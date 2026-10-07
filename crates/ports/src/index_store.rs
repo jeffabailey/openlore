@@ -42,28 +42,25 @@ pub enum IndexStoreError {
 }
 
 // -----------------------------------------------------------------------------
-// IndexStorePort — SYNC local DB over index.duckdb (ADR-025 / I-AV-2)
+// IndexReadPort — the read side of index.duckdb (ADR-082/083, B7)
 // -----------------------------------------------------------------------------
 
-/// The indexer-side index store over the SEPARATE `index.duckdb` (ADR-023/025).
-/// SYNC (local DB) — like `StoragePort`, NO `async_trait`.
+/// The READ side of the index store over the SEPARATE `index.duckdb`
+/// (ADR-023/025). SYNC (local DB) — like `StoragePort`, NO `async_trait`.
+///
+/// Split from the write side (B7, DD-IXD-9) so the indexer's search handler
+/// can hold reads ONLY: by type it cannot reach an upsert, a purge or a probe
+/// (principle 12 — "no public request can change the index" is structural).
+/// Contract shape: unbounded-preservation — every method leaves the whole store
+/// exactly as it found it.
 ///
 /// Every query returns rows carrying a NON-`Option` `author_did` (type-level
 /// anti-merging, I-AV-2). There is intentionally NO aggregate-across-authors
 /// method (NO `GROUP BY`/`COUNT`/`SUM`-across-authors surface): aggregation is
 /// composed in the PURE `appview-domain` core from individually-attributed
 /// rows, NEVER as a stored merged row or an author-eliding SQL aggregate
-/// (WD-103). De-dup at `upsert` is by CID only (ADR-025).
-pub trait IndexStorePort {
-    /// Earned-Trust probe — see ADR-009 + `probe.rs`. The adapter impl asserts
-    /// schema version + fsync honored on the substrate, attribution round-trip
-    /// (distinct non-empty `author_did`s read back byte-equal), and the
-    /// no-merge-schema assertion (NO consensus/merged table). REQUIRED per I-4.
-    fn probe(&self) -> ProbeOutcome;
-
-    /// Insert (or de-dup-by-CID upsert) one verified, attributed indexed claim.
-    fn upsert(&self, claim: &IndexedClaim) -> Result<(), IndexStoreError>;
-
+/// (WD-103).
+pub trait IndexReadPort {
     /// Which claims assert this `object` (philosophy). Every row carries its
     /// non-`Option` `author_did`; the pure core groups by author. Two
     /// identical-content claims from different authors stay TWO rows (I-AV-2).
@@ -80,4 +77,25 @@ pub trait IndexStorePort {
 
     /// Fetch one indexed claim by its (verified) CID PK — the `--show` key.
     fn get_by_cid(&self, cid: &Cid) -> Result<Option<IndexedClaim>, IndexStoreError>;
+}
+
+// -----------------------------------------------------------------------------
+// IndexStorePort — the write side (probe + upsert) over index.duckdb
+// -----------------------------------------------------------------------------
+
+/// The indexer-side index store over the SEPARATE `index.duckdb` (ADR-023/025):
+/// the read side ([`IndexReadPort`], a supertrait) plus the write side — the
+/// Earned-Trust probe and the de-dup-by-CID upsert (ADR-025). SYNC (local DB).
+///
+/// Only the composition root and the ingest pass hold this port; the search
+/// handler holds [`IndexReadPort`] alone (B7).
+pub trait IndexStorePort: IndexReadPort {
+    /// Earned-Trust probe — see ADR-009 + `probe.rs`. The adapter impl asserts
+    /// schema version + fsync honored on the substrate, attribution round-trip
+    /// (distinct non-empty `author_did`s read back byte-equal), and the
+    /// no-merge-schema assertion (NO consensus/merged table). REQUIRED per I-4.
+    fn probe(&self) -> ProbeOutcome;
+
+    /// Insert (or de-dup-by-CID upsert) one verified, attributed indexed claim.
+    fn upsert(&self, claim: &IndexedClaim) -> Result<(), IndexStoreError>;
 }

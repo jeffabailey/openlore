@@ -1710,6 +1710,66 @@ fn scan_indexer_sources(
     Ok(findings)
 }
 
+// -----------------------------------------------------------------------------
+// `indexer_search_handler_read_only` (ADR-082/083, B7, DD-IXD-9)
+// -----------------------------------------------------------------------------
+
+/// Names of a write or purge capability on the index: none may appear in the
+/// indexer's search-handler module (FR-IXD-2: no request can change the index).
+const SEARCH_HANDLER_WRITE_TOKENS: &[&str] =
+    &["IndexStorePort", "IndexPurgePort", "upsert", "purge"];
+
+/// The one capability the search handler holds.
+const SEARCH_HANDLER_READ_PORT: &str = "IndexReadPort";
+
+/// Pure rule over one search-handler source: every non-comment line of its
+/// production part (before the first `#[cfg(test)]`) naming a write
+/// capability, plus a finding when the module does not hold `IndexReadPort`.
+pub fn classify_search_handler_read_only(source: &str) -> Vec<String> {
+    let production = source.split("#[cfg(test)]").next().unwrap_or_default();
+    let missing_read_port = (!production.contains(SEARCH_HANDLER_READ_PORT))
+        .then(|| format!("does not hold `{SEARCH_HANDLER_READ_PORT}`"));
+    classify_forbidden_tokens(production, SEARCH_HANDLER_WRITE_TOKENS)
+        .into_iter()
+        .chain(missing_read_port)
+        .collect()
+}
+
+/// Effect shell for `indexer_search_handler_read_only`: every
+/// `crates/openlore-indexer/src/*search*.rs`. Finding no search-handler module
+/// is itself a finding (the rule must never pass vacuously).
+pub fn scan_indexer_search_handler_read_only(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    const RULE: &str = "indexer_search_handler_read_only";
+    let handlers: Vec<PathBuf> = rust_sources_under(&workspace_root.join(INDEXER_SOURCE_DIR))
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().contains("search"))
+        })
+        .collect();
+    if handlers.is_empty() {
+        return Ok(vec![format!(
+            "{RULE}: no search-handler module (*search*.rs) under {INDEXER_SOURCE_DIR} — \
+             the rule would pass vacuously"
+        )]);
+    }
+    let mut findings = Vec::new();
+    for path in handlers {
+        let source = std::fs::read_to_string(&path)?;
+        findings.extend(
+            classify_search_handler_read_only(&source)
+                .into_iter()
+                .map(|finding| {
+                    format!(
+                        "{RULE}: {}: {finding} — the search handler holds the read port only (B7)",
+                        path.display()
+                    )
+                }),
+        );
+    }
+    Ok(findings)
+}
+
 /// Tables keyed by `owner_did` in `review-app.duckdb` (ADR-074).
 const REVIEW_OWNER_TABLES: &[&str] = &[
     "accounts",
@@ -1901,6 +1961,7 @@ pub fn run() -> anyhow::Result<i32> {
     let review_app_findings = scan_review_app_rules(&workspace_root)?;
     let indexer_origin_findings = scan_indexer_origin_only_via_listing_source(&workspace_root)?;
     let indexer_client_findings = scan_indexer_guarded_clients_only(&workspace_root)?;
+    let search_handler_findings = scan_indexer_search_handler_read_only(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -1915,6 +1976,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(review_app_findings);
     rendered.extend(indexer_origin_findings);
     rendered.extend(indexer_client_findings);
+    rendered.extend(search_handler_findings);
 
     if rendered.is_empty() {
         println!(
@@ -3103,6 +3165,74 @@ mod indexer_origin_rule_tests {
     fn the_guarded_clients_rule_refuses_to_pass_on_an_empty_tree() {
         let empty = std::env::temp_dir().join("openlore-xtask-no-indexer-sources");
         let findings = scan_indexer_guarded_clients_only(&empty).expect("scan");
+        assert_eq!(findings.len(), 1, "{findings:?}");
+    }
+}
+
+#[cfg(test)]
+mod search_handler_read_only_tests {
+    //! `indexer_search_handler_read_only` (B7). State-delta over the declared
+    //! universe {each write-capability token} x {planted line position}: planting
+    //! one token on a code line adds exactly one finding; a comment line or the
+    //! test module adds none.
+
+    use super::*;
+    use proptest::prelude::*;
+
+    const CLEAN: &str = "use ports::IndexReadPort;\n\
+                         fn handle(reads: &dyn IndexReadPort) {\n    let _ = reads;\n}\n";
+
+    fn plant(line: &str, at: usize) -> String {
+        let mut lines: Vec<&str> = CLEAN.lines().collect();
+        lines.insert(at.min(lines.len()), line);
+        lines.join("\n")
+    }
+
+    proptest! {
+        #[test]
+        fn a_planted_write_token_on_a_code_line_is_exactly_one_finding(
+            token in proptest::sample::select(SEARCH_HANDLER_WRITE_TOKENS),
+            at in 0..5usize,
+        ) {
+            let before = classify_search_handler_read_only(CLEAN);
+            let after = classify_search_handler_read_only(&plant(&format!("    let w = {token};"), at));
+            prop_assert!(before.is_empty(), "{:?}", before);
+            prop_assert_eq!(after.len(), 1, "{:?}", after);
+            prop_assert!(after[0].contains(token));
+        }
+
+        #[test]
+        fn a_write_token_in_a_comment_or_the_test_module_is_no_finding(
+            token in proptest::sample::select(SEARCH_HANDLER_WRITE_TOKENS),
+            at in 0..5usize,
+        ) {
+            let commented = plant(&format!("    // {token}"), at);
+            let test_only = format!("{CLEAN}#[cfg(test)]\nmod tests {{ fn t() {{ {token}; }} }}\n");
+            prop_assert!(classify_search_handler_read_only(&commented).is_empty());
+            prop_assert!(classify_search_handler_read_only(&test_only).is_empty());
+        }
+    }
+
+    // bypass: single example — the read-port requirement is one boolean fact.
+    #[test]
+    fn a_search_handler_without_the_read_port_is_a_finding() {
+        let findings = classify_search_handler_read_only("fn handle() {}\n");
+        assert_eq!(findings.len(), 1, "{findings:?}");
+    }
+
+    // bypass: single example — integration over the REAL tree (wiring, not an invariant).
+    #[test]
+    fn the_real_search_handler_is_read_only() {
+        let root = locate_workspace_root().expect("workspace root");
+        let findings = scan_indexer_search_handler_read_only(&root).expect("scan");
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    // bypass: single example — the non-vacuity guard on an empty tree.
+    #[test]
+    fn the_read_only_rule_refuses_to_pass_without_a_search_handler() {
+        let empty = std::env::temp_dir().join("openlore-xtask-no-search-handler");
+        let findings = scan_indexer_search_handler_read_only(&empty).expect("scan");
         assert_eq!(findings.len(), 1, "{findings:?}");
     }
 }

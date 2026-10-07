@@ -39,8 +39,8 @@ use chrono::{DateTime, Utc};
 use claim_domain::{distinct_references, Cid, ClaimReference, Did, KeyId, ReferenceType};
 use duckdb::Connection;
 use ports::{
-    AuthorRelationship, IndexStoreError, IndexStorePort, IndexedClaim, PeerClaimProvenance,
-    ProbeOutcome, ProbeRefusalReason,
+    AuthorRelationship, IndexReadPort, IndexStoreError, IndexStorePort, IndexedClaim,
+    PeerClaimProvenance, ProbeOutcome, ProbeRefusalReason,
 };
 
 mod schema;
@@ -51,6 +51,10 @@ mod schema;
 /// Holds the open DB handle (behind an `Arc<Mutex<_>>` because DuckDB's
 /// `Connection` is `!Sync`) + the path to the colocated `indexed_claims/`
 /// artifact directory (`<index dir>/indexed_claims/<author_did>/<cid>.json`).
+///
+/// ONE instance per process (ADR-080, B1): the composition root opens the file
+/// once and shares that handle (`Arc`) between the probe, the search reads and
+/// the writes; it never opens the same `index.duckdb` a second time.
 pub struct IndexStoreAdapter {
     conn: Arc<Mutex<Connection>>,
     /// `<index dir>/indexed_claims/` — per-author artifact partition root.
@@ -314,7 +318,11 @@ impl IndexStorePort for IndexStoreAdapter {
             .commit()
             .map_err(|err| write_failed(claim, format!("commit: {err}")))
     }
+}
 
+/// The read side (B7): every method only SELECTs, so the whole store is left
+/// exactly as it was found (unbounded-preservation).
+impl IndexReadPort for IndexStoreAdapter {
     fn query_by_object(&self, object: &str) -> Result<Vec<IndexedClaim>, IndexStoreError> {
         self.select_rows("object = ?", object)
     }
@@ -1277,6 +1285,110 @@ mod atomic_upsert_properties {
             prop_assert!(outcome.is_err(), "an empty verified_against must not be stored");
             prop_assert_eq!(stored(&store, TARGET), target_before);
             prop_assert_eq!(stored(&store, NEIGHBOUR), neighbour_before);
+        }
+    }
+}
+
+#[cfg(test)]
+mod read_port_preservation_properties {
+    //! B7 / ADR-082 @contract-shape:unbounded-preservation. Universe = EVERY row
+    //! the store holds across `indexed_claims`, `indexed_claim_evidence` and
+    //! `indexed_claim_references`. Any sequence of `IndexReadPort` reads, issued
+    //! through the read port alone, leaves that whole universe unchanged.
+
+    use super::*;
+    use proptest::prelude::*;
+
+    const OBJECTS: [&str; 2] = ["org.openlore.philosophy.a", "org.openlore.philosophy.b"];
+    const SUBJECTS: [&str; 2] = ["github:o/one", "github:o/two"];
+    const AUTHORS: [&str; 3] = ["did:plc:priya", "did:plc:sven#k", "did:plc:ana"];
+
+    #[derive(Debug, Clone)]
+    enum Read {
+        Object(usize),
+        Subject(usize),
+        Contributor(usize),
+        Cid(usize),
+    }
+
+    fn read_strategy() -> impl Strategy<Value = Read> {
+        prop_oneof![
+            (0..OBJECTS.len()).prop_map(Read::Object),
+            (0..SUBJECTS.len()).prop_map(Read::Subject),
+            (0..AUTHORS.len()).prop_map(Read::Contributor),
+            (0..8usize).prop_map(Read::Cid),
+        ]
+    }
+
+    /// Perform one read through the READ port only (the search handler's view).
+    fn perform(reads: &dyn IndexReadPort, read: &Read) {
+        let _ = match read {
+            Read::Object(i) => reads.query_by_object(OBJECTS[*i]).map(|_| ()),
+            Read::Subject(i) => reads.query_by_subject(SUBJECTS[*i]).map(|_| ()),
+            Read::Contributor(i) => reads
+                .query_by_contributor(&Did(AUTHORS[*i].to_string()))
+                .map(|_| ()),
+            Read::Cid(i) => reads.get_by_cid(&Cid(format!("bafyrow{i}"))).map(|_| ()),
+        };
+    }
+
+    /// The whole store, in a comparable form.
+    fn snapshot(store: &IndexStoreAdapter) -> Vec<String> {
+        let conn = store.lock().expect("lock");
+        [
+            "SELECT cid || '|' || author_did || '|' || subject || '|' || object FROM indexed_claims ORDER BY cid",
+            "SELECT cid || '|' || CAST(ordinal AS VARCHAR) || '|' || evidence FROM indexed_claim_evidence ORDER BY cid, ordinal",
+            "SELECT referencing_cid || '|' || referenced_cid || '|' || ref_type FROM indexed_claim_references ORDER BY 1",
+        ]
+        .iter()
+        .flat_map(|sql| {
+            let mut stmt = conn.prepare(sql).expect("prepare");
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .expect("query")
+                .map(|row| row.expect("row"))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(16))]
+        #[test]
+        fn reads_through_the_read_port_leave_the_whole_store_unchanged(
+            rows in proptest::collection::vec(
+                (0..AUTHORS.len(), 0..SUBJECTS.len(), 0..OBJECTS.len(), 0..3usize),
+                0..8,
+            ),
+            reads in proptest::collection::vec(read_strategy(), 0..12),
+        ) {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let store = IndexStoreAdapter::open(&dir.path().join("index.duckdb")).expect("open");
+            for (index, (author, subject, object, evidence)) in rows.iter().enumerate() {
+                let did = AUTHORS[*author].to_string();
+                store
+                    .upsert(&IndexedClaim {
+                        author_did: Did(did.clone()),
+                        verified_against: KeyId(did),
+                        cid: Cid(format!("bafyrow{index}")),
+                        subject: SUBJECTS[*subject].to_string(),
+                        object: OBJECTS[*object].to_string(),
+                        evidence: (0..*evidence).map(|e| format!("https://e.test/{e}")).collect(),
+                        references: if index > 0 {
+                            vec![ClaimReference {
+                                ref_type: ReferenceType::Counters,
+                                cid: Cid(format!("bafyrow{}", index - 1)),
+                            }]
+                        } else {
+                            Vec::new()
+                        },
+                        ..super::tests::sample_claim()
+                    })
+                    .expect("upsert");
+            }
+
+            let before = snapshot(&store);
+            reads.iter().for_each(|read| perform(&store, read));
+            prop_assert_eq!(snapshot(&store), before);
         }
     }
 }

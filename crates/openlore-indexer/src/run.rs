@@ -14,12 +14,10 @@
 //! PDS-write surface — the capability boundary is the ABSENCE of those deps
 //! (enforced by `xtask check-arch`'s `indexer_holds_no_signing_or_local_store`).
 //!
-//! Bootstrap SCAFFOLD (step 01-04): the wiring SHAPE + the wire → probe → use
-//! sequence + the refuse-on-probe-failure path are established; the adapter
-//! constructors + the serve/ingest/stats bodies are `todo!()` (the real bounded
-//! pull-ingest loop + serving land in Phase 03/04).
-//
-// SCAFFOLD: true
+//! The index store is opened ONCE per process here (ADR-080, B1) and shared:
+//! the probe and the ingest pass use it whole, `serve`'s search handler sees it
+//! through `IndexReadPort` only (B7). `serve` answers searches; it runs no
+//! ingest of its own. `stats` is still a `todo!()` scaffold.
 
 #![allow(dead_code)] // some scaffold seams (serve/stats) land in Phase 03/04
 
@@ -33,7 +31,7 @@ use adapter_atproto_did::{AtProtoDidAdapter, IdentityLookup};
 use adapter_atproto_ingest::AtProtoIngestAdapter;
 use adapter_index_store::IndexStoreAdapter;
 use adapter_system_clock::SystemClockAdapter;
-use adapter_xrpc_query_server::{QueryHandler, XrpcQueryServer};
+use adapter_xrpc_query_server::XrpcQueryServer;
 use std::collections::BTreeMap;
 
 use appview_domain::ingest_pass::{
@@ -41,18 +39,15 @@ use appview_domain::ingest_pass::{
     RefusalCause, SkipReason,
 };
 use appview_domain::{
-    compose_results, ingest_repo_record, origin_of, plan_listing, records_of, summarize, DidFetch,
-    FallbackUrl, IngestOutcome, ListingBudget, ListingPlan, ListingSource, NetworkSearchResult,
-    PassSummary, RejectReason, ResolutionFailure,
+    ingest_repo_record, origin_of, plan_listing, records_of, summarize, DidFetch, FallbackUrl,
+    IngestOutcome, ListingBudget, ListingPlan, ListingSource, PassSummary, RejectReason,
+    ResolutionFailure,
 };
 use claim_domain::{ClaimRecord, Did, VerificationKey};
-use lexicon::{
-    ClaimReferenceDto, SearchDimensionDto, SearchQueryRequest, SearchQueryResponse, SearchResultDto,
-};
 use ports::net_policy::TransportPolicy;
 use ports::{
     ClockPort, IdentityLookupError, IdentityLookupPort, IdentityResolvePort, IndexStorePort,
-    IngestError, IngestSourcePort, RepoListingPort, SearchDimension,
+    IngestError, IngestSourcePort, RepoListingPort,
 };
 
 use crate::config::{parse_config, BuildProfile, ConfigError, IndexerConfig};
@@ -60,7 +55,12 @@ use crate::config::{parse_config, BuildProfile, ConfigError, IndexerConfig};
 use crate::probe_gauntlet::{
     capability_boundary_probe, origin_classification_probe, probe_gauntlet, ProbeRefusal,
 };
+use crate::search_handler::{search_handler, SharedIndexReads};
 use crate::Command;
+
+/// The one shared index handle: read + write side, safe to share across the
+/// serve accept loop's tasks.
+pub type SharedIndexStore = Arc<dyn IndexStorePort + Send + Sync>;
 
 /// Refused to start (bad config, wiring, probe) or a fatal runtime/store failure.
 const EXIT_FATAL: i32 = 2;
@@ -72,7 +72,10 @@ const EXIT_SERVED: i32 = 0;
 /// indexer's driven adapters — by construction NO signing identity + NO local
 /// store (the capability boundary, ADR-023 / I-AV-5).
 pub struct IndexerWiring {
-    pub index_store: Box<dyn IndexStorePort>,
+    /// The process's ONE handle on `index.duckdb` (ADR-080, B1): opened once
+    /// here and shared by the probe, the writes and (through its read port
+    /// only) the search handler.
+    pub index_store: SharedIndexStore,
     pub ingest_source: Box<dyn IngestSourcePort>,
     /// Read-only `listRecords` of ONE repo DID, cursor-paged (ADR-071 §4).
     pub repo_listing: Box<dyn RepoListingPort>,
@@ -137,7 +140,7 @@ impl IndexerWiring {
         let query_server = None;
 
         Ok(Self {
-            index_store: Box::new(index_store),
+            index_store: Arc::new(index_store),
             ingest_source: Box::new(ingest_source),
             repo_listing: Box::new(repo_listing),
             pds_lookup: Box::new(pds_lookup),
@@ -185,8 +188,8 @@ impl IndexerWiring {
 /// 1. Construct the wiring (instantiates every indexer adapter).
 /// 2. Run the capability-boundary probe + ALL probes; refuse with
 ///    `health.startup.refused` + exit 2 on any refusal (REFUSES to start, ADR-023).
-/// 3. Dispatch the verb (`serve` runs the query server + ingest loop; `ingest`
-///    is a one-shot bounded PULL pass; `stats` reports index coverage).
+/// 3. Dispatch the verb (`serve` answers searches over the index; `ingest` is a
+///    one-shot bounded PULL pass; `stats` reports index coverage).
 ///
 /// Bootstrap SCAFFOLD (step 01-04): the sequence is wired; the verb bodies are
 /// `todo!()`.
@@ -232,36 +235,19 @@ pub fn run(command: Command) -> i32 {
 /// `openlore-indexer serve` — serve the `org.openlore.appview.searchClaims`
 /// query surface over localhost HTTP (the B1 transport, ADR-027).
 ///
-/// The walking-skeleton serve path (04-01): the index is already populated (the
-/// test harness runs a one-shot `ingest` pass FIRST, then `serve` over the same
-/// `index.duckdb`). `serve` binds the query server on the configured
-/// `listen_addr` (`:0` → an OS-assigned ephemeral port for parallel-safety),
-/// prints the bound address as a structured `indexer.serve.listening` event so a
-/// supervisor (the test harness) can read the port back, then runs the hyper
-/// accept loop until the process is killed.
+/// `serve` does not ingest: it answers searches over whatever `index.duckdb`
+/// already holds (populated by `ingest` passes). It binds the query server on
+/// the configured `listen_addr` (`:0` → an OS-assigned ephemeral port for
+/// parallel-safety), prints the bound address as a structured
+/// `indexer.serve.listening` event so a supervisor (the test harness) can read
+/// the port back, then runs the hyper accept loop until the process is killed.
 ///
-/// The query handler reads the `IndexStorePort` (the SEPARATE `index.duckdb`) and
-/// composes per-author via the PURE `appview_domain::compose_results` (the SAME
-/// pure core the layer-2 AVC-2 proves) — the wire carries FLAT attributed rows
-/// (every `author_did` present; anti-merging across the transport, I-AV-2).
+/// The query handler reuses the wiring's ONE index handle (ADR-080: the store is
+/// opened exactly once per process) and sees it through `IndexReadPort` only
+/// (B7) — see `search_handler`.
 fn serve(wiring: &IndexerWiring) -> i32 {
-    // A fresh handle to the SEPARATE index.duckdb for the serve handler. The
-    // adapter is Send+Sync (its `Arc<Mutex<Connection>>` substrate is), so it can
-    // be shared across the hyper accept loop's per-connection tasks. The wiring's
-    // `index_store` already proved (via probe) the store is reachable; this reopen
-    // is the long-lived serve handle.
-    let store = match IndexStoreAdapter::open(&wiring.index_path) {
-        Ok(s) => Arc::new(s),
-        Err(err) => {
-            eprintln!("openlore-indexer serve: open index store: {err}");
-            return EXIT_FATAL;
-        }
-    };
-
-    let handler: QueryHandler = {
-        let store = Arc::clone(&store);
-        Arc::new(move |request: SearchQueryRequest| handle_search(store.as_ref(), request))
-    };
+    let reads: SharedIndexReads = Arc::clone(&wiring.index_store) as SharedIndexReads;
+    let handler = search_handler(reads);
 
     let listen_addr: std::net::SocketAddr = match wiring.listen_addr.parse() {
         Ok(addr) => addr,
@@ -313,118 +299,6 @@ fn serve(wiring: &IndexerWiring) -> i32 {
             }
         }
     })
-}
-
-/// The serve query handler: read the index store along `request.dimension`,
-/// compose per-author via the PURE `appview_domain::compose_results`, and project
-/// the per-author structure back to a FLAT attributed wire response (every
-/// `author_did` present; the `distinct_author_count` is the pure COUNT, never a
-/// merge). A store error degrades to an empty result (serve never panics on a
-/// read failure; the CLI sees an empty-but-attributed response).
-fn handle_search(store: &dyn IndexStorePort, request: SearchQueryRequest) -> SearchQueryResponse {
-    let dimension = from_dto_dimension(request.dimension);
-    let rows = match dimension {
-        SearchDimension::Object => store.query_by_object(&request.value),
-        SearchDimension::Subject => store.query_by_subject(&request.value),
-        SearchDimension::Contributor => {
-            store.query_by_contributor(&claim_domain::Did(request.value.clone()))
-        }
-    };
-    let rows = rows.unwrap_or_default();
-
-    // The per-author grouping + the distinct-author COUNT come from the PURE
-    // composition (the SAME core proven at layer 2 by AVC-2). The author ORDER on
-    // the wire follows that stable composition; the per-row payload is projected
-    // from the original `IndexedClaim` rows (which carry composed_at + evidence the
-    // composed `NetworkResultRow` does not). The wire stays FLAT + attributed.
-    let composed = compose_results(rows.clone(), dimension);
-    let results = flat_attributed_rows(&composed, &rows);
-    SearchQueryResponse {
-        results,
-        distinct_author_count: composed.distinct_author_count,
-        total_claims: composed.total_claims,
-        suggestion: composed.suggestion,
-    }
-}
-
-/// Project the per-author `NetworkSearchResult` (the pure composition's stable
-/// author order + within-group cid order) into FLAT attributed wire rows, looking
-/// each row's full payload (composed_at, evidence) up from the original
-/// `IndexedClaim` rows by cid. The wire carries one row per attributed claim (NO
-/// merged/consensus object — I-AV-2).
-fn flat_attributed_rows(
-    composed: &NetworkSearchResult,
-    rows: &[ports::IndexedClaim],
-) -> Vec<SearchResultDto> {
-    let mut out = Vec::new();
-    for (_author, group) in &composed.by_author {
-        for composed_row in group {
-            let source = rows.iter().find(|r| r.cid == composed_row.cid);
-            let composed_at = source
-                .map(|r| r.composed_at.to_rfc3339())
-                .unwrap_or_default();
-            let evidence = source.map(|r| r.evidence.clone()).unwrap_or_default();
-            // Carry the row's typed references over the wire (OD-AV-7): a countering
-            // claim K's `counters` reference to the countered claim C's CID lets the
-            // CLI render reconstruct C's `countered-by <K.cid> (by <K.author>)`
-            // annotation (shown, never applied — I-AV-9). The reference rows carry no
-            // author (anti-merging preserved); K's author is K's own `author_did`.
-            let references = source
-                .map(|r| r.references.iter().map(reference_to_dto).collect())
-                .unwrap_or_default();
-            // ADR-079: the stored provenance travels over the wire. App-signed rows
-            // send the explicit token; an old reader ignores the additive field.
-            let provenance = source.map(|r| provenance_token(r.provenance).to_string());
-            out.push(SearchResultDto {
-                author_did: composed_row.author_did.0.clone(),
-                cid: composed_row.cid.0.clone(),
-                subject: composed_row.subject.clone(),
-                predicate: composed_row.predicate.clone(),
-                object: composed_row.object.clone(),
-                confidence: composed_row.confidence,
-                composed_at,
-                verified_against: composed_row.verified_against.0.clone(),
-                evidence,
-                references,
-                provenance,
-            });
-        }
-    }
-    out
-}
-
-/// The ADR-079 wire token for a stored provenance (the same domain as the
-/// `indexed_claims.provenance` column).
-fn provenance_token(provenance: ports::PeerClaimProvenance) -> &'static str {
-    match provenance {
-        ports::PeerClaimProvenance::AppSigned => "app-signed",
-        ports::PeerClaimProvenance::SelfAttested => "self-attested",
-    }
-}
-
-/// Map a typed `claim_domain::ClaimReference` to its wire DTO, using the lowercase
-/// `ref_type` token the `indexed_claim_references` CHECK domain + the on-disk
-/// artifact use (so the wire, the store, and the artifact agree without drift).
-fn reference_to_dto(reference: &claim_domain::ClaimReference) -> ClaimReferenceDto {
-    let ref_type = match reference.ref_type {
-        claim_domain::ReferenceType::Retracts => "retracts",
-        claim_domain::ReferenceType::Corrects => "corrects",
-        claim_domain::ReferenceType::Counters => "counters",
-        claim_domain::ReferenceType::Supersedes => "supersedes",
-    };
-    ClaimReferenceDto {
-        ref_type: ref_type.to_string(),
-        cid: reference.cid.0.clone(),
-    }
-}
-
-/// Map a wire DTO dimension to the domain `SearchDimension`.
-fn from_dto_dimension(dim: SearchDimensionDto) -> SearchDimension {
-    match dim {
-        SearchDimensionDto::Object => SearchDimension::Object,
-        SearchDimensionDto::Contributor => SearchDimension::Contributor,
-        SearchDimensionDto::Subject => SearchDimension::Subject,
-    }
 }
 
 /// `openlore-indexer ingest` — a one-shot bounded PULL pass (ADR-024, ADR-077).

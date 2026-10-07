@@ -114,7 +114,6 @@ fn the_three_new_rules_are_part_of_check_arch() {
 
 /// XD-2 @US-IXD-001 @AC-001.3 @FR-IXD-2 @DD-IXD-9 @B7 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 01-01: search handler module holds IndexReadPort only (B7)"]
 fn the_search_handler_can_only_read_the_index() {
     let handlers: Vec<(PathBuf, String)> = production_sources("crates/openlore-indexer/src")
         .into_iter()

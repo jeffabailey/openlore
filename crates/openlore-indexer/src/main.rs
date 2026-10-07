@@ -9,7 +9,7 @@
 //! check-arch`'s `indexer_holds_no_signing_or_local_store` rule.
 //!
 //! Subcommands:
-//!   - `serve`  — run the bounded pull-ingest loop + the query server.
+//!   - `serve`  — answer searches over the index (the query server; no ingest).
 //!   - `ingest` — a one-shot bounded PULL pass (ADR-024).
 //!   - `stats`  — report index coverage.
 //!
@@ -17,11 +17,7 @@
 //! wire → PROBE → use gate (refuse to start on any probe failure: emit
 //! `health.startup.refused` + exit 2) before dispatching the subcommand.
 //!
-//! Bootstrap SCAFFOLD (step 01-04): the binary + the clap surface + the
-//! composition-root sequence are established; the verb bodies + adapter
-//! constructors are `todo!()` (the real ingest/serve lands in Phase 03/04).
-//
-// SCAFFOLD: true
+//! `serve` and `ingest` are live; `stats` is still a `todo!()` scaffold.
 
 #![forbid(unsafe_code)]
 
@@ -30,6 +26,7 @@ use clap::{Parser, Subcommand};
 mod config;
 mod probe_gauntlet;
 mod run;
+mod search_handler;
 
 /// The `openlore-indexer` CLI surface (ADR-023 single-binary indexer).
 #[derive(Debug, Parser)]
@@ -43,11 +40,11 @@ pub struct IndexerCli {
     pub command: Command,
 }
 
-/// The indexer subcommands. `serve` is the long-running mode; `ingest` is a
-/// one-shot bounded PULL; `stats` reports coverage.
+/// The indexer subcommands. `serve` is the long-running search server; `ingest`
+/// is a one-shot bounded PULL; `stats` reports coverage.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Run the bounded pull-ingest loop + serve the query surface (ADR-024/027).
+    /// Serve the search query surface over the index (ADR-027, ADR-080).
     Serve,
     /// Run a one-shot bounded PULL pass (ADR-024).
     Ingest,
