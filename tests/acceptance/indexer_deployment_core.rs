@@ -116,8 +116,11 @@ fn sut_plan_purge(_listed: &[String], _indexed_authors: &BTreeSet<String>) -> Pu
     todo!("DELIVER 02-02: bind to appview_domain::plan_purge (ADR-082)")
 }
 
-fn sut_read_did_list(_text: &str) -> ListReadView {
-    todo!("DELIVER 02-01: bind to the per-pass DID-file parse (reuses parse_repo_dids, ADR-081)")
+fn sut_read_did_list(text: &str) -> ListReadView {
+    appview_domain::did_list::read_did_list(text).map_or_else(
+        |bad| ListReadView::Malformed(bad.entry),
+        |dids| ListReadView::Loaded(dids.into_iter().map(|did| did.0).collect()),
+    )
 }
 
 fn sut_pass_exit(outcome: &PassOutcomeView) -> (i32, Option<String>) {
@@ -368,7 +371,6 @@ proptest! {
     /// well-formed DIDs in first-seen order, or refuses naming the FIRST bad
     /// entry. A BOM makes the first entry bad; CRLF is whitespace.
     #[test]
-    #[ignore = "DELIVER 02-01: per-pass DID-file parse"]
     fn reading_the_did_list_loads_it_whole_or_names_the_first_bad_entry(text in list_text()) {
         prop_assert_eq!(sut_read_did_list(&text), list_oracle(&text));
     }

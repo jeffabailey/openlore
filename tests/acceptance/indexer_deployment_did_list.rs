@@ -161,7 +161,6 @@ fn then_the_pass_refused_the_list(
 ///   And the index was never restarted
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: OPENLORE_INDEXER_REPO_DIDS_FILE read each pass (B5)"]
 fn a_did_added_to_the_list_is_indexed_on_the_next_pass_without_a_restart() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     live.operator_saves_list(&dids(&[
@@ -191,7 +190,6 @@ fn a_did_added_to_the_list_is_indexed_on_the_next_pass_without_a_restart() {
 ///   Then the passes report 3 and then 4 configured DIDs, with no restart
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: per-pass re-read survives file renames (B5, H1)"]
 fn two_list_edits_in_a_row_are_picked_up_by_two_passes_in_a_row() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     live.operator_saves_list(&dids(&[
@@ -235,7 +233,6 @@ fn two_list_edits_in_a_row_are_picked_up_by_two_passes_in_a_row() {
 ///   Then the pass reports a list age of about 3 hours
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: repo_dids_age_secs in the per-pass config.loaded (B15)"]
 fn each_pass_reports_how_old_the_did_list_is() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya]);
@@ -266,7 +263,6 @@ fn each_pass_reports_how_old_the_did_list_is() {
 ///   And when Jeff fixes the list the next pass completes
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: malformed list refuses the pass, never serve (B5, B4)"]
 fn a_mistyped_list_refuses_the_pass_names_the_bad_entry_and_keeps_search_serving() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     live.operator_saves_list_text("did:plc:therrera2v6w,tomas");
@@ -300,7 +296,6 @@ fn a_mistyped_list_refuses_the_pass_names_the_bad_entry_and_keeps_search_serving
 ///     | is something that cannot be read as a file |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: unreadable list refuses the pass before any fetch or purge (B5)"]
 fn a_list_the_index_cannot_read_refuses_the_pass_and_touches_nothing() {
     let cases: [(&str, Arrange); 2] = [
         ("missing", |live| live.list_file_is_missing()),
@@ -339,7 +334,6 @@ fn a_list_the_index_cannot_read_refuses_the_pass_and_touches_nothing() {
 ///     | a byte-order mark then Priya, Dmitri            | is refused, naming the first entry              |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: list parsing reuses parse_repo_dids; BOM fails loud (B5)"]
 fn line_endings_are_tolerated_a_hidden_byte_order_mark_is_refused_loudly() {
     let world = given_authors_publish_on_their_own_pdses();
     let crlf = LiveIndex::deploy(
@@ -374,7 +368,6 @@ fn line_endings_are_tolerated_a_hidden_byte_order_mark_is_refused_loudly() {
 ///   Then it refuses to start with exit 2, naming the conflicting setting
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: REPO_DIDS and REPO_DIDS_FILE are mutually exclusive (B5)"]
 fn setting_both_a_list_and_a_list_file_is_refused_at_start() {
     let world = given_authors_publish_on_their_own_pdses();
 

@@ -15,6 +15,9 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use appview_domain::did_list::read_did_list;
+#[cfg(test)]
+use appview_domain::did_list::MAX_DID_LENGTH;
 use appview_domain::ingest_pass::pds_endpoint_admissible;
 use appview_domain::FallbackUrl;
 use claim_domain::Did;
@@ -56,12 +59,6 @@ const MAX_CONCURRENT_FETCHES_RANGE: RangeInclusive<u64> = 1..=16;
 /// One DID's whole fetch — resolving plus every listing page (ADR-078).
 const DEFAULT_PER_DID_TIMEOUT_SECS: u64 = 30;
 const PER_DID_TIMEOUT_SECS_RANGE: RangeInclusive<u64> = 1..=600;
-
-/// The DID methods that can name a repo with a PDS.
-const REPO_DID_METHODS: [&str; 2] = ["plc", "web"];
-
-/// The longest DID the ATProto DID syntax admits.
-const MAX_DID_LENGTH: usize = 2048;
 
 /// Which build this binary is: the loopback test seam exists only in
 /// development builds (the review-app pattern).
@@ -146,8 +143,11 @@ pub fn parse_config(
             .filter(|value| !value.is_empty())
     };
     let policy = transport_policy(setting(LOOPBACK_SEAM_VAR).as_deref(), profile)?;
-    let repo_dids = parse_repo_dids(setting(REPO_DIDS_VAR).as_deref().unwrap_or_default())?;
-    let repo_dids_file = setting(REPO_DIDS_FILE_VAR).map(PathBuf::from);
+    let inline_list = setting(REPO_DIDS_VAR);
+    let repo_dids = parse_repo_dids(inline_list.as_deref().unwrap_or_default())?;
+    let repo_dids_file = setting(REPO_DIDS_FILE_VAR)
+        .map(|file| list_file(&file, inline_list.is_some()))
+        .transpose()?;
     let control_socket = setting(CONTROL_SOCKET_VAR)
         .map(|path| control_socket_path(&path))
         .transpose()?;
@@ -218,48 +218,25 @@ fn control_socket_path(path: &str) -> Result<PathBuf, ConfigError> {
     }
 }
 
+/// The list file, unless the inline list is set too: the two are mutually
+/// exclusive (ADR-081 §6), so a deployment never wonders which one won.
+fn list_file(path: &str, inline_list_set: bool) -> Result<PathBuf, ConfigError> {
+    if inline_list_set {
+        Err(ConfigError::new(
+            REPO_DIDS_FILE_VAR,
+            path,
+            format!("is mutually exclusive with {REPO_DIDS_VAR}: set one of them"),
+        ))
+    } else {
+        Ok(PathBuf::from(path))
+    }
+}
+
 /// The distinct repo DIDs of a comma- or whitespace-separated list, in
 /// first-seen order; the first malformed entry refuses the whole list.
 pub fn parse_repo_dids(list: &str) -> Result<Vec<Did>, ConfigError> {
-    list.split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|entry| !entry.is_empty())
-        .map(repo_did)
-        .try_fold(Vec::new(), |mut distinct, did| {
-            let did = did?;
-            if !distinct.contains(&did) {
-                distinct.push(did);
-            }
-            Ok(distinct)
-        })
-}
-
-/// One list entry as a repo DID: ATProto DID syntax, method `plc` or `web`.
-fn repo_did(entry: &str) -> Result<Did, ConfigError> {
-    let refuse = |problem: &str| ConfigError::new(REPO_DIDS_VAR, entry, problem);
-    let (method, identifier) = entry
-        .strip_prefix("did:")
-        .and_then(|rest| rest.split_once(':'))
-        .ok_or_else(|| refuse("is not a DID (did:<method>:<identifier>)"))?;
-    if entry.len() > MAX_DID_LENGTH
-        || method.is_empty()
-        || !method.chars().all(|c| c.is_ascii_lowercase())
-        || !did_identifier_valid(identifier)
-    {
-        return Err(refuse("is not a well-formed DID"));
-    }
-    if !REPO_DID_METHODS.contains(&method) {
-        return Err(refuse("names no repo: only did:plc and did:web DIDs do"));
-    }
-    Ok(Did(entry.to_string()))
-}
-
-/// `[A-Za-z0-9._:%-]+`, not ending in `:` (so no `#fragment`, no empty id).
-fn did_identifier_valid(identifier: &str) -> bool {
-    !identifier.is_empty()
-        && !identifier.ends_with(':')
-        && identifier
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '%' | '-'))
+    read_did_list(list)
+        .map_err(|bad| ConfigError::new(REPO_DIDS_VAR, &bad.entry, bad.problem.describe()))
 }
 
 /// A source URL the indexer may be configured with: absolute, without query

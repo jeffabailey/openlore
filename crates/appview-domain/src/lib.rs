@@ -42,6 +42,7 @@
 #![forbid(unsafe_code)]
 
 mod compose;
+pub mod did_list;
 pub mod health;
 mod ingest;
 pub mod ingest_pass;

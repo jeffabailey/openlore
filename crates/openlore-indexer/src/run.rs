@@ -36,6 +36,7 @@ use adapter_system_clock::SystemClockAdapter;
 use adapter_xrpc_query_server::XrpcQueryServer;
 use std::collections::BTreeMap;
 
+use appview_domain::did_list::read_did_list;
 use appview_domain::ingest_pass::{
     classify_fetch_failure, pass_exit, refusal_cause_of, summarize_outcomes, ClassifiedSkip,
     FetchFailure, PassExit, PassFailure, RefusalCause, SkipReason,
@@ -51,9 +52,7 @@ use ports::{
     IngestError, IngestSourcePort, RepoListingPort,
 };
 
-use crate::config::{
-    parse_config, parse_repo_dids, BuildProfile, ConfigError, IndexerConfig, REPO_DIDS_FILE_VAR,
-};
+use crate::config::{parse_config, BuildProfile, ConfigError, IndexerConfig, REPO_DIDS_FILE_VAR};
 
 use crate::health::health_handler;
 use crate::pass_runner::{PassLabel, PassRunner, StatusReader};
@@ -380,14 +379,26 @@ fn listed_pass_work(wiring: &IndexerWiring, pass: PassLabel) -> PassWork {
 #[derive(Debug, Clone, Copy)]
 enum ListSource {
     Env,
-    File,
+    /// The list file, last rendered `age_secs` ago (its mtime, B15); `None`
+    /// when the platform keeps no modification time.
+    File {
+        age_secs: Option<u64>,
+    },
 }
 
 impl ListSource {
     const fn token(self) -> &'static str {
         match self {
             Self::Env => "env",
-            Self::File => "file",
+            Self::File { .. } => "file",
+        }
+    }
+
+    /// `repo_dids_age_secs` — reported for the file only.
+    const fn age_secs(self) -> Option<u64> {
+        match self {
+            Self::Env => None,
+            Self::File { age_secs } => age_secs,
         }
     }
 }
@@ -406,18 +417,38 @@ fn pass_list(wiring: &IndexerWiring) -> Result<(Vec<Did>, ListSource), ListRefus
     let Some(file) = &wiring.repo_dids_file else {
         return Ok((wiring.repo_dids.clone(), ListSource::Env));
     };
-    let text = std::fs::read_to_string(file).map_err(|_| ListRefusal {
+    let (text, age_secs) = read_list_file(file).map_err(|_| ListRefusal {
         cause: PassFailure::ListUnreadable,
         variable: REPO_DIDS_FILE_VAR,
         value: file.display().to_string(),
     })?;
-    parse_repo_dids(&text)
-        .map(|dids| (dids, ListSource::File))
-        .map_err(|error| ListRefusal {
+    read_did_list(&text)
+        .map(|dids| (dids, ListSource::File { age_secs }))
+        .map_err(|bad| ListRefusal {
             cause: PassFailure::ListMalformed,
             variable: REPO_DIDS_FILE_VAR,
-            value: error.value,
+            value: bad.entry,
         })
+}
+
+/// The list file's text and age, opened by PATH now (never a cached handle:
+/// the host replaces the file by rename, H1) and aged from the same handle.
+fn read_list_file(file: &Path) -> std::io::Result<(String, Option<u64>)> {
+    use std::io::Read;
+    let mut handle = std::fs::File::open(file)?;
+    let mut text = String::new();
+    handle.read_to_string(&mut text)?;
+    let age_secs = handle
+        .metadata()
+        .and_then(|meta| meta.modified())
+        .ok()
+        .map(|rendered| {
+            std::time::SystemTime::now()
+                .duration_since(rendered)
+                .unwrap_or_default()
+                .as_secs()
+        });
+    Ok((text, age_secs))
 }
 
 /// `indexer.ingest.pass_refused`: the list was refused; nothing is fetched.
@@ -440,18 +471,19 @@ fn emit_pass_config_loaded(
     repo_dids: &[Did],
     source: ListSource,
 ) {
-    emit_in(
-        Some(pass),
-        serde_json::json!({
-            "event": "indexer.config.loaded",
-            "repo_did_count": repo_dids.len(),
-            "repo_dids_source": source.token(),
-            "fallback_configured": wiring.fallback.is_some(),
-            "max_concurrent_fetches": wiring.max_concurrent_fetches,
-            "per_did_time_budget_secs": wiring.per_did_time_budget.as_secs(),
-            "transport_policy": wiring.policy.token(),
-        }),
-    );
+    let mut loaded = serde_json::json!({
+        "event": "indexer.config.loaded",
+        "repo_did_count": repo_dids.len(),
+        "repo_dids_source": source.token(),
+        "fallback_configured": wiring.fallback.is_some(),
+        "max_concurrent_fetches": wiring.max_concurrent_fetches,
+        "per_did_time_budget_secs": wiring.per_did_time_budget.as_secs(),
+        "transport_policy": wiring.policy.token(),
+    });
+    if let Some(age_secs) = source.age_secs() {
+        loaded["repo_dids_age_secs"] = age_secs.into();
+    }
+    emit_in(Some(pass), loaded);
 }
 
 /// Bind the query server and answer searches (and `/healthz`, from the
