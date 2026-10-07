@@ -143,7 +143,6 @@ fn search_keeps_answering_within_a_second_while_a_pass_runs() {
 ///   And every search answers within 1 second
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: one store handle shared by search and the pass (B1, B2)"]
 fn a_pass_is_never_refused_because_search_is_busy() {
     let (_world, live) = given_a_crowd_index_with_a_long_write_heavy_pass();
 
@@ -223,7 +222,6 @@ fn searches_overlapping_the_end_of_a_pass_still_answer_within_a_second() {
 ///   And the next timer firing after it ends starts a new pass
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: single-flight runner, busy → coalesced exit 0 (B2, B3)"]
 fn passes_never_overlap() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_a_live_index_whose_pass_takes_a_while(&world);
@@ -280,7 +278,6 @@ fn passes_never_overlap() {
 ///   And Maria's results for every author are exactly as before
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: repeated passes are idempotent (B2)"]
 fn a_pass_with_nothing_new_on_the_network_changes_nothing_maria_sees() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya, Author::Dmitri]);
@@ -388,7 +385,6 @@ fn the_timer_sees_the_pass_s_own_exit_code_and_exactly_one_summary() {
 ///   And no pass summary is written and no index is opened by the timer
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: trigger exit 4 + indexer.trigger.unreachable; client never opens the store (B3)"]
 fn the_timer_firing_while_serve_is_down_reports_that_no_pass_ran() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya]);
@@ -431,7 +427,6 @@ fn the_timer_firing_while_serve_is_down_reports_that_no_pass_ran() {
 ///   And the timer itself never loads or refuses a configuration
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: trigger dispatched before config parsing and store open (B3)"]
 fn the_timer_needs_nothing_but_the_control_socket_to_start_a_pass() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya]);
@@ -777,7 +772,6 @@ fn an_index_killed_in_the_middle_of_a_pass_comes_back_with_what_it_had_saved() {
 ///   Then it becomes ready and the next timer firing runs a pass
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: stale socket replaced at bind; socket probe before ready (B3)"]
 fn a_socket_file_left_over_from_a_crash_does_not_stop_the_next_start() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya]);

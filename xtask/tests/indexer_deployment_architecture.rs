@@ -207,7 +207,6 @@ fn the_index_store_deletes_only_in_its_purge_module() {
 
 /// XD-5 @US-IXD-002 @ADR-080 @component-boundaries-4.4 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 01-03: control channel on a Unix socket only (B3)"]
 fn the_control_channel_is_a_unix_socket_never_a_network_listener() {
     let control: Vec<_> = production_sources("crates/openlore-indexer/src")
         .into_iter()

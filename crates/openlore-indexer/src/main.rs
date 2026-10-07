@@ -12,6 +12,9 @@
 //!   - `serve`  — answer searches over the index (the query server; no ingest).
 //!   - `ingest` — a one-shot bounded PULL pass (ADR-024).
 //!   - `stats`  — report index coverage.
+//!   - `trigger` — ask the running `serve` for one pass over its control
+//!     socket (ADR-080 §3). Dispatched BEFORE any configuration is parsed or
+//!     store opened: it reads only the socket variable (M4).
 //!
 //! Parses args with clap, then delegates to `run::run`, which does the
 //! wire → PROBE → use gate (refuse to start on any probe failure: emit
@@ -24,6 +27,8 @@
 use clap::{Parser, Subcommand};
 
 mod config;
+#[cfg(unix)]
+mod control;
 mod pass_runner;
 mod probe_gauntlet;
 mod run;
@@ -51,10 +56,36 @@ pub enum Command {
     Ingest,
     /// Report index coverage (claims indexed, distinct authors, ingest lag).
     Stats,
+    /// Ask the running `serve` for one pass; exit with that pass's code
+    /// (0 also when it joined a running pass; 4 when `serve` is unreachable).
+    Trigger,
 }
 
 fn main() -> std::process::ExitCode {
     let parsed = IndexerCli::parse();
-    let code = run::run(parsed.command);
+    let code = match parsed.command {
+        Command::Trigger => trigger(),
+        command => run::run(command),
+    };
     std::process::ExitCode::from(u8::try_from(code & 0xFF).unwrap_or(1))
+}
+
+/// `trigger` reads ONLY the control-socket variable — no config, no probes, no
+/// store (M4: the client must never take the index lock from `serve`).
+#[cfg(unix)]
+fn trigger() -> i32 {
+    control::trigger(std::env::var(control::CONTROL_SOCKET_VAR).ok())
+}
+
+/// The control channel exists only on Unix: elsewhere `serve` is unreachable.
+#[cfg(not(unix))]
+fn trigger() -> i32 {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "event": "indexer.trigger.unreachable",
+            "cause": "unsupported_platform",
+        })
+    );
+    4
 }

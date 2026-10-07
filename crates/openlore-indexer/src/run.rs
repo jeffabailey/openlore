@@ -21,7 +21,8 @@
 
 #![allow(dead_code)] // some scaffold seams (serve/stats) land in Phase 03/04
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -50,11 +51,14 @@ use ports::{
     IngestError, IngestSourcePort, RepoListingPort,
 };
 
-use crate::config::{parse_config, BuildProfile, ConfigError, IndexerConfig};
+use crate::config::{
+    parse_config, parse_repo_dids, BuildProfile, ConfigError, IndexerConfig, REPO_DIDS_FILE_VAR,
+};
 
-use crate::pass_runner::PassRunner;
+use crate::pass_runner::{PassLabel, PassRunner};
 use crate::probe_gauntlet::{
-    capability_boundary_probe, origin_classification_probe, probe_gauntlet, ProbeRefusal,
+    capability_boundary_probe, control_channel_probe, origin_classification_probe, probe_gauntlet,
+    ProbeRefusal,
 };
 use crate::search_handler::{search_handler, SharedIndexReads};
 use crate::Command;
@@ -84,8 +88,13 @@ pub struct IndexerWiring {
     /// repo is listed and the only origin a self-attested record may be
     /// indexed from (ADR-071, ADR-077).
     pub pds_lookup: Box<dyn IdentityLookupPort>,
-    /// The repo DIDs one ingest pass enumerates (DWD-9).
+    /// The repo DIDs one ingest pass enumerates (DWD-9) when no list file is
+    /// configured.
     pub repo_dids: Vec<Did>,
+    /// The DID list file each in-`serve` pass reads afresh (ADR-081).
+    pub repo_dids_file: Option<PathBuf>,
+    /// `serve`'s Unix control socket (ADR-080 §3); `None` = no control channel.
+    pub control_socket: Option<PathBuf>,
     /// VERIFY-ONLY resolve path (ADR-026) — never the signing `IdentityPort`.
     pub identity_resolve: Box<dyn IdentityResolvePort>,
     /// The query server is bound only for `serve` (Phase 04); the `ingest`
@@ -146,6 +155,8 @@ impl IndexerWiring {
             repo_listing: Box::new(repo_listing),
             pds_lookup: Box::new(pds_lookup),
             repo_dids: cfg.repo_dids,
+            repo_dids_file: cfg.repo_dids_file,
+            control_socket: cfg.control_socket,
             identity_resolve: Box::new(identity_resolve),
             query_server,
             clock: Box::new(clock),
@@ -230,6 +241,8 @@ pub fn run(command: Command) -> i32 {
         Command::Serve => serve(&wiring),
         Command::Ingest => ingest(&wiring),
         Command::Stats => stats(&wiring),
+        // `trigger` is dispatched by `main` before any of the above (M4).
+        Command::Trigger => EXIT_FATAL,
     }
 }
 
@@ -247,14 +260,186 @@ pub fn run(command: Command) -> i32 {
 /// opened exactly once per process) and sees it through `IndexReadPort` only
 /// (B7) — see `search_handler`.
 fn serve(wiring: &IndexerWiring) -> i32 {
+    let control = match open_control_channel(wiring.control_socket.as_deref()) {
+        Ok(control) => control,
+        Err(refusal) => {
+            emit_health_startup_refused(&refusal);
+            return EXIT_FATAL;
+        }
+    };
+    let stop_answering = AtomicBool::new(false);
     // The pass runner's dedicated thread lives for the whole of `serve`; it
-    // runs the same `ingest` pass over the same store handle (no second open),
-    // off the HTTP executor (ADR-080 §2/§6). Its start handle is held here
-    // until the control channel takes it.
+    // runs the same pass over the same store handle (no second open), off the
+    // HTTP executor (ADR-080 §2/§6). The control channel holds its start handle.
     std::thread::scope(|scope| {
-        let _pass_runner = PassRunner::spawn_scoped(scope, |_pass_id| ingest(wiring));
-        serve_searches(wiring)
+        let runner = Arc::new(PassRunner::spawn_scoped(scope, |pass| {
+            in_serve_pass(wiring, pass)
+        }));
+        if let Some((socket, listener)) = control {
+            let answering = Arc::clone(&runner);
+            let stop = &stop_answering;
+            scope.spawn(move || control_answer(&listener, &answering, stop));
+            if let Err(refusal) = control_channel_probe(&socket, control_round_trip(&socket)) {
+                stop_answering.store(true, Ordering::Relaxed);
+                emit_health_startup_refused(&refusal);
+                return EXIT_FATAL;
+            }
+        }
+        drop(runner);
+        let code = serve_searches(wiring);
+        stop_answering.store(true, Ordering::Relaxed);
+        code
     })
+}
+
+/// The bound control socket, when one is configured.
+#[cfg(unix)]
+type ControlChannel = (PathBuf, std::os::unix::net::UnixListener);
+#[cfg(not(unix))]
+type ControlChannel = (PathBuf, std::convert::Infallible);
+
+/// Bind the configured control socket (replacing a stale file); a bind
+/// failure refuses the start.
+#[cfg(unix)]
+fn open_control_channel(socket: Option<&Path>) -> Result<Option<ControlChannel>, ProbeRefusal> {
+    socket
+        .map(|socket| {
+            crate::control::bind(socket)
+                .map(|listener| (socket.to_path_buf(), listener))
+                .map_err(|err| control_channel_probe(socket, Err(err)).unwrap_err())
+        })
+        .transpose()
+}
+
+/// The control channel exists only on Unix: configuring one elsewhere refuses.
+#[cfg(not(unix))]
+fn open_control_channel(socket: Option<&Path>) -> Result<Option<ControlChannel>, ProbeRefusal> {
+    match socket {
+        None => Ok(None),
+        Some(socket) => Err(control_channel_probe(
+            socket,
+            Err(std::io::Error::other("a control socket needs a Unix host")),
+        )
+        .unwrap_err()),
+    }
+}
+
+#[cfg(unix)]
+fn control_answer(
+    listener: &std::os::unix::net::UnixListener,
+    runner: &Arc<PassRunner>,
+    stop: &AtomicBool,
+) {
+    crate::control::answer_triggers(listener, runner, stop);
+}
+
+#[cfg(not(unix))]
+fn control_answer(never: &std::convert::Infallible, _: &Arc<PassRunner>, _: &AtomicBool) {
+    match *never {}
+}
+
+#[cfg(unix)]
+fn control_round_trip(socket: &Path) -> std::io::Result<()> {
+    crate::control::probe_round_trip(socket)
+}
+
+#[cfg(not(unix))]
+fn control_round_trip(_: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// One pass inside `serve`: load the DID list afresh (the file when one is
+/// configured, ADR-081), announce it under the pass's label, run the pass.
+fn in_serve_pass(wiring: &IndexerWiring, pass: PassLabel) -> i32 {
+    let started = Instant::now();
+    let (repo_dids, source) = match pass_list(wiring) {
+        Ok(listed) => listed,
+        Err(refusal) => return refuse_pass(pass, &refusal, started),
+    };
+    emit_pass_config_loaded(wiring, pass, &repo_dids, source);
+    run_pass(wiring, &repo_dids, Some(pass))
+}
+
+/// Where a pass's DID list came from (`indexer.config.loaded.repo_dids_source`).
+#[derive(Debug, Clone, Copy)]
+enum ListSource {
+    Env,
+    File,
+}
+
+impl ListSource {
+    const fn token(self) -> &'static str {
+        match self {
+            Self::Env => "env",
+            Self::File => "file",
+        }
+    }
+}
+
+/// Why a pass refused its DID list: the cause token and what to name.
+#[derive(Debug)]
+struct ListRefusal {
+    cause: &'static str,
+    variable: &'static str,
+    value: String,
+}
+
+/// This pass's DID list: the file read now when configured, else the
+/// environment's list.
+fn pass_list(wiring: &IndexerWiring) -> Result<(Vec<Did>, ListSource), ListRefusal> {
+    let Some(file) = &wiring.repo_dids_file else {
+        return Ok((wiring.repo_dids.clone(), ListSource::Env));
+    };
+    let text = std::fs::read_to_string(file).map_err(|_| ListRefusal {
+        cause: "repo_dids_unreadable",
+        variable: REPO_DIDS_FILE_VAR,
+        value: file.display().to_string(),
+    })?;
+    parse_repo_dids(&text)
+        .map(|dids| (dids, ListSource::File))
+        .map_err(|error| ListRefusal {
+            cause: "repo_dids_malformed",
+            variable: REPO_DIDS_FILE_VAR,
+            value: error.value,
+        })
+}
+
+/// A refused list: no fetch, one `pass_refused`, then the summary (exit 2).
+fn refuse_pass(pass: PassLabel, refusal: &ListRefusal, started: Instant) -> i32 {
+    emit_in(
+        Some(pass),
+        serde_json::json!({
+            "event": "indexer.ingest.pass_refused",
+            "cause": refusal.cause,
+            "variable": refusal.variable,
+            "value": refusal.value,
+        }),
+    );
+    let mut summary = pass_summary_event(&summarize(&[]), EXIT_FATAL, started);
+    summary["cause"] = refusal.cause.into();
+    emit_in(Some(pass), summary);
+    EXIT_FATAL
+}
+
+/// `indexer.config.loaded` at a pass's start, after its list loaded.
+fn emit_pass_config_loaded(
+    wiring: &IndexerWiring,
+    pass: PassLabel,
+    repo_dids: &[Did],
+    source: ListSource,
+) {
+    emit_in(
+        Some(pass),
+        serde_json::json!({
+            "event": "indexer.config.loaded",
+            "repo_did_count": repo_dids.len(),
+            "repo_dids_source": source.token(),
+            "fallback_configured": wiring.fallback.is_some(),
+            "max_concurrent_fetches": wiring.max_concurrent_fetches,
+            "per_did_time_budget_secs": wiring.per_did_time_budget.as_secs(),
+            "transport_policy": wiring.policy.token(),
+        }),
+    );
 }
 
 /// Bind the query server and answer searches until the process is killed.
@@ -330,6 +515,12 @@ fn serve_searches(wiring: &IndexerWiring) -> i32 {
 /// `indexer.ingest.pass_summary` on stdout (structural counts + DIDs only, NO
 /// claim-content telemetry, WD-105).
 fn ingest(wiring: &IndexerWiring) -> i32 {
+    run_pass(wiring, &wiring.repo_dids, None)
+}
+
+/// One pass over `repo_dids`; every event carries `pass`'s label when the
+/// pass runs inside `serve`.
+fn run_pass(wiring: &IndexerWiring, repo_dids: &[Did], pass: Option<PassLabel>) -> i32 {
     let started = Instant::now();
     let runtime = match current_thread_runtime() {
         Ok(rt) => rt,
@@ -339,9 +530,13 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
         }
     };
 
-    let fetches = fetch_all(wiring, &runtime);
-    fetches.iter().for_each(emit_fallback_read);
-    fetches.iter().for_each(emit_source_skipped);
+    let fetches = fetch_all(wiring, repo_dids, &runtime);
+    fetches
+        .iter()
+        .for_each(|fetch| emit_fallback_read(pass, fetch));
+    fetches
+        .iter()
+        .for_each(|fetch| emit_source_skipped(pass, fetch));
 
     let tally = match gate_all(wiring, &runtime, &fetches) {
         Ok(tally) => tally,
@@ -350,11 +545,11 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
             return EXIT_FATAL;
         }
     };
-    tally.emit();
+    tally.emit(pass);
 
     let summary = summarize(&fetches);
     let exit_code = pass_exit_code(&summary);
-    emit_pass_summary(&summary, exit_code, started);
+    emit_in(pass, pass_summary_event(&summary, exit_code, started));
     exit_code
 }
 
@@ -367,9 +562,13 @@ fn current_thread_runtime() -> std::io::Result<tokio::runtime::Runtime> {
 
 /// The fetch phase: every configured repo DID, at most
 /// `max_concurrent_fetches` at once, results in configured order.
-fn fetch_all(wiring: &IndexerWiring, runtime: &tokio::runtime::Runtime) -> Vec<DidFetch> {
+fn fetch_all(
+    wiring: &IndexerWiring,
+    repo_dids: &[Did],
+    runtime: &tokio::runtime::Runtime,
+) -> Vec<DidFetch> {
     runtime.block_on(
-        stream::iter(&wiring.repo_dids)
+        stream::iter(repo_dids)
             .map(|repo_did| fetch_repo(wiring, repo_did))
             .buffered(wiring.max_concurrent_fetches)
             .collect(),
@@ -545,25 +744,28 @@ fn record_outcome(
 
 /// Emit `indexer.ingest.source_fallback` for a DID read through the fallback
 /// (it was unresolvable — the only way onto that arm, ADR-077).
-fn emit_fallback_read(fetch: &DidFetch) {
+fn emit_fallback_read(pass: Option<PassLabel>, fetch: &DidFetch) {
     if let DidFetch::Read {
         did,
         source: ListingSource::Fallback(fallback),
         ..
     } = fetch
     {
-        emit(serde_json::json!({
-            "event": "indexer.ingest.source_fallback",
-            "did": did.0,
-            "reason": SkipReason::DidUnresolvable.token(),
-            "fallback_url": fallback.as_str(),
-        }));
+        emit_in(
+            pass,
+            serde_json::json!({
+                "event": "indexer.ingest.source_fallback",
+                "did": did.0,
+                "reason": SkipReason::DidUnresolvable.token(),
+                "fallback_url": fallback.as_str(),
+            }),
+        );
     }
 }
 
 /// Emit `indexer.ingest.source_skipped` for a DID that contributed nothing:
 /// its DID and reason, the PDS only when one was resolved — NO claim content.
-fn emit_source_skipped(fetch: &DidFetch) {
+fn emit_source_skipped(pass: Option<PassLabel>, fetch: &DidFetch) {
     if let DidFetch::Skipped { did, skip, pds_url } = fetch {
         let mut event = serde_json::json!({
             "event": "indexer.ingest.source_skipped",
@@ -577,13 +779,18 @@ fn emit_source_skipped(fetch: &DidFetch) {
         if let Some(fallback_failure) = skip.fallback_failure {
             event["fallback_failure"] = serde_json::Value::from(fallback_failure.token());
         }
-        emit(event);
+        emit_in(pass, event);
     }
 }
 
-/// Emit `indexer.ingest.pass_summary` — the pass's LAST stdout event.
-fn emit_pass_summary(summary: &PassSummary, exit_code: i32, started: Instant) {
-    emit(serde_json::json!({
+/// `indexer.ingest.pass_summary` — the pass's LAST stdout event. No pass
+/// purges yet, so `purged_authors` is 0.
+fn pass_summary_event(
+    summary: &PassSummary,
+    exit_code: i32,
+    started: Instant,
+) -> serde_json::Value {
+    serde_json::json!({
         "event": "indexer.ingest.pass_summary",
         "configured": summary.configured,
         "own_pds": summary.own_pds,
@@ -591,12 +798,21 @@ fn emit_pass_summary(summary: &PassSummary, exit_code: i32, started: Instant) {
         "skipped": summary.skipped,
         "duration_ms": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         "exit_code": exit_code,
-    }));
+        "purged_authors": 0,
+    })
 }
 
 /// Print one structured event as a stdout line.
 fn emit(event: serde_json::Value) {
     println!("{event}");
+}
+
+/// Print one pass event, stamped with the pass's label when it has one.
+fn emit_in(pass: Option<PassLabel>, mut event: serde_json::Value) {
+    if let Some(pass) = pass {
+        event["pass_id"] = pass.to_string().into();
+    }
+    emit(event);
 }
 
 /// The resolved verification key of an app-signed record's author (ADR-026
@@ -638,7 +854,7 @@ impl IngestTally {
     /// Emit the structured `indexer.ingest.verified` + `indexer.ingest.rejected`
     /// events to stdout (the DevOps observability contract). Structural counts +
     /// per-reason breakdown ONLY — NO claim-content telemetry (WD-105 privacy).
-    fn emit(&self) {
+    fn emit(&self, pass: Option<PassLabel>) {
         let by_reason: serde_json::Map<String, serde_json::Value> = RefusalCause::ALL
             .iter()
             .map(|cause| {
@@ -646,15 +862,21 @@ impl IngestTally {
                 (cause.token().to_string(), count.into())
             })
             .collect();
-        emit(serde_json::json!({
-            "event": "indexer.ingest.verified",
-            "count": self.verified,
-        }));
-        emit(serde_json::json!({
-            "event": "indexer.ingest.rejected",
-            "count": self.refused.values().sum::<u64>(),
-            "by_reason": by_reason,
-        }));
+        emit_in(
+            pass,
+            serde_json::json!({
+                "event": "indexer.ingest.verified",
+                "count": self.verified,
+            }),
+        );
+        emit_in(
+            pass,
+            serde_json::json!({
+                "event": "indexer.ingest.rejected",
+                "count": self.refused.values().sum::<u64>(),
+                "by_reason": by_reason,
+            }),
+        );
     }
 }
 

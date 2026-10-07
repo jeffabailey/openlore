@@ -237,6 +237,24 @@ pub fn origin_classification_probe() -> Result<(), ProbeRefusal> {
 // refusal: the indexer ACCEPTS only its own SEPARATE `index.duckdb` and REFUSES
 // the user's `openlore.duckdb` (the capability boundary) or any other filename.
 // -----------------------------------------------------------------------------
+/// Earned Trust for the control channel (ADR-080 §3): `serve` reports ready
+/// only after a connect round-trip over its own socket answered. A bind or
+/// round-trip failure refuses the start, naming the socket and what failed.
+pub fn control_channel_probe(
+    socket: &Path,
+    outcome: Result<(), std::io::Error>,
+) -> Result<(), ProbeRefusal> {
+    outcome.map_err(|err| ProbeRefusal {
+        adapter: "control_socket",
+        reason: ports::ProbeRefusalReason::IndexerConfigInvalid,
+        detail: format!("control socket {}: {err}", socket.display()),
+        structured: serde_json::json!({
+            "variable": crate::config::CONTROL_SOCKET_VAR,
+            "value": socket.display().to_string(),
+        }),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

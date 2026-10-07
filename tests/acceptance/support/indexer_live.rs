@@ -643,6 +643,9 @@ impl RestartableIndex {
 
     /// GIVEN a regular file (not a socket) sits at the socket path, as after a crash.
     pub fn leaves_a_stale_socket_file(&self) {
+        // The killed serve's socket node is still there; a socket node cannot
+        // be opened for writing, so replace it with the regular stale file.
+        let _ = std::fs::remove_file(&self.socket);
         std::fs::write(&self.socket, b"stale").expect("leave a stale socket file");
     }
 }

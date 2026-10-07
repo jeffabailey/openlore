@@ -10,15 +10,19 @@
 //!
 //! The runner publishes a [`PassStatus`] that readers can only read: its fields
 //! are private to this module and nothing outside the runner can set them.
+//!
+//! Every pass carries a [`PassLabel`]: the runner's boot nonce (the Unix time
+//! in milliseconds at which this runner started) and the pass's sequence
+//! number, written `<boot>-<seq>`. The sequence alone repeats after a restart;
+//! the boot nonce keeps a label unique across restarts, so "exactly one
+//! `pass_summary` per `pass_id`" stays checkable over a whole log stream.
 
-// The start handle and status readers are consumed by the control channel
-// (01-03) and `/healthz` (01-04); until then only `serve` holds the handle.
-#![allow(dead_code)]
-
+use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::Scope;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use appview_domain::pass_runner::{
     single_flight, PassEnding, PassId, RunnerEvent, RunnerReply, RunnerSlot,
@@ -26,6 +30,34 @@ use appview_domain::pass_runner::{
 
 /// The exit code a panicked pass reports (ADR-080 §7: `pass_panicked` → 2).
 const EXIT_PASS_PANICKED: i32 = 2;
+
+/// The process-unique label of one pass: `<boot nonce>-<sequence>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PassLabel {
+    boot: BootNonce,
+    pass_id: PassId,
+}
+
+impl fmt::Display for PassLabel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}-{}", self.boot.0, self.pass_id.0)
+    }
+}
+
+/// When a runner started (Unix milliseconds); distinguishes its passes from
+/// those of an earlier run of the same process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BootNonce(u128);
+
+impl BootNonce {
+    fn now() -> Self {
+        Self(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |since| since.as_millis()),
+        )
+    }
+}
 
 /// The last pass the runner finished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +75,8 @@ pub struct PassStatus {
     last_finished: Option<FinishedPass>,
 }
 
+// `/healthz` (01-04) is the first production reader of the status.
+#[cfg_attr(not(test), allow(dead_code))]
 impl PassStatus {
     const IDLE: Self = Self {
         slot: RunnerSlot::Idle,
@@ -92,25 +126,41 @@ struct PassOrder {
 /// The start handle of a runner whose pass thread lives in a scope. Dropping
 /// it stops the thread once any running pass ends.
 pub struct PassRunner {
+    boot: BootNonce,
     state: Arc<Mutex<RunnerState>>,
     orders: mpsc::Sender<PassOrder>,
 }
 
 impl PassRunner {
     /// Spawn the runner's dedicated pass thread in `scope`. `pass` is the pass
-    /// body (the same `ingest` pass); it returns the pass's exit code.
+    /// body (the same `ingest` pass, told its label); it returns the pass's
+    /// exit code.
     pub fn spawn_scoped<'scope, 'env, F>(scope: &'scope Scope<'scope, 'env>, pass: F) -> Self
     where
-        F: FnMut(PassId) -> i32 + Send + 'scope,
+        F: FnMut(PassLabel) -> i32 + Send + 'scope,
     {
+        let boot = BootNonce::now();
         let state = Arc::new(Mutex::new(RunnerState {
             status: PassStatus::IDLE,
             next_id: PassId(1),
         }));
         let (orders, inbox) = mpsc::channel();
         let thread_state = Arc::clone(&state);
-        scope.spawn(move || run_orders(&thread_state, &inbox, pass));
-        Self { state, orders }
+        scope.spawn(move || run_orders(&thread_state, &inbox, boot, pass));
+        Self {
+            boot,
+            state,
+            orders,
+        }
+    }
+
+    /// The label a pass of this runner carries in events and replies.
+    #[must_use]
+    pub fn label(&self, pass_id: PassId) -> PassLabel {
+        PassLabel {
+            boot: self.boot,
+            pass_id,
+        }
     }
 
     /// Ask for one pass. Starts it when idle; otherwise reports the running pass.
@@ -139,7 +189,8 @@ impl PassRunner {
         }
     }
 
-    /// The runner's published status.
+    /// The runner's published status (read by `/healthz`, 01-04).
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub fn status(&self) -> PassStatus {
         lock(&self.state).status
@@ -147,12 +198,20 @@ impl PassRunner {
 }
 
 /// The pass thread: run each order, free the slot, report the exit code.
-fn run_orders<F>(state: &Mutex<RunnerState>, inbox: &mpsc::Receiver<PassOrder>, mut pass: F)
-where
-    F: FnMut(PassId) -> i32,
+fn run_orders<F>(
+    state: &Mutex<RunnerState>,
+    inbox: &mpsc::Receiver<PassOrder>,
+    boot: BootNonce,
+    mut pass: F,
+) where
+    F: FnMut(PassLabel) -> i32,
 {
     for order in inbox {
-        let (ending, exit_code) = match catch_unwind(AssertUnwindSafe(|| pass(order.pass_id))) {
+        let label = PassLabel {
+            boot,
+            pass_id: order.pass_id,
+        };
+        let (ending, exit_code) = match catch_unwind(AssertUnwindSafe(|| pass(label))) {
             Ok(exit_code) => (PassEnding::Completed, exit_code),
             Err(_panic) => (PassEnding::Panicked, EXIT_PASS_PANICKED),
         };

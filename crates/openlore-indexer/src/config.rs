@@ -22,6 +22,10 @@ use ports::net_policy::TransportPolicy;
 
 /// The repo DIDs one ingest pass enumerates.
 pub const REPO_DIDS_VAR: &str = "OPENLORE_INDEXER_REPO_DIDS";
+/// The DID list FILE every in-`serve` pass reads afresh (ADR-081).
+pub const REPO_DIDS_FILE_VAR: &str = "OPENLORE_INDEXER_REPO_DIDS_FILE";
+/// The Unix control socket `serve` listens on for `trigger` (ADR-080 §3).
+pub const CONTROL_SOCKET_VAR: &str = "OPENLORE_INDEXER_CONTROL_SOCKET";
 /// The optional fallback listing source.
 pub const FALLBACK_VAR: &str = "OPENLORE_INDEXER_SOURCE_URL";
 /// TEST-ONLY: admits plain http to loopback in a debug build.
@@ -88,6 +92,12 @@ pub struct IndexerConfig {
     pub listen_addr: String,
     /// The distinct repo DIDs one ingest pass enumerates, first-seen order (DWD-9).
     pub repo_dids: Vec<Did>,
+    /// The DID list file each in-`serve` pass reads afresh (ADR-081);
+    /// `None` = the passes use `repo_dids`.
+    pub repo_dids_file: Option<PathBuf>,
+    /// The ABSOLUTE path of `serve`'s Unix control socket (ADR-080 §3);
+    /// `None` = no control channel.
+    pub control_socket: Option<PathBuf>,
     /// The PLC directory each repo DID's document is resolved from.
     pub plc_endpoint: String,
     /// Which PDS addresses may be contacted (DD-IPF-5).
@@ -137,6 +147,10 @@ pub fn parse_config(
     };
     let policy = transport_policy(setting(LOOPBACK_SEAM_VAR).as_deref(), profile)?;
     let repo_dids = parse_repo_dids(setting(REPO_DIDS_VAR).as_deref().unwrap_or_default())?;
+    let repo_dids_file = setting(REPO_DIDS_FILE_VAR).map(PathBuf::from);
+    let control_socket = setting(CONTROL_SOCKET_VAR)
+        .map(|path| control_socket_path(&path))
+        .transpose()?;
     let fallback = setting(FALLBACK_VAR)
         .map(|url| fallback_url(&url, policy))
         .transpose()?;
@@ -163,6 +177,8 @@ pub fn parse_config(
         fallback,
         listen_addr: lookup(LISTEN_ADDR_VAR).unwrap_or_else(|| DEFAULT_LISTEN_ADDR.to_string()),
         repo_dids,
+        repo_dids_file,
+        control_socket,
         plc_endpoint,
         policy,
         max_concurrent_fetches: usize::try_from(max_concurrent_fetches).unwrap_or(usize::MAX),
@@ -187,9 +203,24 @@ fn transport_policy(
     }
 }
 
+/// The control socket must be an absolute path (a relative one would depend on
+/// the working directory of whoever starts `serve` or `trigger`).
+fn control_socket_path(path: &str) -> Result<PathBuf, ConfigError> {
+    let socket = PathBuf::from(path);
+    if socket.is_absolute() {
+        Ok(socket)
+    } else {
+        Err(ConfigError::new(
+            CONTROL_SOCKET_VAR,
+            path,
+            "must be an absolute path",
+        ))
+    }
+}
+
 /// The distinct repo DIDs of a comma- or whitespace-separated list, in
 /// first-seen order; the first malformed entry refuses the whole list.
-fn parse_repo_dids(list: &str) -> Result<Vec<Did>, ConfigError> {
+pub fn parse_repo_dids(list: &str) -> Result<Vec<Did>, ConfigError> {
     list.split(|c: char| c == ',' || c.is_whitespace())
         .filter(|entry| !entry.is_empty())
         .map(repo_did)
@@ -316,6 +347,31 @@ mod tests {
 
     fn parse(env: &BTreeMap<&str, String>) -> Result<IndexerConfig, ConfigError> {
         parse_config(|name| env.get(name).cloned(), BuildProfile::Development)
+    }
+
+    proptest! {
+        /// The control socket loads iff its path is absolute (DISTILL decision
+        /// 4); a refusal names the variable and the value as given.
+        #[test]
+        fn a_control_socket_loads_iff_its_path_is_absolute(
+            rooted in any::<bool>(),
+            segments in proptest::collection::vec("[a-z0-9._-]{1,12}", 1..4),
+        ) {
+            let relative = segments.join("/");
+            let path = if rooted { format!("/{relative}") } else { relative };
+            let env = BTreeMap::from([(CONTROL_SOCKET_VAR, path.clone())]);
+            match parse(&env) {
+                Ok(config) => {
+                    prop_assert!(rooted);
+                    prop_assert_eq!(config.control_socket, Some(PathBuf::from(&path)));
+                }
+                Err(error) => {
+                    prop_assert!(!rooted);
+                    prop_assert_eq!(error.variable, CONTROL_SOCKET_VAR);
+                    prop_assert_eq!(error.value, path);
+                }
+            }
+        }
     }
 
     proptest! {
