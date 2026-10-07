@@ -675,3 +675,10 @@ mod pass_core_properties {
 #[cfg(test)]
 #[path = "config_contracts.rs"]
 mod contracts;
+
+/// indexer-deployment CORE-8 (new settings ranges), moved VERBATIM from
+/// `tests/acceptance/indexer_deployment_core.rs` for the same reason as
+/// `pass_core_properties` above. RED until DELIVER 02-03.
+#[cfg(test)]
+#[path = "deployment_settings_properties.rs"]
+mod deployment_settings_properties;

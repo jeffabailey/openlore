@@ -1,0 +1,525 @@
+{
+  "roadmap": {
+    "project_id": "indexer-deployment",
+    "created_at": "2026-10-07T03:43:18Z",
+    "total_steps": 11,
+    "paradigm": "functional Rust (ADR-007) \u2014 crafter: @nw-functional-software-crafter",
+    "scenario_count": 75,
+    "tag_renumbering": "DISTILL tagged the 74 scenarios with a 01..08-xx scheme (one id per scenario). This roadmap regroups them into 11 steps; every #[ignore = \"DELIVER <step>: ...\"] reason (and the todo!(\"DELIVER ...\") RED bindings in indexer_deployment_core.rs) was rewritten to the new step id, description text unchanged. Old -> new: 07-02 -> 01-01; 05-04 -> 01-02; 01-01, 01-03, 02-02, 02-04, 02-05, 02-07, 02-08, 02-16, 07-05 -> 01-03; 01-02, 02-01, 02-03, 02-06, 02-09, 02-14, 05-03, 05-09 -> 01-04; 03-01..03-07, 05-02 -> 02-01; 03-08..03-16, 05-01, 05-10, 07-01, 07-03, 07-04, 07-06 -> 02-02; 02-10..02-13, 02-15, 02-17, 03-17, 04-05, 05-05, 05-06 -> 02-03; 04-01..04-04, 04-06, 05-07, 05-08 -> 02-04; 06-02, 08-02 -> 03-01; 08-01, 08-03..08-08 -> 03-02; 08-09..08-12 -> 03-03. The 'Suggested DELIVER order' in distill/test-scenarios.md is superseded by this file. The pre-existing indexer_per_did_config release-guard ignore (CI marker) is untouched. Roadmap review F2 (2026-10-07): four properties moved VERBATIM (same fn names, same tags) out of the cli target indexer_deployment_core, because cli may not link their crates (check-arch CLI_FORBIDDEN_INDEXER_DEPS) and openlore-indexer is bin-only: CORE-8 each_new_setting_accepts_exactly_its_range -> crates/openlore-indexer/src/deployment_settings_properties.rs (02-03); CORE-9 only_two_routes_exist_on_the_public_listener and CORE-9b requests_are_admitted_exactly_within_their_bounds -> crates/adapter-xrpc-query-server/tests/public_surface_properties.rs (02-04, proptest dev-dep added); CORE-11 purging_an_author_changes_only_that_author_s_claims_and_files -> crates/adapter-index-store/tests/purge_properties.rs (02-02). Stub comments in indexer_deployment_core.rs point to each. Review F3 added XP-13 the_liveness_line_fails_closed_when_the_shipped_heartbeat_cannot_be_read (xtask/tests/indexer_deployment_platform.rs, 03-02): 74 -> 75 scenarios.",
+    "global_rules": [
+      "Keep main green: every step is independently committable; scenarios of later steps stay #[ignore]. Remove one ignore at a time, see it RED for the right reason, then GREEN.",
+      "RED gate (distill/red-classification.md): most layer-3 scenarios first fail at their setup pass until `trigger` lands (01-03). When enabling a scenario, re-check it fails on ITS OWN assertion before implementing.",
+      "Build the binaries before acceptance tests: cargo build -p openlore-indexer -p cli (and -p openlore-review-app in 03-01). The live harness spawns target/debug binaries.",
+      "After any change to a shared crate (ports, appview-domain, adapter-index-store, adapter-xrpc-query-server, xtask, tests/acceptance/support) run dependent suites NARROWLY (cargo test -p <crate> / cargo test -p cli --test <target>), never the whole workspace on the host; CI verifies the full suite.",
+      "Trunk-based: commit to main, no PRs. .github/workflows changes are pushed over SSH (gh credential helper lacks workflow scope).",
+      "Orchestrator decisions (distill/wave-decisions.md 1-5) are binding: fault seam OPENLORE_INDEXER_TEST_FAULT debug-only (release refuses start); review-app caps REVIEW_DB_MEMORY_LIMIT_MB / REVIEW_DB_THREADS; render-dids.sh honours INDEXER_CONFIG_DIR, chown only as root, no bats; control socket must be an absolute path; CLI prints 'Network index unavailable' on a 500."
+    ]
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Thin slice: serve owns the index and runs triggered passes",
+      "description": "One store handle per process with a read/write port split, an in-serve pass runner on a dedicated thread with single-flight, the `trigger` verb over a Unix control socket (dispatched before config and store open), a guaranteed single pass_summary and GET /healthz. Ends with the walking skeleton (WS-0..2) green.",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "One store handle per process and read/write port split (B1, B7, B10)",
+          "description": "serve opens index.duckdb once and shares that handle across probe, search and (next step) the pass runner. IndexReadPort (queries) is split from the write port (probe, upsert). The search handler moves into its own openlore-indexer module holding only the read port. serve/main doc comments describe real behaviour.",
+          "criteria": [
+            "serve opens the index exactly once per process; existing indexer and search suites pass with unchanged assertions",
+            "The search-handler module names the read port only, never a write, upsert or purge capability (XD-2)",
+            "check-arch reports indexer_search_handler_read_only; it fails on a planted write-port token in the search module and passes on the real tree",
+            "serve and main doc comments no longer claim an ingest loop"
+          ],
+          "time_estimate_hours": 4,
+          "dependencies": [],
+          "test_file": "xtask/tests/indexer_deployment_architecture.rs",
+          "test_files": [
+            "xtask/tests/indexer_deployment_architecture.rs"
+          ],
+          "scenario_name": "the_search_handler_can_only_read_the_index",
+          "scenario_fns": [
+            "the_search_handler_can_only_read_the_index"
+          ],
+          "test_command": "cargo test -p xtask --test indexer_deployment_architecture && cargo test -p xtask --lib && cargo test -p ports && cargo test -p adapter-index-store && cargo build -p openlore-indexer -p cli && cargo test -p openlore-indexer && cargo test -p cli --test indexer_ingest --test appview_core --test appview_search --test search_hide_retracted --test review_app_self_attested_readers --test indexer_per_did_fetch",
+          "files_to_modify": [
+            "crates/ports/src/index_store.rs",
+            "crates/ports/src/lib.rs",
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/openlore-indexer/src/search_handler.rs (NEW)",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/openlore-indexer/src/main.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nContract shape: read port = unbounded-preservation (snapshot before == after; PBT over the existing upsert universe). Principle 12: the handler is TYPED so it cannot reach a write method. XD-2 scans every crates/openlore-indexer/src/*search*.rs for the tokens IndexStorePort/IndexPurgePort/upsert/purge and requires IndexReadPort \u2014 keep those words out of that file, comments included. Add only the read-only check-arch rule here (fixture unit tests, classify_forbidden_tokens pattern); the two purge rules land in 02-02. No schema or lexicon change.\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*, indexer_pass_core, and openlore-review-app suites when touching the review app); build openlore-indexer before acceptance tests; keep main green; .github/workflows changes push over SSH."
+        },
+        {
+          "id": "01-02",
+          "name": "In-serve pass runner on a dedicated thread with single-flight (B2, B13 thread)",
+          "description": "serve hosts a pass runner that executes the existing ingest pass body on its own OS thread with its own runtime, sharing the one store handle. A pure single-flight transition decides start / busy (naming the running pass) / free, and the runner publishes a read-only PassStatus view.",
+          "criteria": [
+            "Property: the runner never runs two passes; busy names the running pass id; every ending (completed, panicked, deadline) frees the slot; an ending while idle is ignored (CORE-6)",
+            "A pass started inside serve uses the same store handle as search; no second open",
+            "The pass runs off the HTTP executor: the runtime serving search is never blocked by a pass",
+            "PassStatus is exposed to readers as a view with no setter reachable outside the runner"
+          ],
+          "time_estimate_hours": 5,
+          "dependencies": [
+            "01-01"
+          ],
+          "test_file": "tests/acceptance/indexer_deployment_core.rs",
+          "test_files": [
+            "tests/acceptance/indexer_deployment_core.rs"
+          ],
+          "scenario_name": "the_runner_never_runs_two_passes_and_always_frees_its_slot",
+          "scenario_fns": [
+            "the_runner_never_runs_two_passes_and_always_frees_its_slot"
+          ],
+          "test_command": "cargo test -p cli --test indexer_deployment_core && cargo test -p appview-domain && cargo build -p openlore-indexer -p cli && cargo test -p openlore-indexer && cargo test -p cli --test indexer_ingest --test indexer_per_did_fetch --test indexer_pass_core",
+          "files_to_modify": [
+            "crates/appview-domain/src/pass_runner.rs (NEW, pure single-flight transition)",
+            "crates/appview-domain/src/lib.rs",
+            "crates/openlore-indexer/src/pass_runner.rs (NEW)",
+            "crates/openlore-indexer/src/run.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nBind sut_single_flight with ONE call into a pure transition in a library crate the cli suite already links (appview-domain); if it must stay binary-private, move the property verbatim into openlore-indexer unit tests (indexer_pass_core precedent) keeping the fn name. The runner module file name must contain 'runner' (XD-3 in 02-02 looks for it). Reuse the ingest pass body; do not fork it. No trigger yet: the runner is reachable only in-process here (its unit/integration test is single-example wiring).\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*, indexer_pass_core, and openlore-review-app suites when touching the review app); build openlore-indexer before acceptance tests; keep main green; .github/workflows changes push over SSH."
+        },
+        {
+          "id": "01-03",
+          "name": "Walking skeleton: `trigger` over a Unix control socket runs one pass in serve (B3, B5 minimal)",
+          "description": "OPENLORE_INDEXER_CONTROL_SOCKET (absolute path, opt-in, Unix only) opens a control channel in serve; `openlore-indexer trigger` is dispatched before config parsing, probes and store open, asks serve for one pass and exits with that pass's own 0/2/3, busy -> 0 (coalesced), unreachable -> 4. The runner mints a pass_id per pass and reads OPENLORE_INDEXER_REPO_DIDS_FILE each pass (happy path).",
+          "criteria": [
+            "Maria finds Priya's and Dmitri's claims from two PDS hosts after one triggered pass; a claim approved later is found after the next pass with no restart (WS-1, WS-2)",
+            "Every pass carries its own pass_id on its per-pass config.loaded, every pass event and its pass_summary; trigger exits with that pass's own exit code",
+            "A second trigger during a pass coalesces with exit 0 and one summary; trigger with serve down exits 4 with indexer.trigger.unreachable and opens no store (PS-13, PS-15)",
+            "trigger needs only the socket variable; a stale socket file from a crash never blocks the next start (PS-16, PS-24)",
+            "A pass is never refused because search is busy; a pass with nothing new changes nothing Maria sees; the control module binds only a Unix socket, never TCP (PS-11, PS-25, XD-5)"
+          ],
+          "time_estimate_hours": 7,
+          "dependencies": [
+            "01-02"
+          ],
+          "test_file": "tests/acceptance/indexer_deployment_walking_skeleton.rs",
+          "test_files": [
+            "tests/acceptance/indexer_deployment_walking_skeleton.rs",
+            "tests/acceptance/indexer_deployment_passes.rs",
+            "xtask/tests/indexer_deployment_architecture.rs"
+          ],
+          "scenario_name": "maria_finds_claims_from_authors_on_different_pdses_after_the_scheduled_pass",
+          "scenario_fns": [
+            "maria_finds_claims_from_authors_on_different_pdses_after_the_scheduled_pass",
+            "a_claim_priya_approves_after_a_pass_becomes_searchable_on_the_next_pass",
+            "passes_never_overlap",
+            "the_timer_firing_while_serve_is_down_reports_that_no_pass_ran",
+            "the_timer_needs_nothing_but_the_control_socket_to_start_a_pass",
+            "a_socket_file_left_over_from_a_crash_does_not_stop_the_next_start",
+            "a_pass_is_never_refused_because_search_is_busy",
+            "a_pass_with_nothing_new_on_the_network_changes_nothing_maria_sees",
+            "the_control_channel_is_a_unix_socket_never_a_network_listener"
+          ],
+          "test_command": "cargo build -p openlore-indexer -p cli && cargo test -p cli --test indexer_deployment_walking_skeleton && cargo test -p cli --test indexer_deployment_passes && cargo test -p xtask --test indexer_deployment_architecture && cargo test -p openlore-indexer && cargo test -p cli --test indexer_ingest --test indexer_per_did_fetch --test indexer_per_did_config --test appview_search --test search_hide_retracted --test review_app_self_attested_readers",
+          "files_to_modify": [
+            "crates/openlore-indexer/src/control.rs (NEW, cfg(unix))",
+            "crates/openlore-indexer/src/main.rs",
+            "crates/openlore-indexer/src/config.rs",
+            "crates/openlore-indexer/src/pass_runner.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/openlore-indexer/src/probe_gauntlet.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nEnable WS-1 FIRST (DISTILL order), then WS-2, then the rest; each re-checks its own assertion once trigger exists (RED gate). Earned Trust: stale socket replaced at bind, then a connect round-trip probe before 'listening' (ADR-080 ET). Control channel compiled only on Unix; trigger reads ONLY the socket variable (M4). Absolute-path socket rule (orchestrator decision 4) may be refused here or in 02-03 with AS-55. The list file is read per pass here on the happy path; refusals/BOM/exclusivity/age are 02-01. pass_id (review F1): today emit_pass_summary (run.rs) emits NO pass_id, and assert_one_summary_matching (support/indexer_live.rs) requires one, so WS-1 cannot go green without it. The runner mints a never-repeating pass_id per pass (the single-flight id from 01-02) and stamps it on the per-pass config.loaded (PS-13 reads it), every pass event and pass_summary; the control reply carries the pass's exit code and trigger exits with it (busy -> 0, unreachable -> 4). The every-ending summary guarantee (exit 2 paths, cause token) is 01-04.\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*, indexer_pass_core, and openlore-review-app suites when touching the review app); build openlore-indexer before acceptance tests; keep main green; .github/workflows changes push over SSH."
+        },
+        {
+          "id": "01-04",
+          "name": "One pass_summary per pass, /healthz, end-of-pass checkpoint (B4, B8 health, B14)",
+          "description": "Every pass ending emits exactly one pass_summary with pass_id, exit_code and (iff exit 2) a cause token, including upsert failures; trigger propagates it. GET /healthz projects PassStatus (status + last_successful_pass_at only). An explicit CHECKPOINT on the write port ends every pass without stalling search.",
+          "criteria": [
+            "A fresh deployment answers search 200 empty and /healthz 200 with last_successful_pass_at null (WS-0); /healthz shows only the end time of the last good pass (PS-22)",
+            "The timer sees the pass's own exit code and exactly one summary for 0, 0-with-skip, 3 and 2; an upsert failure ends with exit 2 and search keeps answering (PS-14, PS-17)",
+            "Search answers within 1 s while a pass runs and across the end-of-pass checkpoint (PS-10, PS-12)",
+            "Property: exit 2 outranks 3 outranks 0 and a cause exists iff exit 2; the canonical-pass table holds (CORE-5 + pinned)",
+            "Property: the health projection is 503 store_unusable or 200 with exactly status and time (CORE-10)"
+          ],
+          "time_estimate_hours": 6,
+          "dependencies": [
+            "01-03"
+          ],
+          "test_file": "tests/acceptance/indexer_deployment_passes.rs",
+          "test_files": [
+            "tests/acceptance/indexer_deployment_walking_skeleton.rs",
+            "tests/acceptance/indexer_deployment_passes.rs",
+            "tests/acceptance/indexer_deployment_core.rs"
+          ],
+          "scenario_name": "the_timer_sees_the_pass_s_own_exit_code_and_exactly_one_summary",
+          "scenario_fns": [
+            "a_fresh_deployment_answers_before_its_first_pass",
+            "the_timer_sees_the_pass_s_own_exit_code_and_exactly_one_summary",
+            "a_pass_that_cannot_store_a_claim_ends_with_exit_2_and_search_keeps_answering",
+            "the_health_response_shows_when_the_last_good_pass_ended_and_only_that",
+            "search_keeps_answering_within_a_second_while_a_pass_runs",
+            "searches_overlapping_the_end_of_a_pass_still_answer_within_a_second",
+            "a_pass_s_exit_code_puts_local_failures_before_outages_before_success",
+            "the_exit_codes_of_the_canonical_passes",
+            "the_health_response_is_honest_and_minimal"
+          ],
+          "test_command": "cargo build -p openlore-indexer -p cli && cargo test -p cli --test indexer_deployment_walking_skeleton && cargo test -p cli --test indexer_deployment_passes && cargo test -p cli --test indexer_deployment_core && cargo test -p appview-domain && cargo test -p adapter-xrpc-query-server && cargo test -p adapter-index-store && cargo test -p openlore-indexer && cargo test -p cli --test indexer_ingest --test indexer_pass_core --test indexer_per_did_resilience --test appview_search --test search_hide_retracted",
+          "files_to_modify": [
+            "crates/appview-domain/src/ingest_pass.rs",
+            "crates/appview-domain/src/health.rs (NEW, pure projection)",
+            "crates/ports/src/index_store.rs",
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/adapter-xrpc-query-server/src/lib.rs",
+            "crates/openlore-indexer/src/health.rs (NEW)",
+            "crates/openlore-indexer/src/pass_runner.rs",
+            "crates/openlore-indexer/src/run.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nExtend pass_exit_code over the FULL outcome (list refused, purge failed, upsert failed, panicked, deadline) now \u2014 later steps only wire causes. Existing callers of pass_exit_code keep their results (indexer_pass_core regression). Summary is printed, THEN the exit returns (ADR-078 am.). PS-17 uses a real fault (a file where an artifact dir belongs), no seam. Health handler reads the PassStatus view only; the 503 arm is wired in 02-03. The 3-exit-code table is closed-world: keep it example-based (falsifier gate).\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*, indexer_pass_core, and openlore-review-app suites when touching the review app); build openlore-indexer before acceptance tests; keep main green; .github/workflows changes push over SSH."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "DID-list file, purge, robustness and public bounds",
+      "description": "Per-pass DID-list file with refusals (ADR-081), opt-in purge of unlisted authors (ADR-082, ADR-078 amended), robustness (catch_unwind, unusable store -> exit, 503/500, pass deadline, gate-as-you-go, author-key cache, DuckDB caps, debug-only fault seam) and bounded public surface (ADR-083).",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "DID-list file read and validated each pass (B5, B15)",
+          "description": "OPENLORE_INDEXER_REPO_DIDS_FILE is re-read every pass and parsed whole with the existing DID rules: CRLF tolerated, BOM refused, first bad entry named. A bad or unreadable list refuses the pass (exit 2, one summary, nothing fetched or purged), never serve. REPO_DIDS and REPO_DIDS_FILE together refuse startup. Each pass reports repo_dids_age_secs.",
+          "criteria": [
+            "A DID added to the list is indexed on the next pass; two edits in a row are picked up by two passes, no restart (DL-30, DL-31)",
+            "A mistyped list refuses the pass naming the bad entry, search keeps serving and the next good list recovers; a missing or unreadable list refuses the pass and touches nothing (DL-32, DL-33)",
+            "Line endings are tolerated and a byte-order mark is refused loudly (DL-34)",
+            "Setting both a list and a list file refuses startup; each pass's config.loaded reports the list age (DL-35, DL-37)",
+            "Property: reading a list yields all its distinct valid DIDs in first-seen order or names the first bad entry (CORE-4)"
+          ],
+          "time_estimate_hours": 5,
+          "dependencies": [
+            "01-04"
+          ],
+          "test_file": "tests/acceptance/indexer_deployment_did_list.rs",
+          "test_files": [
+            "tests/acceptance/indexer_deployment_did_list.rs",
+            "tests/acceptance/indexer_deployment_core.rs"
+          ],
+          "scenario_name": "a_did_added_to_the_list_is_indexed_on_the_next_pass_without_a_restart",
+          "scenario_fns": [
+            "a_did_added_to_the_list_is_indexed_on_the_next_pass_without_a_restart",
+            "two_list_edits_in_a_row_are_picked_up_by_two_passes_in_a_row",
+            "a_mistyped_list_refuses_the_pass_names_the_bad_entry_and_keeps_search_serving",
+            "a_list_the_index_cannot_read_refuses_the_pass_and_touches_nothing",
+            "line_endings_are_tolerated_a_hidden_byte_order_mark_is_refused_loudly",
+            "setting_both_a_list_and_a_list_file_is_refused_at_start",
+            "each_pass_reports_how_old_the_did_list_is",
+            "reading_the_did_list_loads_it_whole_or_names_the_first_bad_entry"
+          ],
+          "test_command": "cargo build -p openlore-indexer -p cli && cargo test -p cli --test indexer_deployment_did_list && cargo test -p cli --test indexer_deployment_core && cargo test -p appview-domain && cargo test -p openlore-indexer && cargo test -p cli --test indexer_per_did_config --test indexer_pass_core --test indexer_ingest",
+          "files_to_modify": [
+            "crates/appview-domain/src/did_list.rs (NEW, pure list read)",
+            "crates/appview-domain/src/lib.rs",
+            "crates/openlore-indexer/src/config.rs",
+            "crates/openlore-indexer/src/pass_runner.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nReuse parse_repo_dids rules (today private in openlore-indexer config.rs): move the pure parse into appview-domain so config.rs and the per-pass read share it and CORE-4 binds with one call; existing config properties (indexer_per_did_config, config_contracts.rs) must stay green. Read the file via its path each pass (never cache an fd/inode: H1, ADR-081). A refused list yields cause pass_refused through the 01-04 exit function. Events stay structural (no list contents beyond the bad entry).\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*, indexer_pass_core, and openlore-review-app suites when touching the review app); build openlore-indexer before acceptance tests; keep main green; .github/workflows changes push over SSH."
+        },
+        {
+          "id": "02-02",
+          "name": "Opt-in purge of unlisted authors (B6) with its check-arch rules",
+          "description": "With OPENLORE_INDEXER_PURGE_UNLISTED=1 the runner, at pass start, plans a purge (pure set difference of indexed authors and the loaded non-empty list) and removes each removed author's claims, children and artifact files through a probed IndexPurgePort held only by the runner. Exact bare-DID match, resumable, idempotent; skips and refused/empty lists never delete.",
+          "criteria": [
+            "Removing an author removes their app-signed and self-attested claims on the next pass, even when every listed author is unreachable (exit 3); still-listed unreachable authors keep theirs (PG-40, PG-46, PG-41, PG-42)",
+            "An empty or unusable list purges nothing; without the setting nothing is purged; a look-alike DID is never purged (PG-36, PG-43, PG-44, PG-45)",
+            "Purging is done once and re-listing restores the author's claims (PG-47)",
+            "Properties: the plan never intersects the list, is a subset of indexed, empty list -> suppressed (CORE-1..3); purge_author changes only the target's rows and files and is idempotent (CORE-11)",
+            "check-arch has the three rules; purge only in the runner; parent-table DELETE only in purge.rs; the purge port carries a probe (XD-1, XD-3, XD-4, XD-6)"
+          ],
+          "time_estimate_hours": 8,
+          "dependencies": [
+            "02-01"
+          ],
+          "test_file": "tests/acceptance/indexer_deployment_did_list.rs",
+          "test_files": [
+            "tests/acceptance/indexer_deployment_did_list.rs",
+            "tests/acceptance/indexer_deployment_core.rs",
+            "crates/adapter-index-store/tests/purge_properties.rs",
+            "xtask/tests/indexer_deployment_architecture.rs"
+          ],
+          "scenario_name": "removing_an_author_from_the_list_removes_their_claims_on_the_next_pass",
+          "scenario_fns": [
+            "removing_an_author_from_the_list_removes_their_claims_on_the_next_pass",
+            "a_removed_author_is_purged_even_when_every_listed_author_is_unreachable",
+            "an_author_who_is_still_listed_but_unreachable_keeps_their_claims",
+            "a_list_that_drops_an_author_but_cannot_be_used_purges_nothing",
+            "an_empty_list_never_empties_the_index",
+            "without_the_purge_setting_a_removed_author_s_claims_stay",
+            "only_the_removed_author_is_purged_never_one_whose_did_merely_starts_the_same_way",
+            "a_removed_author_s_app_signed_and_self_attested_claims_are_both_purged",
+            "purging_is_done_once_and_listing_the_author_again_brings_their_claims_back",
+            "the_purge_plan_is_the_set_of_indexed_authors_no_longer_listed",
+            "the_purge_plan_never_names_a_listed_look_alike",
+            "purging_an_author_changes_only_that_author_s_claims_and_files",
+            "the_three_new_rules_are_part_of_check_arch",
+            "only_the_pass_runner_can_purge",
+            "the_index_store_deletes_only_in_its_purge_module",
+            "the_purge_port_implementation_is_probed"
+          ],
+          "test_command": "cargo build -p openlore-indexer -p cli && cargo test -p cli --test indexer_deployment_did_list && cargo test -p cli --test indexer_deployment_core && cargo test -p xtask --test indexer_deployment_architecture && cargo test -p xtask --lib && cargo test -p appview-domain && cargo test -p ports && cargo test -p adapter-index-store --test purge_properties && cargo test -p adapter-index-store && cargo test -p openlore-indexer && cargo test -p cli --test indexer_ingest --test appview_search --test search_hide_retracted --test review_app_self_attested_readers --test indexer_pass_core",
+          "files_to_modify": [
+            "crates/appview-domain/src/purge_plan.rs (NEW, pure plan_purge)",
+            "crates/appview-domain/src/lib.rs",
+            "crates/ports/src/index_store.rs",
+            "crates/adapter-index-store/src/purge.rs (NEW)",
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/openlore-indexer/src/pass_runner.rs",
+            "crates/openlore-indexer/src/config.rs",
+            "crates/openlore-indexer/src/main.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nOrder: CORE-1..3 (cli target, bind plan_purge in appview-domain) + CORE-11 first, then PG-40 and the rest. CORE-11 lives in crates/adapter-index-store/tests/purge_properties.rs (review F2: cli may not link the adapter); bind it there through the crate's public API over a temp DuckDB + artifact dir. Match author_did = bare OR starts_with(author_did, bare || '#') \u2014 never LIKE. purge_author is bounded-change (universe: the three tables + artifact files); references TO purged CIDs from other authors stay byte-identical. Resumable, not atomic (R-IXD-D3): a real-DuckDB adapter test decides the transaction split. Probe: schema version + indexed_authors round-trip. Composition root (main.rs/run.rs) may name IndexPurgePort to wire it but never purge_author or plan_purge (XD-3). Purge failure cause (PG-48) needs the fault seam: 02-03. Emit author_purged per DID, structural only.\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*, indexer_pass_core, and openlore-review-app suites when touching the review app); build openlore-indexer before acceptance tests; keep main green; .github/workflows changes push over SSH."
+        },
+        {
+          "id": "02-03",
+          "name": "Robustness: panic isolation, unusable store, deadline, DuckDB caps, fault seam (B9, B12, B13)",
+          "description": "catch_unwind per pass (exit 2, slot freed); a poisoned/unusable store emits indexer.store.unusable, /healthz 503, serve exits 2; search returns 500 on a store error, never empty 200; a pass deadline gives exit 2 pass_deadline_exceeded keeping what was saved; gate consumes DIDs as fetched with per-pass author-key cache; DuckDB memory/threads applied and read back; debug-only OPENLORE_INDEXER_TEST_FAULT.",
+          "criteria": [
+            "A crashing pass frees the runner for the next pass; a broken index makes serve stop instead of answering falsely; a store read failure is reported as unavailable, never as no results (PS-18, PS-20, PS-21)",
+            "A pass past its deadline ends with exit 2 and keeps what it saved; a SIGKILLed index comes back with what it had saved (PS-19, PS-23)",
+            "A failing purge ends the pass with exit 2 purge_failed and finishes on the next pass; pass logs never contain claim content (PG-48, PS-26)",
+            "Every new setting is refused outside its range and accepted at its limits, naming the variable (AS-55); property: each setting accepts exactly its range (CORE-8)",
+            "Property: past the deadline the pass is exit 2 pass_deadline_exceeded whatever it would have said (CORE-7)"
+          ],
+          "time_estimate_hours": 8,
+          "dependencies": [
+            "02-02"
+          ],
+          "test_file": "tests/acceptance/indexer_deployment_passes.rs",
+          "test_files": [
+            "tests/acceptance/indexer_deployment_passes.rs",
+            "tests/acceptance/indexer_deployment_did_list.rs",
+            "tests/acceptance/indexer_deployment_public_surface.rs",
+            "tests/acceptance/indexer_deployment_core.rs",
+            "crates/openlore-indexer/src/deployment_settings_properties.rs"
+          ],
+          "scenario_name": "a_pass_that_crashes_frees_the_runner_for_the_next_pass",
+          "scenario_fns": [
+            "a_pass_that_crashes_frees_the_runner_for_the_next_pass",
+            "a_pass_that_overruns_its_deadline_ends_with_exit_2_and_keeps_what_it_saved",
+            "a_broken_index_makes_serve_stop_instead_of_answering_falsely",
+            "a_search_that_cannot_read_the_index_is_reported_as_unavailable_never_as_no_results",
+            "an_index_killed_in_the_middle_of_a_pass_comes_back_with_what_it_had_saved",
+            "what_the_index_logs_about_its_passes_never_contains_claim_content",
+            "a_purge_that_fails_ends_the_pass_with_exit_2_and_finishes_on_the_next_pass",
+            "the_index_refuses_settings_outside_their_range_and_accepts_their_limits",
+            "a_pass_past_its_deadline_fails_whatever_it_would_have_said",
+            "each_new_setting_accepts_exactly_its_range"
+          ],
+          "test_command": "cargo build -p openlore-indexer -p cli && cargo test -p cli --test indexer_deployment_passes && cargo test -p cli --test indexer_deployment_did_list && cargo test -p cli --test indexer_deployment_public_surface && cargo test -p cli --test indexer_deployment_core && cargo test -p appview-domain && cargo test -p adapter-index-store && cargo test -p adapter-xrpc-query-server && cargo test -p openlore-indexer && cargo test -p cli --test indexer_ingest --test indexer_per_did_resilience --test indexer_per_did_config --test indexer_pass_core --test appview_search --test search_hide_retracted --test review_app_self_attested_readers",
+          "files_to_modify": [
+            "crates/appview-domain/src/ingest_pass.rs",
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/adapter-xrpc-query-server/src/lib.rs",
+            "crates/openlore-indexer/src/pass_runner.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/openlore-indexer/src/config.rs",
+            "crates/openlore-indexer/src/search_handler.rs",
+            "crates/openlore-indexer/src/health.rs",
+            "crates/openlore-indexer/src/probe_gauntlet.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nFault seam (decision 1): tokens first_pass_panics, store_poisoned, search_store_read_fails, purge_fails; honoured only under cfg!(debug_assertions), a release build refuses start like the loopback seam. Deadline decision is pure in appview-domain (CORE-7 binds from the cli target; the shell owns the clock). CORE-8 lives in crates/openlore-indexer/src/deployment_settings_properties.rs (review F2; bin-only crate): bind sut_parse_setting to config parsing there, run via cargo test -p openlore-indexer -- --ignored each_new_setting while RED. PS-19 is ~60 s (@slow). B9 read-back is not externally observable: add an adapter-level test that the probe refuses mismatched memory_limit/threads (DISTILL finding 5). CLI on 500 prints 'Network index unavailable' (decision 5) \u2014 adjust the CLI, not the server contract. Gate-as-you-go keeps <= cap+1 listings held.\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*, indexer_pass_core, and openlore-review-app suites when touching the review app); build openlore-indexer before acceptance tests; keep main green; .github/workflows changes push over SSH."
+        },
+        {
+          "id": "02-04",
+          "name": "Bounded public surface: two routes, size caps, row cap, connection bounds (B8)",
+          "description": "The public listener serves only POST searchClaims and GET /healthz; bodies over 8 KiB -> 413, values over 512 B -> 400 (not one byte early); results capped at 1000 by SQL LIMIT with an indexer.search.truncated event that omits the query; header timeout and connection cap keep a burst bounded. Production configuration starts ready and runs a pass.",
+          "criteria": [
+            "Write attempts and any path other than search and health are refused, and the control channel is never reachable over TCP (AS-50)",
+            "8192-byte body and 512-byte value admitted, 8193 and 513 refused (AS-52); property: requests are admitted exactly within bounds (CORE-9b)",
+            "A search matching more than 1000 claims returns 1000 and logs the cut without the query (AS-53)",
+            "100 searches in 10 s are answered and the index stays healthy; the production configuration starts ready and runs a pass (AS-54, AS-56)",
+            "Property: only two routes exist on the public listener (CORE-9)"
+          ],
+          "time_estimate_hours": 5,
+          "dependencies": [
+            "02-03"
+          ],
+          "test_file": "tests/acceptance/indexer_deployment_public_surface.rs",
+          "test_files": [
+            "tests/acceptance/indexer_deployment_public_surface.rs",
+            "crates/adapter-xrpc-query-server/tests/public_surface_properties.rs"
+          ],
+          "scenario_name": "anyone_trying_to_write_or_to_reach_anything_but_search_and_health_is_refused",
+          "scenario_fns": [
+            "anyone_trying_to_write_or_to_reach_anything_but_search_and_health_is_refused",
+            "oversized_requests_are_refused_at_the_boundary_not_one_byte_early",
+            "a_search_matching_more_than_1000_claims_returns_1000_and_logs_the_cut_without_the_query",
+            "a_burst_of_100_searches_in_10_seconds_is_answered_and_leaves_the_index_healthy",
+            "the_production_configuration_starts_ready_and_runs_a_pass",
+            "only_two_routes_exist_on_the_public_listener",
+            "requests_are_admitted_exactly_within_their_bounds"
+          ],
+          "test_command": "cargo build -p openlore-indexer -p cli && cargo test -p cli --test indexer_deployment_public_surface && cargo test -p adapter-xrpc-query-server --test public_surface_properties && cargo test -p adapter-xrpc-query-server &&cargo test -p adapter-index-store && cargo test -p openlore-indexer && cargo test -p cli --test appview_search --test search_hide_retracted --test review_app_self_attested_readers --test indexer_deployment_walking_skeleton",
+          "files_to_modify": [
+            "crates/adapter-xrpc-query-server/src/lib.rs",
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/openlore-indexer/src/search_handler.rs",
+            "crates/openlore-indexer/src/run.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nRouting and admission are pure decisions exposed by adapter-xrpc-query-server; CORE-9/9b live in its tests/public_surface_properties.rs (review F2: cli may not link the crate) and bind there with one call each; the 2-route table is closed-world (example-based). Read the body with a hard limit (never buffer unbounded). Row cap in SQL (LIMIT 1000+1 to detect truncation), not post-filter; the truncated event carries counts only. AS-53 is slow (~1001 records). AS-56 is the in-repo twin of the CI image serve-smoke (03-03): keep their expectations identical. The viewer and CLI use the same query server: rerun appview_search/search_hide_retracted narrowly.\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*, indexer_pass_core, and openlore-review-app suites when touching the review app); build openlore-indexer before acceptance tests; keep main green; .github/workflows changes push over SSH."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Review-app caps, deploy artefacts, CI image and tofu",
+      "description": "Review-app DuckDB caps (B11), the host deploy artefacts (compose, Caddy site, systemd timers, render-dids.sh, deploy.sh, runbook) and the CI image job plus tofu (IAM, log group, metric filters, 3 alarms, SSM parameter). No tofu apply; no tofu-aws-pds module bump (operator follow-up).",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Review-app DuckDB caps with read-back probe and capped compose (B11)",
+          "description": "The review app reads REVIEW_DB_MEMORY_LIMIT_MB (16..=1024) and REVIEW_DB_THREADS (1..=4), applies them when opening its DuckDB, and refuses to start (health.startup.refused naming the variable) when out of range or when the read-back does not match. Its compose gains init, the 48 MB / 1-thread caps and mem_limit 192m.",
+          "criteria": [
+            "Caps within range start the review app; 15, 1025, non-numeric memory and 0, 5 threads refuse startup naming the variable (RAC-1)",
+            "The probe reads memory_limit and threads back and refuses when they differ from configuration",
+            "Review-app compose runs with init, the two cap variables at 48 and 1, and mem_limit 192m (XP-2)",
+            "Existing review-app suites pass unchanged"
+          ],
+          "time_estimate_hours": 3,
+          "dependencies": [],
+          "test_file": "tests/acceptance/review_app_resource_caps.rs",
+          "test_files": [
+            "tests/acceptance/review_app_resource_caps.rs",
+            "xtask/tests/indexer_deployment_platform.rs"
+          ],
+          "scenario_name": "the_review_app_accepts_database_caps_within_their_range_and_refuses_the_rest",
+          "scenario_fns": [
+            "the_review_app_accepts_database_caps_within_their_range_and_refuses_the_rest",
+            "the_review_app_container_is_capped_for_sharing_the_host"
+          ],
+          "test_command": "cargo build -p openlore-review-app && cargo test -p openlore-review-app --test review_app_resource_caps && cargo test -p openlore-review-app && cargo test -p adapter-review-store && cargo test -p xtask --test indexer_deployment_platform && cargo test -p cli --test review_app_self_attested_readers",
+          "files_to_modify": [
+            "crates/openlore-review-app/src/config.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "crates/adapter-review-store/src/lib.rs",
+            "crates/adapter-review-store/src/probe.rs",
+            "deploy/review-app/host/compose.yaml"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nNames fixed by decision 2. Range validation is a pure function (PBT: accepts exactly its range, mirroring CORE-8). Independent of phases 01-02 (can run in parallel). Compose edit is a deploy artefact covered by XP-2; the 192m figure is confirmed at the re-measure gate, not here. Do not change the review app's unguarded IdentityLookup or anything else in its composition root.\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*, indexer_pass_core, and openlore-review-app suites when touching the review app); build openlore-indexer before acceptance tests; keep main green; .github/workflows changes push over SSH."
+        },
+        {
+          "id": "03-02",
+          "name": "Host deploy artefacts: compose, Caddy site, timers, render-dids.sh, deploy.sh, runbook",
+          "description": "deploy/indexer/ mirrors the review-app layout: one serve container in production posture, index.caddy exposing only search and /healthz, a 15-minute Persistent pass timer (render then trigger) and a health timer, render-dids.sh that renames the file never the directory and keeps the last good list, deploy.sh with digest, CI-green and cosign gates, and the README runbook.",
+          "criteria": [
+            "The indexer container has exactly its two mounts and the production posture (XP-1)",
+            "The public site serves only POST search and GET /healthz over HTTPS with an 8 KB body cap (XP-3)",
+            "The pass runs every 15 minutes, never stacks, survives a reboot and outlives the 25-minute deadline; the health line reports not_live 1 when FilterLogEvents fails, and 0 when all is well (XP-4, XP-13)",
+            "Two list edits replace the file and never the directory; a failed or empty read keeps the last good list and never fails the pass (XP-5, XP-6)",
+            "Deploys by tag, branch or short sha, unsigned digests and red-CI shas are refused before any tool or host is touched (XP-7, XP-8)"
+          ],
+          "time_estimate_hours": 7,
+          "dependencies": [
+            "02-04",
+            "03-01"
+          ],
+          "test_file": "xtask/tests/indexer_deployment_platform.rs",
+          "test_files": [
+            "xtask/tests/indexer_deployment_platform.rs"
+          ],
+          "scenario_name": "the_indexer_container_has_exactly_its_two_mounts_and_the_production_posture",
+          "scenario_fns": [
+            "the_indexer_container_has_exactly_its_two_mounts_and_the_production_posture",
+            "the_public_site_serves_only_search_and_health_over_https",
+            "the_pass_runs_every_15_minutes_never_stacks_and_survives_a_reboot",
+            "two_consecutive_list_edits_replace_the_file_and_never_the_directory",
+            "a_failed_or_empty_read_keeps_the_last_good_list_and_never_fails_the_pass",
+            "the_liveness_line_fails_closed_when_the_shipped_heartbeat_cannot_be_read",
+            "a_deploy_by_tag_branch_or_short_sha_is_refused_before_any_tool_runs",
+            "an_unsigned_digest_or_a_red_ci_sha_is_refused_before_the_host_is_touched"
+          ],
+          "test_command": "cargo test -p xtask --test indexer_deployment_platform && bash -n deploy/indexer/deploy.sh deploy/indexer/host/*.sh",
+          "files_to_modify": [
+            "deploy/indexer/host/compose.yaml (NEW)",
+            "deploy/indexer/host/index.caddy (NEW)",
+            "deploy/indexer/host/openlore-indexer-pass.timer (NEW)",
+            "deploy/indexer/host/openlore-indexer-pass.service (NEW)",
+            "deploy/indexer/host/openlore-indexer-health.timer (NEW)",
+            "deploy/indexer/host/openlore-indexer-health.service (NEW)",
+            "deploy/indexer/host/health-timer.sh (NEW)",
+            "deploy/indexer/host/render-dids.sh (NEW)",
+            "deploy/indexer/deploy.sh (NEW)",
+            "deploy/indexer/README.md (NEW, runbook)"
+          ],
+          "implementation_notes": "EXEMPT FROM PARADIGM: declarative deploy artefacts and shell scripts, verified by structural xtask tests and real bash runs with PATH stubs; no Rust domain logic. Compensate with property-based test at unit level on adjacent slot: CORE-4 (02-01) covers every list text render-dids.sh can write, CORE-8 (02-03) covers every env value compose sets.\n\nInputs: devops/infrastructure-integration.md, platform-architecture.md, monitoring-alerting.md, observability-design.md (status query). Decision 3: render-dids.sh honours INDEXER_CONFIG_DIR, chown only when EUID=0, no bats file. Staging FILE in the same dir, chmod 0444, rename the file, touch .rendered-at, ship indexer.dids.render_failed on failure, exit 0. container_name openlore-indexer (R-IXD-D7). health-timer.sh (review F3; observability-design \u00a74) emits one indexer.host.health line per run with not_live = 1 IF running = 0 (container openlore-indexer not running, incl. absent/OOM-killed) OR healthz_ok = 0 (/healthz through Caddy not 200 with status ok; a 503 store_unusable counts) OR summary_45m = 0 (no indexer.ingest.pass_summary in the shipped log group in the last 45 min via aws logs filter-log-events; ANY aws/FilterLogEvents error sets summary_check = error and summary_45m = 0: fail closed) OR dids_age_s > 7200 (.rendered-at missing = infinitely old); else 0. That one field is the A3 input (architecture \u00a79 'indexer_live = 0' == not_live = 1). Testability (XP-13): honours INDEXER_CONFIG_DIR and INDEXER_STATE_DIR, resolves docker/curl/aws from PATH, prints the line on stdout, tolerates no /proc, always exits 0. Hung-process guard: 3 failed /healthz in a row -> docker restart. deploy.sh: install/deploy/status/rollback modelled on deploy/review-app/deploy.sh; refuse non-digest refs before any tool runs. Add the indexer to the replacement runbook's redeploy step.\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*, indexer_pass_core, and openlore-review-app suites when touching the review app); build openlore-indexer before acceptance tests; keep main green; .github/workflows changes push over SSH."
+        },
+        {
+          "id": "03-03",
+          "name": "CI image job, host checks and tofu: IAM, log group, metric filters, 3 alarms, SSM parameter",
+          "description": "A runtime-only distroless arm64 Dockerfile; ci.yml indexer-build and indexer-image jobs (serve-smoke, trivy, push, cosign sign, SBOM, build provenance); deploy-pds-check indexer-host job; prod indexer.tf (log group, metric filters, saved queries, exactly 3 alarms on the existing topic with ok_actions, SSM parameter); bootstrap indexer-iam.tf least privilege. Validate only, never apply.",
+          "criteria": [
+            "Exactly three alarms page the existing topic and announce recovery (XP-9)",
+            "Metric filters and saved queries read only the structural events the index emits (XP-10)",
+            "The host role may read the DID-list parameter, write its own log group and FilterLogEvents on that group only (the health heartbeat), nothing more (XP-11)",
+            "The image is a signed, non-root, distroless build from CI with a blocking serve-smoke; host checks cover deploy/indexer/** (XP-12)",
+            "tofu fmt/validate pass for both roots; no apply and no tofu-aws-pds module bump"
+          ],
+          "time_estimate_hours": 6,
+          "dependencies": [
+            "03-02"
+          ],
+          "test_file": "xtask/tests/indexer_deployment_platform.rs",
+          "test_files": [
+            "xtask/tests/indexer_deployment_platform.rs"
+          ],
+          "scenario_name": "exactly_three_alarms_page_the_existing_topic_and_announce_recovery",
+          "scenario_fns": [
+            "exactly_three_alarms_page_the_existing_topic_and_announce_recovery",
+            "alarms_and_queries_read_only_the_structural_events_the_index_emits",
+            "the_host_may_read_the_did_list_and_its_own_logs_and_nothing_more",
+            "the_image_is_a_signed_non_root_distroless_build_from_ci"
+          ],
+          "test_command": "cargo test -p xtask --test indexer_deployment_platform && tofu fmt -check -recursive deploy/tofu && tofu -chdir=deploy/tofu/environments/prod init -backend=false && tofu -chdir=deploy/tofu/environments/prod validate && tofu -chdir=deploy/tofu/bootstrap init -backend=false && tofu -chdir=deploy/tofu/bootstrap validate",
+          "files_to_modify": [
+            "crates/openlore-indexer/Dockerfile (NEW)",
+            ".github/workflows/ci.yml",
+            ".github/workflows/deploy-pds-check.yml",
+            "deploy/tofu/environments/prod/indexer.tf (NEW)",
+            "deploy/tofu/environments/prod/variables.tf",
+            "deploy/tofu/environments/prod/outputs.tf",
+            "deploy/tofu/bootstrap/indexer-iam.tf (NEW)"
+          ],
+          "implementation_notes": "EXEMPT FROM PARADIGM: CI workflow, Dockerfile and OpenTofu HCL are declarative infrastructure verified by structural xtask tests and tofu validate. Compensate with property-based test at unit level on adjacent slot: CORE-5 (01-04) pins the exit_code/cause contract the metric filters key on, CORE-9 (02-04) pins the route allowlist the serve-smoke and Caddy mirror.\n\nInputs: devops/ci-cd-pipeline.md \u00a73/\u00a75, monitoring-alerting.md, infrastructure-integration.md \u00a75. serve-smoke expectations = AS-56 (trigger exits 3 on did:web:smoke.invalid, one pass_summary, 8 KB not 413 / 9 KB 413, stop < 3 s). Same distroless and trivy pins as the review app. deploy-pds-check: drop the bats step (decision 3), keep shellcheck, compose config, posture guard, systemd-analyze, caddy validate. Alarms: A1 2x exit 3, A2 exit 2 or startup.refused/store.unusable, A3 no summary 45 min (missing = breaching) or indexer_live=0; *_alarms_enabled toggle. IAM: ssm:GetParameter on /openlore/prod/indexer(/*), logs CreateLogStream/PutLogEvents/DescribeLogStreams plus FilterLogEvents (DEVOPS U-1, approved) on /openlore/prod/indexer only; no CreateLogGroup, PutMetricData, SSM write or '*'. Optional: nightly index-smoke (advisory). Workflow changes push over SSH.\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*, indexer_pass_core, and openlore-review-app suites when touching the review app); build openlore-indexer before acceptance tests; keep main green; .github/workflows changes push over SSH."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/appview-domain/src/",
+      "crates/ports/src/",
+      "crates/adapter-index-store/src/",
+      "crates/adapter-xrpc-query-server/src/",
+      "crates/adapter-review-store/src/",
+      "crates/openlore-indexer/",
+      "crates/openlore-review-app/src/",
+      "crates/cli/src/",
+      "xtask/src/",
+      "deploy/indexer/",
+      "deploy/review-app/host/",
+      "deploy/tofu/environments/prod/",
+      "deploy/tofu/bootstrap/",
+      ".github/workflows/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "xtask/tests/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.duckdb"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer (opus), F1-F3 addressed",
+    "approved_at": "2026-10-06"
+  }
+}

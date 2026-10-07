@@ -46,7 +46,7 @@ already true), but the scenario stays RED on the health half.
 | AS-52 | MISSING_FUNCTIONALITY | 8 KiB + 1 body not refused with 413 (B8) |
 | AS-55 | MISSING_FUNCTIONALITY | `OPENLORE_INDEXER_DUCKDB_MEMORY_LIMIT_MB=15` accepted (B9) |
 | AS-56 | MISSING_FUNCTIONALITY | `/healthz` 404 (B8) |
-| CORE-1..11 (12 tests) | RED_SCAFFOLD | `not yet implemented: DELIVER 05-0x: bind to …` |
+| CORE-1..11 (12 tests) | RED_SCAFFOLD | `not yet implemented: DELIVER <step>: bind to …` (step ids per deliver/roadmap.json; CORE-8, CORE-9/9b and CORE-11 moved to their owning crates, roadmap review F2) |
 | RAC-1 | MISSING_FUNCTIONALITY | `REVIEW_DB_MEMORY_LIMIT_MB (15, 1) must be refused` (B11) |
 | XD-1..6 | MISSING_FUNCTIONALITY | rule names absent from `check_arch.rs`; modules (`*search*`, `*runner*`, `*control*`, `purge.rs`) absent |
 | XP-1..12 | MISSING_FUNCTIONALITY | the deploy files do not exist yet (`deploy/indexer/**`, `indexer.tf`, `indexer-iam.tf`, Dockerfile, CI jobs) |

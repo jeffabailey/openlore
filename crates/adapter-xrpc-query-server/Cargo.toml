@@ -42,3 +42,9 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 tokio = { workspace = true, features = ["rt", "net", "macros"] }
+
+[dev-dependencies]
+# indexer-deployment CORE-9 / CORE-9b (route allowlist, request bounds):
+# property tests moved here from the cli acceptance target (check-arch
+# CLI_FORBIDDEN_INDEXER_DEPS forbids cli from linking this crate).
+proptest = { workspace = true }

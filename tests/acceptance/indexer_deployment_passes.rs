@@ -100,7 +100,7 @@ fn when_the_pass_is_underway(live: &LiveIndex) {
 ///   And the pass completes
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: pass on its own thread, store held one transaction at a time (B2, B13)"]
+#[ignore = "DELIVER 01-04: pass on its own thread, store held one transaction at a time (B2, B13)"]
 fn search_keeps_answering_within_a_second_while_a_pass_runs() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_a_live_index_whose_pass_takes_a_while(&world);
@@ -143,7 +143,7 @@ fn search_keeps_answering_within_a_second_while_a_pass_runs() {
 ///   And every search answers within 1 second
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: one store handle shared by search and the pass (B1, B2)"]
+#[ignore = "DELIVER 01-03: one store handle shared by search and the pass (B1, B2)"]
 fn a_pass_is_never_refused_because_search_is_busy() {
     let (_world, live) = given_a_crowd_index_with_a_long_write_heavy_pass();
 
@@ -175,7 +175,7 @@ fn a_pass_is_never_refused_because_search_is_busy() {
 ///   Then every search answers within 1 second, including those during the pass's final save
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: explicit end-of-pass CHECKPOINT never stalls search (B14)"]
+#[ignore = "DELIVER 01-04: explicit end-of-pass CHECKPOINT never stalls search (B14)"]
 fn searches_overlapping_the_end_of_a_pass_still_answer_within_a_second() {
     let (_world, live) = given_a_crowd_index_with_a_long_write_heavy_pass();
 
@@ -223,7 +223,7 @@ fn searches_overlapping_the_end_of_a_pass_still_answer_within_a_second() {
 ///   And the next timer firing after it ends starts a new pass
 /// ```
 #[test]
-#[ignore = "DELIVER 02-04: single-flight runner, busy → coalesced exit 0 (B2, B3)"]
+#[ignore = "DELIVER 01-03: single-flight runner, busy → coalesced exit 0 (B2, B3)"]
 fn passes_never_overlap() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_a_live_index_whose_pass_takes_a_while(&world);
@@ -280,7 +280,7 @@ fn passes_never_overlap() {
 ///   And Maria's results for every author are exactly as before
 /// ```
 #[test]
-#[ignore = "DELIVER 02-05: repeated passes are idempotent (B2)"]
+#[ignore = "DELIVER 01-03: repeated passes are idempotent (B2)"]
 fn a_pass_with_nothing_new_on_the_network_changes_nothing_maria_sees() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya, Author::Dmitri]);
@@ -330,7 +330,7 @@ fn a_pass_with_nothing_new_on_the_network_changes_nothing_maria_sees() {
 ///     | "did:plc:therrera2v6w,tomas"        | 2    | repo_dids_malformed |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-06: trigger propagates 0/2/3; one pass_summary per pass incl. exit 2 (B3, B4)"]
+#[ignore = "DELIVER 01-04: trigger propagates 0/2/3; one pass_summary per pass incl. exit 2 (B3, B4)"]
 fn the_timer_sees_the_pass_s_own_exit_code_and_exactly_one_summary() {
     type Arrange = fn(&IndexerWorld);
     let cases: Vec<(&str, &str, Arrange, PassExit, Option<FailureCause>)> = vec![
@@ -388,7 +388,7 @@ fn the_timer_sees_the_pass_s_own_exit_code_and_exactly_one_summary() {
 ///   And no pass summary is written and no index is opened by the timer
 /// ```
 #[test]
-#[ignore = "DELIVER 02-07: trigger exit 4 + indexer.trigger.unreachable; client never opens the store (B3)"]
+#[ignore = "DELIVER 01-03: trigger exit 4 + indexer.trigger.unreachable; client never opens the store (B3)"]
 fn the_timer_firing_while_serve_is_down_reports_that_no_pass_ran() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya]);
@@ -431,7 +431,7 @@ fn the_timer_firing_while_serve_is_down_reports_that_no_pass_ran() {
 ///   And the timer itself never loads or refuses a configuration
 /// ```
 #[test]
-#[ignore = "DELIVER 02-08: trigger dispatched before config parsing and store open (B3)"]
+#[ignore = "DELIVER 01-03: trigger dispatched before config parsing and store open (B3)"]
 fn the_timer_needs_nothing_but_the_control_socket_to_start_a_pass() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya]);
@@ -467,7 +467,7 @@ fn the_timer_needs_nothing_but_the_control_socket_to_start_a_pass() {
 ///   And Maria still finds Priya's claims and the index stays up
 /// ```
 #[test]
-#[ignore = "DELIVER 02-09: upsert failure still emits the summary (B4)"]
+#[ignore = "DELIVER 01-04: upsert failure still emits the summary (B4)"]
 fn a_pass_that_cannot_store_a_claim_ends_with_exit_2_and_search_keeps_answering() {
     let world = given_authors_publish_on_their_own_pdses();
     world.index_cannot_store_claims_of(Author::Dmitri);
@@ -496,7 +496,7 @@ fn a_pass_that_cannot_store_a_claim_ends_with_exit_2_and_search_keeps_answering(
 ///   And when the timer fires again a new pass runs and completes instead of reporting busy
 /// ```
 #[test]
-#[ignore = "DELIVER 02-10: catch_unwind per pass frees the single-flight slot (B12)"]
+#[ignore = "DELIVER 02-03: catch_unwind per pass frees the single-flight slot (B12)"]
 fn a_pass_that_crashes_frees_the_runner_for_the_next_pass() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = LiveIndex::deploy(
@@ -534,7 +534,7 @@ fn a_pass_that_crashes_frees_the_runner_for_the_next_pass() {
 ///   And Maria finds Priya's claims saved before the deadline
 /// ```
 #[test]
-#[ignore = "DELIVER 02-11: pass deadline (B13); ~60 s scenario"]
+#[ignore = "DELIVER 02-03: pass deadline (B13); ~60 s scenario"]
 fn a_pass_that_overruns_its_deadline_ends_with_exit_2_and_keeps_what_it_saved() {
     let world = IndexerWorld::configured_with(&[Author::Priya, Author::Sam]);
     world.publishes_self_attested(
@@ -579,7 +579,7 @@ fn a_pass_that_overruns_its_deadline_ends_with_exit_2_and_keeps_what_it_saved() 
 ///   And until it exits it never reports healthy and never answers a search with an empty success
 /// ```
 #[test]
-#[ignore = "DELIVER 02-12: poisoned store → indexer.store.unusable, /healthz 503, exit 2 (B12)"]
+#[ignore = "DELIVER 02-03: poisoned store → indexer.store.unusable, /healthz 503, exit 2 (B12)"]
 fn a_broken_index_makes_serve_stop_instead_of_answering_falsely() {
     let world = given_authors_publish_on_their_own_pdses();
     let mut live = LiveIndex::deploy(
@@ -630,7 +630,7 @@ fn a_broken_index_makes_serve_stop_instead_of_answering_falsely() {
 ///   And Maria is told the network index is unavailable, not that nothing matched
 /// ```
 #[test]
-#[ignore = "DELIVER 02-13: fallible QueryHandler, search 500 on store error (B12)"]
+#[ignore = "DELIVER 02-03: fallible QueryHandler, search 500 on store error (B12)"]
 fn a_search_that_cannot_read_the_index_is_reported_as_unavailable_never_as_no_results() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = LiveIndex::deploy(
@@ -669,7 +669,7 @@ fn a_search_that_cannot_read_the_index_is_reported_as_unavailable_never_as_no_re
 ///   And the response carries only the status and that time
 /// ```
 #[test]
-#[ignore = "DELIVER 02-14: /healthz last_successful_pass_at from PassStatus (B2, B8)"]
+#[ignore = "DELIVER 01-04: /healthz last_successful_pass_at from PassStatus (B2, B8)"]
 fn the_health_response_shows_when_the_last_good_pass_ended_and_only_that() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya]);
@@ -725,7 +725,7 @@ fn the_health_response_shows_when_the_last_good_pass_ended_and_only_that() {
 ///   And the next timer firing completes the pass and Maria finds Dmitri's claims too
 /// ```
 #[test]
-#[ignore = "DELIVER 02-15: SIGKILL mid-pass recovery; trigger exit 4 on a dropped socket (B1, B3)"]
+#[ignore = "DELIVER 02-03: SIGKILL mid-pass recovery; trigger exit 4 on a dropped socket (B1, B3)"]
 fn an_index_killed_in_the_middle_of_a_pass_comes_back_with_what_it_had_saved() {
     let world = given_authors_publish_on_their_own_pdses();
     world.host_answers(
@@ -777,7 +777,7 @@ fn an_index_killed_in_the_middle_of_a_pass_comes_back_with_what_it_had_saved() {
 ///   Then it becomes ready and the next timer firing runs a pass
 /// ```
 #[test]
-#[ignore = "DELIVER 02-16: stale socket replaced at bind; socket probe before ready (B3)"]
+#[ignore = "DELIVER 01-03: stale socket replaced at bind; socket probe before ready (B3)"]
 fn a_socket_file_left_over_from_a_crash_does_not_stop_the_next_start() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya]);
@@ -802,7 +802,7 @@ fn a_socket_file_left_over_from_a_crash_does_not_stop_the_next_start() {
 ///   Then every pass line carries only structural fields: DIDs, counts, reasons, causes and ids
 /// ```
 #[test]
-#[ignore = "DELIVER 02-17: structural-only pass events incl. new ones (B4, B6, B15)"]
+#[ignore = "DELIVER 02-03: structural-only pass events incl. new ones (B4, B6, B15)"]
 fn what_the_index_logs_about_its_passes_never_contains_claim_content() {
     let world = given_authors_publish_on_their_own_pdses();
     world.host_answers(Host::JeffbaileyUs, ListingPosture::Status(502));

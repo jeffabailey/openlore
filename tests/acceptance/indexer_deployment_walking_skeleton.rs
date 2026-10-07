@@ -49,7 +49,7 @@ use indexer_network::{search_rows, Author};
 ///   And Priya's claim is marked self-attested
 /// ```
 #[test]
-#[ignore = "DELIVER 01-01: walking skeleton — serve owns the index, trigger runs one pass in serve (B1-B5)"]
+#[ignore = "DELIVER 01-03: walking skeleton — serve owns the index, trigger runs one pass in serve (B1-B5)"]
 fn maria_finds_claims_from_authors_on_different_pdses_after_the_scheduled_pass() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya, Author::Dmitri]);
@@ -94,7 +94,7 @@ fn maria_finds_claims_from_authors_on_different_pdses_after_the_scheduled_pass()
 ///   And the index reports it is healthy with no successful pass yet
 /// ```
 #[test]
-#[ignore = "DELIVER 01-02: empty index answers 200 + /healthz (B1, B8)"]
+#[ignore = "DELIVER 01-04: empty index answers 200 + /healthz (B1, B8)"]
 fn a_fresh_deployment_answers_before_its_first_pass() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya, Author::Dmitri]);

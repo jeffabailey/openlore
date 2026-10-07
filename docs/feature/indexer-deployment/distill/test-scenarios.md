@@ -16,8 +16,12 @@
 | `tests/acceptance/indexer_deployment_core.rs` (`crates/cli`) | 2, proptest | 12 (CORE-1..11 + 2 pinned examples) | pure functions (RED `sut_*` bindings) |
 | `tests/acceptance/review_app_resource_caps.rs` (`crates/openlore-review-app`) | 4 | 1 (RAC-1, 8-row outline) | `openlore-review-app serve` |
 | `xtask/tests/indexer_deployment_architecture.rs` | structural | 6 (XD-1..6) + 1 always-on scanner self-test | real workspace sources |
-| `xtask/tests/indexer_deployment_platform.rs` | structural + real `bash` | 12 (XP-1..12) + 1 always-on helper self-test | real deploy files, `render-dids.sh`, `deploy.sh` |
-| **Total** | | **74 ignored** (+2 always-on self-tests) | |
+| `xtask/tests/indexer_deployment_platform.rs` | structural + real `bash` | 13 (XP-1..13) + 1 always-on helper self-test | real deploy files, `render-dids.sh`, `deploy.sh`, `health-timer.sh` |
+| **Total** | | **75 ignored** (+2 always-on self-tests) | |
+
+> DELIVER roadmap review (2026-10-07): XP-13 added (F3). CORE-8, CORE-9/9b and CORE-11 moved verbatim
+> out of `indexer_deployment_core.rs` into their owning crates (F2): see `deliver/roadmap.json`
+> `tag_renumbering`.
 
 Error / edge / adversarial share: 31 of 74 (42 %). Walking skeletons: 3. Properties: 10 generators + 2 pinned.
 
@@ -86,6 +90,7 @@ Error / edge / adversarial share: 31 of 74 (42 %). Walking skeletons: 3. Propert
 | XP-7..8 | `deploy.sh` (real run): non-digest refs, unsigned digests, red-CI shas refused before the host | AC-006.1 |
 | XP-9..10 | Exactly 3 alarms on the existing topic with recoveries; filters/queries on structural events | AC-004.1..4, 004.6, AC-005.x |
 | XP-11..12 | Host IAM least privilege; signed non-root distroless image from CI | AC-003.5, AC-001.6, AC-006.1 |
+| XP-13 | `health-timer.sh` (real run): a failing FilterLogEvents makes the health line `not_live = 1` (fail closed) | AC-004.1, AC-005.1, DV-IXD-8, U-1, `@error` |
 
 ## AC traceability
 

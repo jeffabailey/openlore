@@ -96,7 +96,7 @@ fn destructive_sql_outside_purge(file: &str, literal: &str) -> bool {
 
 /// XD-1 @architecture-design-11 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 07-01: the three check-arch rules (architecture-design §11)"]
+#[ignore = "DELIVER 02-02: the three check-arch rules (architecture-design §11)"]
 fn the_three_new_rules_are_part_of_check_arch() {
     let check_arch = std::fs::read_to_string(root().join("xtask/src/check_arch.rs"))
         .expect("read xtask/src/check_arch.rs");
@@ -114,7 +114,7 @@ fn the_three_new_rules_are_part_of_check_arch() {
 
 /// XD-2 @US-IXD-001 @AC-001.3 @FR-IXD-2 @DD-IXD-9 @B7 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 07-02: search handler module holds IndexReadPort only (B7)"]
+#[ignore = "DELIVER 01-01: search handler module holds IndexReadPort only (B7)"]
 fn the_search_handler_can_only_read_the_index() {
     let handlers: Vec<(PathBuf, String)> = production_sources("crates/openlore-indexer/src")
         .into_iter()
@@ -145,7 +145,7 @@ fn the_search_handler_can_only_read_the_index() {
 
 /// XD-3 @US-IXD-003 @ADR-082 @DD-IXD-6 @B6 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 07-03: purge capability confined to the pass runner (B6)"]
+#[ignore = "DELIVER 02-02: purge capability confined to the pass runner (B6)"]
 fn only_the_pass_runner_can_purge() {
     let sources = production_sources("crates/openlore-indexer/src");
     let runner: Vec<_> = sources
@@ -179,7 +179,7 @@ fn only_the_pass_runner_can_purge() {
 
 /// XD-4 @US-IXD-003 @ADR-082 @DD-IXD-6 @B6 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 07-04: purge.rs holds the only parent-table DELETE (B6)"]
+#[ignore = "DELIVER 02-02: purge.rs holds the only parent-table DELETE (B6)"]
 fn the_index_store_deletes_only_in_its_purge_module() {
     let sources = production_sources("crates/adapter-index-store/src");
     assert!(
@@ -208,7 +208,7 @@ fn the_index_store_deletes_only_in_its_purge_module() {
 
 /// XD-5 @US-IXD-002 @ADR-080 @component-boundaries-4.4 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 07-05: control channel on a Unix socket only (B3)"]
+#[ignore = "DELIVER 01-03: control channel on a Unix socket only (B3)"]
 fn the_control_channel_is_a_unix_socket_never_a_network_listener() {
     let control: Vec<_> = production_sources("crates/openlore-indexer/src")
         .into_iter()
@@ -226,7 +226,7 @@ fn the_control_channel_is_a_unix_socket_never_a_network_listener() {
 
 /// XD-6 @ADR-082 @architecture-design-11 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 07-06: IndexPurgePort impl carries a probe (check-probes)"]
+#[ignore = "DELIVER 02-02: IndexPurgePort impl carries a probe (check-probes)"]
 fn the_purge_port_implementation_is_probed() {
     let purge = production_sources("crates/adapter-index-store/src")
         .into_iter()

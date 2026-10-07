@@ -161,7 +161,7 @@ fn then_the_pass_refused_the_list(
 ///   And the index was never restarted
 /// ```
 #[test]
-#[ignore = "DELIVER 03-01: OPENLORE_INDEXER_REPO_DIDS_FILE read each pass (B5)"]
+#[ignore = "DELIVER 02-01: OPENLORE_INDEXER_REPO_DIDS_FILE read each pass (B5)"]
 fn a_did_added_to_the_list_is_indexed_on_the_next_pass_without_a_restart() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     live.operator_saves_list(&dids(&[
@@ -191,7 +191,7 @@ fn a_did_added_to_the_list_is_indexed_on_the_next_pass_without_a_restart() {
 ///   Then the passes report 3 and then 4 configured DIDs, with no restart
 /// ```
 #[test]
-#[ignore = "DELIVER 03-02: per-pass re-read survives file renames (B5, H1)"]
+#[ignore = "DELIVER 02-01: per-pass re-read survives file renames (B5, H1)"]
 fn two_list_edits_in_a_row_are_picked_up_by_two_passes_in_a_row() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     live.operator_saves_list(&dids(&[
@@ -235,7 +235,7 @@ fn two_list_edits_in_a_row_are_picked_up_by_two_passes_in_a_row() {
 ///   Then the pass reports a list age of about 3 hours
 /// ```
 #[test]
-#[ignore = "DELIVER 03-03: repo_dids_age_secs in the per-pass config.loaded (B15)"]
+#[ignore = "DELIVER 02-01: repo_dids_age_secs in the per-pass config.loaded (B15)"]
 fn each_pass_reports_how_old_the_did_list_is() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya]);
@@ -266,7 +266,7 @@ fn each_pass_reports_how_old_the_did_list_is() {
 ///   And when Jeff fixes the list the next pass completes
 /// ```
 #[test]
-#[ignore = "DELIVER 03-04: malformed list refuses the pass, never serve (B5, B4)"]
+#[ignore = "DELIVER 02-01: malformed list refuses the pass, never serve (B5, B4)"]
 fn a_mistyped_list_refuses_the_pass_names_the_bad_entry_and_keeps_search_serving() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     live.operator_saves_list_text("did:plc:therrera2v6w,tomas");
@@ -300,7 +300,7 @@ fn a_mistyped_list_refuses_the_pass_names_the_bad_entry_and_keeps_search_serving
 ///     | is something that cannot be read as a file |
 /// ```
 #[test]
-#[ignore = "DELIVER 03-05: unreadable list refuses the pass before any fetch or purge (B5)"]
+#[ignore = "DELIVER 02-01: unreadable list refuses the pass before any fetch or purge (B5)"]
 fn a_list_the_index_cannot_read_refuses_the_pass_and_touches_nothing() {
     let cases: [(&str, Arrange); 2] = [
         ("missing", |live| live.list_file_is_missing()),
@@ -339,7 +339,7 @@ fn a_list_the_index_cannot_read_refuses_the_pass_and_touches_nothing() {
 ///     | a byte-order mark then Priya, Dmitri            | is refused, naming the first entry              |
 /// ```
 #[test]
-#[ignore = "DELIVER 03-06: list parsing reuses parse_repo_dids; BOM fails loud (B5)"]
+#[ignore = "DELIVER 02-01: list parsing reuses parse_repo_dids; BOM fails loud (B5)"]
 fn line_endings_are_tolerated_a_hidden_byte_order_mark_is_refused_loudly() {
     let world = given_authors_publish_on_their_own_pdses();
     let crlf = LiveIndex::deploy(
@@ -374,7 +374,7 @@ fn line_endings_are_tolerated_a_hidden_byte_order_mark_is_refused_loudly() {
 ///   Then it refuses to start with exit 2, naming the conflicting setting
 /// ```
 #[test]
-#[ignore = "DELIVER 03-07: REPO_DIDS and REPO_DIDS_FILE are mutually exclusive (B5)"]
+#[ignore = "DELIVER 02-01: REPO_DIDS and REPO_DIDS_FILE are mutually exclusive (B5)"]
 fn setting_both_a_list_and_a_list_file_is_refused_at_start() {
     let world = given_authors_publish_on_their_own_pdses();
 
@@ -413,7 +413,7 @@ fn setting_both_a_list_and_a_list_file_is_refused_at_start() {
 ///   And no file of Dmitri's is left in the index
 /// ```
 #[test]
-#[ignore = "DELIVER 03-08: plan_purge + IndexPurgePort at pass start (B6)"]
+#[ignore = "DELIVER 02-02: plan_purge + IndexPurgePort at pass start (B6)"]
 fn removing_an_author_from_the_list_removes_their_claims_on_the_next_pass() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     let before = maria_results_by_author(&world, &live);
@@ -462,7 +462,7 @@ fn removing_an_author_from_the_list_removes_their_claims_on_the_next_pass() {
 ///   And Maria still finds Priya's and Jeff's claims
 /// ```
 #[test]
-#[ignore = "DELIVER 03-09: purge at pass start whatever the exit code (B6)"]
+#[ignore = "DELIVER 02-02: purge at pass start whatever the exit code (B6)"]
 fn a_removed_author_is_purged_even_when_every_listed_author_is_unreachable() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     world.host_is_reachable(Host::MorelBsky, false);
@@ -489,7 +489,7 @@ fn a_removed_author_is_purged_even_when_every_listed_author_is_unreachable() {
 ///   And everything Maria finds is exactly as before
 /// ```
 #[test]
-#[ignore = "DELIVER 03-10: skips never delete (B6)"]
+#[ignore = "DELIVER 02-02: skips never delete (B6)"]
 fn an_author_who_is_still_listed_but_unreachable_keeps_their_claims() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     let before = maria_results_by_author(&world, &live);
@@ -518,7 +518,7 @@ fn an_author_who_is_still_listed_but_unreachable_keeps_their_claims() {
 ///     | cannot be read                  |
 /// ```
 #[test]
-#[ignore = "DELIVER 03-11: a refused list never reaches plan_purge (B6)"]
+#[ignore = "DELIVER 02-02: a refused list never reaches plan_purge (B6)"]
 fn a_list_that_drops_an_author_but_cannot_be_used_purges_nothing() {
     let cases: [(&str, Arrange, FailureCause); 2] = [
         (
@@ -557,7 +557,7 @@ fn a_list_that_drops_an_author_but_cannot_be_used_purges_nothing() {
 ///   And everything Maria finds is exactly as before
 /// ```
 #[test]
-#[ignore = "DELIVER 03-12: empty list → purge_suppressed (B6)"]
+#[ignore = "DELIVER 02-02: empty list → purge_suppressed (B6)"]
 fn an_empty_list_never_empties_the_index() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     let before = maria_results_by_author(&world, &live);
@@ -584,7 +584,7 @@ fn an_empty_list_never_empties_the_index() {
 ///   Then nobody is purged and Maria still finds Dmitri's claims
 /// ```
 #[test]
-#[ignore = "DELIVER 03-13: purge is opt-in (OPENLORE_INDEXER_PURGE_UNLISTED) (B6)"]
+#[ignore = "DELIVER 02-02: purge is opt-in (OPENLORE_INDEXER_PURGE_UNLISTED) (B6)"]
 fn without_the_purge_setting_a_removed_author_s_claims_stay() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = LiveIndex::deploy(&world, Deployment::listing(&dids(&LISTED)).without_purge());
@@ -608,7 +608,7 @@ fn without_the_purge_setting_a_removed_author_s_claims_stay() {
 ///   Then only did:plc:crowdmember0001's claim is gone
 /// ```
 #[test]
-#[ignore = "DELIVER 03-14: exact bare-DID match, never LIKE (B6)"]
+#[ignore = "DELIVER 02-02: exact bare-DID match, never LIKE (B6)"]
 fn only_the_removed_author_is_purged_never_one_whose_did_merely_starts_the_same_way() {
     let short = "did:plc:crowdmember0001";
     let long = "did:plc:crowdmember00011";
@@ -645,7 +645,7 @@ fn only_the_removed_author_is_purged_never_one_whose_did_merely_starts_the_same_
 ///   Then the pass reports 3 claims removed for Priya and Maria finds none of them
 /// ```
 #[test]
-#[ignore = "DELIVER 03-15: purge matches author_did = bare OR starts_with(bare || '#') (B6)"]
+#[ignore = "DELIVER 02-02: purge matches author_did = bare OR starts_with(bare || '#') (B6)"]
 fn a_removed_author_s_app_signed_and_self_attested_claims_are_both_purged() {
     let mut world = given_authors_publish_on_their_own_pdses();
     world.publishes_app_signed(
@@ -687,7 +687,7 @@ fn a_removed_author_s_app_signed_and_self_attested_claims_are_both_purged() {
 ///   And when Jeff lists Dmitri again the next pass indexes his 2 claims again
 /// ```
 #[test]
-#[ignore = "DELIVER 03-16: purge idempotent; the index is a cache (B6)"]
+#[ignore = "DELIVER 02-02: purge idempotent; the index is a cache (B6)"]
 fn purging_is_done_once_and_listing_the_author_again_brings_their_claims_back() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     live.operator_saves_list(&dids(&[Author::Priya, Author::Jeff]));
@@ -714,7 +714,7 @@ fn purging_is_done_once_and_listing_the_author_again_brings_their_claims_back() 
 ///   And the following pass completes the purge of Dmitri
 /// ```
 #[test]
-#[ignore = "DELIVER 03-17: purge failure → exit 2 purge_failed; resumable (B4, B6)"]
+#[ignore = "DELIVER 02-03: purge failure → exit 2 purge_failed; resumable (B4, B6)"]
 fn a_purge_that_fails_ends_the_pass_with_exit_2_and_finishes_on_the_next_pass() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = LiveIndex::deploy(

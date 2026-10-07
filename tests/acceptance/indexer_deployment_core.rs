@@ -19,6 +19,14 @@
 //! | CORE-10 | health projection: 503 `store_unusable` or 200 with exactly status + time | ADR-083 §2, data-models §6 |
 //! | CORE-11 | `purge_author` universe: only the target's rows, children and artifact files change (state delta); idempotent | ADR-082, data-models §3 |
 //!
+//! **Moved (roadmap review F2):** CORE-8 lives in
+//! `crates/openlore-indexer/src/deployment_settings_properties.rs`, CORE-9/9b in
+//! `crates/adapter-xrpc-query-server/tests/public_surface_properties.rs`, CORE-11 in
+//! `crates/adapter-index-store/tests/purge_properties.rs` — verbatim, same fn
+//! names. The `cli` target may not link those crates (check-arch
+//! CLI_FORBIDDEN_INDEXER_DEPS) and the indexer is bin-only. The rest stay here
+//! and bind to pure functions in `appview-domain`.
+//!
 //! ## Binding seam (RED scaffold, Mandate 7)
 //!
 //! None of these functions exist yet, so every property calls a `sut_*`
@@ -36,13 +44,9 @@
 //
 // SCAFFOLD: true
 
-#[path = "../common/state_delta.rs"]
-mod state_delta;
-
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use proptest::prelude::*;
-use state_delta::{assert_state_delta, set_to, Delta};
 
 // =============================================================================
 // Observable view types (the contract)
@@ -104,47 +108,20 @@ enum RunnerReply {
     Ignored,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Route {
-    Search,
-    Health,
-    NotFound,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Admission {
-    Admitted,
-    TooLarge,
-    BadRequest,
-}
-
-/// One store as the purge universe sees it (data-models §3).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-struct StoreView {
-    /// (author_did, cid, signed_record_path)
-    claims: BTreeSet<(String, String, String)>,
-    /// (cid, evidence url)
-    evidence: BTreeSet<(String, String)>,
-    /// (referencing_cid, referenced_cid)
-    references: BTreeSet<(String, String)>,
-    /// artifact file paths present on disk
-    artifacts: BTreeSet<String>,
-}
-
 // =============================================================================
 // RED binding seam — DELIVER binds each to ONE production call
 // =============================================================================
 
 fn sut_plan_purge(_listed: &[String], _indexed_authors: &BTreeSet<String>) -> PurgePlanView {
-    todo!("DELIVER 05-01: bind to appview_domain::plan_purge (ADR-082)")
+    todo!("DELIVER 02-02: bind to appview_domain::plan_purge (ADR-082)")
 }
 
 fn sut_read_did_list(_text: &str) -> ListReadView {
-    todo!("DELIVER 05-02: bind to the per-pass DID-file parse (reuses parse_repo_dids, ADR-081)")
+    todo!("DELIVER 02-01: bind to the per-pass DID-file parse (reuses parse_repo_dids, ADR-081)")
 }
 
 fn sut_pass_exit(_outcome: &PassOutcomeView) -> (i32, Option<String>) {
-    todo!("DELIVER 05-03: bind to the extended appview_domain pass_exit_code (+ cause)")
+    todo!("DELIVER 01-04: bind to the extended appview_domain pass_exit_code (+ cause)")
 }
 
 fn sut_single_flight(
@@ -152,7 +129,7 @@ fn sut_single_flight(
     _event: RunnerEvent,
     _next_id: u64,
 ) -> (RunnerView, RunnerReply) {
-    todo!("DELIVER 05-04: bind to the pass runner's pure single-flight transition (ADR-080 §3)")
+    todo!("DELIVER 01-02: bind to the pass runner's pure single-flight transition (ADR-080 §3)")
 }
 
 fn sut_deadline_outcome(
@@ -160,33 +137,14 @@ fn sut_deadline_outcome(
     _deadline_secs: u64,
     _natural_exit: i32,
 ) -> (i32, Option<String>) {
-    todo!("DELIVER 05-05: bind to the pass deadline decision (B13)")
-}
-
-fn sut_parse_setting(_variable: &str, _value: &str) -> Result<(), String> {
-    todo!("DELIVER 05-06: bind to openlore-indexer config parsing of the new settings (data-models §1)")
-}
-
-fn sut_route(_method: &str, _path: &str) -> Route {
-    todo!("DELIVER 05-07: bind to adapter-xrpc-query-server routing (ADR-083 §1)")
-}
-
-fn sut_admit(_body_len: usize, _value_len: usize) -> Admission {
-    todo!("DELIVER 05-08: bind to the public request bounds (ADR-083 §3)")
+    todo!("DELIVER 02-03: bind to the pass deadline decision (B13)")
 }
 
 fn sut_health_view(
     _store_usable: bool,
     _last_success_epoch_secs: Option<i64>,
 ) -> (u16, serde_json::Value) {
-    todo!("DELIVER 05-09: bind to the /healthz projection of PassStatus (ADR-083 §2)")
-}
-
-fn sut_purge_author(_store: &StoreView, _bare: &str) -> (StoreView, u64) {
-    todo!(
-        "DELIVER 05-10: seed a temp index.duckdb + artifact dir from `store` through the REAL \
-         adapter-index-store, call IndexPurgePort::purge_author(bare), read it back"
-    )
+    todo!("DELIVER 01-04: bind to the /healthz projection of PassStatus (ADR-083 §2)")
 }
 
 // =============================================================================
@@ -238,39 +196,6 @@ fn exit_oracle(o: &PassOutcomeView) -> i32 {
     }
 }
 
-fn purge_oracle(store: &StoreView, target: &str) -> (StoreView, u64) {
-    let purged: BTreeSet<(String, String, String)> = store
-        .claims
-        .iter()
-        .filter(|(author, _, _)| bare(author) == target)
-        .cloned()
-        .collect();
-    let cids: BTreeSet<&String> = purged.iter().map(|(_, cid, _)| cid).collect();
-    let paths: BTreeSet<&String> = purged.iter().map(|(_, _, p)| p).collect();
-    let after = StoreView {
-        claims: store.claims.difference(&purged).cloned().collect(),
-        evidence: store
-            .evidence
-            .iter()
-            .filter(|(cid, _)| !cids.contains(cid))
-            .cloned()
-            .collect(),
-        references: store
-            .references
-            .iter()
-            .filter(|(referencing, _)| !cids.contains(referencing))
-            .cloned()
-            .collect(),
-        artifacts: store
-            .artifacts
-            .iter()
-            .filter(|p| !paths.contains(p))
-            .cloned()
-            .collect(),
-    };
-    (after, purged.len() as u64)
-}
-
 // =============================================================================
 // Generators
 // =============================================================================
@@ -299,44 +224,6 @@ fn indexed_author_id() -> impl Strategy<Value = String> {
         } else {
             d
         }
-    })
-}
-
-fn segment(author_did: &str) -> String {
-    author_did.split('#').next().unwrap_or("").replace(':', "_")
-}
-
-/// A store of 0..12 claims by pool authors, with evidence, cross-author
-/// references (including references TO claims that will be purged) and one
-/// artifact file per claim at its stored `signed_record_path`.
-fn store() -> impl Strategy<Value = StoreView> {
-    prop::collection::vec(
-        (
-            indexed_author_id(),
-            0u8..3,
-            prop::collection::vec(0usize..12, 0..3),
-        ),
-        0..12,
-    )
-    .prop_map(|rows| {
-        let mut s = StoreView::default();
-        for (i, (author, evidence, refs)) in rows.iter().enumerate() {
-            let cid = format!("bafyclaim{i:03}");
-            let path = format!("indexed_claims/{}/{cid}.json", segment(author));
-            s.claims.insert((author.clone(), cid.clone(), path.clone()));
-            s.artifacts.insert(path);
-            for e in 0..*evidence {
-                s.evidence
-                    .insert((cid.clone(), format!("https://example.org/evidence/{i}/{e}")));
-            }
-            for r in refs {
-                if *r < rows.len() && *r != i {
-                    s.references
-                        .insert((cid.clone(), format!("bafyclaim{r:03}")));
-                }
-            }
-        }
-        s
     })
 }
 
@@ -400,7 +287,7 @@ proptest! {
     /// suppresses the purge; otherwise the plan is exactly bare(indexed) − list,
     /// so it never names a listed DID and never names an author not indexed.
     #[test]
-    #[ignore = "DELIVER 05-01: plan_purge"]
+    #[ignore = "DELIVER 02-02: plan_purge"]
     fn the_purge_plan_is_the_set_of_indexed_authors_no_longer_listed(
         listed in prop::collection::vec(did(), 0..6),
         indexed in prop::collection::btree_set(indexed_author_id(), 0..8),
@@ -426,7 +313,7 @@ proptest! {
     /// well-formed DIDs in first-seen order, or refuses naming the FIRST bad
     /// entry. A BOM makes the first entry bad; CRLF is whitespace.
     #[test]
-    #[ignore = "DELIVER 05-02: per-pass DID-file parse"]
+    #[ignore = "DELIVER 02-01: per-pass DID-file parse"]
     fn reading_the_did_list_loads_it_whole_or_names_the_first_bad_entry(text in list_text()) {
         prop_assert_eq!(sut_read_did_list(&text), list_oracle(&text));
     }
@@ -436,7 +323,7 @@ proptest! {
     /// and wins over a total outage (3, every listed DID skipped), which wins
     /// over 0; a cause is named exactly when the exit is 2.
     #[test]
-    #[ignore = "DELIVER 05-03: pass_exit_code extended"]
+    #[ignore = "DELIVER 01-04: pass_exit_code extended"]
     fn a_pass_s_exit_code_puts_local_failures_before_outages_before_success(o in outcome()) {
         let (code, cause) = sut_pass_exit(&o);
         prop_assert_eq!(code, exit_oracle(&o));
@@ -448,7 +335,7 @@ proptest! {
     /// pass runs, a request during a pass gets `busy` naming THAT pass, every
     /// ending (completed, panicked, deadline) frees the slot, and pass ids never repeat.
     #[test]
-    #[ignore = "DELIVER 05-04: single-flight transition"]
+    #[ignore = "DELIVER 01-02: single-flight transition"]
     fn the_runner_never_runs_two_passes_and_always_frees_its_slot(
         events in prop::collection::vec(
             prop_oneof![
@@ -494,7 +381,7 @@ proptest! {
     /// Past the deadline the pass is a failure named `pass_deadline_exceeded`,
     /// whatever it would otherwise have ended with; within it nothing changes.
     #[test]
-    #[ignore = "DELIVER 05-05: pass deadline decision"]
+    #[ignore = "DELIVER 02-03: pass deadline decision"]
     fn a_pass_past_its_deadline_fails_whatever_it_would_have_said(
         deadline_secs in 60u64..=7200,
         elapsed_ms in 0u64..8_000_000,
@@ -509,73 +396,19 @@ proptest! {
         }
     }
 
-    /// CORE-8 @US-IXD-006 @data-models-1 @property @C1b @C6a @contract-shape:pure-function
-    /// Every new numeric setting accepts exactly its range and refuses
-    /// anything else, including non-numbers.
-    #[test]
-    #[ignore = "DELIVER 05-06: new settings parse"]
-    fn each_new_setting_accepts_exactly_its_range(
-        n in -10i64..10_000,
-        junk in "[a-z ]{1,6}",
-    ) {
-        let ranges: [(&str, i64, i64); 3] = [
-            ("OPENLORE_INDEXER_DUCKDB_MEMORY_LIMIT_MB", 16, 1024),
-            ("OPENLORE_INDEXER_DUCKDB_THREADS", 1, 4),
-            ("OPENLORE_INDEXER_PASS_DEADLINE_SECS", 60, 7200),
-        ];
-        for (variable, lo, hi) in ranges {
-            prop_assert_eq!(sut_parse_setting(variable, &n.to_string()).is_ok(), (lo..=hi).contains(&n), "{}={}", variable, n);
-            prop_assert!(sut_parse_setting(variable, &junk).is_err(), "{}={:?}", variable, junk);
-        }
-        prop_assert_eq!(sut_parse_setting("OPENLORE_INDEXER_PURGE_UNLISTED", &n.to_string()).is_ok(), n == 1);
-    }
-
-    /// CORE-9 @US-IXD-001 @AC-001.3 @FR-IXD-2 @ADR-083 @property @C6a @contract-shape:pure-function
-    /// Of every method and path, exactly POST searchClaims is search and GET
-    /// /healthz is health; everything else (near misses included) is not found.
-    #[test]
-    #[ignore = "DELIVER 05-07: public route allowlist"]
-    fn only_two_routes_exist_on_the_public_listener(
-        method in prop::sample::select(vec!["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "post"]),
-        path in prop_oneof![
-            Just("/xrpc/org.openlore.appview.searchClaims".to_string()),
-            Just("/healthz".to_string()),
-            Just("/xrpc/org.openlore.appview.searchClaims/".to_string()),
-            Just("/HEALTHZ".to_string()),
-            Just("/healthz/".to_string()),
-            Just("/xrpc/com.atproto.repo.createRecord".to_string()),
-            "/[a-zA-Z0-9./_-]{0,40}",
-        ],
-    ) {
-        let expected = match (method, path.as_str()) {
-            ("POST", "/xrpc/org.openlore.appview.searchClaims") => Route::Search,
-            ("GET", "/healthz") => Route::Health,
-            _ => Route::NotFound,
-        };
-        prop_assert_eq!(sut_route(method, &path), expected);
-    }
-
-    /// CORE-9b @US-IXD-001 @NFR-IXD-7 @ADR-083-3 @property @C1b @contract-shape:pure-function
-    /// A body over 8 KiB is too large (checked first); otherwise a value over
-    /// 512 bytes is a bad request; otherwise the search is admitted.
-    #[test]
-    #[ignore = "DELIVER 05-08: public request bounds"]
-    fn requests_are_admitted_exactly_within_their_bounds(body_len in 0usize..20_000, value_len in 0usize..2_000) {
-        let expected = if body_len > 8192 {
-            Admission::TooLarge
-        } else if value_len > 512 {
-            Admission::BadRequest
-        } else {
-            Admission::Admitted
-        };
-        prop_assert_eq!(sut_admit(body_len, value_len), expected);
-    }
+    // CORE-8 `each_new_setting_accepts_exactly_its_range` moved VERBATIM to
+    // crates/openlore-indexer/src/deployment_settings_properties.rs (settings
+    // parsing is private to the indexer binary).
+    // CORE-9 `only_two_routes_exist_on_the_public_listener` and CORE-9b
+    // `requests_are_admitted_exactly_within_their_bounds` moved VERBATIM to
+    // crates/adapter-xrpc-query-server/tests/public_surface_properties.rs
+    // (cli may not link that crate: check-arch CLI_FORBIDDEN_INDEXER_DEPS).
 
     /// CORE-10 @US-IXD-002 @ADR-083-2 @H2 @property @contract-shape:pure-function
     /// An unusable store is always 503 `store_unusable`; a usable one is 200
     /// with exactly `status` and `last_successful_pass_at` (RFC3339 or null).
     #[test]
-    #[ignore = "DELIVER 05-09: /healthz projection"]
+    #[ignore = "DELIVER 01-04: /healthz projection"]
     fn the_health_response_is_honest_and_minimal(
         usable in any::<bool>(),
         last in prop::option::of(1_600_000_000i64..2_100_000_000),
@@ -601,42 +434,9 @@ proptest! {
     }
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
-
-    /// CORE-11 @US-IXD-003 @AC-003.2 @ADR-082 @property @contract-shape:bounded-change
-    /// Purging one bare DID changes exactly: its claims (bare and `#fragment`
-    /// forms), their evidence and outgoing references, and the artifact files
-    /// at THEIR stored paths. Look-alike DIDs (prefix pair, colliding did:web
-    /// segments) and references other authors hold TO purged claims are
-    /// untouched. Purging again removes nothing (idempotent, C4a).
-    #[test]
-    #[ignore = "DELIVER 05-10: IndexPurgePort::purge_author over the real adapter"]
-    fn purging_an_author_changes_only_that_author_s_claims_and_files(
-        before in store(),
-        target in did(),
-    ) {
-        let (after, removed) = sut_purge_author(&before, &target);
-        let (expected, expected_removed) = purge_oracle(&before, &target);
-        prop_assert_eq!(removed, expected_removed);
-        let snap = |s: &StoreView| -> HashMap<String, Vec<String>> {
-            HashMap::from([
-                ("index.claims".to_string(), s.claims.iter().map(|c| format!("{c:?}")).collect()),
-                ("index.evidence".to_string(), s.evidence.iter().map(|c| format!("{c:?}")).collect()),
-                ("index.references".to_string(), s.references.iter().map(|c| format!("{c:?}")).collect()),
-                ("index.artifact_files".to_string(), s.artifacts.iter().cloned().collect()),
-            ])
-        };
-        let (b, a, e) = (snap(&before), snap(&after), snap(&expected));
-        let universe: HashSet<String> = b.keys().cloned().collect();
-        let delta = universe.iter().fold(Delta::new(), |d, slot| d.with_slot(slot.clone(), set_to(e[slot].clone())));
-        assert_state_delta(&b, &a, &universe, &delta);
-
-        let (again, removed_again) = sut_purge_author(&after, &target);
-        prop_assert_eq!(removed_again, 0);
-        prop_assert_eq!(again, after);
-    }
-}
+// CORE-11 `purging_an_author_changes_only_that_author_s_claims_and_files` moved
+// VERBATIM to crates/adapter-index-store/tests/purge_properties.rs: it binds the
+// REAL adapter, which cli may not link (check-arch CLI_FORBIDDEN_INDEXER_DEPS).
 
 // =============================================================================
 // Pinned domain examples (readable anchors for reviewers)
@@ -644,7 +444,7 @@ proptest! {
 
 /// CORE-1x @ADR-082 @adversarial @contract-shape:pure-function — the prefix look-alike is never planned.
 #[test]
-#[ignore = "DELIVER 05-01: plan_purge"]
+#[ignore = "DELIVER 02-02: plan_purge"]
 fn the_purge_plan_never_names_a_listed_look_alike() {
     let indexed: BTreeSet<String> = [
         "did:plc:priyaraman7x2k",
@@ -662,7 +462,7 @@ fn the_purge_plan_never_names_a_listed_look_alike() {
 
 /// CORE-5x @AC-004.1 @contract-shape:pure-function — the closed table of exit codes.
 #[test]
-#[ignore = "DELIVER 05-03: pass_exit_code extended"]
+#[ignore = "DELIVER 01-04: pass_exit_code extended"]
 fn the_exit_codes_of_the_canonical_passes() {
     let base = PassOutcomeView {
         list_refused: false,

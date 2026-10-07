@@ -14,6 +14,7 @@
 //! * XP-10 metric filters key on the events the binary emits; no default_value; queries read no claim content (AC-005.4)
 //! * XP-11 host IAM: read the DID parameter, write/filter the indexer's own logs, nothing else (AC-003.5)
 //! * XP-12 image + CI: distroless non-root image by digest; build, smoke, scan, sign in CI (AC-001.6, AC-006.1)
+//! * XP-13 `health-timer.sh` REAL run: a failing `FilterLogEvents` makes the health line `not_live = 1` (fail closed, A3)
 //!
 //! The shell scripts run under `bash` with stub `aws`/`gh`/`cosign`/… on PATH
 //! that record every call; nothing reaches AWS, GitHub or a registry. Live
@@ -25,6 +26,9 @@
 //! * `render-dids.sh` honours `INDEXER_CONFIG_DIR` (default `/pds/indexer/config`)
 //!   and resolves `aws`, `timeout`, `chown` from `PATH`.
 //! * `deploy.sh` resolves `gh`, `cosign`, `crane`, `aws`, `curl`, `docker` from `PATH`.
+//! * `health-timer.sh run` honours `INDEXER_CONFIG_DIR` and `INDEXER_STATE_DIR`, resolves
+//!   `docker`, `curl`, `aws` from `PATH`, prints its `indexer.host.health` line on stdout,
+//!   tolerates a host without `/proc` (fields default to 0) and always exits 0.
 //!
 //! `#[ignore]`d until DELIVER creates the files they inspect.
 
@@ -166,7 +170,7 @@ fn bash(script: &str, args: &[&str], env: &[(&str, String)]) -> Run {
 /// XP-1 @US-IXD-001 @US-IXD-006 @AC-001.6 @AC-003.5 @AC-006.5 @C-1 @NFR-IXD-8 @infrastructure
 /// @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 08-01: deploy/indexer/host/compose.yaml (DV-IXD-3)"]
+#[ignore = "DELIVER 03-02: deploy/indexer/host/compose.yaml (DV-IXD-3)"]
 fn the_indexer_container_has_exactly_its_two_mounts_and_the_production_posture() {
     let compose = read("deploy/indexer/host/compose.yaml");
     let mut found = mounts(&compose);
@@ -252,7 +256,7 @@ fn the_indexer_container_has_exactly_its_two_mounts_and_the_production_posture()
 
 /// XP-2 @US-IXD-006 @AC-006.4 @AC-006.5 @B11 @DV-IXD-14 @infrastructure @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 08-02: review-app compose B11 caps, init, 192m (DV-IXD-14)"]
+#[ignore = "DELIVER 03-01: review-app compose B11 caps, init, 192m (DV-IXD-14)"]
 fn the_review_app_container_is_capped_for_sharing_the_host() {
     let compose = read("deploy/review-app/host/compose.yaml");
     assert_eq!(
@@ -284,7 +288,7 @@ fn the_review_app_container_is_capped_for_sharing_the_host() {
 
 /// XP-3 @US-IXD-001 @AC-001.2 @AC-001.3 @NFR-IXD-7 @ADR-083 @infrastructure @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 08-03: deploy/indexer/host/index.caddy (DV-IXD-7)"]
+#[ignore = "DELIVER 03-02: deploy/indexer/host/index.caddy (DV-IXD-7)"]
 fn the_public_site_serves_only_search_and_health_over_https() {
     let caddy = read("deploy/indexer/host/index.caddy");
     let flat = compact(&caddy);
@@ -325,7 +329,7 @@ fn the_public_site_serves_only_search_and_health_over_https() {
 
 /// XP-4 @US-IXD-002 @AC-002.4 @AC-002.5 @FR-IXD-3 @DV-IXD-4 @infrastructure @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 08-04: deploy/indexer/host/openlore-indexer-pass.{timer,service} (DV-IXD-4)"]
+#[ignore = "DELIVER 03-02: deploy/indexer/host/openlore-indexer-pass.{timer,service} (DV-IXD-4)"]
 fn the_pass_runs_every_15_minutes_never_stacks_and_survives_a_reboot() {
     let timer = read("deploy/indexer/host/openlore-indexer-pass.timer");
     let service = read("deploy/indexer/host/openlore-indexer-pass.service");
@@ -439,7 +443,7 @@ fn inode(path: &Path) -> u64 {
 /// XP-5 @US-IXD-003 @AC-003.1 @H1 @ADR-081 @DV-IXD-5 @infrastructure @real-io @contract-shape:bounded-change
 #[cfg(unix)]
 #[test]
-#[ignore = "DELIVER 08-05: deploy/indexer/host/render-dids.sh (DV-IXD-5)"]
+#[ignore = "DELIVER 03-02: deploy/indexer/host/render-dids.sh (DV-IXD-5)"]
 fn two_consecutive_list_edits_replace_the_file_and_never_the_directory() {
     use std::os::unix::fs::PermissionsExt;
     let r = Render::new();
@@ -494,7 +498,7 @@ fn two_consecutive_list_edits_replace_the_file_and_never_the_directory() {
 /// @contract-shape:unbounded-preservation
 #[cfg(unix)]
 #[test]
-#[ignore = "DELIVER 08-06: render-dids.sh keeps the last good list (DV-IXD-5)"]
+#[ignore = "DELIVER 03-02: render-dids.sh keeps the last good list (DV-IXD-5)"]
 fn a_failed_or_empty_read_keeps_the_last_good_list_and_never_fails_the_pass() {
     let r = Render::new();
     r.parameter_is("did:plc:priyaraman7x2k,did:plc:dvolkov3m9q");
@@ -539,6 +543,98 @@ fn a_failed_or_empty_read_keeps_the_last_good_list_and_never_fails_the_pass() {
 }
 
 // =============================================================================
+// health-timer.sh (observability-design §4; monitoring-alerting A3)
+// =============================================================================
+
+/// One `health-timer.sh run` against stub `docker` (container running), `curl`
+/// (`/healthz` ok, search ok), a fresh `.rendered-at`, and a stub `aws` whose
+/// `filter-log-events` either finds a `pass_summary` or fails. Returns the run
+/// and its `indexer.host.health` line, whitespace removed.
+#[cfg(unix)]
+fn health_run(filter_log_events_fails: bool) -> (Run, String) {
+    let stubs = Stubs::new();
+    stubs.add(
+        "docker",
+        "case \"$*\" in\n  *ps*) echo 0123456789abcdef ;;\n  *Running*) echo true ;;\n  *RestartCount*) echo 0 ;;\n  *OOMKilled*) echo false ;;\n  *stats*) echo '61MiB / 128MiB' ;;\nesac\nexit 0",
+    );
+    stubs.add(
+        "curl",
+        "case \"$*\" in\n  *healthz*) echo '{\"status\":\"ok\",\"last_successful_pass_at\":null}' ;;\n  *) echo '{\"results\":[]}' ;;\nesac\nexit 0",
+    );
+    let filter = if filter_log_events_fails {
+        "echo 'An error occurred (AccessDeniedException) when calling the FilterLogEvents operation' >&2; exit 254"
+    } else {
+        "echo '{\"events\":[{\"message\":\"{\\\"event\\\":\\\"indexer.ingest.pass_summary\\\"}\"}]}'; exit 0"
+    };
+    stubs.add(
+        "aws",
+        &format!("case \"$*\" in\n  *filter-log-events*) {filter} ;;\nesac\nexit 0"),
+    );
+    let config = tempfile::tempdir().expect("config dir");
+    std::fs::write(config.path().join(".rendered-at"), "").expect(".rendered-at");
+    let state = tempfile::tempdir().expect("state dir");
+    let run = bash(
+        "deploy/indexer/host/health-timer.sh",
+        &["run"],
+        &[
+            ("PATH", stubs.path_env()),
+            ("INDEXER_CONFIG_DIR", config.path().display().to_string()),
+            ("INDEXER_STATE_DIR", state.path().display().to_string()),
+        ],
+    );
+    let line = run
+        .out
+        .lines()
+        .find(|l| l.contains("indexer.host.health"))
+        .map(compact)
+        .unwrap_or_default()
+        .replace(' ', "");
+    (run, line)
+}
+
+/// XP-13 @US-IXD-004 @US-IXD-005 @AC-004.1 @AC-005.1 @DV-IXD-8 @U-1 @C7a @error @infrastructure @real-io
+/// @contract-shape:pure-function
+/// ```gherkin
+/// Scenario: The liveness line fails closed when the shipped heartbeat cannot be read
+///   Given the indexer container is running, /healthz answers ok and the DID list is fresh
+///   When the host health check runs and FilterLogEvents finds a pass_summary
+///   Then the health line reports summary_45m 1 and not_live 0
+///   When the host health check runs and FilterLogEvents fails
+///   Then the health line reports summary_check error, summary_45m 0 and not_live 1
+///   And the check itself still exits 0
+/// ```
+#[cfg(unix)]
+#[test]
+#[ignore = "DELIVER 03-02: deploy/indexer/host/health-timer.sh not_live fails closed (observability §4)"]
+fn the_liveness_line_fails_closed_when_the_shipped_heartbeat_cannot_be_read() {
+    let (ok, ok_line) = health_run(false);
+    assert_eq!(ok.status, 0, "{}", ok.out);
+    assert!(
+        ok_line.contains("\"summary_45m\":1") && ok_line.contains("\"not_live\":0"),
+        "non-vacuity: a found heartbeat with everything else healthy is live\n{}",
+        ok.out
+    );
+
+    let (failed, line) = health_run(true);
+    assert_eq!(
+        failed.status, 0,
+        "the health check never fails its unit\n{}",
+        failed.out
+    );
+    for needle in [
+        "\"summary_check\":\"error\"",
+        "\"summary_45m\":0",
+        "\"not_live\":1",
+    ] {
+        assert!(
+            line.contains(needle),
+            "a FilterLogEvents error counts as not live: missing {needle}\n{}",
+            failed.out
+        );
+    }
+}
+
+// =============================================================================
 // deploy.sh (infrastructure-integration §6.1; ci-cd-pipeline §5.7)
 // =============================================================================
 
@@ -565,7 +661,7 @@ fn deploy_stubs(ci_conclusion: &str, signature_ok: bool) -> Stubs {
 
 /// XP-7 @US-IXD-006 @AC-006.1 @FR-IXD-11 @DV-IXD-2 @error @infrastructure @real-io @contract-shape:unbounded-preservation
 #[test]
-#[ignore = "DELIVER 08-07: deploy/indexer/deploy.sh digest guard (DV-IXD-2)"]
+#[ignore = "DELIVER 03-02: deploy/indexer/deploy.sh digest guard (DV-IXD-2)"]
 fn a_deploy_by_tag_branch_or_short_sha_is_refused_before_any_tool_runs() {
     for reference in ["main", "latest", "v1.2.3", "4f2c1ab", "sha256:abc123"] {
         let stubs = deploy_stubs("success", true);
@@ -595,7 +691,7 @@ fn a_deploy_by_tag_branch_or_short_sha_is_refused_before_any_tool_runs() {
 /// XP-8 @US-IXD-006 @AC-006.1 @AC-001.6 @FR-IXD-11 @DV-IXD-2 @error @infrastructure @real-io
 /// @contract-shape:unbounded-preservation
 #[test]
-#[ignore = "DELIVER 08-08: deploy/indexer/deploy.sh CI-green + cosign gates (DV-IXD-2)"]
+#[ignore = "DELIVER 03-02: deploy/indexer/deploy.sh CI-green + cosign gates (DV-IXD-2)"]
 fn an_unsigned_digest_or_a_red_ci_sha_is_refused_before_the_host_is_touched() {
     let digest = format!("sha256:{}", "0".repeat(64));
     let unsigned = deploy_stubs("success", false);
@@ -658,7 +754,7 @@ fn an_unsigned_digest_or_a_red_ci_sha_is_refused_before_the_host_is_touched() {
 /// XP-9 @US-IXD-004 @AC-004.1 @AC-004.2 @AC-004.3 @AC-004.4 @AC-004.6 @DV-IXD-8 @infrastructure
 /// @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 08-09: deploy/tofu/environments/prod/indexer.tf alarms (DV-IXD-8)"]
+#[ignore = "DELIVER 03-03: deploy/tofu/environments/prod/indexer.tf alarms (DV-IXD-8)"]
 fn exactly_three_alarms_page_the_existing_topic_and_announce_recovery() {
     let tf = read("deploy/tofu/environments/prod/indexer.tf");
     let resources = hcl_resources(&tf);
@@ -721,7 +817,7 @@ fn exactly_three_alarms_page_the_existing_topic_and_announce_recovery() {
 /// XP-10 @US-IXD-004 @US-IXD-005 @AC-005.1 @AC-005.2 @AC-005.3 @AC-005.4 @I-IXD-4 @infrastructure
 /// @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 08-10: metric filters + saved queries in indexer.tf (DV-IXD-8, observability §5)"]
+#[ignore = "DELIVER 03-03: metric filters + saved queries in indexer.tf (DV-IXD-8, observability §5)"]
 fn alarms_and_queries_read_only_the_structural_events_the_index_emits() {
     let tf = read("deploy/tofu/environments/prod/indexer.tf");
     let resources = hcl_resources(&tf);
@@ -783,7 +879,7 @@ fn alarms_and_queries_read_only_the_structural_events_the_index_emits() {
 
 /// XP-11 @US-IXD-003 @AC-003.5 @NFR-IXD-8 @DV-IXD-10 @infrastructure @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 08-11: deploy/tofu/bootstrap/indexer-iam.tf (DV-IXD-10)"]
+#[ignore = "DELIVER 03-03: deploy/tofu/bootstrap/indexer-iam.tf (DV-IXD-10)"]
 fn the_host_may_read_the_did_list_and_its_own_logs_and_nothing_more() {
     let iam = read("deploy/tofu/bootstrap/indexer-iam.tf");
     for granted in [
@@ -811,7 +907,7 @@ fn the_host_may_read_the_did_list_and_its_own_logs_and_nothing_more() {
 
 /// XP-12 @US-IXD-001 @US-IXD-006 @AC-001.6 @AC-006.1 @DV-IXD-1 @infrastructure @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 08-12: Dockerfile + ci.yml indexer-build/indexer-image + deploy-pds-check indexer-host (DV-IXD-1)"]
+#[ignore = "DELIVER 03-03: Dockerfile + ci.yml indexer-build/indexer-image + deploy-pds-check indexer-host (DV-IXD-1)"]
 fn the_image_is_a_signed_non_root_distroless_build_from_ci() {
     let dockerfile = read("crates/openlore-indexer/Dockerfile");
     assert!(
