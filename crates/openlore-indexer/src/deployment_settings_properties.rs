@@ -4,15 +4,20 @@
 //! cannot link (check-arch CLI_FORBIDDEN_INDEXER_DEPS / I-3). Precedent:
 //! `config::pass_core_properties`.
 //!
-//! RED scaffold: DELIVER 02-03 replaces the `sut_parse_setting` body with ONE
-//! call into this crate's config parsing (data-models §1).
+//! `sut_parse_setting` is ONE call into this crate's config parsing
+//! (data-models §1).
 //
-// SCAFFOLD: true
+// SCAFFOLD: false
 
 use proptest::prelude::*;
 
-fn sut_parse_setting(_variable: &str, _value: &str) -> Result<(), String> {
-    todo!("DELIVER 02-03: bind to openlore-indexer config parsing of the new settings (data-models §1)")
+fn sut_parse_setting(variable: &str, value: &str) -> Result<(), String> {
+    super::parse_config(
+        |name| (name == variable).then(|| value.to_string()),
+        super::BuildProfile::Development,
+    )
+    .map(|_| ())
+    .map_err(|refusal| refusal.to_string())
 }
 
 proptest! {
@@ -22,7 +27,6 @@ proptest! {
     /// Every new numeric setting accepts exactly its range and refuses
     /// anything else, including non-numbers.
     #[test]
-    #[ignore = "DELIVER 02-03: new settings parse"]
     fn each_new_setting_accepts_exactly_its_range(
         n in -10i64..10_000,
         junk in "[a-z ]{1,6}",

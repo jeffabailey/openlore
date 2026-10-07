@@ -39,6 +39,15 @@ pub const LOOPBACK_SEAM_VAR: &str = "OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP";
 pub const MAX_CONCURRENT_FETCHES_VAR: &str = "OPENLORE_INDEXER_MAX_CONCURRENT_FETCHES";
 /// One DID's whole-fetch deadline, in seconds.
 pub const PER_DID_TIMEOUT_SECS_VAR: &str = "OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS";
+/// DuckDB's memory limit for the index, in MiB (B9); unset keeps DuckDB's default.
+pub const DUCKDB_MEMORY_LIMIT_MB_VAR: &str = "OPENLORE_INDEXER_DUCKDB_MEMORY_LIMIT_MB";
+/// DuckDB's worker threads for the index (B9); unset keeps DuckDB's default.
+pub const DUCKDB_THREADS_VAR: &str = "OPENLORE_INDEXER_DUCKDB_THREADS";
+/// How long one pass may run before it ends with exit 2 (B13), in seconds.
+pub const PASS_DEADLINE_SECS_VAR: &str = "OPENLORE_INDEXER_PASS_DEADLINE_SECS";
+/// TEST-ONLY: provokes a fault a real process cannot be driven into from
+/// outside (DISTILL decision 1); a release build refuses to start with it set.
+pub const TEST_FAULT_VAR: &str = "OPENLORE_INDEXER_TEST_FAULT";
 /// The SEPARATE `index.duckdb` path.
 const INDEX_PATH_VAR: &str = "OPENLORE_INDEXER_INDEX_PATH";
 /// The home directory the default index path lives under.
@@ -61,6 +70,50 @@ const MAX_CONCURRENT_FETCHES_RANGE: RangeInclusive<u64> = 1..=16;
 /// One DID's whole fetch — resolving plus every listing page (ADR-078).
 const DEFAULT_PER_DID_TIMEOUT_SECS: u64 = 30;
 const PER_DID_TIMEOUT_SECS_RANGE: RangeInclusive<u64> = 1..=600;
+
+/// The DuckDB caps' admissible ranges (data-models §1); production 48 MiB, 1 thread.
+const DUCKDB_MEMORY_LIMIT_MB_RANGE: RangeInclusive<u64> = 16..=1024;
+const DUCKDB_THREADS_RANGE: RangeInclusive<u64> = 1..=4;
+
+/// One pass's deadline (ADR-080 §8): 25 minutes unless configured.
+const DEFAULT_PASS_DEADLINE_SECS: u64 = 1500;
+const PASS_DEADLINE_SECS_RANGE: RangeInclusive<u64> = 60..=7200;
+
+/// A fault the TEST-ONLY seam provokes inside a development build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestFault {
+    /// The first in-`serve` pass panics.
+    FirstPassPanics,
+    /// The store's connection mutex is poisoned at the next pass's start.
+    StorePoisoned,
+    /// Every search read of the store fails.
+    SearchStoreReadFails,
+    /// The first author purge fails; later ones succeed.
+    PurgeFails,
+}
+
+impl TestFault {
+    const ALL: [Self; 4] = [
+        Self::FirstPassPanics,
+        Self::StorePoisoned,
+        Self::SearchStoreReadFails,
+        Self::PurgeFails,
+    ];
+
+    /// The seam's value naming this fault.
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::FirstPassPanics => "first_pass_panics",
+            Self::StorePoisoned => "store_poisoned",
+            Self::SearchStoreReadFails => "search_store_read_fails",
+            Self::PurgeFails => "purge_fails",
+        }
+    }
+
+    fn from_token(token: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|fault| fault.token() == token)
+    }
+}
 
 /// Which build this binary is: the loopback test seam exists only in
 /// development builds (the review-app pattern).
@@ -108,6 +161,14 @@ pub struct IndexerConfig {
     /// Each in-`serve` pass purges the authors its loaded list no longer
     /// names (ADR-082); off, a removed author's claims stay (ADR-078).
     pub purge_unlisted: bool,
+    /// DuckDB's memory limit in MiB; `None` keeps DuckDB's default (B9).
+    pub duckdb_memory_limit_mb: Option<u64>,
+    /// DuckDB's worker threads; `None` keeps DuckDB's default (B9).
+    pub duckdb_threads: Option<u64>,
+    /// How long one pass may run before it ends with exit 2 (B13).
+    pub pass_deadline: Duration,
+    /// The TEST-ONLY fault to provoke; always `None` in a release build.
+    pub test_fault: Option<TestFault>,
 }
 
 /// Why the configuration was refused: the variable, its offending value (the
@@ -148,6 +209,7 @@ pub fn parse_config(
             .filter(|value| !value.is_empty())
     };
     let policy = transport_policy(setting(LOOPBACK_SEAM_VAR).as_deref(), profile)?;
+    let test_fault = test_fault(lookup(TEST_FAULT_VAR).as_deref(), profile)?;
     let inline_list = setting(REPO_DIDS_VAR);
     let repo_dids = parse_repo_dids(inline_list.as_deref().unwrap_or_default())?;
     let repo_dids_file = setting(REPO_DIDS_FILE_VAR)
@@ -176,6 +238,23 @@ pub fn parse_config(
         DEFAULT_PER_DID_TIMEOUT_SECS,
     )?;
     let purge_unlisted = purge_switch(setting(PURGE_UNLISTED_VAR).as_deref())?;
+    let set = |name: &str| lookup(name).map(|value| value.trim().to_string());
+    let duckdb_memory_limit_mb = set(DUCKDB_MEMORY_LIMIT_MB_VAR)
+        .map(|value| {
+            ranged_number(
+                DUCKDB_MEMORY_LIMIT_MB_VAR,
+                &value,
+                DUCKDB_MEMORY_LIMIT_MB_RANGE,
+            )
+        })
+        .transpose()?;
+    let duckdb_threads = set(DUCKDB_THREADS_VAR)
+        .map(|value| ranged_number(DUCKDB_THREADS_VAR, &value, DUCKDB_THREADS_RANGE))
+        .transpose()?;
+    let pass_deadline_secs = set(PASS_DEADLINE_SECS_VAR)
+        .map_or(Ok(DEFAULT_PASS_DEADLINE_SECS), |value| {
+            ranged_number(PASS_DEADLINE_SECS_VAR, &value, PASS_DEADLINE_SECS_RANGE)
+        })?;
     Ok(IndexerConfig {
         index_path: lookup(INDEX_PATH_VAR)
             .map(PathBuf::from)
@@ -190,7 +269,29 @@ pub fn parse_config(
         max_concurrent_fetches: usize::try_from(max_concurrent_fetches).unwrap_or(usize::MAX),
         per_did_time_budget: Duration::from_secs(per_did_timeout_secs),
         purge_unlisted,
+        duckdb_memory_limit_mb,
+        duckdb_threads,
+        pass_deadline: Duration::from_secs(pass_deadline_secs),
+        test_fault,
     })
+}
+
+/// The TEST-ONLY fault seam: refused whenever it is set in a release build
+/// (like the loopback seam); in a development build it must name a known
+/// fault. Unset (or blank) provokes nothing.
+fn test_fault(seam: Option<&str>, profile: BuildProfile) -> Result<Option<TestFault>, ConfigError> {
+    match (seam.map(str::trim), profile) {
+        (None, _) => Ok(None),
+        (Some(value), BuildProfile::Release) => Err(ConfigError::new(
+            TEST_FAULT_VAR,
+            value,
+            "is a test-only seam; a release build refuses to start with it set",
+        )),
+        (Some(""), BuildProfile::Development) => Ok(None),
+        (Some(value), BuildProfile::Development) => TestFault::from_token(value)
+            .map(Some)
+            .ok_or_else(|| ConfigError::new(TEST_FAULT_VAR, value, "names no known fault")),
+    }
 }
 
 /// The purge switch: on only for `1`, off when unset; anything else refused.
@@ -307,23 +408,31 @@ fn bounded_number(
     range: RangeInclusive<u64>,
     default: u64,
 ) -> Result<u64, ConfigError> {
-    value.map_or(Ok(default), |value| {
-        value
-            .parse::<u64>()
-            .ok()
-            .filter(|number| range.contains(number))
-            .ok_or_else(|| {
-                ConfigError::new(
-                    variable,
-                    value,
-                    format!(
-                        "must be a whole number from {} to {}",
-                        range.start(),
-                        range.end()
-                    ),
-                )
-            })
-    })
+    value.map_or(Ok(default), |value| ranged_number(variable, value, range))
+}
+
+/// `value` as a whole number within `range`, else refused naming `variable`
+/// (a blank value is not a number).
+fn ranged_number(
+    variable: &'static str,
+    value: &str,
+    range: RangeInclusive<u64>,
+) -> Result<u64, ConfigError> {
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|number| range.contains(number))
+        .ok_or_else(|| {
+            ConfigError::new(
+                variable,
+                value,
+                format!(
+                    "must be a whole number from {} to {}",
+                    range.start(),
+                    range.end()
+                ),
+            )
+        })
 }
 
 /// `<home>/.local/share/openlore-indexer/index.duckdb`.
@@ -502,6 +611,35 @@ mod tests {
         }
     }
 
+    proptest! {
+        /// Universe = the whole loaded [`IndexerConfig`]. The TEST-ONLY fault
+        /// seam: a release build refuses it whatever its value, naming it; a
+        /// development build loads exactly the known faults (changing only
+        /// `test_fault`) and refuses any other value.
+        #[test]
+        fn the_fault_seam_loads_only_known_faults_and_only_in_a_development_build(
+            value in prop_oneof![
+                proptest::sample::select(TestFault::ALL.to_vec()).prop_map(|f| f.token().to_string()),
+                "[a-z_]{1,24}",
+            ],
+        ) {
+            let env = BTreeMap::from([(TEST_FAULT_VAR, value.clone())]);
+            let release = parse_config(|name| env.get(name).cloned(), BuildProfile::Release);
+            prop_assert_eq!(release.map_err(|r| r.variable), Err(TEST_FAULT_VAR));
+            let baseline = parse(&BTreeMap::new()).expect("an empty environment loads");
+            match (parse(&env), TestFault::from_token(&value)) {
+                (Ok(config), Some(fault)) => {
+                    prop_assert_eq!(config, IndexerConfig { test_fault: Some(fault), ..baseline });
+                }
+                (Err(refusal), None) => {
+                    prop_assert_eq!(refusal.variable, TEST_FAULT_VAR);
+                    prop_assert_eq!(refusal.value, value);
+                }
+                (outcome, fault) => prop_assert!(false, "{:?} for {:?}", outcome, fault),
+            }
+        }
+    }
+
     // bypass: a single absent-variable example pins the documented defaults.
     #[test]
     fn unset_variables_take_the_documented_defaults() {
@@ -513,6 +651,10 @@ mod tests {
         assert_eq!(config.policy, TransportPolicy::HttpsPublicOnly);
         assert_eq!(config.max_concurrent_fetches, 4);
         assert_eq!(config.per_did_time_budget, Duration::from_secs(30));
+        assert_eq!(config.duckdb_memory_limit_mb, None);
+        assert_eq!(config.duckdb_threads, None);
+        assert_eq!(config.pass_deadline, Duration::from_secs(1500));
+        assert_eq!(config.test_fault, None);
     }
 }
 
@@ -731,7 +873,7 @@ mod contracts;
 
 /// indexer-deployment CORE-8 (new settings ranges), moved VERBATIM from
 /// `tests/acceptance/indexer_deployment_core.rs` for the same reason as
-/// `pass_core_properties` above. RED until DELIVER 02-03.
+/// `pass_core_properties` above.
 #[cfg(test)]
 #[path = "deployment_settings_properties.rs"]
 mod deployment_settings_properties;

@@ -698,7 +698,6 @@ fn purging_is_done_once_and_listing_the_author_again_brings_their_claims_back() 
 ///   And the following pass completes the purge of Dmitri
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: purge failure → exit 2 purge_failed; resumable (B4, B6)"]
 fn a_purge_that_fails_ends_the_pass_with_exit_2_and_finishes_on_the_next_pass() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = LiveIndex::deploy(

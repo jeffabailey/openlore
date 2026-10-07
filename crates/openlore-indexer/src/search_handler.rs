@@ -12,12 +12,13 @@
 
 use std::sync::Arc;
 
-use adapter_xrpc_query_server::QueryHandler;
+use adapter_xrpc_query_server::{IndexUnavailable, QueryHandler};
 use appview_domain::{compose_results, NetworkSearchResult};
+use claim_domain::{Cid, Did};
 use lexicon::{
     ClaimReferenceDto, SearchDimensionDto, SearchQueryRequest, SearchQueryResponse, SearchResultDto,
 };
-use ports::{IndexReadPort, SearchDimension};
+use ports::{IndexReadPort, IndexStoreError, IndexedClaim, SearchDimension};
 
 /// The shared read handle the search handler closes over: the process's one
 /// index handle (ADR-080), seen through its read port only.
@@ -28,22 +29,55 @@ pub fn search_handler(reads: SharedIndexReads) -> QueryHandler {
     Arc::new(move |request: SearchQueryRequest| handle_search(reads.as_ref(), request))
 }
 
+/// TEST-FAULT seam (`OPENLORE_INDEXER_TEST_FAULT=search_store_read_fails`,
+/// debug builds only): an index every read of which fails.
+pub fn unreadable_index() -> SharedIndexReads {
+    Arc::new(UnreadableIndex)
+}
+
+/// The read port of an index that cannot be read.
+struct UnreadableIndex;
+
+impl UnreadableIndex {
+    fn failure<T>() -> Result<T, IndexStoreError> {
+        Err(IndexStoreError::QueryFailed {
+            message: "test fault: the index cannot be read".to_string(),
+        })
+    }
+}
+
+impl IndexReadPort for UnreadableIndex {
+    fn query_by_object(&self, _: &str) -> Result<Vec<IndexedClaim>, IndexStoreError> {
+        Self::failure()
+    }
+    fn query_by_contributor(&self, _: &Did) -> Result<Vec<IndexedClaim>, IndexStoreError> {
+        Self::failure()
+    }
+    fn query_by_subject(&self, _: &str) -> Result<Vec<IndexedClaim>, IndexStoreError> {
+        Self::failure()
+    }
+    fn get_by_cid(&self, _: &Cid) -> Result<Option<IndexedClaim>, IndexStoreError> {
+        Self::failure()
+    }
+}
+
 /// One search: read the index along `request.dimension`,
 /// compose per-author via the PURE `appview_domain::compose_results`, and project
 /// the per-author structure back to a FLAT attributed wire response (every
 /// `author_did` present; the `distinct_author_count` is the pure COUNT, never a
-/// merge). A store error degrades to an empty result (serve never panics on a
-/// read failure; the CLI sees an empty-but-attributed response).
-fn handle_search(reads: &dyn IndexReadPort, request: SearchQueryRequest) -> SearchQueryResponse {
+/// merge). A store error is [`IndexUnavailable`] (a 500), never an empty
+/// result the client would read as "no results" (ADR-080 §7).
+fn handle_search(
+    reads: &dyn IndexReadPort,
+    request: SearchQueryRequest,
+) -> Result<SearchQueryResponse, IndexUnavailable> {
     let dimension = from_dto_dimension(request.dimension);
     let rows = match dimension {
         SearchDimension::Object => reads.query_by_object(&request.value),
         SearchDimension::Subject => reads.query_by_subject(&request.value),
-        SearchDimension::Contributor => {
-            reads.query_by_contributor(&claim_domain::Did(request.value.clone()))
-        }
+        SearchDimension::Contributor => reads.query_by_contributor(&Did(request.value.clone())),
     };
-    let rows = rows.unwrap_or_default();
+    let rows = rows.map_err(|_store_error| IndexUnavailable)?;
 
     // The per-author grouping + the distinct-author COUNT come from the PURE
     // composition (the SAME core proven at layer 2 by AVC-2). The author ORDER on
@@ -52,12 +86,12 @@ fn handle_search(reads: &dyn IndexReadPort, request: SearchQueryRequest) -> Sear
     // composed `NetworkResultRow` does not). The wire stays FLAT + attributed.
     let composed = compose_results(rows.clone(), dimension);
     let results = flat_attributed_rows(&composed, &rows);
-    SearchQueryResponse {
+    Ok(SearchQueryResponse {
         results,
         distinct_author_count: composed.distinct_author_count,
         total_claims: composed.total_claims,
         suggestion: composed.suggestion,
-    }
+    })
 }
 
 /// Project the per-author `NetworkSearchResult` (the pure composition's stable

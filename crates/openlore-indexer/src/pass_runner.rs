@@ -25,6 +25,7 @@
 
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::Scope;
@@ -36,7 +37,7 @@ use appview_domain::pass_runner::{
 };
 use appview_domain::{plan_purge, BareDid, PurgePlan, PurgeSuppressed};
 use claim_domain::Did;
-use ports::{IndexPurgePort, IndexStoreError};
+use ports::{IndexPurgePort, IndexStoreError, ProbeOutcome, PurgeReport};
 
 /// The exit code a panicked pass reports (ADR-080 §7: `pass_panicked` → 2).
 const EXIT_PASS_PANICKED: i32 = 2;
@@ -46,6 +47,14 @@ const EXIT_PASS_PANICKED: i32 = 2;
 pub struct PassLabel {
     boot: BootNonce,
     pass_id: PassId,
+}
+
+impl PassLabel {
+    /// The pass's sequence number within this runner (1 = its first pass).
+    #[must_use]
+    pub fn pass_id(&self) -> PassId {
+        self.pass_id
+    }
 }
 
 impl fmt::Display for PassLabel {
@@ -348,6 +357,43 @@ fn purge_each(purge: &dyn IndexPurgePort, removed: impl IntoIterator<Item = Bare
         }
     }
     PurgeStep::Purged(purged)
+}
+
+/// TEST-FAULT seam (`OPENLORE_INDEXER_TEST_FAULT=purge_fails`, debug builds
+/// only): `purge`, except that its first author purge fails. The purge is
+/// resumable, so the next pass finishes it.
+pub fn failing_first_purge(
+    purge: Arc<dyn IndexPurgePort + Send + Sync>,
+) -> Arc<dyn IndexPurgePort + Send + Sync> {
+    Arc::new(FailingFirstPurge {
+        purge,
+        failed_once: AtomicBool::new(false),
+    })
+}
+
+struct FailingFirstPurge {
+    purge: Arc<dyn IndexPurgePort + Send + Sync>,
+    failed_once: AtomicBool,
+}
+
+impl IndexPurgePort for FailingFirstPurge {
+    fn probe(&self) -> ProbeOutcome {
+        self.purge.probe()
+    }
+
+    fn indexed_authors(&self) -> Result<std::collections::BTreeSet<String>, IndexStoreError> {
+        self.purge.indexed_authors()
+    }
+
+    fn purge_author(&self, bare_did: &str) -> Result<PurgeReport, IndexStoreError> {
+        if self.failed_once.swap(true, Ordering::SeqCst) {
+            self.purge.purge_author(bare_did)
+        } else {
+            Err(IndexStoreError::QueryFailed {
+                message: "test fault: the purge fails".to_string(),
+            })
+        }
+    }
 }
 
 #[cfg(test)]

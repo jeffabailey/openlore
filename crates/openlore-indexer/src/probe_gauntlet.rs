@@ -171,7 +171,8 @@ pub fn probe_gauntlet(
 ) -> Result<(), ProbeRefusal> {
     // The real walk (mirrors the CLI gauntlet): refuse on the FIRST adapter that
     // is not ready (wire → probe → use; ADR-009). The adapters' probe bodies are
-    // now real (step 03-01).
+    // now real (step 03-01). The index store's arm also reads back the DuckDB
+    // caps it was opened with (B9) and refuses when DuckDB did not honour them.
     check_probe("index_store", index_store.probe())?;
     check_probe("ingest_source", ingest_src.probe())?;
     check_probe("identity_resolve", resolve.probe())?;

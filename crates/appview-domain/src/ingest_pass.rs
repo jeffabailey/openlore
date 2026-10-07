@@ -479,6 +479,22 @@ pub const fn pass_exit(failure: Option<PassFailure>, summary: &PassSummary) -> P
     }
 }
 
+/// The pass's exit once its deadline is taken into account (ADR-080 §8, B13):
+/// a pass that ran past `deadline` failed `pass_deadline_exceeded`, whatever
+/// it would otherwise have ended with; within it, `natural` stands.
+#[must_use]
+pub fn within_deadline(
+    natural: PassExit,
+    elapsed: std::time::Duration,
+    deadline: std::time::Duration,
+) -> PassExit {
+    if elapsed > deadline {
+        PassExit::Failed(PassFailure::PassDeadlineExceeded)
+    } else {
+        natural
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,6 +650,28 @@ mod tests {
             match failure {
                 Some(_) => prop_assert_eq!(exit.code(), EXIT_LOCAL_FAILURE),
                 None => prop_assert_eq!(exit.code(), pass_exit_code(&summary)),
+            }
+        }
+
+        /// Universe {code, cause}: past the deadline the exit is 2
+        /// `pass_deadline_exceeded` whatever the natural exit; at or within it
+        /// the natural exit is unchanged (CORE-7's unit-level twin).
+        #[test]
+        fn past_its_deadline_a_pass_fails_and_within_it_nothing_changes(
+            deadline_ms in 1u64..10_000_000,
+            elapsed_ms in 0u64..20_000_000,
+            natural in prop_oneof![
+                Just(PassExit::Completed), Just(PassExit::TotalOutage),
+                Just(PassExit::Failed(PassFailure::UpsertFailed)),
+                Just(PassExit::Failed(PassFailure::PurgeFailed)),
+            ],
+        ) {
+            let ms = std::time::Duration::from_millis;
+            let exit = within_deadline(natural, ms(elapsed_ms), ms(deadline_ms));
+            if elapsed_ms > deadline_ms {
+                prop_assert_eq!(exit, PassExit::Failed(PassFailure::PassDeadlineExceeded));
+            } else {
+                prop_assert_eq!(exit, natural);
             }
         }
 

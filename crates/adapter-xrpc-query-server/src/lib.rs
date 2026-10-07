@@ -44,9 +44,20 @@ use tokio::net::TcpListener;
 
 /// The query handler the composition root wires: a pure-by-contract
 /// `SearchQueryRequest -> SearchQueryResponse` that reads the `IndexStorePort` +
-/// composes per-author via the pure `appview-domain` core. `Send + Sync` so the
-/// hyper accept loop can share it across per-connection tasks.
-pub type QueryHandler = Arc<dyn Fn(SearchQueryRequest) -> SearchQueryResponse + Send + Sync>;
+/// composes per-author via the pure `appview-domain` core. Fallible (ADR-080
+/// §7, B12): a store that cannot be read is [`IndexUnavailable`], answered with
+/// a 500, never an empty 200 that would read as "no results". `Send + Sync` so
+/// the hyper accept loop can share it across per-connection tasks.
+pub type QueryHandler =
+    Arc<dyn Fn(SearchQueryRequest) -> Result<SearchQueryResponse, IndexUnavailable> + Send + Sync>;
+
+/// The index could not be read for a search. Carries nothing about the
+/// request: the 500 it becomes names no query value (ADR-083 §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexUnavailable;
+
+/// The 500 body of a search the index could not answer (a short reason only).
+const INDEX_UNAVAILABLE_BODY: &str = r#"{"error":"index_unavailable"}"#;
 
 /// The health reader the composition root wires behind `GET /healthz` (ADR-083
 /// §2): it reads the process's state and projects it, never changing it.
@@ -100,7 +111,16 @@ impl XrpcQueryServer {
             value: "org.openlore.appview.__probe__".to_string(),
             cid: None,
         };
-        let response = (self.handler)(sentinel);
+        let Ok(response) = (self.handler)(sentinel) else {
+            return ProbeOutcome::Refused {
+                reason: ProbeRefusalReason::StorageSchemaMismatch,
+                detail: "searchClaims could not read the index".to_string(),
+                structured: serde_json::json!({
+                    "contract": "search_reads_the_index",
+                    "violation": "index_unavailable",
+                }),
+            };
+        };
         for (index, row) in response.results.iter().enumerate() {
             if row.author_did.trim().is_empty() {
                 return ProbeOutcome::Refused {
@@ -220,7 +240,9 @@ async fn route(
         Ok(parsed) => parsed,
         Err(err) => return Ok(bad_request(&format!("parse request: {err}"))),
     };
-    let response = handler(request);
+    let Ok(response) = handler(request) else {
+        return Ok(index_unavailable());
+    };
     let json = match serde_json::to_vec(&response) {
         Ok(bytes) => bytes,
         Err(err) => return Ok(internal_error(&format!("serialize response: {err}"))),
@@ -252,6 +274,17 @@ fn bad_request(message: &str) -> Response<Full<Bytes>> {
     Response::builder()
         .status(StatusCode::BAD_REQUEST)
         .body(Full::new(Bytes::from(message.to_string())))
+        .expect("static response is well-formed")
+}
+
+/// A search the index could not answer: 500 with a short reason, no query value.
+fn index_unavailable() -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .header("content-type", "application/json")
+        .body(Full::new(Bytes::from_static(
+            INDEX_UNAVAILABLE_BODY.as_bytes(),
+        )))
         .expect("static response is well-formed")
 }
 
@@ -294,11 +327,13 @@ mod tests {
     /// `rows`, so `probe()` can dispatch its sentinel through the SAME handler.
     fn server_serving(rows: Vec<SearchResultDto>) -> XrpcQueryServer {
         let addr: SocketAddr = "127.0.0.1:0".parse().expect("ephemeral addr parses");
-        let handler: QueryHandler = Arc::new(move |_req: SearchQueryRequest| SearchQueryResponse {
-            distinct_author_count: rows.len() as u32,
-            total_claims: rows.len() as u32,
-            results: rows.clone(),
-            suggestion: None,
+        let handler: QueryHandler = Arc::new(move |_req: SearchQueryRequest| {
+            Ok(SearchQueryResponse {
+                distinct_author_count: rows.len() as u32,
+                total_claims: rows.len() as u32,
+                results: rows.clone(),
+                suggestion: None,
+            })
         });
         XrpcQueryServer::bind(addr, handler).expect("bind ephemeral query server")
     }

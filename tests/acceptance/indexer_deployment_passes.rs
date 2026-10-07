@@ -487,7 +487,6 @@ fn a_pass_that_cannot_store_a_claim_ends_with_exit_2_and_search_keeps_answering(
 ///   And when the timer fires again a new pass runs and completes instead of reporting busy
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: catch_unwind per pass frees the single-flight slot (B12)"]
 fn a_pass_that_crashes_frees_the_runner_for_the_next_pass() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = LiveIndex::deploy(
@@ -525,7 +524,6 @@ fn a_pass_that_crashes_frees_the_runner_for_the_next_pass() {
 ///   And Maria finds Priya's claims saved before the deadline
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: pass deadline (B13); ~60 s scenario"]
 fn a_pass_that_overruns_its_deadline_ends_with_exit_2_and_keeps_what_it_saved() {
     let world = IndexerWorld::configured_with(&[Author::Priya, Author::Sam]);
     world.publishes_self_attested(
@@ -570,7 +568,6 @@ fn a_pass_that_overruns_its_deadline_ends_with_exit_2_and_keeps_what_it_saved() 
 ///   And until it exits it never reports healthy and never answers a search with an empty success
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: poisoned store → indexer.store.unusable, /healthz 503, exit 2 (B12)"]
 fn a_broken_index_makes_serve_stop_instead_of_answering_falsely() {
     let world = given_authors_publish_on_their_own_pdses();
     let mut live = LiveIndex::deploy(
@@ -621,7 +618,6 @@ fn a_broken_index_makes_serve_stop_instead_of_answering_falsely() {
 ///   And Maria is told the network index is unavailable, not that nothing matched
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: fallible QueryHandler, search 500 on store error (B12)"]
 fn a_search_that_cannot_read_the_index_is_reported_as_unavailable_never_as_no_results() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = LiveIndex::deploy(
@@ -715,7 +711,6 @@ fn the_health_response_shows_when_the_last_good_pass_ended_and_only_that() {
 ///   And the next timer firing completes the pass and Maria finds Dmitri's claims too
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: SIGKILL mid-pass recovery; trigger exit 4 on a dropped socket (B1, B3)"]
 fn an_index_killed_in_the_middle_of_a_pass_comes_back_with_what_it_had_saved() {
     let world = given_authors_publish_on_their_own_pdses();
     world.host_answers(
@@ -791,7 +786,6 @@ fn a_socket_file_left_over_from_a_crash_does_not_stop_the_next_start() {
 ///   Then every pass line carries only structural fields: DIDs, counts, reasons, causes and ids
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: structural-only pass events incl. new ones (B4, B6, B15)"]
 fn what_the_index_logs_about_its_passes_never_contains_claim_content() {
     let world = given_authors_publish_on_their_own_pdses();
     world.host_answers(Host::JeffbaileyUs, ListingPosture::Status(502));

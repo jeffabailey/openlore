@@ -260,7 +260,6 @@ fn a_burst_of_100_searches_in_10_seconds_is_answered_and_leaves_the_index_health
 ///     | control socket                | 0.0.0.0:9000   | refuses with exit 2 naming the setting |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: new settings parsed with ConfigError refusals (B3, B6, B9, B13)"]
 fn the_index_refuses_settings_outside_their_range_and_accepts_their_limits() {
     let cases: [(&str, &str, bool); 15] = [
         (var::DUCKDB_MEMORY_LIMIT_MB, "15", false),

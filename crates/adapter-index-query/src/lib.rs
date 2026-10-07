@@ -155,6 +155,19 @@ impl IndexQueryPort for HttpIndexQueryAdapter {
                 message: format!("indexer at {} unreachable: {err}", self.base_url),
             })?;
 
+        // A server error means the index cannot answer now (ADR-080 §7: a store
+        // error is a 500, never an empty 200): the same SOFT outcome as an
+        // unreachable indexer, so search degrades to local-only (DISTILL
+        // decision 5), never "no results".
+        if response.status().is_server_error() {
+            return Err(IndexQueryError::Unreachable {
+                message: format!(
+                    "indexer at {} unavailable: HTTP {}",
+                    self.base_url,
+                    response.status()
+                ),
+            });
+        }
         if !response.status().is_success() {
             return Err(IndexQueryError::BadResponse {
                 message: format!("indexer returned HTTP {}", response.status()),

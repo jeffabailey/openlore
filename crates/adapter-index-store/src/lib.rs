@@ -60,12 +60,141 @@ pub struct IndexStoreAdapter {
     conn: Arc<Mutex<Connection>>,
     /// `<index dir>/indexed_claims/` — per-author artifact partition root.
     artifacts_root: PathBuf,
+    /// The DuckDB caps applied at open; the probe reads them back (B9).
+    caps: DuckDbCaps,
+}
+
+/// DuckDB's resource caps for the index (B9): each `None` keeps DuckDB's
+/// default. Applied at open and read back by the probe (Earned Trust).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DuckDbCaps {
+    /// `memory_limit`, in MiB.
+    pub memory_limit_mb: Option<u64>,
+    /// `threads`.
+    pub threads: Option<u64>,
+}
+
+/// The caps DuckDB reports back: `memory_limit` as it prints it (e.g.
+/// `48.0 MiB`) and `threads`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DuckDbSettings {
+    pub memory_limit: String,
+    pub threads: u64,
+}
+
+/// A cap DuckDB did not honour: the setting, what was asked, what it reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapNotHonoured {
+    pub setting: &'static str,
+    pub requested: String,
+    pub reported: String,
+}
+
+/// PURE: does `reported` honour every cap `requested` sets? The first cap that
+/// differs is named; an unset cap is never checked.
+pub fn caps_honoured(
+    requested: DuckDbCaps,
+    reported: &DuckDbSettings,
+) -> Result<(), CapNotHonoured> {
+    if let Some(mb) = requested.memory_limit_mb {
+        if mebibytes_of(&reported.memory_limit) != Some(mb) {
+            return Err(CapNotHonoured {
+                setting: "memory_limit",
+                requested: format!("{mb} MiB"),
+                reported: reported.memory_limit.clone(),
+            });
+        }
+    }
+    match requested.threads {
+        Some(threads) if threads != reported.threads => Err(CapNotHonoured {
+            setting: "threads",
+            requested: threads.to_string(),
+            reported: reported.threads.to_string(),
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// A DuckDB size (`<number> <unit>`, binary or decimal units) in whole MiB,
+/// rounded; `None` when it is not a size.
+fn mebibytes_of(size: &str) -> Option<u64> {
+    let (number, unit) = size.trim().split_once(' ')?;
+    let number: f64 = number.parse().ok()?;
+    let bytes_per_unit: f64 = match unit.trim() {
+        "bytes" | "B" => 1.0,
+        "KiB" => 1024.0,
+        "MiB" => 1024.0 * 1024.0,
+        "GiB" => 1024.0 * 1024.0 * 1024.0,
+        "KB" => 1e3,
+        "MB" => 1e6,
+        "GB" => 1e9,
+        _ => return None,
+    };
+    let mebibytes = (number * bytes_per_unit / (1024.0 * 1024.0)).round();
+    (mebibytes.is_finite() && mebibytes >= 0.0).then_some(mebibytes as u64)
+}
+
+/// Why the store can no longer be used (`indexer.store.unusable.reason`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnusableReason {
+    /// A thread panicked while holding the connection: its state is unknown.
+    MutexPoisoned,
+}
+
+impl UnusableReason {
+    /// The event's `reason` token.
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::MutexPoisoned => "mutex_poisoned",
+        }
+    }
 }
 
 impl IndexStoreAdapter {
-    /// Open the index store at `db_path`; run pending migrations; prepare the
-    /// colocated `indexed_claims/` artifact directory. Idempotent across reopens.
+    /// Open the index store at `db_path` under DuckDB's default caps.
     pub fn open(db_path: &Path) -> Result<Self, IndexStoreError> {
+        Self::open_capped(db_path, DuckDbCaps::default())
+    }
+
+    /// Why the store can no longer be used, if it cannot (ADR-080 §7): a
+    /// poisoned connection mutex. `None` = usable.
+    #[must_use]
+    pub fn unusable_reason(&self) -> Option<UnusableReason> {
+        self.conn
+            .is_poisoned()
+            .then_some(UnusableReason::MutexPoisoned)
+    }
+
+    /// TEST-FAULT seam (`OPENLORE_INDEXER_TEST_FAULT=store_poisoned`, debug
+    /// builds only): poison the connection mutex the way a panic under the
+    /// lock would.
+    pub fn poison_for_test_fault(&self) {
+        let conn = Arc::clone(&self.conn);
+        let _ = std::thread::spawn(move || {
+            let _held = conn.lock();
+            panic!("test fault: the index store's connection mutex is poisoned");
+        })
+        .join();
+    }
+
+    /// What DuckDB reports for the capped settings now.
+    fn reported_settings(conn: &Connection) -> Result<DuckDbSettings, duckdb::Error> {
+        conn.query_row(
+            "SELECT current_setting('memory_limit'), CAST(current_setting('threads') AS BIGINT)",
+            [],
+            |row| {
+                Ok(DuckDbSettings {
+                    memory_limit: row.get::<_, String>(0)?,
+                    threads: u64::try_from(row.get::<_, i64>(1)?).unwrap_or_default(),
+                })
+            },
+        )
+    }
+
+    /// Open the index store at `db_path` with DuckDB's `caps` applied; run
+    /// pending migrations; prepare the colocated `indexed_claims/` artifact
+    /// directory. Idempotent across reopens.
+    pub fn open_capped(db_path: &Path, caps: DuckDbCaps) -> Result<Self, IndexStoreError> {
         if let Some(parent) = db_path.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent).map_err(|err| {
@@ -80,6 +209,7 @@ impl IndexStoreAdapter {
             Connection::open(db_path).map_err(|err| IndexStoreError::SchemaMigrationFailed {
                 message: format!("open index.duckdb at {}: {err}", db_path.display()),
             })?;
+        apply_caps(&conn, caps)?;
 
         schema::run_migrations(&mut conn)?;
 
@@ -101,6 +231,7 @@ impl IndexStoreAdapter {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             artifacts_root,
+            caps,
         })
     }
 
@@ -194,6 +325,25 @@ impl IndexStoreAdapter {
     }
 }
 
+/// Apply each set cap to the freshly opened connection (B9).
+fn apply_caps(conn: &Connection, caps: DuckDbCaps) -> Result<(), IndexStoreError> {
+    let statements = caps
+        .memory_limit_mb
+        .map(|mb| format!("SET memory_limit = '{mb}MiB';"))
+        .into_iter()
+        .chain(
+            caps.threads
+                .map(|threads| format!("SET threads = {threads};")),
+        );
+    for statement in statements {
+        conn.execute_batch(&statement)
+            .map_err(|err| IndexStoreError::SchemaMigrationFailed {
+                message: format!("apply DuckDB cap `{statement}`: {err}"),
+            })?;
+    }
+    Ok(())
+}
+
 /// The typed `references` a claim carries, read from the `indexed_claim_references`
 /// child table by the claim's OWN `referencing_cid` (a SAME-store lookup — NOT a
 /// cross-store join). Each reference is `ClaimReference { ref_type, cid:
@@ -262,6 +412,29 @@ impl IndexStorePort for IndexStoreAdapter {
                 };
             }
         };
+        // Arm 0: the DuckDB caps are honoured (B9: read back what was set).
+        let honoured = Self::reported_settings(&conn)
+            .map_err(|err| CapNotHonoured {
+                setting: "memory_limit/threads",
+                requested: format!("{:?}", self.caps),
+                reported: format!("unreadable: {err}"),
+            })
+            .and_then(|reported| caps_honoured(self.caps, &reported));
+        if let Err(cap) = honoured {
+            return ProbeOutcome::Refused {
+                reason: ProbeRefusalReason::IndexerConfigInvalid,
+                detail: format!(
+                    "DuckDB {} is {} but {} was set",
+                    cap.setting, cap.reported, cap.requested
+                ),
+                structured: serde_json::json!({
+                    "adapter": "index_store",
+                    "setting": cap.setting,
+                    "requested": cap.requested,
+                    "reported": cap.reported,
+                }),
+            };
+        }
         // Arm 1: schema version.
         match schema::read_version(&conn) {
             Ok(v) if v == schema::LATEST_VERSION => {}
@@ -1432,5 +1605,74 @@ mod read_port_preservation_properties {
             let reopened = IndexStoreAdapter::open(&path).expect("reopen");
             prop_assert_eq!(snapshot(&reopened), before);
         }
+    }
+}
+
+#[cfg(test)]
+mod duckdb_caps_properties {
+    //! B9 (DISTILL finding 5): the read-back is not externally observable, so
+    //! the probe's refusal of caps DuckDB did not honour is pinned here.
+
+    use super::*;
+    use proptest::prelude::*;
+
+    fn report(memory_mb: u64, threads: u64) -> DuckDbSettings {
+        DuckDbSettings {
+            memory_limit: if memory_mb >= 1024 && memory_mb.is_multiple_of(1024) {
+                format!("{}.0 GiB", memory_mb / 1024)
+            } else {
+                format!("{memory_mb}.0 MiB")
+            },
+            threads,
+        }
+    }
+
+    proptest! {
+        /// Universe {memory_limit, threads}: the caps are honoured exactly
+        /// when every SET cap equals what DuckDB reports (an unset cap is never
+        /// checked); a mismatch names the first differing setting.
+        #[test]
+        fn caps_are_honoured_iff_duckdb_reports_what_was_set(
+            requested_mb in proptest::option::of(16u64..=1024),
+            requested_threads in proptest::option::of(1u64..=4),
+            reported_mb in 16u64..=1024,
+            reported_threads in 1u64..=4,
+        ) {
+            let requested = DuckDbCaps { memory_limit_mb: requested_mb, threads: requested_threads };
+            let verdict = caps_honoured(requested, &report(reported_mb, reported_threads));
+            let memory_ok = requested_mb.is_none_or(|mb| mb == reported_mb);
+            let threads_ok = requested_threads.is_none_or(|t| t == reported_threads);
+            match verdict {
+                Ok(()) => prop_assert!(memory_ok && threads_ok),
+                Err(cap) if !memory_ok => prop_assert_eq!(cap.setting, "memory_limit"),
+                Err(cap) => {
+                    prop_assert!(!threads_ok);
+                    prop_assert_eq!(cap.setting, "threads");
+                }
+            }
+        }
+    }
+
+    // bypass: single-example wiring test — real DuckDB applies the caps at
+    // open, the probe reads them back, and a poisoned mutex is reported.
+    #[test]
+    fn caps_applied_at_open_are_read_back_and_a_poisoned_store_is_unusable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let caps = DuckDbCaps {
+            memory_limit_mb: Some(48),
+            threads: Some(1),
+        };
+        let store = IndexStoreAdapter::open_capped(&dir.path().join("index.duckdb"), caps)
+            .expect("open capped");
+        let reported =
+            IndexStoreAdapter::reported_settings(&store.lock().expect("lock")).expect("read back");
+        assert_eq!(caps_honoured(caps, &reported), Ok(()), "{reported:?}");
+        assert!(matches!(store.probe(), ProbeOutcome::Ok));
+        assert_eq!(store.unusable_reason(), None);
+
+        store.poison_for_test_fault();
+
+        assert_eq!(store.unusable_reason(), Some(UnusableReason::MutexPoisoned));
+        assert!(store.query_by_object("x").is_err());
     }
 }

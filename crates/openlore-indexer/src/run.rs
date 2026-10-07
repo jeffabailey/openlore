@@ -31,15 +31,16 @@ use futures_util::stream::{self, StreamExt};
 
 use adapter_atproto_did::{AtProtoDidAdapter, IdentityLookup};
 use adapter_atproto_ingest::AtProtoIngestAdapter;
-use adapter_index_store::IndexStoreAdapter;
+use adapter_index_store::{DuckDbCaps, IndexStoreAdapter, UnusableReason};
 use adapter_system_clock::SystemClockAdapter;
 use adapter_xrpc_query_server::XrpcQueryServer;
 use std::collections::BTreeMap;
 
 use appview_domain::did_list::read_did_list;
+use appview_domain::health::StoreHealth;
 use appview_domain::ingest_pass::{
-    classify_fetch_failure, pass_exit, refusal_cause_of, summarize_outcomes, ClassifiedSkip,
-    FetchFailure, PassExit, PassFailure, RefusalCause, SkipReason,
+    classify_fetch_failure, pass_exit, refusal_cause_of, summarize_outcomes, within_deadline,
+    ClassifiedSkip, FetchFailure, PassExit, PassFailure, RefusalCause, SkipReason,
 };
 use appview_domain::{
     ingest_repo_record, origin_of, plan_listing, records_of, DidFetch, FallbackUrl, IngestOutcome,
@@ -52,18 +53,22 @@ use ports::{
     IndexStorePort, IngestError, IngestSourcePort, RepoListingPort,
 };
 
-use crate::config::{parse_config, BuildProfile, ConfigError, IndexerConfig, REPO_DIDS_FILE_VAR};
+use crate::config::{
+    parse_config, BuildProfile, ConfigError, IndexerConfig, TestFault, REPO_DIDS_FILE_VAR,
+};
 
-use crate::health::health_handler;
+use crate::health::{health_handler, StoreUsability};
 use crate::pass_runner::{
-    purge_unlisted_authors, PassLabel, PassRunner, PurgeStep, PurgedAuthor, StatusReader,
+    failing_first_purge, purge_unlisted_authors, PassLabel, PassRunner, PurgeStep, PurgedAuthor,
+    StatusReader,
 };
 use crate::probe_gauntlet::{
     capability_boundary_probe, check_probe, control_channel_probe, origin_classification_probe,
     probe_gauntlet, ProbeRefusal,
 };
-use crate::search_handler::{search_handler, SharedIndexReads};
+use crate::search_handler::{search_handler, unreadable_index, SharedIndexReads};
 use crate::Command;
+use appview_domain::pass_runner::PassId;
 
 /// The one shared index handle: read + write side, safe to share across the
 /// serve accept loop's tasks.
@@ -77,6 +82,9 @@ const EXIT_FATAL: i32 = 2;
 /// `serve` ran to completion.
 const EXIT_SERVED: i32 = 0;
 
+/// How often `serve` checks that its store is still usable (ADR-080 §7).
+const STORE_WATCH_PERIOD: Duration = Duration::from_millis(50);
+
 /// The indexer's wired adapter set, owned by the composition root for the
 /// duration of the program (mirrors the CLI's `Wiring`). Holds ONLY the
 /// indexer's driven adapters — by construction NO signing identity + NO local
@@ -86,6 +94,12 @@ pub struct IndexerWiring {
     /// here and shared by the probe, the writes and (through its read port
     /// only) the search handler.
     pub index_store: SharedIndexStore,
+    /// The same handle, for the store's own condition (is it still usable?)
+    /// and the TEST-ONLY poison fault — never handed to search or the pass.
+    pub store_condition: Arc<IndexStoreAdapter>,
+    /// What search reads: the same handle through its read port only (B7),
+    /// or, under the `search_store_read_fails` test fault, an unreadable one.
+    pub index_reads: SharedIndexReads,
     /// The same handle's purge capability when `OPENLORE_INDEXER_PURGE_UNLISTED=1`
     /// (ADR-082); `None` = removed authors keep their claims.
     pub index_purge: Option<SharedIndexPurge>,
@@ -125,6 +139,10 @@ pub struct IndexerWiring {
     /// The HTTP/XRPC query surface listen address (ADR-027). `serve` binds it;
     /// `:0` resolves to an OS-assigned ephemeral port read back at runtime.
     pub listen_addr: String,
+    /// How long one pass may run before it ends with exit 2 (B13).
+    pub pass_deadline: Duration,
+    /// The TEST-ONLY fault to provoke (never set in a release build).
+    pub test_fault: Option<TestFault>,
 }
 
 impl IndexerWiring {
@@ -142,13 +160,27 @@ impl IndexerWiring {
 
         let clock = SystemClockAdapter::new();
         // SEPARATE index.duckdb (ADR-023).
+        let caps = DuckDbCaps {
+            memory_limit_mb: cfg.duckdb_memory_limit_mb,
+            threads: cfg.duckdb_threads,
+        };
         let index_store = Arc::new(
-            IndexStoreAdapter::open(&cfg.index_path)
+            IndexStoreAdapter::open_capped(&cfg.index_path, caps)
                 .map_err(|err| anyhow::anyhow!("open index store: {err}"))?,
         );
-        let index_purge = cfg
-            .purge_unlisted
-            .then(|| Arc::clone(&index_store) as SharedIndexPurge);
+        let index_purge = cfg.purge_unlisted.then(|| {
+            let purge = Arc::clone(&index_store) as SharedIndexPurge;
+            if cfg.test_fault == Some(TestFault::PurgeFails) {
+                failing_first_purge(purge)
+            } else {
+                purge
+            }
+        });
+        let index_reads = if cfg.test_fault == Some(TestFault::SearchStoreReadFails) {
+            unreadable_index()
+        } else {
+            Arc::clone(&index_store) as SharedIndexReads
+        };
         // Read-only bounded PULL (ADR-024), SSRF-guarded (ADR-077 §4): every
         // outbound request obeys the transport policy, after DNS.
         let ingest_source = AtProtoIngestAdapter::guarded(fallback_base, cfg.policy);
@@ -163,6 +195,8 @@ impl IndexerWiring {
         let query_server = None;
 
         Ok(Self {
+            store_condition: Arc::clone(&index_store),
+            index_reads,
             index_store,
             index_purge,
             ingest_source: Box::new(ingest_source),
@@ -180,6 +214,8 @@ impl IndexerWiring {
             per_did_time_budget: cfg.per_did_time_budget,
             index_path: cfg.index_path,
             listen_addr: cfg.listen_addr,
+            pass_deadline: cfg.pass_deadline,
+            test_fault: cfg.test_fault,
         })
     }
 
@@ -302,11 +338,47 @@ fn serve(wiring: &IndexerWiring) -> i32 {
                 return EXIT_FATAL;
             }
         }
+        let stop = &stop_answering;
+        scope.spawn(move || exit_when_the_store_is_unusable(wiring, stop));
         let status = runner.status_reader();
         drop(runner);
         let code = serve_searches(wiring, status);
         stop_answering.store(true, Ordering::Relaxed);
         code
+    })
+}
+
+/// Watch the store for as long as `serve` runs: once it is unusable (a
+/// poisoned connection), emit `indexer.store.unusable` and exit 2, so the
+/// runtime restarts `serve` on a freshly opened store (ADR-080 §7). A process
+/// that keeps answering on a dead handle is not allowed.
+fn exit_when_the_store_is_unusable(wiring: &IndexerWiring, stop: &AtomicBool) {
+    while !stop.load(Ordering::Relaxed) {
+        if let Some(reason) = wiring.store_condition.unusable_reason() {
+            emit_store_unusable(reason);
+            std::process::exit(EXIT_FATAL);
+        }
+        std::thread::sleep(STORE_WATCH_PERIOD);
+    }
+}
+
+/// `indexer.store.unusable`: the store cannot be used; `serve` exits 2 next.
+fn emit_store_unusable(reason: UnusableReason) {
+    emit(serde_json::json!({
+        "event": "indexer.store.unusable",
+        "adapter": "index_store",
+        "reason": reason.token(),
+    }));
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+}
+
+/// Whether the store is usable, as `/healthz` reports it.
+fn store_usability(wiring: &IndexerWiring) -> StoreUsability {
+    let store = Arc::clone(&wiring.store_condition);
+    Arc::new(move || match store.unusable_reason() {
+        None => StoreHealth::Usable,
+        Some(_) => StoreHealth::Unusable,
     })
 }
 
@@ -371,22 +443,37 @@ fn control_round_trip(_: &Path) -> std::io::Result<()> {
 /// completed pass, each with its cause.
 fn in_serve_pass(wiring: &IndexerWiring, pass: PassLabel) -> i32 {
     let started = Instant::now();
-    let work = catch_unwind(AssertUnwindSafe(|| listed_pass_work(wiring, pass)))
-        .unwrap_or_else(|_panic| PassWork::failed(PassFailure::PassPanicked));
-    finish_pass(Some(pass), &work, started)
+    let work = catch_unwind(AssertUnwindSafe(|| {
+        provoke_test_fault(wiring, pass);
+        listed_pass_work(wiring, pass, started)
+    }))
+    .unwrap_or_else(|_panic| PassWork::failed(PassFailure::PassPanicked));
+    finish_pass(Some(pass), &work, started, wiring.pass_deadline)
+}
+
+/// The TEST-ONLY pass faults (debug builds only; config refuses the seam in a
+/// release build): the first pass panics, or the store is poisoned.
+fn provoke_test_fault(wiring: &IndexerWiring, pass: PassLabel) {
+    match wiring.test_fault {
+        Some(TestFault::FirstPassPanics) if pass.pass_id() == PassId(1) => {
+            panic!("test fault: the first pass panics")
+        }
+        Some(TestFault::StorePoisoned) => wiring.store_condition.poison_for_test_fault(),
+        _ => {}
+    }
 }
 
 /// Load the DID list afresh (the file when one is configured, ADR-081),
 /// announce it under the pass's label, do the pass's work. A refused list
 /// fetches nothing.
-fn listed_pass_work(wiring: &IndexerWiring, pass: PassLabel) -> PassWork {
+fn listed_pass_work(wiring: &IndexerWiring, pass: PassLabel, started: Instant) -> PassWork {
     match pass_list(wiring) {
         Ok((repo_dids, source)) => {
             emit_pass_config_loaded(wiring, pass, &repo_dids, source);
             match purge_removed_authors(wiring, &repo_dids, pass) {
                 Ok(purged_authors) => PassWork {
                     purged_authors,
-                    ..pass_work(wiring, &repo_dids, Some(pass))
+                    ..pass_work(wiring, &repo_dids, Some(pass), started)
                 },
                 Err(purged_authors) => PassWork {
                     purged_authors,
@@ -562,8 +649,7 @@ fn emit_pass_config_loaded(
 /// Bind the query server and answer searches (and `/healthz`, from the
 /// runner's `status`) until the process is killed.
 fn serve_searches(wiring: &IndexerWiring, status: StatusReader) -> i32 {
-    let reads: SharedIndexReads = Arc::clone(&wiring.index_store) as SharedIndexReads;
-    let handler = search_handler(reads);
+    let handler = search_handler(Arc::clone(&wiring.index_reads));
 
     let listen_addr: std::net::SocketAddr = match wiring.listen_addr.parse() {
         Ok(addr) => addr,
@@ -590,7 +676,7 @@ fn serve_searches(wiring: &IndexerWiring, status: StatusReader) -> i32 {
 
     runtime.block_on(async move {
         let server = match XrpcQueryServer::bind(listen_addr, handler) {
-            Ok(server) => server.with_health(health_handler(status)),
+            Ok(server) => server.with_health(health_handler(status, store_usability(wiring))),
             Err(err) => {
                 eprintln!("openlore-indexer serve: bind query server: {err}");
                 return EXIT_FATAL;
@@ -640,8 +726,8 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
 /// carries `pass`'s label when the pass runs inside `serve`.
 fn run_pass(wiring: &IndexerWiring, repo_dids: &[Did], pass: Option<PassLabel>) -> i32 {
     let started = Instant::now();
-    let work = pass_work(wiring, repo_dids, pass);
-    finish_pass(pass, &work, started)
+    let work = pass_work(wiring, repo_dids, pass, started);
+    finish_pass(pass, &work, started, wiring.pass_deadline)
 }
 
 /// What a pass's work came to, before its summary is written: the per-DID
@@ -664,9 +750,19 @@ impl PassWork {
     }
 }
 
-/// Write the pass's ONE summary (last of its events) and return its exit code.
-fn finish_pass(pass: Option<PassLabel>, work: &PassWork, started: Instant) -> i32 {
-    let exit = pass_exit(work.failure, &work.summary);
+/// Write the pass's ONE summary (last of its events) and return its exit code;
+/// a pass that ran past `deadline` failed, whatever it came to (B13).
+fn finish_pass(
+    pass: Option<PassLabel>,
+    work: &PassWork,
+    started: Instant,
+    deadline: Duration,
+) -> i32 {
+    let exit = within_deadline(
+        pass_exit(work.failure, &work.summary),
+        started.elapsed(),
+        deadline,
+    );
     emit_in(pass, pass_summary_event(work, exit, started));
     exit.code()
 }
@@ -674,8 +770,16 @@ fn finish_pass(pass: Option<PassLabel>, work: &PassWork, started: Instant) -> i3
 /// The pass's work. Each DID is gated as soon as its fetch is in (configured
 /// order), so an author's claims are searchable while slower authors are
 /// still being fetched; the first store failure ends the pass (ADR-078 §2).
-/// The pass ends with an explicit checkpoint (ADR-080 §6).
-fn pass_work(wiring: &IndexerWiring, repo_dids: &[Did], pass: Option<PassLabel>) -> PassWork {
+/// The pass ends with an explicit checkpoint (ADR-080 §6). Whatever is still
+/// outstanding when the pass's deadline (from `started`) passes is abandoned:
+/// the pass ends there, keeping every upsert already committed (B13).
+fn pass_work(
+    wiring: &IndexerWiring,
+    repo_dids: &[Did],
+    pass: Option<PassLabel>,
+    started: Instant,
+) -> PassWork {
+    let deadline = tokio::time::Instant::from_std(started + wiring.pass_deadline);
     let runtime = match current_thread_runtime() {
         Ok(rt) => rt,
         Err(err) => {
@@ -691,14 +795,24 @@ fn pass_work(wiring: &IndexerWiring, repo_dids: &[Did], pass: Option<PassLabel>)
     );
     let mut outcomes = Vec::with_capacity(repo_dids.len());
     let mut tally = IngestTally::default();
+    let mut author_keys = AuthorKeys::new(deadline);
     let mut failure = None;
-    while let Some(fetch) = runtime.block_on(fetches.next()) {
+    loop {
+        let fetch = match runtime
+            .block_on(async { tokio::time::timeout_at(deadline, fetches.next()).await })
+        {
+            Ok(Some(fetch)) => fetch,
+            Ok(None) => break,
+            Err(_deadline_passed) => {
+                failure = Some(PassFailure::PassDeadlineExceeded);
+                break;
+            }
+        };
         emit_fallback_read(pass, &fetch);
         emit_source_skipped(pass, &fetch);
         outcomes.push(fetch.outcome());
-        if let Err(err) = gate_fetch(wiring, &runtime, &fetch, &mut tally) {
-            eprintln!("openlore-indexer: index upsert failed: {err}");
-            failure = Some(PassFailure::UpsertFailed);
+        if let Err(stop) = gate_fetch(wiring, &runtime, &fetch, &mut author_keys, &mut tally) {
+            failure = Some(stop.failure());
             break;
         }
     }
@@ -823,8 +937,9 @@ fn gate_fetch(
     wiring: &IndexerWiring,
     runtime: &tokio::runtime::Runtime,
     fetch: &DidFetch,
+    author_keys: &mut AuthorKeys,
     tally: &mut IngestTally,
-) -> Result<(), String> {
+) -> Result<(), GateStop> {
     let DidFetch::Read {
         did: repo_did,
         source,
@@ -841,9 +956,12 @@ fn gate_fetch(
             tally.reject(&RejectReason::SchemaUnknown);
             continue;
         };
-        let key = author_key(wiring, runtime, &record);
+        let key = author_keys.of(wiring, runtime, &record)?;
         let outcome = ingest_repo_record(&record, &rkey, repo_did, origin, key.as_ref());
-        record_outcome(wiring, repo_did, &rkey, outcome, tally)?;
+        record_outcome(wiring, repo_did, &rkey, outcome, tally).map_err(|err| {
+            eprintln!("openlore-indexer: index upsert failed: {err}");
+            GateStop::UpsertFailed
+        })?;
     }
     Ok(())
 }
@@ -953,23 +1071,62 @@ fn emit_in(pass: Option<PassLabel>, mut event: serde_json::Value) {
     emit(event);
 }
 
-/// The resolved verification key of an app-signed record's author (ADR-026
-/// resolve-only path); `None` when it cannot be resolved (the gate then
-/// refuses the record). A self-attested record has no key to resolve.
-fn author_key(
-    wiring: &IndexerWiring,
-    runtime: &tokio::runtime::Runtime,
-    record: &ClaimRecord,
-) -> Option<VerificationKey> {
-    match record {
-        ClaimRecord::AppSigned(signed) => runtime
-            .block_on(
-                wiring
-                    .identity_resolve
-                    .resolve_verification_key(&signed.unsigned.author_did),
-            )
-            .ok(),
-        ClaimRecord::SelfAttested(_) => None,
+/// Why the gate stopped a pass early.
+#[derive(Debug, Clone, Copy)]
+enum GateStop {
+    /// A store write failed (exit 2 `upsert_failed`).
+    UpsertFailed,
+    /// The pass's deadline passed while an author key was being resolved.
+    DeadlineExceeded,
+}
+
+impl GateStop {
+    const fn failure(self) -> PassFailure {
+        match self {
+            Self::UpsertFailed => PassFailure::UpsertFailed,
+            Self::DeadlineExceeded => PassFailure::PassDeadlineExceeded,
+        }
+    }
+}
+
+/// The author keys one pass resolved (ADR-080 §8): each author DID is
+/// resolved at most once per pass, and never past the pass's deadline.
+struct AuthorKeys {
+    resolved: BTreeMap<String, Option<VerificationKey>>,
+    deadline: tokio::time::Instant,
+}
+
+impl AuthorKeys {
+    fn new(deadline: tokio::time::Instant) -> Self {
+        Self {
+            resolved: BTreeMap::new(),
+            deadline,
+        }
+    }
+
+    /// The resolved verification key of an app-signed record's author
+    /// (ADR-026 resolve-only path); `None` when it cannot be resolved (the
+    /// gate then refuses the record). A self-attested record has no key.
+    fn of(
+        &mut self,
+        wiring: &IndexerWiring,
+        runtime: &tokio::runtime::Runtime,
+        record: &ClaimRecord,
+    ) -> Result<Option<VerificationKey>, GateStop> {
+        let ClaimRecord::AppSigned(signed) = record else {
+            return Ok(None);
+        };
+        let author_did = &signed.unsigned.author_did;
+        if let Some(key) = self.resolved.get(&author_did.0) {
+            return Ok(key.clone());
+        }
+        let resolving = wiring.identity_resolve.resolve_verification_key(author_did);
+        let key = runtime
+            .block_on(async { tokio::time::timeout_at(self.deadline, resolving).await })
+            .map_err(|_deadline_passed| GateStop::DeadlineExceeded)?
+            .ok();
+        self.resolved.insert(author_did.0.clone(), key.clone());
+        Ok(key)
     }
 }
 

@@ -189,11 +189,25 @@ fn sut_single_flight(
 }
 
 fn sut_deadline_outcome(
-    _elapsed_ms: u64,
-    _deadline_secs: u64,
-    _natural_exit: i32,
+    elapsed_ms: u64,
+    deadline_secs: u64,
+    natural_exit: i32,
 ) -> (i32, Option<String>) {
-    todo!("DELIVER 02-03: bind to the pass deadline decision (B13)")
+    use appview_domain::ingest_pass as pass;
+    let natural = match natural_exit {
+        0 => pass::PassExit::Completed,
+        3 => pass::PassExit::TotalOutage,
+        _ => pass::PassExit::Failed(pass::PassFailure::UpsertFailed),
+    };
+    let exit = pass::within_deadline(
+        natural,
+        std::time::Duration::from_millis(elapsed_ms),
+        std::time::Duration::from_secs(deadline_secs),
+    );
+    (
+        exit.code(),
+        exit.cause().map(|cause| cause.token().to_string()),
+    )
 }
 
 fn sut_health_view(
@@ -441,7 +455,6 @@ proptest! {
     /// Past the deadline the pass is a failure named `pass_deadline_exceeded`,
     /// whatever it would otherwise have ended with; within it nothing changes.
     #[test]
-    #[ignore = "DELIVER 02-03: pass deadline decision"]
     fn a_pass_past_its_deadline_fails_whatever_it_would_have_said(
         deadline_secs in 60u64..=7200,
         elapsed_ms in 0u64..8_000_000,
