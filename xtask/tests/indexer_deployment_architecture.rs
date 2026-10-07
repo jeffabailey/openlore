@@ -96,7 +96,6 @@ fn destructive_sql_outside_purge(file: &str, literal: &str) -> bool {
 
 /// XD-1 @architecture-design-11 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 02-02: the three check-arch rules (architecture-design §11)"]
 fn the_three_new_rules_are_part_of_check_arch() {
     let check_arch = std::fs::read_to_string(root().join("xtask/src/check_arch.rs"))
         .expect("read xtask/src/check_arch.rs");
@@ -144,7 +143,6 @@ fn the_search_handler_can_only_read_the_index() {
 
 /// XD-3 @US-IXD-003 @ADR-082 @DD-IXD-6 @B6 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 02-02: purge capability confined to the pass runner (B6)"]
 fn only_the_pass_runner_can_purge() {
     let sources = production_sources("crates/openlore-indexer/src");
     let runner: Vec<_> = sources
@@ -178,7 +176,6 @@ fn only_the_pass_runner_can_purge() {
 
 /// XD-4 @US-IXD-003 @ADR-082 @DD-IXD-6 @B6 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 02-02: purge.rs holds the only parent-table DELETE (B6)"]
 fn the_index_store_deletes_only_in_its_purge_module() {
     let sources = production_sources("crates/adapter-index-store/src");
     assert!(
@@ -224,7 +221,6 @@ fn the_control_channel_is_a_unix_socket_never_a_network_listener() {
 
 /// XD-6 @ADR-082 @architecture-design-11 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 02-02: IndexPurgePort impl carries a probe (check-probes)"]
 fn the_purge_port_implementation_is_probed() {
     let purge = production_sources("crates/adapter-index-store/src")
         .into_iter()

@@ -112,8 +112,14 @@ enum RunnerReply {
 // RED binding seam — DELIVER binds each to ONE production call
 // =============================================================================
 
-fn sut_plan_purge(_listed: &[String], _indexed_authors: &BTreeSet<String>) -> PurgePlanView {
-    todo!("DELIVER 02-02: bind to appview_domain::plan_purge (ADR-082)")
+fn sut_plan_purge(listed: &[String], indexed_authors: &BTreeSet<String>) -> PurgePlanView {
+    let listed: Vec<claim_domain::Did> = listed.iter().cloned().map(claim_domain::Did).collect();
+    match appview_domain::plan_purge(&listed, indexed_authors.iter().map(String::as_str)) {
+        appview_domain::PurgePlan::Purge(authors) => {
+            PurgePlanView::Purge(authors.into_iter().map(|author| author.0).collect())
+        }
+        appview_domain::PurgePlan::Suppressed(_) => PurgePlanView::Suppressed,
+    }
 }
 
 fn sut_read_did_list(text: &str) -> ListReadView {
@@ -345,7 +351,6 @@ proptest! {
     /// suppresses the purge; otherwise the plan is exactly bare(indexed) − list,
     /// so it never names a listed DID and never names an author not indexed.
     #[test]
-    #[ignore = "DELIVER 02-02: plan_purge"]
     fn the_purge_plan_is_the_set_of_indexed_authors_no_longer_listed(
         listed in prop::collection::vec(did(), 0..6),
         indexed in prop::collection::btree_set(indexed_author_id(), 0..8),
@@ -498,7 +503,6 @@ proptest! {
 
 /// CORE-1x @ADR-082 @adversarial @contract-shape:pure-function — the prefix look-alike is never planned.
 #[test]
-#[ignore = "DELIVER 02-02: plan_purge"]
 fn the_purge_plan_never_names_a_listed_look_alike() {
     let indexed: BTreeSet<String> = [
         "did:plc:priyaraman7x2k",

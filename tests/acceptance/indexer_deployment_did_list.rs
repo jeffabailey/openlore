@@ -406,7 +406,6 @@ fn setting_both_a_list_and_a_list_file_is_refused_at_start() {
 ///   And no file of Dmitri's is left in the index
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: plan_purge + IndexPurgePort at pass start (B6)"]
 fn removing_an_author_from_the_list_removes_their_claims_on_the_next_pass() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     let before = maria_results_by_author(&world, &live);
@@ -455,7 +454,6 @@ fn removing_an_author_from_the_list_removes_their_claims_on_the_next_pass() {
 ///   And Maria still finds Priya's and Jeff's claims
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: purge at pass start whatever the exit code (B6)"]
 fn a_removed_author_is_purged_even_when_every_listed_author_is_unreachable() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     world.host_is_reachable(Host::MorelBsky, false);
@@ -482,7 +480,6 @@ fn a_removed_author_is_purged_even_when_every_listed_author_is_unreachable() {
 ///   And everything Maria finds is exactly as before
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: skips never delete (B6)"]
 fn an_author_who_is_still_listed_but_unreachable_keeps_their_claims() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     let before = maria_results_by_author(&world, &live);
@@ -511,7 +508,6 @@ fn an_author_who_is_still_listed_but_unreachable_keeps_their_claims() {
 ///     | cannot be read                  |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: a refused list never reaches plan_purge (B6)"]
 fn a_list_that_drops_an_author_but_cannot_be_used_purges_nothing() {
     let cases: [(&str, Arrange, FailureCause); 2] = [
         (
@@ -550,7 +546,6 @@ fn a_list_that_drops_an_author_but_cannot_be_used_purges_nothing() {
 ///   And everything Maria finds is exactly as before
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: empty list → purge_suppressed (B6)"]
 fn an_empty_list_never_empties_the_index() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     let before = maria_results_by_author(&world, &live);
@@ -577,7 +572,6 @@ fn an_empty_list_never_empties_the_index() {
 ///   Then nobody is purged and Maria still finds Dmitri's claims
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: purge is opt-in (OPENLORE_INDEXER_PURGE_UNLISTED) (B6)"]
 fn without_the_purge_setting_a_removed_author_s_claims_stay() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = LiveIndex::deploy(&world, Deployment::listing(&dids(&LISTED)).without_purge());
@@ -601,7 +595,6 @@ fn without_the_purge_setting_a_removed_author_s_claims_stay() {
 ///   Then only did:plc:crowdmember0001's claim is gone
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: exact bare-DID match, never LIKE (B6)"]
 fn only_the_removed_author_is_purged_never_one_whose_did_merely_starts_the_same_way() {
     let short = "did:plc:crowdmember0001";
     let long = "did:plc:crowdmember00011";
@@ -638,7 +631,6 @@ fn only_the_removed_author_is_purged_never_one_whose_did_merely_starts_the_same_
 ///   Then the pass reports 3 claims removed for Priya and Maria finds none of them
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: purge matches author_did = bare OR starts_with(bare || '#') (B6)"]
 fn a_removed_author_s_app_signed_and_self_attested_claims_are_both_purged() {
     let mut world = given_authors_publish_on_their_own_pdses();
     world.publishes_app_signed(
@@ -680,7 +672,6 @@ fn a_removed_author_s_app_signed_and_self_attested_claims_are_both_purged() {
 ///   And when Jeff lists Dmitri again the next pass indexes his 2 claims again
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: purge idempotent; the index is a cache (B6)"]
 fn purging_is_done_once_and_listing_the_author_again_brings_their_claims_back() {
     let (world, live) = given_the_first_pass_indexed_priya_dmitri_and_jeff();
     live.operator_saves_list(&dids(&[Author::Priya, Author::Jeff]));

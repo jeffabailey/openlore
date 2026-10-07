@@ -43,6 +43,7 @@ use ports::{
     PeerClaimProvenance, ProbeOutcome, ProbeRefusalReason,
 };
 
+mod purge;
 mod schema;
 
 /// Embedded-DuckDB `IndexStorePort` adapter over the SEPARATE `index.duckdb`

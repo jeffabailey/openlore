@@ -31,11 +31,112 @@ struct StoreView {
     artifacts: BTreeSet<String>,
 }
 
-fn sut_purge_author(_store: &StoreView, _bare: &str) -> (StoreView, u64) {
-    todo!(
-        "DELIVER 02-02: seed a temp index.duckdb + artifact dir from `store` through the REAL \
-         adapter-index-store, call IndexPurgePort::purge_author(bare), read it back"
-    )
+fn sut_purge_author(store: &StoreView, bare: &str) -> (StoreView, u64) {
+    let dir = tempfile::tempdir().expect("temp index dir");
+    let db_path = dir.path().join("index.duckdb");
+    // The real adapter creates the schema; the rows and files are then laid
+    // down exactly as the view states them (stored paths included).
+    drop(adapter_index_store::IndexStoreAdapter::open(&db_path).expect("open index store"));
+    seed(&db_path, dir.path(), store);
+    let adapter = adapter_index_store::IndexStoreAdapter::open(&db_path).expect("reopen");
+    let report = ports::IndexPurgePort::purge_author(&adapter, bare).expect("purge_author");
+    drop(adapter);
+    (read_back(&db_path, dir.path()), report.claims_removed)
+}
+
+fn seed(db_path: &std::path::Path, index_dir: &std::path::Path, store: &StoreView) {
+    let conn = duckdb::Connection::open(db_path).expect("open seed connection");
+    for (author, cid, path) in &store.claims {
+        conn.execute(
+            "INSERT INTO indexed_claims (cid, author_did, subject, predicate, object, confidence, \
+             composed_at, indexed_at, source_pds, signed_record_path, verified_against) \
+             VALUES (?, ?, 'subject', 'predicate', 'object', 0.5, now(), now(), 'network', ?, 'key')",
+            duckdb::params![cid, author, path],
+        )
+        .expect("seed claim");
+        let file = index_dir.join(path);
+        std::fs::create_dir_all(file.parent().expect("partition")).expect("partition dir");
+        std::fs::write(&file, cid).expect("seed artifact");
+    }
+    for (ordinal, (cid, evidence)) in store.evidence.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO indexed_claim_evidence (cid, evidence, ordinal) VALUES (?, ?, ?)",
+            duckdb::params![cid, evidence, ordinal as i32],
+        )
+        .expect("seed evidence");
+    }
+    for (referencing, referenced) in &store.references {
+        conn.execute(
+            "INSERT INTO indexed_claim_references (referencing_cid, referenced_cid, ref_type) \
+             VALUES (?, ?, 'counters')",
+            duckdb::params![referencing, referenced],
+        )
+        .expect("seed reference");
+    }
+}
+
+fn read_back(db_path: &std::path::Path, index_dir: &std::path::Path) -> StoreView {
+    let conn = duckdb::Connection::open(db_path).expect("open read-back connection");
+    let claims = rows(
+        &conn,
+        "SELECT author_did, cid, signed_record_path FROM indexed_claims",
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    );
+    let evidence = rows(
+        &conn,
+        "SELECT cid, evidence FROM indexed_claim_evidence",
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    );
+    let references = rows(
+        &conn,
+        "SELECT referencing_cid, referenced_cid FROM indexed_claim_references",
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    );
+    let artifacts = walkdir(&index_dir.join("indexed_claims"))
+        .into_iter()
+        .map(|file| {
+            file.strip_prefix(index_dir)
+                .expect("under the index dir")
+                .display()
+                .to_string()
+        })
+        .collect();
+    StoreView {
+        claims,
+        evidence,
+        references,
+        artifacts,
+    }
+}
+
+fn rows<T: Ord>(
+    conn: &duckdb::Connection,
+    sql: &str,
+    map: impl FnMut(&duckdb::Row<'_>) -> duckdb::Result<T>,
+) -> BTreeSet<T> {
+    let mut stmt = conn.prepare(sql).expect("prepare read-back");
+    stmt.query_map([], map)
+        .expect("read back")
+        .map(|row| row.expect("decode"))
+        .collect()
+}
+
+fn walkdir(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .flat_map(|entry| {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        walkdir(&path)
+                    } else {
+                        vec![path]
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// BareDid: the text of an `author_did` before the first `#`.
@@ -151,7 +252,6 @@ proptest! {
     /// segments) and references other authors hold TO purged claims are
     /// untouched. Purging again removes nothing (idempotent, C4a).
     #[test]
-    #[ignore = "DELIVER 02-02: IndexPurgePort::purge_author over the real adapter"]
     fn purging_an_author_changes_only_that_author_s_claims_and_files(
         before in store(),
         target in did(),

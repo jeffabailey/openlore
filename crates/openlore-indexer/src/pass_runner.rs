@@ -17,6 +17,11 @@
 //! number, written `<boot>-<seq>`. The sequence alone repeats after a restart;
 //! the boot nonce keeps a label unique across restarts, so "exactly one
 //! `pass_summary` per `pass_id`" stays checkable over a whole log stream.
+//!
+//! The runner is the ONLY holder of the purge capability (ADR-082, check-arch
+//! `index_purge_only_in_pass_runner`): [`purge_unlisted_authors`] plans the
+//! purge from the loaded list (pure `plan_purge`) and purges each removed
+//! author through `IndexPurgePort`, at pass start, before any fetch.
 
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -29,6 +34,9 @@ use appview_domain::ingest_pass::EXIT_PASS_COMPLETED;
 use appview_domain::pass_runner::{
     single_flight, PassEnding, PassId, RunnerEvent, RunnerReply, RunnerSlot,
 };
+use appview_domain::{plan_purge, BareDid, PurgePlan, PurgeSuppressed};
+use claim_domain::Did;
+use ports::{IndexPurgePort, IndexStoreError};
 
 /// The exit code a panicked pass reports (ADR-080 §7: `pass_panicked` → 2).
 const EXIT_PASS_PANICKED: i32 = 2;
@@ -285,6 +293,61 @@ fn lock(state: &Mutex<RunnerState>) -> MutexGuard<'_, RunnerState> {
     state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// One author a pass purged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PurgedAuthor {
+    pub did: BareDid,
+    pub claims_removed: u64,
+}
+
+/// What a pass's purge step did (ADR-082).
+#[derive(Debug)]
+pub enum PurgeStep {
+    /// The list was empty: nobody was purged.
+    Suppressed(PurgeSuppressed),
+    /// Every removed author was purged (possibly none).
+    Purged(Vec<PurgedAuthor>),
+    /// The store failed; the authors before the failure stay purged and the
+    /// next pass's plan finishes the rest.
+    Failed {
+        purged: Vec<PurgedAuthor>,
+        error: IndexStoreError,
+    },
+}
+
+/// Purge every indexed author the loaded, non-empty `listed` no longer
+/// names. A listed author is never planned, whatever their fetch outcome.
+pub fn purge_unlisted_authors(purge: &dyn IndexPurgePort, listed: &[Did]) -> PurgeStep {
+    let indexed = match purge.indexed_authors() {
+        Ok(indexed) => indexed,
+        Err(error) => {
+            return PurgeStep::Failed {
+                purged: Vec::new(),
+                error,
+            }
+        }
+    };
+    match plan_purge(listed, indexed.iter().map(String::as_str)) {
+        PurgePlan::Suppressed(reason) => PurgeStep::Suppressed(reason),
+        PurgePlan::Purge(removed) => purge_each(purge, removed),
+    }
+}
+
+/// Purge `removed` one author at a time, stopping at the first store failure.
+fn purge_each(purge: &dyn IndexPurgePort, removed: impl IntoIterator<Item = BareDid>) -> PurgeStep {
+    let mut purged = Vec::new();
+    for did in removed {
+        match purge.purge_author(&did.0) {
+            Ok(report) => purged.push(PurgedAuthor {
+                did,
+                claims_removed: report.claims_removed,
+            }),
+            Err(error) => return PurgeStep::Failed { purged, error },
+        }
+    }
+    PurgeStep::Purged(purged)
 }
 
 #[cfg(test)]

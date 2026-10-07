@@ -48,17 +48,19 @@ use appview_domain::{
 use claim_domain::{ClaimRecord, Did, VerificationKey};
 use ports::net_policy::TransportPolicy;
 use ports::{
-    ClockPort, IdentityLookupError, IdentityLookupPort, IdentityResolvePort, IndexStorePort,
-    IngestError, IngestSourcePort, RepoListingPort,
+    ClockPort, IdentityLookupError, IdentityLookupPort, IdentityResolvePort, IndexPurgePort,
+    IndexStorePort, IngestError, IngestSourcePort, RepoListingPort,
 };
 
 use crate::config::{parse_config, BuildProfile, ConfigError, IndexerConfig, REPO_DIDS_FILE_VAR};
 
 use crate::health::health_handler;
-use crate::pass_runner::{PassLabel, PassRunner, StatusReader};
+use crate::pass_runner::{
+    purge_unlisted_authors, PassLabel, PassRunner, PurgeStep, PurgedAuthor, StatusReader,
+};
 use crate::probe_gauntlet::{
-    capability_boundary_probe, control_channel_probe, origin_classification_probe, probe_gauntlet,
-    ProbeRefusal,
+    capability_boundary_probe, check_probe, control_channel_probe, origin_classification_probe,
+    probe_gauntlet, ProbeRefusal,
 };
 use crate::search_handler::{search_handler, SharedIndexReads};
 use crate::Command;
@@ -66,6 +68,9 @@ use crate::Command;
 /// The one shared index handle: read + write side, safe to share across the
 /// serve accept loop's tasks.
 pub type SharedIndexStore = Arc<dyn IndexStorePort + Send + Sync>;
+
+/// The delete side of the same handle, handed to the pass runner only (ADR-082).
+pub type SharedIndexPurge = Arc<dyn IndexPurgePort + Send + Sync>;
 
 /// Refused to start (bad config, wiring, probe) or a fatal runtime/store failure.
 const EXIT_FATAL: i32 = 2;
@@ -81,6 +86,9 @@ pub struct IndexerWiring {
     /// here and shared by the probe, the writes and (through its read port
     /// only) the search handler.
     pub index_store: SharedIndexStore,
+    /// The same handle's purge capability when `OPENLORE_INDEXER_PURGE_UNLISTED=1`
+    /// (ADR-082); `None` = removed authors keep their claims.
+    pub index_purge: Option<SharedIndexPurge>,
     pub ingest_source: Box<dyn IngestSourcePort>,
     /// Read-only `listRecords` of ONE repo DID, cursor-paged (ADR-071 §4).
     pub repo_listing: Box<dyn RepoListingPort>,
@@ -134,8 +142,13 @@ impl IndexerWiring {
 
         let clock = SystemClockAdapter::new();
         // SEPARATE index.duckdb (ADR-023).
-        let index_store = IndexStoreAdapter::open(&cfg.index_path)
-            .map_err(|err| anyhow::anyhow!("open index store: {err}"))?;
+        let index_store = Arc::new(
+            IndexStoreAdapter::open(&cfg.index_path)
+                .map_err(|err| anyhow::anyhow!("open index store: {err}"))?,
+        );
+        let index_purge = cfg
+            .purge_unlisted
+            .then(|| Arc::clone(&index_store) as SharedIndexPurge);
         // Read-only bounded PULL (ADR-024), SSRF-guarded (ADR-077 §4): every
         // outbound request obeys the transport policy, after DNS.
         let ingest_source = AtProtoIngestAdapter::guarded(fallback_base, cfg.policy);
@@ -150,7 +163,8 @@ impl IndexerWiring {
         let query_server = None;
 
         Ok(Self {
-            index_store: Arc::new(index_store),
+            index_store,
+            index_purge,
             ingest_source: Box::new(ingest_source),
             repo_listing: Box::new(repo_listing),
             pds_lookup: Box::new(pds_lookup),
@@ -185,6 +199,9 @@ impl IndexerWiring {
             self.identity_resolve.as_ref(),
         )?;
         origin_classification_probe()?;
+        if let Some(purge) = &self.index_purge {
+            check_probe("index_purge", purge.probe())?;
+        }
         // The query server's probe is an inherent method (not a `*Port` trait),
         // so it is checked here at the composition root, not in the gauntlet.
         // SCAFFOLD: true — `check the query_server.probe()` once its body lands.
@@ -366,13 +383,69 @@ fn listed_pass_work(wiring: &IndexerWiring, pass: PassLabel) -> PassWork {
     match pass_list(wiring) {
         Ok((repo_dids, source)) => {
             emit_pass_config_loaded(wiring, pass, &repo_dids, source);
-            pass_work(wiring, &repo_dids, Some(pass))
+            match purge_removed_authors(wiring, &repo_dids, pass) {
+                Ok(purged_authors) => PassWork {
+                    purged_authors,
+                    ..pass_work(wiring, &repo_dids, Some(pass))
+                },
+                Err(purged_authors) => PassWork {
+                    purged_authors,
+                    ..PassWork::failed(PassFailure::PurgeFailed)
+                },
+            }
         }
         Err(refusal) => {
             emit_pass_refused(pass, &refusal);
             PassWork::failed(refusal.cause)
         }
     }
+}
+
+/// At pass start, before any fetch: when purging is enabled, purge the
+/// authors this pass's loaded list no longer names (ADR-082), announcing
+/// each. `Ok`/`Err` carry how many authors were purged; `Err` = the store
+/// failed (exit 2, nothing is fetched; the next pass finishes the purge).
+fn purge_removed_authors(
+    wiring: &IndexerWiring,
+    repo_dids: &[Did],
+    pass: PassLabel,
+) -> Result<u64, u64> {
+    let Some(purge) = &wiring.index_purge else {
+        return Ok(0);
+    };
+    match purge_unlisted_authors(purge.as_ref(), repo_dids) {
+        PurgeStep::Suppressed(reason) => {
+            emit_in(
+                Some(pass),
+                serde_json::json!({
+                    "event": "indexer.ingest.purge_suppressed",
+                    "reason": reason.token(),
+                }),
+            );
+            Ok(0)
+        }
+        PurgeStep::Purged(purged) => Ok(emit_purged(pass, &purged)),
+        PurgeStep::Failed { purged, error } => {
+            eprintln!("openlore-indexer: purge failed: {error}");
+            Err(emit_purged(pass, &purged))
+        }
+    }
+}
+
+/// `indexer.ingest.author_purged` per purged author (bare DID and count
+/// only, no claim content); how many there were.
+fn emit_purged(pass: PassLabel, purged: &[PurgedAuthor]) -> u64 {
+    for author in purged {
+        emit_in(
+            Some(pass),
+            serde_json::json!({
+                "event": "indexer.ingest.author_purged",
+                "did": author.did.0,
+                "claims_removed": author.claims_removed,
+            }),
+        );
+    }
+    purged.len() as u64
 }
 
 /// Where a pass's DID list came from (`indexer.config.loaded.repo_dids_source`).
@@ -576,6 +649,8 @@ fn run_pass(wiring: &IndexerWiring, repo_dids: &[Did], pass: Option<PassLabel>) 
 struct PassWork {
     summary: PassSummary,
     failure: Option<PassFailure>,
+    /// Authors purged at the pass's start (ADR-082).
+    purged_authors: u64,
 }
 
 impl PassWork {
@@ -584,6 +659,7 @@ impl PassWork {
         Self {
             summary: PassSummary::default(),
             failure: Some(failure),
+            purged_authors: 0,
         }
     }
 }
@@ -591,7 +667,7 @@ impl PassWork {
 /// Write the pass's ONE summary (last of its events) and return its exit code.
 fn finish_pass(pass: Option<PassLabel>, work: &PassWork, started: Instant) -> i32 {
     let exit = pass_exit(work.failure, &work.summary);
-    emit_in(pass, pass_summary_event(&work.summary, exit, started));
+    emit_in(pass, pass_summary_event(work, exit, started));
     exit.code()
 }
 
@@ -631,6 +707,7 @@ fn pass_work(wiring: &IndexerWiring, repo_dids: &[Did], pass: Option<PassLabel>)
     PassWork {
         summary: summarize_outcomes(outcomes),
         failure,
+        purged_authors: 0,
     }
 }
 
@@ -844,12 +921,9 @@ fn emit_source_skipped(pass: Option<PassLabel>, fetch: &DidFetch) {
 }
 
 /// `indexer.ingest.pass_summary` — the pass's LAST stdout event, naming the
-/// cause on exit 2. No pass purges yet, so `purged_authors` is 0.
-fn pass_summary_event(
-    summary: &PassSummary,
-    exit: PassExit,
-    started: Instant,
-) -> serde_json::Value {
+/// cause on exit 2, with how many authors it purged.
+fn pass_summary_event(work: &PassWork, exit: PassExit, started: Instant) -> serde_json::Value {
+    let summary = &work.summary;
     let mut event = serde_json::json!({
         "event": "indexer.ingest.pass_summary",
         "configured": summary.configured,
@@ -858,7 +932,7 @@ fn pass_summary_event(
         "skipped": summary.skipped,
         "duration_ms": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         "exit_code": exit.code(),
-        "purged_authors": 0,
+        "purged_authors": work.purged_authors,
     });
     if let Some(cause) = exit.cause() {
         event["cause"] = cause.token().into();

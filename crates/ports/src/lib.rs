@@ -178,7 +178,9 @@ mod store_read;
 pub use index_query::{
     IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw,
 };
-pub use index_store::{IndexReadPort, IndexStoreError, IndexStorePort};
+pub use index_store::{
+    IndexPurgePort, IndexReadPort, IndexStoreError, IndexStorePort, PurgeReport,
+};
 pub use indexed_claim::{CounterRef, IndexedClaim, SearchDimension};
 pub use ingest_source::{
     IngestError, IngestSourcePort, RawRecord, RepoListing, RepoListingPort, RepoRecord,

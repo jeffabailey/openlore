@@ -1770,6 +1770,185 @@ pub fn scan_indexer_search_handler_read_only(workspace_root: &Path) -> anyhow::R
     Ok(findings)
 }
 
+// -----------------------------------------------------------------------------
+// `index_store_delete_only_in_purge` (ADR-082, B6, boundary rule 2)
+// -----------------------------------------------------------------------------
+
+/// The index-store sources the delete rule scans.
+const INDEX_STORE_SOURCE_DIR: &str = "crates/adapter-index-store/src";
+
+/// The two upsert child clears that stay legal outside `purge*.rs`: an upsert
+/// replaces one claim's evidence and outgoing references (whitespace-normalised).
+const INDEX_STORE_CHILD_CLEARS: &[&str] = &[
+    "DELETE FROM indexed_claim_evidence WHERE cid = ?",
+    "DELETE FROM indexed_claim_references WHERE referencing_cid = ?",
+];
+
+/// Pure rule over one SQL literal of `file_name` in `adapter-index-store`:
+/// `Some(excerpt)` iff it deletes, drops or truncates outside a `purge*.rs`
+/// file and is not exactly one of the upsert's child clears.
+pub fn classify_index_store_delete_literal(file_name: &str, literal: &str) -> Option<String> {
+    let destructive = literal
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .any(|word| {
+            DESTRUCTIVE_SQL_KEYWORDS
+                .iter()
+                .any(|keyword| word.eq_ignore_ascii_case(keyword))
+        });
+    let normalised = literal.split_whitespace().collect::<Vec<_>>().join(" ");
+    (destructive
+        && !file_name.starts_with("purge")
+        && !INDEX_STORE_CHILD_CLEARS.contains(&normalised.as_str()))
+    .then(|| excerpt_of(literal))
+}
+
+/// `syn` visitor collecting the string literals of PRODUCTION code, including
+/// those inside macro bodies (`format!("DELETE …")`), so building SQL through
+/// a macro cannot hide a statement from a rule.
+struct MacroAwareLiteralCollector {
+    literals: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for MacroAwareLiteralCollector {
+    /// Doc comments and other attributes are not code.
+    fn visit_attribute(&mut self, _attr: &'ast syn::Attribute) {}
+
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if !is_test_only(&item.attrs) {
+            syn::visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if !is_test_only(&item.attrs) {
+            syn::visit::visit_item_fn(self, item);
+        }
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        use syn::punctuated::Punctuated;
+        if let Ok(args) =
+            mac.parse_body_with(Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated)
+        {
+            args.iter().for_each(|arg| self.visit_expr(arg));
+        }
+    }
+
+    fn visit_lit_str(&mut self, lit: &'ast syn::LitStr) {
+        self.literals.push(lit.value());
+    }
+}
+
+/// Effect shell for `index_store_delete_only_in_purge`. A tree whose purge
+/// module holds no DELETE is itself a finding (never passes vacuously).
+pub fn scan_index_store_delete_only_in_purge(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    const RULE: &str = "index_store_delete_only_in_purge";
+    let mut findings = Vec::new();
+    let mut purge_deletes = 0usize;
+    for path in rust_sources_under(&workspace_root.join(INDEX_STORE_SOURCE_DIR)) {
+        let source = std::fs::read_to_string(&path)?;
+        let file = syn::parse_file(&source)
+            .map_err(|e| anyhow::anyhow!("syn parse {}: {e}", path.display()))?;
+        let mut collector = MacroAwareLiteralCollector {
+            literals: Vec::new(),
+        };
+        collector.visit_file(&file);
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if file_name.starts_with("purge") {
+            purge_deletes += collector
+                .literals
+                .iter()
+                .filter(|l| l.to_ascii_uppercase().contains("DELETE"))
+                .count();
+        }
+        findings.extend(
+            collector
+                .literals
+                .iter()
+                .filter_map(|literal| classify_index_store_delete_literal(&file_name, literal))
+                .map(|excerpt| {
+                    format!(
+                        "{RULE}: {}: destructive SQL outside purge*.rs: {excerpt} — only the \
+                         purge module may delete from the index (ADR-082)",
+                        path.display()
+                    )
+                }),
+        );
+    }
+    if purge_deletes == 0 {
+        findings.push(format!(
+            "{RULE}: no DELETE in {INDEX_STORE_SOURCE_DIR}/purge*.rs — the rule would pass vacuously"
+        ));
+    }
+    Ok(findings)
+}
+
+// -----------------------------------------------------------------------------
+// `index_purge_only_in_pass_runner` (ADR-082, B6, boundary rule 1)
+// -----------------------------------------------------------------------------
+
+/// The purge capability and its plan.
+const PURGE_CAPABILITY_TOKENS: &[&str] = &["IndexPurgePort", "purge_author", "plan_purge"];
+
+/// The composition root may NAME the port to wire it, never purge or plan.
+const PURGE_CALL_TOKENS: &[&str] = &["purge_author", "plan_purge"];
+
+/// The indexer's composition-root files.
+const INDEXER_COMPOSITION_ROOT: &[&str] = &["main.rs", "run.rs"];
+
+/// Pure rule over one indexer source's production part (before its first
+/// `#[cfg(test)]`): the pass runner (`*runner*.rs`) may purge; the
+/// composition root may name `IndexPurgePort`; no other module may name the
+/// capability at all.
+pub fn classify_index_purge_capability(file_name: &str, source: &str) -> Vec<String> {
+    if file_name.contains("runner") {
+        return Vec::new();
+    }
+    let tokens = if INDEXER_COMPOSITION_ROOT.contains(&file_name) {
+        PURGE_CALL_TOKENS
+    } else {
+        PURGE_CAPABILITY_TOKENS
+    };
+    let production = source.split("#[cfg(test)]").next().unwrap_or_default();
+    classify_forbidden_tokens(production, tokens)
+}
+
+/// Effect shell for `index_purge_only_in_pass_runner`. A tree whose runner
+/// never purges is itself a finding (never passes vacuously).
+pub fn scan_index_purge_only_in_pass_runner(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    const RULE: &str = "index_purge_only_in_pass_runner";
+    let mut findings = Vec::new();
+    let mut runner_purges = false;
+    for path in rust_sources_under(&workspace_root.join(INDEXER_SOURCE_DIR)) {
+        let source = std::fs::read_to_string(&path)?;
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        runner_purges |= file_name.contains("runner") && source.contains("purge_author");
+        findings.extend(
+            classify_index_purge_capability(&file_name, &source)
+                .into_iter()
+                .map(|finding| {
+                    format!(
+                        "{RULE}: {}: {finding} — only the pass runner may purge (ADR-082)",
+                        path.display()
+                    )
+                }),
+        );
+    }
+    if !runner_purges {
+        findings.push(format!(
+            "{RULE}: no pass runner (*runner*.rs) under {INDEXER_SOURCE_DIR} calls purge_author — \
+             the rule would pass vacuously"
+        ));
+    }
+    Ok(findings)
+}
+
 /// Tables keyed by `owner_did` in `review-app.duckdb` (ADR-074).
 const REVIEW_OWNER_TABLES: &[&str] = &[
     "accounts",
@@ -1962,6 +2141,8 @@ pub fn run() -> anyhow::Result<i32> {
     let indexer_origin_findings = scan_indexer_origin_only_via_listing_source(&workspace_root)?;
     let indexer_client_findings = scan_indexer_guarded_clients_only(&workspace_root)?;
     let search_handler_findings = scan_indexer_search_handler_read_only(&workspace_root)?;
+    let index_delete_findings = scan_index_store_delete_only_in_purge(&workspace_root)?;
+    let index_purge_findings = scan_index_purge_only_in_pass_runner(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -1977,6 +2158,8 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(indexer_origin_findings);
     rendered.extend(indexer_client_findings);
     rendered.extend(search_handler_findings);
+    rendered.extend(index_delete_findings);
+    rendered.extend(index_purge_findings);
 
     if rendered.is_empty() {
         println!(
@@ -3234,5 +3417,120 @@ mod search_handler_read_only_tests {
         let empty = std::env::temp_dir().join("openlore-xtask-no-search-handler");
         let findings = scan_indexer_search_handler_read_only(&empty).expect("scan");
         assert_eq!(findings.len(), 1, "{findings:?}");
+    }
+
+    // --- index_store_delete_only_in_purge / index_purge_only_in_pass_runner (ADR-082) ---
+    // bypass: closed-world fixtures — each rule is a finite table of file kinds
+    // (purge / other, runner / composition root / other) × statement kinds.
+
+    #[test]
+    fn index_store_destructive_sql_is_legal_only_in_purge_files_or_as_an_upsert_child_clear() {
+        let table: [(&str, &str, bool); 7] = [
+            (
+                "lib.rs",
+                "DELETE FROM indexed_claims WHERE author_did = ?",
+                true,
+            ),
+            ("lib.rs", "drop table indexed_claims", true),
+            ("schema.rs", "TRUNCATE indexed_claim_evidence", true),
+            (
+                "lib.rs",
+                "DELETE FROM indexed_claim_evidence\n   WHERE cid = ?",
+                false,
+            ),
+            (
+                "lib.rs",
+                "DELETE FROM indexed_claim_references WHERE referencing_cid = ?",
+                false,
+            ),
+            (
+                "purge.rs",
+                "DELETE FROM indexed_claims WHERE author_did = $1",
+                false,
+            ),
+            ("lib.rs", "SELECT deleted_at FROM indexed_claims", false),
+        ];
+        for (file, literal, violation) in table {
+            assert_eq!(
+                classify_index_store_delete_literal(file, literal).is_some(),
+                violation,
+                "{file}: {literal}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_delete_built_by_a_macro_is_still_seen() {
+        let file = syn::parse_file(
+            "fn f(c: &C) { c.execute(&format!(\"DELETE FROM indexed_claims WHERE {X}\"), []); }\n\
+             /// DELETE in a doc comment is not code\nfn g() {}\n\
+             #[cfg(test)] mod tests { fn t() { let _ = \"DROP TABLE x\"; } }",
+        )
+        .expect("parse");
+        let mut collector = MacroAwareLiteralCollector {
+            literals: Vec::new(),
+        };
+        collector.visit_file(&file);
+        assert_eq!(
+            collector.literals,
+            vec!["DELETE FROM indexed_claims WHERE {X}".to_string()]
+        );
+    }
+
+    #[test]
+    fn only_the_pass_runner_may_purge_and_the_composition_root_may_only_wire_the_port() {
+        let wires = "let purge: Arc<dyn IndexPurgePort> = store;\n";
+        let purges = "purge.purge_author(&did.0);\n";
+        let plans = "let plan = plan_purge(&listed, authors);\n";
+        let in_tests =
+            "#[cfg(test)]\nmod tests { fn t(p: &dyn IndexPurgePort) { p.purge_author(\"x\"); } }\n";
+        for source in [wires, purges, plans] {
+            assert!(classify_index_purge_capability("pass_runner.rs", source).is_empty());
+        }
+        assert!(classify_index_purge_capability("run.rs", wires).is_empty());
+        assert_eq!(classify_index_purge_capability("run.rs", purges).len(), 1);
+        assert_eq!(classify_index_purge_capability("main.rs", plans).len(), 1);
+        for name in ["control.rs", "health.rs", "search_handler.rs"] {
+            assert_eq!(
+                classify_index_purge_capability(name, wires).len(),
+                1,
+                "{name}"
+            );
+            assert_eq!(
+                classify_index_purge_capability(name, purges).len(),
+                1,
+                "{name}"
+            );
+            assert!(
+                classify_index_purge_capability(name, in_tests).is_empty(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_purge_rules_pass_on_the_real_tree_and_refuse_a_vacuous_one() {
+        let root = locate_workspace_root().expect("workspace root");
+        assert_eq!(
+            scan_index_store_delete_only_in_purge(&root).expect("scan"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            scan_index_purge_only_in_pass_runner(&root).expect("scan"),
+            Vec::<String>::new()
+        );
+        let empty = std::env::temp_dir().join("openlore-xtask-no-index-sources");
+        assert_eq!(
+            scan_index_store_delete_only_in_purge(&empty)
+                .expect("scan")
+                .len(),
+            1
+        );
+        assert_eq!(
+            scan_index_purge_only_in_pass_runner(&empty)
+                .expect("scan")
+                .len(),
+            1
+        );
     }
 }

@@ -16,6 +16,8 @@
 //
 // SCAFFOLD: true  (trait surface only; the adapter impl lands in step 01-03/04)
 
+use std::collections::BTreeSet;
+
 use claim_domain::{Cid, Did};
 
 use crate::{IndexedClaim, ProbeOutcome};
@@ -103,4 +105,37 @@ pub trait IndexStorePort: IndexReadPort {
     /// of a pass (ADR-080 §6): automatic checkpoints during the pass's writes
     /// stay rare and small, so a search never waits on a large one.
     fn checkpoint(&self) -> Result<(), IndexStoreError>;
+}
+
+// -----------------------------------------------------------------------------
+// IndexPurgePort — the delete side, held only by the pass runner (ADR-082)
+// -----------------------------------------------------------------------------
+
+/// What purging one author removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PurgeReport {
+    /// How many of the author's claims (rows) were removed.
+    pub claims_removed: u64,
+}
+
+/// The ONLY delete capability over `index.duckdb` (ADR-082, B6), separate
+/// from the read and upsert surfaces so that it can be handed to the pass
+/// runner alone (check-arch `index_purge_only_in_pass_runner`).
+///
+/// `purge_author` is a bounded change: it removes the author's claim rows
+/// (stored under the bare DID or any `bare#fragment` key), their evidence and
+/// outgoing references, and each removed row's artifact file at its stored
+/// `signed_record_path` — nothing else. It is resumable and idempotent: an
+/// author stays in [`IndexPurgePort::indexed_authors`] until their rows are
+/// gone, and purging an absent author removes nothing.
+pub trait IndexPurgePort {
+    /// Earned-Trust probe: the schema this binary purges, and the author
+    /// listing the purge plan is computed from, both answer.
+    fn probe(&self) -> ProbeOutcome;
+
+    /// Every author the index holds a claim of, as BARE DIDs (read-only).
+    fn indexed_authors(&self) -> Result<BTreeSet<String>, IndexStoreError>;
+
+    /// Remove one author (a BARE DID) from the index.
+    fn purge_author(&self, bare_did: &str) -> Result<PurgeReport, IndexStoreError>;
 }

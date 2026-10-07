@@ -36,7 +36,10 @@ pub struct ProbeRefusal {
 /// Convert one adapter's [`ProbeOutcome`] into the gauntlet's railway result.
 /// Shared helper mirroring the CLI's `check_probe`. Bootstrap SCAFFOLD — wired
 /// into the gauntlet once the real probe bodies land.
-fn check_probe(adapter: &'static str, outcome: ProbeOutcome) -> Result<(), ProbeRefusal> {
+pub(crate) fn check_probe(
+    adapter: &'static str,
+    outcome: ProbeOutcome,
+) -> Result<(), ProbeRefusal> {
     match outcome {
         ProbeOutcome::Ok => Ok(()),
         ProbeOutcome::Refused {

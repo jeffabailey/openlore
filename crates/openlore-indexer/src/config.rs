@@ -29,6 +29,8 @@ pub const REPO_DIDS_VAR: &str = "OPENLORE_INDEXER_REPO_DIDS";
 pub const REPO_DIDS_FILE_VAR: &str = "OPENLORE_INDEXER_REPO_DIDS_FILE";
 /// The Unix control socket `serve` listens on for `trigger` (ADR-080 §3).
 pub const CONTROL_SOCKET_VAR: &str = "OPENLORE_INDEXER_CONTROL_SOCKET";
+/// Purge authors removed from the DID list (ADR-082): `1` or unset.
+pub const PURGE_UNLISTED_VAR: &str = "OPENLORE_INDEXER_PURGE_UNLISTED";
 /// The optional fallback listing source.
 pub const FALLBACK_VAR: &str = "OPENLORE_INDEXER_SOURCE_URL";
 /// TEST-ONLY: admits plain http to loopback in a debug build.
@@ -103,6 +105,9 @@ pub struct IndexerConfig {
     pub max_concurrent_fetches: usize,
     /// The single deadline each DID's fetch runs under (ADR-078).
     pub per_did_time_budget: Duration,
+    /// Each in-`serve` pass purges the authors its loaded list no longer
+    /// names (ADR-082); off, a removed author's claims stay (ADR-078).
+    pub purge_unlisted: bool,
 }
 
 /// Why the configuration was refused: the variable, its offending value (the
@@ -170,6 +175,7 @@ pub fn parse_config(
         PER_DID_TIMEOUT_SECS_RANGE,
         DEFAULT_PER_DID_TIMEOUT_SECS,
     )?;
+    let purge_unlisted = purge_switch(setting(PURGE_UNLISTED_VAR).as_deref())?;
     Ok(IndexerConfig {
         index_path: lookup(INDEX_PATH_VAR)
             .map(PathBuf::from)
@@ -183,7 +189,21 @@ pub fn parse_config(
         policy,
         max_concurrent_fetches: usize::try_from(max_concurrent_fetches).unwrap_or(usize::MAX),
         per_did_time_budget: Duration::from_secs(per_did_timeout_secs),
+        purge_unlisted,
     })
+}
+
+/// The purge switch: on only for `1`, off when unset; anything else refused.
+fn purge_switch(value: Option<&str>) -> Result<bool, ConfigError> {
+    match value {
+        None => Ok(false),
+        Some("1") => Ok(true),
+        Some(other) => Err(ConfigError::new(
+            PURGE_UNLISTED_VAR,
+            other,
+            "must be 1 (purge authors removed from the DID list) or unset",
+        )),
+    }
 }
 
 /// `HttpsOrLoopbackHttp` only for the TEST-ONLY seam set to `1` in a

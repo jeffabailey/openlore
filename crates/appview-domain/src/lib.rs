@@ -47,6 +47,7 @@ pub mod health;
 mod ingest;
 pub mod ingest_pass;
 pub mod pass_runner;
+pub mod purge_plan;
 mod retraction;
 mod suggest;
 
@@ -63,6 +64,7 @@ pub use ingest_pass::{
     origin_of, plan_listing, records_of, summarize, DidFetch, FallbackUrl, ListingBudget,
     ListingPlan, ListingSource, PassSummary, PdsEndpoint, ResolutionFailure, SkipReason,
 };
+pub use purge_plan::{plan_purge, BareDid, PurgePlan, PurgeSuppressed};
 pub use retraction::{partition_retracted, RetractionPartition};
 pub use suggest::near_match_suggestion;
 
