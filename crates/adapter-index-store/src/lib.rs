@@ -40,7 +40,7 @@ use claim_domain::{distinct_references, Cid, ClaimReference, Did, KeyId, Referen
 use duckdb::Connection;
 use ports::{
     AuthorRelationship, IndexReadPort, IndexStoreError, IndexStorePort, IndexedClaim,
-    PeerClaimProvenance, ProbeOutcome, ProbeRefusalReason,
+    PeerClaimProvenance, ProbeOutcome, ProbeRefusalReason, NEAR_OBJECTS_CAP,
 };
 
 mod purge;
@@ -540,6 +540,34 @@ impl IndexReadPort for IndexStoreAdapter {
 
     fn get_by_cid(&self, cid: &Cid) -> Result<Option<IndexedClaim>, IndexStoreError> {
         Ok(self.select_rows("cid = ?", &cid.0)?.into_iter().next())
+    }
+
+    /// One bounded read (the `LIMIT` is the cap): a length pre-filter, then
+    /// DuckDB's `levenshtein` within `max_distance`, closest first.
+    fn objects_near(
+        &self,
+        object: &str,
+        max_distance: usize,
+    ) -> Result<Vec<String>, IndexStoreError> {
+        let conn = self.lock()?;
+        let near = |err: duckdb::Error| IndexStoreError::QueryFailed {
+            message: format!("near objects: {err}"),
+        };
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT object FROM (SELECT DISTINCT object FROM indexed_claims \
+                   WHERE abs(length(object) - length($1)) <= $2) \
+                 WHERE levenshtein(object, $1) <= $2 \
+                 ORDER BY levenshtein(object, $1), object LIMIT {NEAR_OBJECTS_CAP}"
+            ))
+            .map_err(near)?;
+        let distance = i64::try_from(max_distance).unwrap_or(i64::MAX);
+        let rows = stmt
+            .query_map(duckdb::params![object, distance], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(near)?;
+        rows.map(|row| row.map_err(near)).collect()
     }
 }
 
@@ -1688,5 +1716,75 @@ mod duckdb_caps_properties {
 
         assert_eq!(store.unusable_reason(), Some(UnusableReason::MutexPoisoned));
         assert!(store.query_by_object("x").is_err());
+    }
+}
+
+#[cfg(test)]
+mod near_object_properties {
+    //! Review H3: the indexer suggests a near-match from ONE bounded read of
+    //! the objects near the query, not from the whole index; the suggestion
+    //! must be the one the pure ranker picks over every indexed object.
+
+    use super::tests::sample_claim;
+    use super::*;
+    use appview_domain::{near_match_suggestion, SUGGESTION_MAX_DISTANCE};
+    use claim_domain::Cid;
+    use proptest::prelude::*;
+    use std::collections::BTreeSet;
+
+    fn store_holding(objects: &BTreeSet<String>) -> (tempfile::TempDir, IndexStoreAdapter) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexStoreAdapter::open(&dir.path().join("index.duckdb")).expect("open");
+        for (n, object) in objects.iter().enumerate() {
+            let claim = IndexedClaim {
+                cid: Cid(format!("bafynear{n:04}")),
+                object: object.clone(),
+                ..sample_claim()
+            };
+            store.upsert(&claim).expect("upsert");
+        }
+        (dir, store)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(24))]
+
+        #[test]
+        fn the_bounded_read_suggests_what_the_whole_index_would(
+            objects in proptest::collection::btree_set("o\\.[abc]{1,5}", 1..24),
+            query in "o\\.[abc]{0,6}",
+        ) {
+            let (_dir, store) = store_holding(&objects);
+            let near = store.objects_near(&query, SUGGESTION_MAX_DISTANCE).expect("near");
+            let every: Vec<String> = objects.iter().cloned().collect();
+
+            prop_assert!(near.len() <= NEAR_OBJECTS_CAP);
+            prop_assert!(near.iter().all(|object| objects.contains(object)));
+            prop_assert_eq!(near.iter().collect::<BTreeSet<_>>().len(), near.len());
+            prop_assert_eq!(
+                near_match_suggestion(&query, &near),
+                near_match_suggestion(&query, &every)
+            );
+        }
+    }
+
+    #[test]
+    fn a_one_letter_typo_finds_the_indexed_object() {
+        let objects = BTreeSet::from([
+            "org.openlore.philosophy.reproducible-builds".to_string(),
+            "org.openlore.philosophy.fail-fast".to_string(),
+        ]);
+        let (_dir, store) = store_holding(&objects);
+        let typo = "org.openlore.philosophy.reproducable-builds";
+        assert_eq!(
+            store
+                .objects_near(typo, SUGGESTION_MAX_DISTANCE)
+                .expect("near"),
+            vec!["org.openlore.philosophy.reproducible-builds".to_string()]
+        );
+        assert!(store
+            .objects_near("com.example.unrelated", SUGGESTION_MAX_DISTANCE)
+            .expect("near")
+            .is_empty());
     }
 }

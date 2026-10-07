@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use adapter_index_store::SEARCH_ROW_CAP;
 use adapter_xrpc_query_server::{IndexUnavailable, QueryHandler};
-use appview_domain::{compose_results, NetworkSearchResult};
+use appview_domain::{
+    compose_results, near_match_suggestion, NetworkSearchResult, SUGGESTION_MAX_DISTANCE,
+};
 use claim_domain::{Cid, Did};
 use lexicon::{
     ClaimReferenceDto, SearchDimensionDto, SearchQueryRequest, SearchQueryResponse, SearchResultDto,
@@ -81,6 +83,9 @@ impl IndexReadPort for UnreadableIndex {
     fn get_by_cid(&self, _: &Cid) -> Result<Option<IndexedClaim>, IndexStoreError> {
         Self::failure()
     }
+    fn objects_near(&self, _: &str, _: usize) -> Result<Vec<String>, IndexStoreError> {
+        Self::failure()
+    }
 }
 
 /// One search: read the index along `request.dimension`,
@@ -115,12 +120,30 @@ fn handle_search(
     // composed `NetworkResultRow` does not). The wire stays FLAT + attributed.
     let composed = compose_results(rows.clone(), dimension);
     let results = flat_attributed_rows(&composed, &rows);
+    let suggestion = match (dimension, results.is_empty()) {
+        (SearchDimension::Object, true) => suggest_object(reads, &request.value)?,
+        _ => composed.suggestion,
+    };
     Ok(SearchQueryResponse {
         results,
         distinct_author_count: composed.distinct_author_count,
         total_claims: composed.total_claims,
-        suggestion: composed.suggestion,
+        suggestion,
     })
+}
+
+/// The near-match for an object nothing asserts (US-AV-002 Ex 4): one bounded
+/// read of the indexed objects within the suggestion distance, ranked by the
+/// PURE `near_match_suggestion`. The client asks once; it never sweeps the
+/// index with probe searches (review H3).
+fn suggest_object(
+    reads: &dyn IndexReadPort,
+    object: &str,
+) -> Result<Option<String>, IndexUnavailable> {
+    let near = reads
+        .objects_near(object, SUGGESTION_MAX_DISTANCE)
+        .map_err(|_store_error| IndexUnavailable)?;
+    Ok(near_match_suggestion(object, &near))
 }
 
 /// Project the per-author `NetworkSearchResult` (the pure composition's stable

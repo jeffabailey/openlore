@@ -539,6 +539,112 @@ fn search_by_object_unknown_philosophy_returns_empty_with_suggestion_exit_zero()
     );
 }
 
+/// Review H3 (the near-match sweep): an object search that matches nothing asks
+/// the indexer exactly ONCE — the near-match comes back in that one answer — so a
+/// typo never turns into a sweep of single-edit probe searches (thousands of
+/// requests per typo, and against an empty index too).
+///
+/// @us-av-002 @real-io @error @suggestion @adversarial
+#[test]
+fn an_unknown_object_search_asks_the_indexer_exactly_once() {
+    // -- Precondition: a counting indexer that knows no claims at all (an empty
+    // index) and suggests nothing. --
+    let env = TestEnv::initialized();
+    let indexer = CountingEmptyIndexer::start();
+    let typo = "org.openlore.philosophy.reproducable-builds";
+
+    // -- Action: Maria searches the typo'd object. --
+    let outcome = run_openlore_search_at(&env, &["search", "--object", typo], &indexer.url);
+
+    // -- Outcome: exit 0 with the empty message, after ONE search request. --
+    assert_eq!(
+        outcome.status, 0,
+        "stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+    assert!(
+        outcome.stdout.contains(typo),
+        "the empty message names the object: {}",
+        outcome.stdout
+    );
+    let searched = indexer.searched_values();
+    assert_eq!(
+        searched,
+        vec![typo.to_string()],
+        "one search for the typed value, no probe sweep ({} requests)",
+        searched.len()
+    );
+}
+
+/// An indexer that answers every search with an empty result and records the
+/// value of each search it was asked.
+struct CountingEmptyIndexer {
+    url: String,
+    searched: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl CountingEmptyIndexer {
+    fn start() -> Self {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        let searched = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = std::sync::Arc::clone(&searched);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut length = 0usize;
+                let mut line = String::new();
+                while reader.read_line(&mut line).map(|n| n > 2).unwrap_or(false) {
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    line.clear();
+                }
+                let mut body = vec![0u8; length];
+                let _ = reader.read_exact(&mut body);
+                if let Ok(request) = serde_json::from_slice::<serde_json::Value>(&body) {
+                    let value = request["value"].as_str().unwrap_or_default().to_string();
+                    record.lock().expect("record").push(value);
+                }
+                let answer = r#"{"results":[],"distinct_author_count":0,"total_claims":0}"#;
+                let _ = write!(
+                    reader.get_mut(),
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                     content-length: {}\r\nconnection: close\r\n\r\n{answer}",
+                    answer.len()
+                );
+            }
+        });
+        Self { url, searched }
+    }
+
+    fn searched_values(&self) -> Vec<String> {
+        self.searched.lock().expect("searched").clone()
+    }
+}
+
+/// `openlore search <args>` as Maria against the indexer at `indexer_url`.
+fn run_openlore_search_at(env: &TestEnv, args: &[&str], indexer_url: &str) -> CliOutcome {
+    let output = std::process::Command::new(assert_cmd::cargo::cargo_bin("openlore"))
+        .args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        .env("OPENLORE_INDEXER_URL", indexer_url)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn openlore");
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
 // =============================================================================
 // US-AV-002 / US-AV-003 — LOCAL-FIRST degradation (release gate; KPI-5)
 // =============================================================================

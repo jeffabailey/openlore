@@ -146,7 +146,7 @@ fn run_dimension_object(
     hide_retracted: bool,
 ) -> Result<SearchOutcome> {
     // The OBJECT dimension queries + displays the SAME value, and an empty result
-    // probes the index for a near-match suggestion (a typo'd philosophy URI is one
+    // offers the indexer's near-match suggestion (a typo'd philosophy URI is one
     // edit from the correct one — US-AV-002 Ex 4 / AV-12).
     run_dimension(
         wiring,
@@ -161,8 +161,8 @@ fn run_dimension_object(
 /// How the empty-dimension-result branch behaves for a given dimension.
 ///
 /// - `SuggestNearMatch` (OBJECT): the empty value is likely a TYPO one edit from a
-///   known object, so probe the index for a near-match and offer "Did you mean
-///   <near>?" (US-AV-002 Ex 4 / AV-12).
+///   known object, so offer the indexer's near-match as "Did you mean <near>?"
+///   (US-AV-002 Ex 4 / AV-12).
 /// - `NoSuggestion` (CONTRIBUTOR/SUBJECT): an absent contributor (or subject) is
 ///   not a typo — they simply publish no OpenLore claims (or are not yet ingested);
 ///   there is nothing to suggest, so the empty message names the queried value with
@@ -203,12 +203,10 @@ fn run_dimension(
         // a near-match suggestion (per `empty_policy`), and exit 0 — NOT an error. A
         // non-empty result renders the attributed per-author view.
         Ok(result) if result.results.is_empty() => Ok(render_empty_result(
-            &adapter,
-            &runtime,
             dimension,
-            query_value,
             display_value,
             empty_policy,
+            result.suggestion,
         )),
         Ok(result) => Ok(render_network_result(
             wiring,
@@ -226,36 +224,27 @@ fn run_dimension(
 }
 
 /// Render the empty-dimension-result view (US-AV-002 Ex 4 / AV-12): the typo'd
-/// `value` matched no network claims, so gather the KNOWN network objects near
-/// the query and rank them with the PURE `appview_domain::near_match_suggestion`
-/// (AVC-8) to offer "Did you mean <closest>?". Exit 0 — a valid not-yet-found
+/// value matched no network claims, so offer the indexer's near-match
+/// ("Did you mean <closest>?") when it sent one. Exit 0 — a valid not-yet-found
 /// state, distinct from the `--show`-absent-cid usage error (non-zero, AV-24).
 ///
-/// The known-object set is collected by probing the single-edit-distance
-/// neighbours of `value` against the SAME indexer search port (the slice-04
-/// `graph query` near-match precedent, `render::single_edit_neighbours` + an
-/// exact-match read): a typo is one edit from the correct URI, so any neighbour
-/// that itself has network claims IS a real known object. The pure ranker then
-/// picks the closest — the suggestion is therefore always a real network object,
-/// never fabricated, and the input order does not matter (AVC-8 tiebreak).
+/// The suggestion is computed by the indexer in the SAME request (one bounded
+/// read of the known objects within the suggestion distance, ranked by the
+/// pure `appview_domain::near_match_suggestion`, AVC-8), so it is always a
+/// real network object. The CLI makes exactly one request per search: it never
+/// sweeps the index with single-edit probe searches (review H3 — that sweep
+/// was thousands of requests per typo, against an empty index too).
 fn render_empty_result(
-    adapter: &HttpIndexQueryAdapter,
-    runtime: &tokio::runtime::Runtime,
     dimension: SearchDimension,
-    query_value: &str,
     display_value: &str,
     empty_policy: EmptyPolicy,
+    indexer_suggestion: Option<String>,
 ) -> SearchOutcome {
     // The near-match suggestion is OBJECT-only (a typo'd philosophy URI is one edit
     // from a known object). An absent CONTRIBUTOR/SUBJECT is not a typo, so the
-    // empty message names the DISPLAY value with NO suggestion (AV-17). The probe
-    // runs against the resolved QUERY value (the index is keyed by it); the message
-    // names the DISPLAY value the user typed.
+    // empty message names the DISPLAY value with NO suggestion (AV-17).
     let suggestion = match empty_policy {
-        EmptyPolicy::SuggestNearMatch => {
-            let known = known_objects_near(adapter, runtime, dimension, query_value);
-            appview_domain::near_match_suggestion(query_value, &known)
-        }
+        EmptyPolicy::SuggestNearMatch => indexer_suggestion,
         EmptyPolicy::NoSuggestion => None,
     };
     SearchOutcome {
@@ -266,36 +255,6 @@ fn render_empty_result(
             suggestion.as_deref(),
         ),
     }
-}
-
-/// Collect the KNOWN network objects close to `value` by probing the single-edit
-/// neighbours against the indexer (the slice-04 near-match precedent carried to
-/// the network port). Each neighbour that has ≥1 network claim contributes its
-/// real object string to the candidate set the pure ranker scores. A neighbour
-/// query that errors (unreachable mid-probe) is skipped — the empty path stays
-/// non-fatal (exit 0). Returns a deduplicated candidate set in deterministic
-/// (first-seen) order; the AVC-8 ranker's tiebreak makes the final pick stable.
-fn known_objects_near(
-    adapter: &HttpIndexQueryAdapter,
-    runtime: &tokio::runtime::Runtime,
-    dimension: SearchDimension,
-    value: &str,
-) -> Vec<String> {
-    let mut known: Vec<String> = Vec::new();
-    for candidate in render::single_edit_neighbours(value) {
-        match runtime.block_on(adapter.search(dimension, &candidate, None)) {
-            Ok(result) => {
-                for row in &result.results {
-                    if !known.contains(&row.object) {
-                        known.push(row.object.clone());
-                    }
-                }
-            }
-            // A mid-probe failure is non-fatal: skip the candidate, keep probing.
-            Err(_) => continue,
-        }
-    }
-    known
 }
 
 /// Render a successful network result: the index is per-user-neutral, so resolve
@@ -507,8 +466,8 @@ fn run_dimension_subject(
     hide_retracted: bool,
 ) -> Result<SearchOutcome> {
     // The SUBJECT dimension queries + displays the SAME project URI; an empty result
-    // probes for a near-match (a typo'd project URI is one edit from a known one),
-    // mirroring the OBJECT dimension's AV-12 behavior.
+    // shows the indexer's near-match when it sends one, mirroring the OBJECT
+    // dimension's AV-12 behavior (the indexer currently suggests objects only).
     run_dimension(
         wiring,
         SearchDimension::Subject,

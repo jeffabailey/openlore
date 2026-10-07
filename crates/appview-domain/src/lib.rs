@@ -66,7 +66,7 @@ pub use ingest_pass::{
 };
 pub use purge_plan::{plan_purge, BareDid, PurgePlan, PurgeSuppressed};
 pub use retraction::{partition_retracted, RetractionPartition};
-pub use suggest::near_match_suggestion;
+pub use suggest::{near_match_suggestion, SUGGESTION_MAX_DISTANCE};
 
 use claim_domain::{Cid, Did, KeyId};
 use serde::{Deserialize, Serialize};

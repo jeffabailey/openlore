@@ -179,7 +179,7 @@ pub use index_query::{
     IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw,
 };
 pub use index_store::{
-    IndexPurgePort, IndexReadPort, IndexStoreError, IndexStorePort, PurgeReport,
+    IndexPurgePort, IndexReadPort, IndexStoreError, IndexStorePort, PurgeReport, NEAR_OBJECTS_CAP,
 };
 pub use indexed_claim::{CounterRef, IndexedClaim, SearchDimension};
 pub use ingest_source::{

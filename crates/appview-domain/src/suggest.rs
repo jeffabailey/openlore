@@ -17,7 +17,7 @@
 /// `reproducable`→`reproducible`) is at most distance 2, so it is suggested;
 /// a genuinely unrelated query is many edits away and yields no suggestion.
 /// Kept deliberately tight so an empty result NEVER offers a spurious match.
-const SUGGESTION_MAX_DISTANCE: usize = 2;
+pub const SUGGESTION_MAX_DISTANCE: usize = 2;
 
 /// Near-match suggestion for an empty dimension result (edit distance over
 /// `known` values). Returns `Some(suggestion)` when a close-enough known value

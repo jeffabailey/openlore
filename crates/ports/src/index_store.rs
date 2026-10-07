@@ -79,7 +79,20 @@ pub trait IndexReadPort {
 
     /// Fetch one indexed claim by its (verified) CID PK — the `--show` key.
     fn get_by_cid(&self, cid: &Cid) -> Result<Option<IndexedClaim>, IndexStoreError>;
+
+    /// The distinct indexed objects within `max_distance` edits of `object`,
+    /// closest first, at most [`NEAR_OBJECTS_CAP`]: the candidates a "did you
+    /// mean" suggestion for an empty object search is picked from (US-AV-002
+    /// Ex 4). Object values only — no author, no claim, nothing merged.
+    fn objects_near(
+        &self,
+        object: &str,
+        max_distance: usize,
+    ) -> Result<Vec<String>, IndexStoreError>;
 }
+
+/// The most near-match candidates [`IndexReadPort::objects_near`] returns.
+pub const NEAR_OBJECTS_CAP: usize = 64;
 
 // -----------------------------------------------------------------------------
 // IndexStorePort — the write side (probe + upsert) over index.duckdb
