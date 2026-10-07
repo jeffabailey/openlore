@@ -19,12 +19,14 @@ on:
     paths:
       - "deploy/**"
       - "deploy/review-app/**"
+      - "deploy/indexer/**"
       - ".github/workflows/deploy-pds-check.yml"
   push:
     branches: [main]
     paths:
       - "deploy/**"
       - "deploy/review-app/**"
+      - "deploy/indexer/**"
       - ".github/workflows/deploy-pds-check.yml"
 
 permissions:
@@ -229,3 +231,103 @@ jobs:
           docker run --rm -e PDS_HOSTNAME=openlore.jeffbailey.us \
             -v "$d/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$d/sites:/etc/caddy/sites:ro" \
             caddy:2.8-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+  # The indexer's host files (indexer-deployment; devops/ci-cd-pipeline.md §5), credential-free.
+  # Any violation fails the job and leaves main red, so deploy.sh refuses the sha. The bats step
+  # of the DEVOPS design is dropped (decision 3): the render-dids.sh inode regression runs as a
+  # real-script xtask test (xtask/tests/indexer_deployment_platform.rs) in ci.yml instead.
+  indexer-host:
+    name: indexer host files
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_FILE_PATH: deploy/indexer/host/compose.yaml
+      # A syntactically valid dummy digest: compose refuses to resolve without one.
+      INDEXER_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: scripts parse and are shellcheck-clean
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(find deploy/indexer -type f -name '*.sh' | sort)
+          [ "${#scripts[@]}" -gt 0 ] || { echo "::error::no scripts found"; exit 1; }
+          for f in "${scripts[@]}"; do bash -n "$f"; done
+          shellcheck "${scripts[@]}"
+
+      - name: compose resolves
+        run: docker compose -f "$COMPOSE_FILE_PATH" config -q
+
+      # Mount and posture guard (blocking; infrastructure-integration.md §2). Exactly the data dir
+      # and the config DIRECTORY (read-only); init, read-only root, 128m with no swap, first to be
+      # OOM-killed; never the runtime socket, host namespaces, added capabilities, published
+      # ports, AWS credentials or the loopback test seam.
+      - name: mount and posture guard
+        run: |
+          set -euo pipefail
+          if grep -n 'docker\.sock' "$COMPOSE_FILE_PATH"; then echo "::error::runtime socket mount"; exit 1; fi
+          docker compose -f "$COMPOSE_FILE_PATH" config --format json > "$RUNNER_TEMP/compose.json"
+          jq -e '
+            (.services | length) == 1
+            and (.services[] |
+              ([.volumes[] | {s: .source, t: .target, ro: (.read_only // false)}] | sort_by(.t))
+                == [{s: "/pds/indexer/config", t: "/config", ro: true},
+                    {s: "/pds/indexer/data", t: "/data", ro: false}]
+              and .container_name == "openlore-indexer"
+              and .init == true
+              and .read_only == true
+              and (.privileged // false) == false
+              and (.network_mode // "") != "host"
+              and (.pid // "") != "host"
+              and (.cap_add // []) == []
+              and (.cap_drop // []) == ["ALL"]
+              and (.ports // []) == []
+              and .mem_limit != null
+              and .mem_limit == .memswap_limit
+              and ((.mem_limit | tostring) == "134217728" or (.mem_limit | tostring) == "128m")
+              and (.oom_score_adj // 0) >= 900
+              and ((.security_opt // []) | any(startswith("no-new-privileges")))
+              and ((.environment // {}) | keys
+                    | all(startswith("AWS_") | not)
+                    and (any(. == "OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP") | not)
+                    and (any(. == "OPENLORE_INDEXER_REPO_DIDS") | not)))
+          ' "$RUNNER_TEMP/compose.json" >/dev/null || {
+            echo "::error::compose isolation violated:"
+            jq '.services' "$RUNNER_TEMP/compose.json"
+            exit 1
+          }
+          echo "posture guard passed: only /pds/indexer/data and /pds/indexer/config (ro), 128m"
+
+      - name: systemd units verify
+        run: |
+          set -euo pipefail
+          # verify checks that ExecStart targets exist: stand in for the installed host scripts.
+          sudo install -d /pds/indexer/bin
+          for s in render-dids.sh health-timer.sh; do
+            sudo install -m 0755 "deploy/indexer/host/$s" "/pds/indexer/bin/$s"
+          done
+          d=$(mktemp -d)
+          cp deploy/indexer/host/openlore-indexer-*.service deploy/indexer/host/openlore-indexer-*.timer "$d/"
+          systemd-analyze verify "$d"/openlore-indexer-*.service "$d"/openlore-indexer-*.timer
+          grep -qx 'Persistent=true' deploy/indexer/host/openlore-indexer-pass.timer \
+            || { echo "::error::the pass timer must be Persistent=true"; exit 1; }
+          t=$(sed -n 's/^TimeoutStartSec=\([0-9]*\)min$/\1/p' deploy/indexer/host/openlore-indexer-pass.service)
+          [ -n "$t" ] && [ "$t" -ge 26 ] \
+            || { echo "::error::the pass service TimeoutStartSec must be >= 26min"; exit 1; }
+
+      # The module (v1.7.0) mounts /pds/caddy/sites at /etc/caddy/sites read-only and imports
+      # /etc/caddy/sites/*.caddy; this reproduces that with both sites side by side.
+      - name: Caddy site validates
+        run: |
+          set -euo pipefail
+          site=deploy/indexer/host/index.caddy
+          d=$(mktemp -d)
+          mkdir -p "$d/sites"
+          cp deploy/review-app/host/app.caddy "$d/sites/app.caddy"
+          cp "$site" "$d/sites/index.caddy"
+          printf '{\n}\n\nimport /etc/caddy/sites/*.caddy\n' > "$d/Caddyfile"
+          docker run --rm -e PDS_HOSTNAME=openlore.jeffbailey.us \
+            -v "$d/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$d/sites:/etc/caddy/sites:ro" \
+            caddy:2.8-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          grep -q 'max_size 8KB' "$site" || { echo "::error::index.caddy lost its 8 KB body cap"; exit 1; }
+          [ "$(grep -c 'reverse_proxy' "$site")" = 2 ] \
+            || { echo "::error::index.caddy must proxy exactly two matchers"; exit 1; }

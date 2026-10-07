@@ -47,3 +47,9 @@ variable "aws_profile" {
   type        = string
   default     = null
 }
+
+variable "indexer_alarms_enabled" {
+  description = "Whether the indexer's three alarms (A1-A3, indexer.tf) notify. False until rollout step I-6 (indexer-deployment monitoring-alerting.md)."
+  type        = bool
+  default     = false
+}

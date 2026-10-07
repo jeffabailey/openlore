@@ -745,7 +745,6 @@ fn an_unsigned_digest_or_a_red_ci_sha_is_refused_before_the_host_is_touched() {
 /// XP-9 @US-IXD-004 @AC-004.1 @AC-004.2 @AC-004.3 @AC-004.4 @AC-004.6 @DV-IXD-8 @infrastructure
 /// @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 03-03: deploy/tofu/environments/prod/indexer.tf alarms (DV-IXD-8)"]
 fn exactly_three_alarms_page_the_existing_topic_and_announce_recovery() {
     let tf = read("deploy/tofu/environments/prod/indexer.tf");
     let resources = hcl_resources(&tf);
@@ -808,7 +807,6 @@ fn exactly_three_alarms_page_the_existing_topic_and_announce_recovery() {
 /// XP-10 @US-IXD-004 @US-IXD-005 @AC-005.1 @AC-005.2 @AC-005.3 @AC-005.4 @I-IXD-4 @infrastructure
 /// @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 03-03: metric filters + saved queries in indexer.tf (DV-IXD-8, observability §5)"]
 fn alarms_and_queries_read_only_the_structural_events_the_index_emits() {
     let tf = read("deploy/tofu/environments/prod/indexer.tf");
     let resources = hcl_resources(&tf);
@@ -870,7 +868,6 @@ fn alarms_and_queries_read_only_the_structural_events_the_index_emits() {
 
 /// XP-11 @US-IXD-003 @AC-003.5 @NFR-IXD-8 @DV-IXD-10 @infrastructure @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 03-03: deploy/tofu/bootstrap/indexer-iam.tf (DV-IXD-10)"]
 fn the_host_may_read_the_did_list_and_its_own_logs_and_nothing_more() {
     let iam = read("deploy/tofu/bootstrap/indexer-iam.tf");
     for granted in [
@@ -898,7 +895,6 @@ fn the_host_may_read_the_did_list_and_its_own_logs_and_nothing_more() {
 
 /// XP-12 @US-IXD-001 @US-IXD-006 @AC-001.6 @AC-006.1 @DV-IXD-1 @infrastructure @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 03-03: Dockerfile + ci.yml indexer-build/indexer-image + deploy-pds-check indexer-host (DV-IXD-1)"]
 fn the_image_is_a_signed_non_root_distroless_build_from_ci() {
     let dockerfile = read("crates/openlore-indexer/Dockerfile");
     assert!(

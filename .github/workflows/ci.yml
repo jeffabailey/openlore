@@ -289,3 +289,236 @@ jobs:
             echo "- tags: \`sha-${GITHUB_SHA}\`, \`main\`"
             echo "- deploy (laptop): \`deploy/review-app/deploy.sh deploy ${GITHUB_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------------------------------
+  # Indexer image (indexer-deployment DV-IXD-1; devops/ci-cd-pipeline.md §3). Mirrors the
+  # review-app jobs: main pushes only, after the acceptance stage, so an image never exists for a
+  # red commit. CI builds, smokes, scans, signs and publishes; it never deploys
+  # (deploy/indexer/deploy.sh, laptop-initiated). release-guard above stays as it is; the
+  # serve-smoke repeats its loopback-seam check on the shipped image.
+  # ------------------------------------------------------------------------------------------
+
+  indexer-build:
+    name: indexer build (arm64, bookworm)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test]
+    runs-on: ubuntu-24.04-arm
+    # Built in a bookworm container so the binary's glibc symbols match distroless
+    # cc-debian12 (2.36); same pin as review-app-build.
+    container:
+      image: rust:1-bookworm@sha256:59037199c44290f2befcdd58dcc540164763fc296950255aaefeef096a1866b0
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: indexer-arm64
+      - name: cargo build --release -p openlore-indexer
+        # No --locked: Cargo.lock is gitignored in this workspace (same as release.yml).
+        run: cargo build --release -p openlore-indexer
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cyclonedx
+      - name: Stage binary + CycloneDX SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          strip target/release/openlore-indexer
+          cp target/release/openlore-indexer out/
+          # cargo-cyclonedx 0.5.x: scope with --manifest-path (see release.yml).
+          cargo cyclonedx --format json --manifest-path crates/openlore-indexer/Cargo.toml --override-filename sbom
+          cp crates/openlore-indexer/sbom.json out/openlore-indexer.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openlore-indexer-aarch64
+          path: out/
+          retention-days: 1
+          if-no-files-found: error
+
+  indexer-image:
+    name: indexer image (serve-smoke, scan, push, sign, attest)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [indexer-build]
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write       # push to GHCR
+      id-token: write       # GitHub OIDC: cosign keyless + attestations
+      attestations: write   # SLSA build provenance
+    env:
+      IMAGE: ghcr.io/jeffabailey/openlore-indexer
+      LOCAL_TAG: openlore-indexer:ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: openlore-indexer-aarch64
+          path: ${{ runner.temp }}/ctx
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (runtime-only distroless)
+        run: |
+          set -euo pipefail
+          mv "$RUNNER_TEMP/ctx/openlore-indexer.cdx.json" "$RUNNER_TEMP/cargo.cdx.json"
+          docker buildx build --platform linux/arm64 --load \
+            -f crates/openlore-indexer/Dockerfile \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -t "$LOCAL_TAG" "$RUNNER_TEMP/ctx"
+
+      - name: Smoke (dynamic linking)
+        run: docker run --rm "$LOCAL_TAG" --version
+
+      # serve-smoke (blocking; AS-56): the production posture of deploy/indexer/host/compose.yaml
+      # with one unresolvable DID. healthz, the two-route surface, the 8 KB body cap, one
+      # exit-3 pass with exactly one pass_summary, a sub-3 s stop, and the loopback-seam refusal.
+      - name: serve-smoke (production posture)
+        run: |
+          set -euo pipefail
+          c=openlore-indexer-smoke
+          base=http://127.0.0.1:18080
+          search=/xrpc/org.openlore.appview.searchClaims
+          d=$(mktemp -d)
+          mkdir -p "$d/data" "$d/config"
+          printf 'did:web:smoke.invalid\n' > "$d/config/repo-dids"
+          chmod 0444 "$d/config/repo-dids"
+          sudo chown -R 65532:65532 "$d/data"
+          posture=(--read-only --tmpfs "/tmp:size=8m,mode=0700,uid=65532,gid=65532"
+            --cap-drop ALL --security-opt no-new-privileges:true
+            --memory 128m --memory-swap 128m --init
+            -v "$d/data:/data" -v "$d/config:/config:ro"
+            -e OPENLORE_INDEXER_INDEX_PATH=/data/index.duckdb
+            -e OPENLORE_INDEXER_LISTEN_ADDR=0.0.0.0:8080
+            -e OPENLORE_INDEXER_REPO_DIDS_FILE=/config/repo-dids
+            -e OPENLORE_INDEXER_CONTROL_SOCKET=/tmp/openlore-indexer.sock
+            -e OPENLORE_INDEXER_PURGE_UNLISTED=1
+            -e OPENLORE_INDEXER_DUCKDB_MEMORY_LIMIT_MB=48
+            -e OPENLORE_INDEXER_DUCKDB_THREADS=1
+            -e OPENLORE_INDEXER_PASS_DEADLINE_SECS=1500
+            -e OPENLORE_INDEXER_MAX_CONCURRENT_FETCHES=4
+            -e OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS=30)
+          fail() { echo "::error::serve-smoke: $*"; docker logs "$c" 2>&1 | tail -n 50 || true; exit 1; }
+
+          docker run -d --name "$c" "${posture[@]}" -p 127.0.0.1:18080:8080 "$LOCAL_TAG" serve
+          ok=0
+          for _ in $(seq 1 20); do
+            if curl -fsS -m 2 "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          [ "$ok" = 1 ] || fail "GET /healthz was not 200 within 20 s"
+
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+            --data '{"dimension":"subject","value":"https://smoke.invalid/x"}' "$base$search")
+          [ "$code" = 200 ] || fail "POST search returned $code, wanted 200"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "$base/xrpc/x")
+          [ "$code" = 404 ] || fail "GET /xrpc/x returned $code, wanted 404"
+
+          body() { # $1 = total bytes: a valid JSON search padded with spaces
+            local head='{"dimension":"subject","value":"x"}'
+            printf '%s' "$head"
+            head -c "$(($1 - ${#head}))" /dev/zero | tr '\0' ' '
+          }
+          body 8192 > "$d/8k.json"
+          body 9216 > "$d/9k.json"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+            --data-binary "@$d/8k.json" "$base$search")
+          [ "$code" != 413 ] || fail "an 8 KB body was refused as too large"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+            --data-binary "@$d/9k.json" "$base$search")
+          [ "$code" = 413 ] || fail "a 9 KB body returned $code, wanted 413"
+
+          set +e
+          timeout 120 docker exec "$c" /usr/local/bin/openlore-indexer trigger
+          rc=$?
+          set -e
+          [ "$rc" = 3 ] || fail "trigger exited $rc, wanted 3 (the only DID cannot resolve)"
+          summaries=$(docker logs "$c" 2>&1 | jq -Rc 'fromjson? | select(.event == "indexer.ingest.pass_summary")')
+          [ "$(grep -c . <<<"$summaries")" = 1 ] || fail "wanted exactly one pass_summary: $summaries"
+          jq -e '.exit_code == 3 and (.pass_id != null)' <<<"$summaries" >/dev/null \
+            || fail "the pass_summary lacks exit_code 3 or a pass_id: $summaries"
+
+          start=$(date +%s%N)
+          docker stop -t 10 "$c" >/dev/null
+          elapsed_ms=$((($(date +%s%N) - start) / 1000000))
+          [ "$elapsed_ms" -lt 3000 ] || fail "docker stop took ${elapsed_ms} ms (init must forward SIGTERM)"
+          docker rm "$c" >/dev/null
+
+          # The shipped (release) binary refuses the loopback test seam (IPF-30, on the artefact).
+          set +e
+          out=$(timeout 30 docker run --rm "${posture[@]}" -e OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP=1 "$LOCAL_TAG" serve 2>&1)
+          rc=$?
+          set -e
+          [ "$rc" != 0 ] || fail "the release image started with OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP=1"
+          grep -q 'health.startup.refused' <<<"$out" || fail "no health.startup.refused: $out"
+          grep -q 'OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP' <<<"$out" || fail "refused for another reason: $out"
+          echo "serve-smoke: passed"
+
+      - name: Scan (trivy, HIGH/CRITICAL blocks)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_TAG }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to GHCR and record the digest
+        id: push
+        run: |
+          set -euo pipefail
+          docker tag "$LOCAL_TAG" "$IMAGE:sha-${GITHUB_SHA}"
+          docker tag "$LOCAL_TAG" "$IMAGE:main"
+          docker push "$IMAGE:sha-${GITHUB_SHA}"
+          docker push "$IMAGE:main"
+          digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$LOCAL_TAG" \
+            | grep "^${IMAGE}@" | head -n1 | cut -d@ -f2)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no pushed digest"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign (cosign keyless, by digest)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+
+      - name: SBOM of the image (syft)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/image.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest SBOMs (cargo + image, cosign)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign attest --yes --type cyclonedx --predicate "$RUNNER_TEMP/cargo.cdx.json" "$IMAGE@$DIGEST"
+          cosign attest --yes --type cyclonedx --predicate "$RUNNER_TEMP/image.cdx.json" "$IMAGE@$DIGEST"
+
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Job summary
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          {
+            echo "### openlore-indexer image"
+            echo "- digest: \`$IMAGE@$DIGEST\`"
+            echo "- tags: \`sha-${GITHUB_SHA}\`, \`main\`"
+            echo "- serve-smoke: passed"
+            echo "- deploy (laptop): \`deploy/indexer/deploy.sh deploy ${GITHUB_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
