@@ -155,3 +155,32 @@ fn a_fallback_with_a_query_or_fragment_is_refused() {
         }
     }
 }
+
+#[test]
+fn each_test_fault_is_named_by_its_own_token_in_a_development_build() {
+    let faults = [
+        ("first_pass_panics", TestFault::FirstPassPanics),
+        ("store_poisoned", TestFault::StorePoisoned),
+        ("search_store_read_fails", TestFault::SearchStoreReadFails),
+        ("purge_fails", TestFault::PurgeFails),
+    ];
+    for (token, fault) in faults {
+        assert_eq!(fault.token(), token);
+        let config = parse_with(&[(TEST_FAULT_VAR, token)], BuildProfile::Development)
+            .unwrap_or_else(|refusal| panic!("{token}: {refusal:?}"));
+        assert_eq!(config.test_fault, Some(fault), "{token}");
+    }
+}
+
+#[test]
+fn a_list_file_alone_is_the_list_source_at_its_path() {
+    let config = parse_with(
+        &[(REPO_DIDS_FILE_VAR, "/etc/openlore/repo-dids")],
+        BuildProfile::Development,
+    )
+    .expect("a list file alone loads");
+    assert_eq!(
+        config.repo_dids_file,
+        Some(PathBuf::from("/etc/openlore/repo-dids"))
+    );
+}

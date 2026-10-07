@@ -411,3 +411,10 @@ mod tests {
         }
     }
 }
+
+/// Behaviour contracts of the control channel over real Unix sockets: the
+/// stale-file rule of `bind`, the probe round-trip, a `trigger` request
+/// answered by a running `serve`, and the trigger's refusal causes.
+#[cfg(test)]
+#[path = "control_contracts.rs"]
+mod contracts;
