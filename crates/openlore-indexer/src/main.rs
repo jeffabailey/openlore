@@ -29,6 +29,7 @@ use clap::{Parser, Subcommand};
 mod config;
 #[cfg(unix)]
 mod control;
+mod health;
 mod pass_runner;
 mod probe_gauntlet;
 mod run;

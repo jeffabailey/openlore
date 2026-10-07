@@ -120,8 +120,29 @@ fn sut_read_did_list(_text: &str) -> ListReadView {
     todo!("DELIVER 02-01: bind to the per-pass DID-file parse (reuses parse_repo_dids, ADR-081)")
 }
 
-fn sut_pass_exit(_outcome: &PassOutcomeView) -> (i32, Option<String>) {
-    todo!("DELIVER 01-04: bind to the extended appview_domain pass_exit_code (+ cause)")
+fn sut_pass_exit(outcome: &PassOutcomeView) -> (i32, Option<String>) {
+    use appview_domain::ingest_pass as pass;
+    let failure = [
+        (outcome.list_refused, pass::PassFailure::ListMalformed),
+        (outcome.purge_failed, pass::PassFailure::PurgeFailed),
+        (outcome.upsert_failed, pass::PassFailure::UpsertFailed),
+        (outcome.panicked, pass::PassFailure::PassPanicked),
+        (
+            outcome.deadline_exceeded,
+            pass::PassFailure::PassDeadlineExceeded,
+        ),
+    ]
+    .into_iter()
+    .find_map(|(happened, failure)| happened.then_some(failure));
+    let summary = pass::summarize_outcomes(outcome.dids.iter().map(|did| match did {
+        DidOutcome::Read => pass::PassOutcome::ReadFromOwnPds,
+        DidOutcome::Skipped => pass::PassOutcome::Skipped,
+    }));
+    let exit = pass::pass_exit(failure, &summary);
+    (
+        exit.code(),
+        exit.cause().map(|cause| cause.token().to_string()),
+    )
 }
 
 fn sut_single_flight(
@@ -167,10 +188,18 @@ fn sut_deadline_outcome(
 }
 
 fn sut_health_view(
-    _store_usable: bool,
-    _last_success_epoch_secs: Option<i64>,
+    store_usable: bool,
+    last_success_epoch_secs: Option<i64>,
 ) -> (u16, serde_json::Value) {
-    todo!("DELIVER 01-04: bind to the /healthz projection of PassStatus (ADR-083 §2)")
+    use appview_domain::health::{health_of, StoreHealth};
+    let store = if store_usable {
+        StoreHealth::Usable
+    } else {
+        StoreHealth::Unusable
+    };
+    let last = last_success_epoch_secs.and_then(|secs| chrono::DateTime::from_timestamp(secs, 0));
+    let response = health_of(store, last);
+    (response.status_code(), response.body())
 }
 
 // =============================================================================
@@ -349,7 +378,6 @@ proptest! {
     /// and wins over a total outage (3, every listed DID skipped), which wins
     /// over 0; a cause is named exactly when the exit is 2.
     #[test]
-    #[ignore = "DELIVER 01-04: pass_exit_code extended"]
     fn a_pass_s_exit_code_puts_local_failures_before_outages_before_success(o in outcome()) {
         let (code, cause) = sut_pass_exit(&o);
         prop_assert_eq!(code, exit_oracle(&o));
@@ -433,7 +461,6 @@ proptest! {
     /// An unusable store is always 503 `store_unusable`; a usable one is 200
     /// with exactly `status` and `last_successful_pass_at` (RFC3339 or null).
     #[test]
-    #[ignore = "DELIVER 01-04: /healthz projection"]
     fn the_health_response_is_honest_and_minimal(
         usable in any::<bool>(),
         last in prop::option::of(1_600_000_000i64..2_100_000_000),
@@ -487,7 +514,6 @@ fn the_purge_plan_never_names_a_listed_look_alike() {
 
 /// CORE-5x @AC-004.1 @contract-shape:pure-function — the closed table of exit codes.
 #[test]
-#[ignore = "DELIVER 01-04: pass_exit_code extended"]
 fn the_exit_codes_of_the_canonical_passes() {
     let base = PassOutcomeView {
         list_refused: false,

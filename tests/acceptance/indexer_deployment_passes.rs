@@ -100,7 +100,6 @@ fn when_the_pass_is_underway(live: &LiveIndex) {
 ///   And the pass completes
 /// ```
 #[test]
-#[ignore = "DELIVER 01-04: pass on its own thread, store held one transaction at a time (B2, B13)"]
 fn search_keeps_answering_within_a_second_while_a_pass_runs() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_a_live_index_whose_pass_takes_a_while(&world);
@@ -174,7 +173,6 @@ fn a_pass_is_never_refused_because_search_is_busy() {
 ///   Then every search answers within 1 second, including those during the pass's final save
 /// ```
 #[test]
-#[ignore = "DELIVER 01-04: explicit end-of-pass CHECKPOINT never stalls search (B14)"]
 fn searches_overlapping_the_end_of_a_pass_still_answer_within_a_second() {
     let (_world, live) = given_a_crowd_index_with_a_long_write_heavy_pass();
 
@@ -327,7 +325,6 @@ fn a_pass_with_nothing_new_on_the_network_changes_nothing_maria_sees() {
 ///     | "did:plc:therrera2v6w,tomas"        | 2    | repo_dids_malformed |
 /// ```
 #[test]
-#[ignore = "DELIVER 01-04: trigger propagates 0/2/3; one pass_summary per pass incl. exit 2 (B3, B4)"]
 fn the_timer_sees_the_pass_s_own_exit_code_and_exactly_one_summary() {
     type Arrange = fn(&IndexerWorld);
     let cases: Vec<(&str, &str, Arrange, PassExit, Option<FailureCause>)> = vec![
@@ -462,7 +459,6 @@ fn the_timer_needs_nothing_but_the_control_socket_to_start_a_pass() {
 ///   And Maria still finds Priya's claims and the index stays up
 /// ```
 #[test]
-#[ignore = "DELIVER 01-04: upsert failure still emits the summary (B4)"]
 fn a_pass_that_cannot_store_a_claim_ends_with_exit_2_and_search_keeps_answering() {
     let world = given_authors_publish_on_their_own_pdses();
     world.index_cannot_store_claims_of(Author::Dmitri);
@@ -664,7 +660,6 @@ fn a_search_that_cannot_read_the_index_is_reported_as_unavailable_never_as_no_re
 ///   And the response carries only the status and that time
 /// ```
 #[test]
-#[ignore = "DELIVER 01-04: /healthz last_successful_pass_at from PassStatus (B2, B8)"]
 fn the_health_response_shows_when_the_last_good_pass_ended_and_only_that() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya]);

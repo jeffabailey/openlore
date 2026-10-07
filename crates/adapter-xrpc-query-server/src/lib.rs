@@ -32,6 +32,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use appview_domain::health::HealthResponse;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::service::service_fn;
@@ -46,6 +47,13 @@ use tokio::net::TcpListener;
 /// composes per-author via the pure `appview-domain` core. `Send + Sync` so the
 /// hyper accept loop can share it across per-connection tasks.
 pub type QueryHandler = Arc<dyn Fn(SearchQueryRequest) -> SearchQueryResponse + Send + Sync>;
+
+/// The health reader the composition root wires behind `GET /healthz` (ADR-083
+/// §2): it reads the process's state and projects it, never changing it.
+pub type HealthHandler = Arc<dyn Fn() -> HealthResponse + Send + Sync>;
+
+/// The public health route.
+pub const HEALTH_PATH: &str = "/healthz";
 
 /// Why the XRPC query server failed to bind / serve.
 #[derive(Debug, thiserror::Error)]
@@ -65,6 +73,7 @@ pub struct XrpcQueryServer {
     listener: TcpListener,
     local_addr: SocketAddr,
     handler: QueryHandler,
+    health: Option<HealthHandler>,
 }
 
 impl XrpcQueryServer {
@@ -138,7 +147,17 @@ impl XrpcQueryServer {
             listener,
             local_addr,
             handler,
+            health: None,
         })
+    }
+
+    /// Answer `GET /healthz` from `health` (without it the route is not found).
+    #[must_use]
+    pub fn with_health(self, health: HealthHandler) -> Self {
+        Self {
+            health: Some(health),
+            ..self
+        }
     }
 
     /// The address the listener actually bound (the ephemeral port resolved when
@@ -163,8 +182,10 @@ impl XrpcQueryServer {
                     })?;
             let io = TokioIo::new(stream);
             let handler = Arc::clone(&self.handler);
+            let health = self.health.clone();
             tokio::task::spawn(async move {
-                let service = service_fn(move |req| route(req, Arc::clone(&handler)));
+                let service =
+                    service_fn(move |req| route(req, Arc::clone(&handler), health.clone()));
                 let _ = hyper::server::conn::http1::Builder::new()
                     .serve_connection(io, service)
                     .await;
@@ -173,15 +194,19 @@ impl XrpcQueryServer {
     }
 }
 
-/// Route one HTTP request: only `POST /xrpc/org.openlore.appview.searchClaims`
-/// (with a JSON `SearchQueryRequest` body) is served; everything else is 404.
-/// The handler is called for a valid request; its `SearchQueryResponse` is
-/// serialized as the JSON body.
+/// Route one HTTP request: `POST /xrpc/org.openlore.appview.searchClaims`
+/// (with a JSON `SearchQueryRequest` body) and, when wired, `GET /healthz` are
+/// served; everything else is 404. The handler is called for a valid request;
+/// its `SearchQueryResponse` is serialized as the JSON body.
 async fn route(
     req: Request<Incoming>,
     handler: QueryHandler,
+    health: Option<HealthHandler>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let path = req.uri().path().to_string();
+    if req.method() == Method::GET && path == HEALTH_PATH {
+        return Ok(health.map_or_else(not_found, |health| health_answer(&health())));
+    }
     let is_search =
         req.method() == Method::POST && path == format!("/xrpc/{}", lexicon::SEARCH_CLAIMS_NSID);
     if !is_search {
@@ -205,6 +230,15 @@ async fn route(
         .header("content-type", "application/json")
         .body(Full::new(Bytes::from(json)))
         .expect("static response is well-formed"))
+}
+
+/// The health projection as an HTTP response.
+fn health_answer(health: &HealthResponse) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(health.status_code())
+        .header("content-type", "application/json")
+        .body(Full::new(Bytes::from(health.body().to_string())))
+        .expect("static response is well-formed")
 }
 
 fn not_found() -> Response<Full<Bytes>> {

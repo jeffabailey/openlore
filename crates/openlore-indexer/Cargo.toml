@@ -40,6 +40,7 @@ adapter-xrpc-query-server = { path = "../adapter-xrpc-query-server" }
 adapter-system-clock = { path = "../adapter-system-clock" }
 clap = { version = "4", features = ["derive"] }
 anyhow = { workspace = true }
+chrono = { workspace = true }
 serde_json = { workspace = true }
 # Step 03-01: the `ingest` verb drives the ASYNC IngestSourcePort / IdentityResolvePort
 # (ADR-024/026 network PULL + resolve) via a LOCAL current-thread runtime + block_on

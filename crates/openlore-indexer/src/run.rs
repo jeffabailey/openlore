@@ -21,6 +21,7 @@
 
 #![allow(dead_code)] // some scaffold seams (serve/stats) land in Phase 03/04
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -36,13 +37,12 @@ use adapter_xrpc_query_server::XrpcQueryServer;
 use std::collections::BTreeMap;
 
 use appview_domain::ingest_pass::{
-    classify_fetch_failure, pass_exit_code, refusal_cause_of, ClassifiedSkip, FetchFailure,
-    RefusalCause, SkipReason,
+    classify_fetch_failure, pass_exit, refusal_cause_of, summarize_outcomes, ClassifiedSkip,
+    FetchFailure, PassExit, PassFailure, RefusalCause, SkipReason,
 };
 use appview_domain::{
-    ingest_repo_record, origin_of, plan_listing, records_of, summarize, DidFetch, FallbackUrl,
-    IngestOutcome, ListingBudget, ListingPlan, ListingSource, PassSummary, RejectReason,
-    ResolutionFailure,
+    ingest_repo_record, origin_of, plan_listing, records_of, DidFetch, FallbackUrl, IngestOutcome,
+    ListingBudget, ListingPlan, ListingSource, PassSummary, RejectReason, ResolutionFailure,
 };
 use claim_domain::{ClaimRecord, Did, VerificationKey};
 use ports::net_policy::TransportPolicy;
@@ -55,7 +55,8 @@ use crate::config::{
     parse_config, parse_repo_dids, BuildProfile, ConfigError, IndexerConfig, REPO_DIDS_FILE_VAR,
 };
 
-use crate::pass_runner::{PassLabel, PassRunner};
+use crate::health::health_handler;
+use crate::pass_runner::{PassLabel, PassRunner, StatusReader};
 use crate::probe_gauntlet::{
     capability_boundary_probe, control_channel_probe, origin_classification_probe, probe_gauntlet,
     ProbeRefusal,
@@ -285,8 +286,9 @@ fn serve(wiring: &IndexerWiring) -> i32 {
                 return EXIT_FATAL;
             }
         }
+        let status = runner.status_reader();
         drop(runner);
-        let code = serve_searches(wiring);
+        let code = serve_searches(wiring, status);
         stop_answering.store(true, Ordering::Relaxed);
         code
     })
@@ -348,16 +350,30 @@ fn control_round_trip(_: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// One pass inside `serve`: load the DID list afresh (the file when one is
-/// configured, ADR-081), announce it under the pass's label, run the pass.
+/// One pass inside `serve`, ending with exactly one summary whatever happens
+/// (B4): a refused list, a store failure and a panic are summarised like a
+/// completed pass, each with its cause.
 fn in_serve_pass(wiring: &IndexerWiring, pass: PassLabel) -> i32 {
     let started = Instant::now();
-    let (repo_dids, source) = match pass_list(wiring) {
-        Ok(listed) => listed,
-        Err(refusal) => return refuse_pass(pass, &refusal, started),
-    };
-    emit_pass_config_loaded(wiring, pass, &repo_dids, source);
-    run_pass(wiring, &repo_dids, Some(pass))
+    let work = catch_unwind(AssertUnwindSafe(|| listed_pass_work(wiring, pass)))
+        .unwrap_or_else(|_panic| PassWork::failed(PassFailure::PassPanicked));
+    finish_pass(Some(pass), &work, started)
+}
+
+/// Load the DID list afresh (the file when one is configured, ADR-081),
+/// announce it under the pass's label, do the pass's work. A refused list
+/// fetches nothing.
+fn listed_pass_work(wiring: &IndexerWiring, pass: PassLabel) -> PassWork {
+    match pass_list(wiring) {
+        Ok((repo_dids, source)) => {
+            emit_pass_config_loaded(wiring, pass, &repo_dids, source);
+            pass_work(wiring, &repo_dids, Some(pass))
+        }
+        Err(refusal) => {
+            emit_pass_refused(pass, &refusal);
+            PassWork::failed(refusal.cause)
+        }
+    }
 }
 
 /// Where a pass's DID list came from (`indexer.config.loaded.repo_dids_source`).
@@ -379,7 +395,7 @@ impl ListSource {
 /// Why a pass refused its DID list: the cause token and what to name.
 #[derive(Debug)]
 struct ListRefusal {
-    cause: &'static str,
+    cause: PassFailure,
     variable: &'static str,
     value: String,
 }
@@ -391,34 +407,30 @@ fn pass_list(wiring: &IndexerWiring) -> Result<(Vec<Did>, ListSource), ListRefus
         return Ok((wiring.repo_dids.clone(), ListSource::Env));
     };
     let text = std::fs::read_to_string(file).map_err(|_| ListRefusal {
-        cause: "repo_dids_unreadable",
+        cause: PassFailure::ListUnreadable,
         variable: REPO_DIDS_FILE_VAR,
         value: file.display().to_string(),
     })?;
     parse_repo_dids(&text)
         .map(|dids| (dids, ListSource::File))
         .map_err(|error| ListRefusal {
-            cause: "repo_dids_malformed",
+            cause: PassFailure::ListMalformed,
             variable: REPO_DIDS_FILE_VAR,
             value: error.value,
         })
 }
 
-/// A refused list: no fetch, one `pass_refused`, then the summary (exit 2).
-fn refuse_pass(pass: PassLabel, refusal: &ListRefusal, started: Instant) -> i32 {
+/// `indexer.ingest.pass_refused`: the list was refused; nothing is fetched.
+fn emit_pass_refused(pass: PassLabel, refusal: &ListRefusal) {
     emit_in(
         Some(pass),
         serde_json::json!({
             "event": "indexer.ingest.pass_refused",
-            "cause": refusal.cause,
+            "cause": refusal.cause.token(),
             "variable": refusal.variable,
             "value": refusal.value,
         }),
     );
-    let mut summary = pass_summary_event(&summarize(&[]), EXIT_FATAL, started);
-    summary["cause"] = refusal.cause.into();
-    emit_in(Some(pass), summary);
-    EXIT_FATAL
 }
 
 /// `indexer.config.loaded` at a pass's start, after its list loaded.
@@ -442,8 +454,9 @@ fn emit_pass_config_loaded(
     );
 }
 
-/// Bind the query server and answer searches until the process is killed.
-fn serve_searches(wiring: &IndexerWiring) -> i32 {
+/// Bind the query server and answer searches (and `/healthz`, from the
+/// runner's `status`) until the process is killed.
+fn serve_searches(wiring: &IndexerWiring, status: StatusReader) -> i32 {
     let reads: SharedIndexReads = Arc::clone(&wiring.index_store) as SharedIndexReads;
     let handler = search_handler(reads);
 
@@ -472,7 +485,7 @@ fn serve_searches(wiring: &IndexerWiring) -> i32 {
 
     runtime.block_on(async move {
         let server = match XrpcQueryServer::bind(listen_addr, handler) {
-            Ok(server) => server,
+            Ok(server) => server.with_health(health_handler(status)),
             Err(err) => {
                 eprintln!("openlore-indexer serve: bind query server: {err}");
                 return EXIT_FATAL;
@@ -518,39 +531,83 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
     run_pass(wiring, &wiring.repo_dids, None)
 }
 
-/// One pass over `repo_dids`; every event carries `pass`'s label when the
-/// pass runs inside `serve`.
+/// One pass over `repo_dids`, ending with its one summary; every event
+/// carries `pass`'s label when the pass runs inside `serve`.
 fn run_pass(wiring: &IndexerWiring, repo_dids: &[Did], pass: Option<PassLabel>) -> i32 {
     let started = Instant::now();
+    let work = pass_work(wiring, repo_dids, pass);
+    finish_pass(pass, &work, started)
+}
+
+/// What a pass's work came to, before its summary is written: the per-DID
+/// accounting and the local failure that ended it, if one did.
+struct PassWork {
+    summary: PassSummary,
+    failure: Option<PassFailure>,
+}
+
+impl PassWork {
+    /// A pass that ended on `failure` before it fetched anything.
+    fn failed(failure: PassFailure) -> Self {
+        Self {
+            summary: PassSummary::default(),
+            failure: Some(failure),
+        }
+    }
+}
+
+/// Write the pass's ONE summary (last of its events) and return its exit code.
+fn finish_pass(pass: Option<PassLabel>, work: &PassWork, started: Instant) -> i32 {
+    let exit = pass_exit(work.failure, &work.summary);
+    emit_in(pass, pass_summary_event(&work.summary, exit, started));
+    exit.code()
+}
+
+/// The pass's work. Each DID is gated as soon as its fetch is in (configured
+/// order), so an author's claims are searchable while slower authors are
+/// still being fetched; the first store failure ends the pass (ADR-078 §2).
+/// The pass ends with an explicit checkpoint (ADR-080 §6).
+fn pass_work(wiring: &IndexerWiring, repo_dids: &[Did], pass: Option<PassLabel>) -> PassWork {
     let runtime = match current_thread_runtime() {
         Ok(rt) => rt,
         Err(err) => {
             eprintln!("openlore-indexer: failed to build async runtime: {err}");
-            return EXIT_FATAL;
+            return PassWork::failed(PassFailure::PassPanicked);
         }
     };
 
-    let fetches = fetch_all(wiring, repo_dids, &runtime);
-    fetches
-        .iter()
-        .for_each(|fetch| emit_fallback_read(pass, fetch));
-    fetches
-        .iter()
-        .for_each(|fetch| emit_source_skipped(pass, fetch));
-
-    let tally = match gate_all(wiring, &runtime, &fetches) {
-        Ok(tally) => tally,
-        Err(err) => {
+    let mut fetches = Box::pin(
+        stream::iter(repo_dids)
+            .map(|repo_did| fetch_repo(wiring, repo_did))
+            .buffered(wiring.max_concurrent_fetches),
+    );
+    let mut outcomes = Vec::with_capacity(repo_dids.len());
+    let mut tally = IngestTally::default();
+    let mut failure = None;
+    while let Some(fetch) = runtime.block_on(fetches.next()) {
+        emit_fallback_read(pass, &fetch);
+        emit_source_skipped(pass, &fetch);
+        outcomes.push(fetch.outcome());
+        if let Err(err) = gate_fetch(wiring, &runtime, &fetch, &mut tally) {
             eprintln!("openlore-indexer: index upsert failed: {err}");
-            return EXIT_FATAL;
+            failure = Some(PassFailure::UpsertFailed);
+            break;
         }
-    };
+    }
     tally.emit(pass);
+    checkpoint(wiring);
+    PassWork {
+        summary: summarize_outcomes(outcomes),
+        failure,
+    }
+}
 
-    let summary = summarize(&fetches);
-    let exit_code = pass_exit_code(&summary);
-    emit_in(pass, pass_summary_event(&summary, exit_code, started));
-    exit_code
+/// The end-of-pass checkpoint. Everything it folds in is already committed,
+/// so a failure is reported and changes nothing the pass reports.
+fn checkpoint(wiring: &IndexerWiring) {
+    if let Err(err) = wiring.index_store.checkpoint() {
+        eprintln!("openlore-indexer: end-of-pass checkpoint failed: {err}");
+    }
 }
 
 /// The single-threaded runtime both `serve` and `ingest` run on.
@@ -558,35 +615,6 @@ fn current_thread_runtime() -> std::io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-}
-
-/// The fetch phase: every configured repo DID, at most
-/// `max_concurrent_fetches` at once, results in configured order.
-fn fetch_all(
-    wiring: &IndexerWiring,
-    repo_dids: &[Did],
-    runtime: &tokio::runtime::Runtime,
-) -> Vec<DidFetch> {
-    runtime.block_on(
-        stream::iter(repo_dids)
-            .map(|repo_did| fetch_repo(wiring, repo_did))
-            .buffered(wiring.max_concurrent_fetches)
-            .collect(),
-    )
-}
-
-/// The gate phase: every fetched repo through the verify/provenance gate, in
-/// configured order. `Err` only for a store failure (fatal).
-fn gate_all(
-    wiring: &IndexerWiring,
-    runtime: &tokio::runtime::Runtime,
-    fetches: &[DidFetch],
-) -> Result<IngestTally, String> {
-    let mut tally = IngestTally::default();
-    for fetch in fetches {
-        gate_fetch(wiring, runtime, fetch, &mut tally)?;
-    }
-    Ok(tally)
 }
 
 /// One repo DID's fetch: resolve its PDS, plan where to list it, list it.
@@ -783,23 +811,27 @@ fn emit_source_skipped(pass: Option<PassLabel>, fetch: &DidFetch) {
     }
 }
 
-/// `indexer.ingest.pass_summary` — the pass's LAST stdout event. No pass
-/// purges yet, so `purged_authors` is 0.
+/// `indexer.ingest.pass_summary` — the pass's LAST stdout event, naming the
+/// cause on exit 2. No pass purges yet, so `purged_authors` is 0.
 fn pass_summary_event(
     summary: &PassSummary,
-    exit_code: i32,
+    exit: PassExit,
     started: Instant,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut event = serde_json::json!({
         "event": "indexer.ingest.pass_summary",
         "configured": summary.configured,
         "own_pds": summary.own_pds,
         "fallback": summary.fallback,
         "skipped": summary.skipped,
         "duration_ms": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        "exit_code": exit_code,
+        "exit_code": exit.code(),
         "purged_authors": 0,
-    })
+    });
+    if let Some(cause) = exit.cause() {
+        event["cause"] = cause.token().into();
+    }
+    event
 }
 
 /// Print one structured event as a stdout line.

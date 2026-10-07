@@ -404,15 +404,78 @@ pub const EXIT_PASS_COMPLETED: i32 = 0;
 /// The exit code of a pass in which every configured DID was skipped.
 pub const EXIT_TOTAL_OUTAGE: i32 = 3;
 
-/// The pass's exit code (DD-IPF-6): [`EXIT_TOTAL_OUTAGE`] exactly when at
-/// least one DID was configured and none was listed; [`EXIT_PASS_COMPLETED`]
-/// otherwise. A store failure (exit 2) never reaches this decision.
+/// The exit code of a pass that ended on a local failure (fix the deployment).
+pub const EXIT_LOCAL_FAILURE: i32 = 2;
+
+/// The pass's exit code (DD-IPF-6) when no local failure ended it:
+/// [`EXIT_TOTAL_OUTAGE`] exactly when at least one DID was configured and none
+/// was listed; [`EXIT_PASS_COMPLETED`] otherwise.
 pub const fn pass_exit_code(summary: &PassSummary) -> i32 {
+    pass_exit(None, summary).code()
+}
+
+/// The local fault that ended a pass (`pass_summary.cause`, ADR-078 am.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassFailure {
+    ListMalformed,
+    ListUnreadable,
+    UpsertFailed,
+    PurgeFailed,
+    PassPanicked,
+    PassDeadlineExceeded,
+}
+
+impl PassFailure {
+    /// The `cause` token of the pass summary.
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::ListMalformed => "repo_dids_malformed",
+            Self::ListUnreadable => "repo_dids_unreadable",
+            Self::UpsertFailed => "upsert_failed",
+            Self::PurgeFailed => "purge_failed",
+            Self::PassPanicked => "pass_panicked",
+            Self::PassDeadlineExceeded => "pass_deadline_exceeded",
+        }
+    }
+}
+
+/// How a pass ended, as the timer and the pass summary report it. Only a
+/// failed pass carries a cause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassExit {
+    Completed,
+    TotalOutage,
+    Failed(PassFailure),
+}
+
+impl PassExit {
+    /// The exit code `trigger` returns and the summary records.
+    pub const fn code(self) -> i32 {
+        match self {
+            Self::Completed => EXIT_PASS_COMPLETED,
+            Self::TotalOutage => EXIT_TOTAL_OUTAGE,
+            Self::Failed(_) => EXIT_LOCAL_FAILURE,
+        }
+    }
+
+    /// The failure named by the summary; present exactly on exit 2.
+    pub const fn cause(self) -> Option<PassFailure> {
+        match self {
+            Self::Failed(failure) => Some(failure),
+            Self::Completed | Self::TotalOutage => None,
+        }
+    }
+}
+
+/// The pass's exit over its whole outcome: a local failure (2) outranks a
+/// total outage (3), which outranks completion (0). A pass ends at its first
+/// local failure, so it has at most one.
+pub const fn pass_exit(failure: Option<PassFailure>, summary: &PassSummary) -> PassExit {
     let listed = summary.own_pds + summary.fallback;
-    if summary.configured >= 1 && listed == 0 {
-        EXIT_TOTAL_OUTAGE
-    } else {
-        EXIT_PASS_COMPLETED
+    match failure {
+        Some(failure) => PassExit::Failed(failure),
+        None if summary.configured >= 1 && listed == 0 => PassExit::TotalOutage,
+        None => PassExit::Completed,
     }
 }
 
@@ -549,6 +612,29 @@ mod tests {
                 fallback: count(|k| matches!(k, Kind::Fallback)),
                 skipped: count(|k| matches!(k, Kind::Skip)),
             });
+        }
+
+        /// Universe {code, cause}: a local failure is exit 2 naming exactly
+        /// that failure, whatever the DIDs did; without one the exit is the
+        /// summary's own code and names no cause.
+        #[test]
+        fn a_local_failure_is_exit_2_and_names_itself(
+            kinds in proptest::collection::vec(
+                prop_oneof![Just(Kind::Own), Just(Kind::Fallback), Just(Kind::Skip)], 0..8),
+            failure in proptest::option::of(prop_oneof![
+                Just(PassFailure::ListMalformed), Just(PassFailure::ListUnreadable),
+                Just(PassFailure::UpsertFailed), Just(PassFailure::PurgeFailed),
+                Just(PassFailure::PassPanicked), Just(PassFailure::PassDeadlineExceeded),
+            ]),
+        ) {
+            let fetches: Vec<DidFetch> = kinds.iter().copied().map(fetch_of).collect();
+            let summary = summarize(&fetches);
+            let exit = pass_exit(failure, &summary);
+            prop_assert_eq!(exit.cause(), failure);
+            match failure {
+                Some(_) => prop_assert_eq!(exit.code(), EXIT_LOCAL_FAILURE),
+                None => prop_assert_eq!(exit.code(), pass_exit_code(&summary)),
+            }
         }
 
         /// Universe {own, foreign}: every record of the requested repo is

@@ -98,4 +98,9 @@ pub trait IndexStorePort: IndexReadPort {
 
     /// Insert (or de-dup-by-CID upsert) one verified, attributed indexed claim.
     fn upsert(&self, claim: &IndexedClaim) -> Result<(), IndexStoreError>;
+
+    /// Fold the write-ahead log into the database file, explicitly, at the end
+    /// of a pass (ADR-080 §6): automatic checkpoints during the pass's writes
+    /// stay rare and small, so a search never waits on a large one.
+    fn checkpoint(&self) -> Result<(), IndexStoreError>;
 }

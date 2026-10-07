@@ -318,6 +318,14 @@ impl IndexStorePort for IndexStoreAdapter {
             .commit()
             .map_err(|err| write_failed(claim, format!("commit: {err}")))
     }
+
+    fn checkpoint(&self) -> Result<(), IndexStoreError> {
+        self.lock()?
+            .execute_batch("CHECKPOINT")
+            .map_err(|err| IndexStoreError::QueryFailed {
+                message: format!("checkpoint: {err}"),
+            })
+    }
 }
 
 /// The read side (B7): every method only SELECTs, so the whole store is left
@@ -1351,6 +1359,36 @@ mod read_port_preservation_properties {
         .collect()
     }
 
+    type Row = (usize, usize, usize, usize);
+
+    /// Upsert one claim per generated row (each counters the one before it).
+    fn fill(store: &IndexStoreAdapter, rows: &[Row]) {
+        for (index, (author, subject, object, evidence)) in rows.iter().enumerate() {
+            let did = AUTHORS[*author].to_string();
+            store
+                .upsert(&IndexedClaim {
+                    author_did: Did(did.clone()),
+                    verified_against: KeyId(did),
+                    cid: Cid(format!("bafyrow{index}")),
+                    subject: SUBJECTS[*subject].to_string(),
+                    object: OBJECTS[*object].to_string(),
+                    evidence: (0..*evidence)
+                        .map(|e| format!("https://e.test/{e}"))
+                        .collect(),
+                    references: if index > 0 {
+                        vec![ClaimReference {
+                            ref_type: ReferenceType::Counters,
+                            cid: Cid(format!("bafyrow{}", index - 1)),
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                    ..super::tests::sample_claim()
+                })
+                .expect("upsert");
+        }
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(16))]
         #[test]
@@ -1363,32 +1401,35 @@ mod read_port_preservation_properties {
         ) {
             let dir = tempfile::tempdir().expect("tempdir");
             let store = IndexStoreAdapter::open(&dir.path().join("index.duckdb")).expect("open");
-            for (index, (author, subject, object, evidence)) in rows.iter().enumerate() {
-                let did = AUTHORS[*author].to_string();
-                store
-                    .upsert(&IndexedClaim {
-                        author_did: Did(did.clone()),
-                        verified_against: KeyId(did),
-                        cid: Cid(format!("bafyrow{index}")),
-                        subject: SUBJECTS[*subject].to_string(),
-                        object: OBJECTS[*object].to_string(),
-                        evidence: (0..*evidence).map(|e| format!("https://e.test/{e}")).collect(),
-                        references: if index > 0 {
-                            vec![ClaimReference {
-                                ref_type: ReferenceType::Counters,
-                                cid: Cid(format!("bafyrow{}", index - 1)),
-                            }]
-                        } else {
-                            Vec::new()
-                        },
-                        ..super::tests::sample_claim()
-                    })
-                    .expect("upsert");
-            }
+            fill(&store, &rows);
 
             let before = snapshot(&store);
             reads.iter().for_each(|read| perform(&store, read));
             prop_assert_eq!(snapshot(&store), before);
+        }
+
+        /// B14 @contract-shape:unbounded-preservation. Universe = every row of
+        /// the store: the end-of-pass checkpoint changes none of them, and they
+        /// all read back the same after the store is reopened.
+        #[test]
+        fn the_end_of_pass_checkpoint_leaves_the_whole_store_unchanged(
+            rows in proptest::collection::vec(
+                (0..AUTHORS.len(), 0..SUBJECTS.len(), 0..OBJECTS.len(), 0..3usize),
+                0..8,
+            ),
+        ) {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("index.duckdb");
+            let store = IndexStoreAdapter::open(&path).expect("open");
+            fill(&store, &rows);
+            let before = snapshot(&store);
+
+            store.checkpoint().expect("checkpoint");
+
+            prop_assert_eq!(snapshot(&store), before.clone());
+            drop(store);
+            let reopened = IndexStoreAdapter::open(&path).expect("reopen");
+            prop_assert_eq!(snapshot(&reopened), before);
         }
     }
 }
