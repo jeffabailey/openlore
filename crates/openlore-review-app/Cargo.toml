@@ -87,5 +87,11 @@ name = "review_app_core"
 path = "../../tests/acceptance/review_app_core.rs"
 harness = true
 
+# indexer-deployment B11 (DISTILL 2026-10-06): the review app's DuckDB caps.
+[[test]]
+name = "review_app_resource_caps"
+path = "../../tests/acceptance/review_app_resource_caps.rs"
+harness = true
+
 [lints]
 workspace = true

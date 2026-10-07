@@ -1451,3 +1451,35 @@ harness = true
 name = "indexer_pass_core"
 path = "../../tests/acceptance/indexer_pass_core.rs"
 harness = true
+
+# indexer-deployment (DISTILL 2026-10-06; ADR-080..083). The long-running
+# production-posture `serve` harness `tests/acceptance/support/indexer_live.rs`
+# (on top of `indexer_network.rs`) drives the REAL `openlore-indexer serve`, the
+# REAL `trigger` client over the control socket, the public HTTP surface and the
+# REAL `openlore search`; PLC + PDSes are `FakeAtprotoNetwork`.
+# `indexer_deployment_core` holds the layer-2 proptest contracts of the new pure
+# cores (RED `sut_*` bindings). Every scenario is `#[ignore]`d at hand-off.
+[[test]]
+name = "indexer_deployment_walking_skeleton"
+path = "../../tests/acceptance/indexer_deployment_walking_skeleton.rs"
+harness = true
+
+[[test]]
+name = "indexer_deployment_passes"
+path = "../../tests/acceptance/indexer_deployment_passes.rs"
+harness = true
+
+[[test]]
+name = "indexer_deployment_did_list"
+path = "../../tests/acceptance/indexer_deployment_did_list.rs"
+harness = true
+
+[[test]]
+name = "indexer_deployment_public_surface"
+path = "../../tests/acceptance/indexer_deployment_public_surface.rs"
+harness = true
+
+[[test]]
+name = "indexer_deployment_core"
+path = "../../tests/acceptance/indexer_deployment_core.rs"
+harness = true

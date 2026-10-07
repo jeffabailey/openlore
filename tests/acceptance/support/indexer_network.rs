@@ -63,6 +63,9 @@ pub enum Author {
     Sam,
     /// A `did:web` author whose web host serves no DID document right now.
     Wren,
+    /// bsky.social author the operator adds to the DID list later
+    /// (indexer-deployment US-IXD-003); self-attested claims.
+    Tomas,
 }
 
 impl Author {
@@ -75,6 +78,7 @@ impl Author {
             Author::Mallory => "did:plc:mallory4k1z",
             Author::Sam => "did:plc:samslowhost6w",
             Author::Wren => "did:web:localhost",
+            Author::Tomas => "did:plc:therrera2v6w",
         }
     }
 
@@ -87,6 +91,7 @@ impl Author {
             Author::Mallory => "mallory.example",
             Author::Sam => "sam.slowhost.example",
             Author::Wren => "localhost",
+            Author::Tomas => "tomasherrera.bsky.social",
         }
     }
 
@@ -100,6 +105,7 @@ impl Author {
             Author::Mallory => Some(Host::MalloryPds),
             Author::Sam => Some(Host::SlowhostExample),
             Author::Wren => None,
+            Author::Tomas => Some(Host::MorelBsky),
         }
     }
 
@@ -458,6 +464,52 @@ impl IndexerWorld {
         (world, by_host)
     }
 
+    /// GIVEN these extra authors (bare DID → home host) besides `authors`; the
+    /// operator lists all of them. Used where a scenario needs DIDs the
+    /// [`Author`] cast does not have (e.g. two DIDs where one begins the other).
+    pub fn configured_with_members(authors: &[Author], members: &[(&str, Host)]) -> Self {
+        let mut accounts: Vec<BlueskyAccount> = authors
+            .iter()
+            .filter_map(|a| {
+                a.home()
+                    .map(|h| BlueskyAccount::new(a.handle(), a.did(), h.label()))
+            })
+            .collect();
+        accounts.extend(members.iter().map(|(did, host)| {
+            BlueskyAccount::new(
+                &format!("{}.test", did.replace(':', "-")),
+                did,
+                host.label(),
+            )
+        }));
+        let hosts: Vec<&str> = Host::ALL.iter().map(|h| h.label()).collect();
+        let mut configured: Vec<String> = authors.iter().map(|a| a.did().to_string()).collect();
+        configured.extend(members.iter().map(|(did, _)| did.to_string()));
+        Self {
+            env: maria_home(),
+            net: FakeAtprotoNetwork::start_with_extra_hosts(accounts, &hosts),
+            configured,
+            fallback: None,
+            plc_endpoint: None,
+            app_signed_authors: Vec::new(),
+            extra_env: BTreeMap::new(),
+            loopback_seam: true,
+        }
+    }
+
+    /// GIVEN the DID `did` published these self-attested claims on its PDS.
+    pub fn did_publishes_self_attested(&self, did: &str, claims: &[Claim]) -> Vec<String> {
+        claims
+            .iter()
+            .map(|c| self.publish_self_attested_value(did, self_attested_value(did, *c), None))
+            .collect()
+    }
+
+    /// The repo DIDs the operator configured (in order).
+    pub fn configured_dids(&self) -> Vec<String> {
+        self.configured.clone()
+    }
+
     // ---------------------------------------------------------------- records
 
     fn publish_self_attested_value(
@@ -603,8 +655,10 @@ impl IndexerWorld {
         self.loopback_seam = false;
     }
 
-    /// The environment of one indexer run, exactly as the operator configured it.
-    fn indexer_env(&self) -> Vec<(String, String)> {
+    /// The environment of one indexer run, exactly as the operator configured it
+    /// (`pub` since indexer-deployment: the long-running `serve` harness in
+    /// `support/indexer_live.rs` starts from it).
+    pub fn indexer_env(&self) -> Vec<(String, String)> {
         let mut env = vec![
             (
                 "OPENLORE_HOME".to_string(),
