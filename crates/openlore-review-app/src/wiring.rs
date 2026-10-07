@@ -18,7 +18,7 @@ use adapter_github::client::{
     token_days_left, token_expiry_needs_warning, TOKEN_EXPIRATION_HEADER,
 };
 use adapter_github::GithubAdapter;
-use adapter_review_store::{DataKey, ReviewStore};
+use adapter_review_store::{DataKey, DuckDbCaps, ReviewStore};
 use ports::{
     OAuthPort, ProbeOutcome, ReviewStorePort, RevokeOutcome, ScanRunPort, ScanStatus,
     SecretStorePort,
@@ -389,7 +389,11 @@ fn wire(env: &BTreeMap<String, String>) -> Result<Wired, Refusal> {
         .map(|text| parse_data_key("data-key-previous", &text))
         .transpose()
         .map_err(|e| refusal(Probe::Secrets)(e.to_string()))?;
-    let store = ReviewStore::open(&config.review_db, data_key(secrets.data_key)?)
+    let caps = DuckDbCaps {
+        memory_limit_mb: Some(config.db_memory_limit_mb),
+        threads: Some(config.db_threads),
+    };
+    let store = ReviewStore::open_capped(&config.review_db, data_key(secrets.data_key)?, caps)
         .map(Arc::new)
         .map_err(|e| refusal(Probe::ReviewStore)(e.to_string()))?;
     if let Some(previous) = previous {

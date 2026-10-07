@@ -53,7 +53,6 @@ fn with_caps(memory: &str, threads: &str) -> impl FnOnce(&mut AppSettings) {
 ///     | 48     | 5       | refuses to start, naming the threads cap  |
 /// ```
 #[test]
-#[ignore = "DELIVER 03-01: review-app cap settings refused out of range (B11)"]
 fn the_review_app_accepts_database_caps_within_their_range_and_refuses_the_rest() {
     for (memory, threads) in [("48", "1"), ("16", "4"), ("1024", "1")] {
         let (_gh, _net, startup) = ReviewWorld::launch(|_, _| {}, with_caps(memory, threads));

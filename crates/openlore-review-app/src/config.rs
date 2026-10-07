@@ -5,11 +5,22 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 /// The granular scope set (ADR-073 / SPIKE-3): claim and post creation only.
 pub(crate) const DEFAULT_OAUTH_SCOPES: &str =
     "atproto repo:org.openlore.claim?action=create repo:app.bsky.feed.post?action=create";
+
+/// DuckDB's memory limit for the private store, in MiB (B11).
+pub(crate) const DB_MEMORY_LIMIT_MB_VAR: &str = "REVIEW_DB_MEMORY_LIMIT_MB";
+/// DuckDB's worker threads for the private store (B11).
+pub(crate) const DB_THREADS_VAR: &str = "REVIEW_DB_THREADS";
+const DB_MEMORY_LIMIT_MB_RANGE: RangeInclusive<u64> = 16..=1024;
+const DB_THREADS_RANGE: RangeInclusive<u64> = 1..=4;
+/// The production sizes (architecture-design §3): 48 MiB, one thread.
+const DEFAULT_DB_MEMORY_LIMIT_MB: u64 = 48;
+const DEFAULT_DB_THREADS: u64 = 1;
 
 /// Which kind of binary is running. Only a development build may accept
 /// plain-HTTP loopback origins and upstreams (the test seam).
@@ -44,6 +55,12 @@ pub(crate) enum ConfigError {
         name: &'static str,
         reason: &'static str,
     },
+    /// A number outside its range (or not a number), with the value given.
+    OutOfRange {
+        name: &'static str,
+        value: String,
+        range: RangeInclusive<u64>,
+    },
     /// `REVIEW_APP_ALLOW_LOOPBACK_HTTP` in a release build.
     LoopbackHttpInRelease,
 }
@@ -53,6 +70,12 @@ impl std::fmt::Display for ConfigError {
         match self {
             Self::Missing(name) => write!(f, "{name} is not set"),
             Self::Invalid { name, reason } => write!(f, "{name} is invalid: {reason}"),
+            Self::OutOfRange { name, value, range } => write!(
+                f,
+                "{name} is invalid: {value:?} must be a whole number from {} to {}",
+                range.start(),
+                range.end()
+            ),
             Self::LoopbackHttpInRelease => write!(
                 f,
                 "REVIEW_APP_ALLOW_LOOPBACK_HTTP is a test seam; a release build refuses it"
@@ -70,6 +93,10 @@ pub(crate) struct AppConfig {
     /// The operator listener; always loopback.
     pub(crate) admin_listen: SocketAddr,
     pub(crate) review_db: PathBuf,
+    /// DuckDB `memory_limit` for the private store, in MiB (B11).
+    pub(crate) db_memory_limit_mb: u64,
+    /// DuckDB `threads` for the private store (B11).
+    pub(crate) db_threads: u64,
     pub(crate) secrets_dir: PathBuf,
     pub(crate) oauth_scopes: String,
     pub(crate) github_api_base: String,
@@ -117,6 +144,18 @@ pub(crate) fn parse_config(
         listen: socket_addr("LISTEN_ADDR", get("LISTEN_ADDR").unwrap_or("0.0.0.0:8080"))?,
         admin_listen,
         review_db: PathBuf::from(get("REVIEW_DB").unwrap_or("/data/review-app.duckdb")),
+        db_memory_limit_mb: ranged_number(
+            DB_MEMORY_LIMIT_MB_VAR,
+            get(DB_MEMORY_LIMIT_MB_VAR),
+            DB_MEMORY_LIMIT_MB_RANGE,
+            DEFAULT_DB_MEMORY_LIMIT_MB,
+        )?,
+        db_threads: ranged_number(
+            DB_THREADS_VAR,
+            get(DB_THREADS_VAR),
+            DB_THREADS_RANGE,
+            DEFAULT_DB_THREADS,
+        )?,
         secrets_dir: PathBuf::from(get("SECRETS_DIR").unwrap_or("/run/secrets")),
         oauth_scopes: get("OAUTH_SCOPES")
             .unwrap_or(DEFAULT_OAUTH_SCOPES)
@@ -125,6 +164,27 @@ pub(crate) fn parse_config(
         plc_url: url("REVIEW_APP_PLC_URL", "https://plc.directory")?,
         handle_resolver_url: url("REVIEW_APP_HANDLE_RESOLVER_URL", "https://bsky.social")?,
     })
+}
+
+/// A whole number within `range`, or `default` when unset (pure, total).
+fn ranged_number(
+    name: &'static str,
+    value: Option<&str>,
+    range: RangeInclusive<u64>,
+    default: u64,
+) -> Result<u64, ConfigError> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|number| range.contains(number))
+        .ok_or_else(|| ConfigError::OutOfRange {
+            name,
+            value: value.to_string(),
+            range,
+        })
 }
 
 fn socket_addr(name: &'static str, value: &str) -> Result<SocketAddr, ConfigError> {
@@ -334,6 +394,43 @@ mod tests {
     }
 
     proptest! {
+        /// Universe: every DB-cap variable x {unset, any number near or far
+        /// from its range, noise}. Unset yields the production default; a set
+        /// value is accepted iff it is a whole number in range (and yields
+        /// that number); anything else is refused naming the variable and
+        /// echoing the value.
+        #[test]
+        fn a_db_cap_is_accepted_exactly_within_its_range(
+            cap in prop_oneof![
+                Just((DB_MEMORY_LIMIT_MB_VAR, DB_MEMORY_LIMIT_MB_RANGE, DEFAULT_DB_MEMORY_LIMIT_MB)),
+                Just((DB_THREADS_VAR, DB_THREADS_RANGE, DEFAULT_DB_THREADS)),
+            ],
+            value in proptest::option::of(prop_oneof![
+                (0u64..1100).prop_map(|n| n.to_string()),
+                any::<u64>().prop_map(|n| n.to_string()),
+                "[a-z -]{0,8}",
+            ]),
+        ) {
+            let (name, range, default) = cap;
+            let mut env = BTreeMap::from([("APP_ORIGIN".to_string(), "https://app.example".to_string())]);
+            if let Some(value) = &value {
+                env.insert(name.to_string(), value.clone());
+            }
+            let parsed = parse_config(&env, BuildProfile::Release)
+                .map(|c| if name == DB_THREADS_VAR { c.db_threads } else { c.db_memory_limit_mb });
+            let trimmed = value.as_deref().map(str::trim).filter(|v| !v.is_empty());
+            match trimmed {
+                None => prop_assert_eq!(parsed, Ok(default)),
+                Some(v) => match v.parse::<u64>().ok().filter(|n| range.contains(n)) {
+                    Some(number) => prop_assert_eq!(parsed, Ok(number)),
+                    None => prop_assert_eq!(
+                        parsed,
+                        Err(ConfigError::OutOfRange { name, value: v.to_string(), range: range.clone() })
+                    ),
+                },
+            }
+        }
+
         /// Universe: data-key texts — the documented JSON with any kid and
         /// key length, legacy hex, and noise. Exactly a printable kid with a
         /// 32-byte base64 key (or 64 hex) is accepted, with its kid.

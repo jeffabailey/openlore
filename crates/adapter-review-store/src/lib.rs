@@ -166,30 +166,157 @@ fn db_error(e: duckdb::Error) -> StoreError {
     StoreError::Database(e.to_string())
 }
 
+/// DuckDB's resource caps for the private store (B11): each `None` keeps
+/// DuckDB's default. Applied at open and read back by the probe.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DuckDbCaps {
+    /// `memory_limit`, in MiB.
+    pub memory_limit_mb: Option<u64>,
+    /// `threads`.
+    pub threads: Option<u64>,
+}
+
+/// The caps DuckDB reports back: `memory_limit` as it prints it (e.g.
+/// `48.0 MiB`) and `threads`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuckDbSettings {
+    pub memory_limit: String,
+    pub threads: u64,
+}
+
+/// A cap DuckDB did not honour: the setting, what was asked, what it reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapNotHonoured {
+    pub setting: &'static str,
+    pub requested: String,
+    pub reported: String,
+}
+
+/// PURE: does `reported` honour every cap `requested` sets? The first cap that
+/// differs is named; an unset cap is never checked.
+pub fn caps_honoured(
+    requested: DuckDbCaps,
+    reported: &DuckDbSettings,
+) -> Result<(), CapNotHonoured> {
+    if let Some(mb) = requested.memory_limit_mb {
+        if mebibytes_of(&reported.memory_limit) != Some(mb) {
+            return Err(CapNotHonoured {
+                setting: "memory_limit",
+                requested: format!("{mb} MiB"),
+                reported: reported.memory_limit.clone(),
+            });
+        }
+    }
+    match requested.threads {
+        Some(threads) if threads != reported.threads => Err(CapNotHonoured {
+            setting: "threads",
+            requested: threads.to_string(),
+            reported: reported.threads.to_string(),
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// A DuckDB size (`<number> <unit>`, binary or decimal units) in whole MiB,
+/// rounded; `None` when it is not a size.
+fn mebibytes_of(size: &str) -> Option<u64> {
+    let (number, unit) = size.trim().split_once(' ')?;
+    let number: f64 = number.parse().ok()?;
+    let bytes_per_unit: f64 = match unit.trim() {
+        "bytes" | "B" => 1.0,
+        "KiB" => 1024.0,
+        "MiB" => 1024.0 * 1024.0,
+        "GiB" => 1024.0 * 1024.0 * 1024.0,
+        "KB" => 1e3,
+        "MB" => 1e6,
+        "GB" => 1e9,
+        _ => return None,
+    };
+    let mebibytes = (number * bytes_per_unit / (1024.0 * 1024.0)).round();
+    (mebibytes.is_finite() && mebibytes >= 0.0).then_some(mebibytes as u64)
+}
+
+/// The `SET` statements that apply `caps` (pure); an unset cap emits none.
+fn cap_statements(caps: DuckDbCaps) -> impl Iterator<Item = String> {
+    let memory = caps
+        .memory_limit_mb
+        .map(|mb| format!("SET memory_limit = '{mb}MiB';"));
+    let threads = caps
+        .threads
+        .map(|threads| format!("SET threads = {threads};"));
+    memory.into_iter().chain(threads)
+}
+
+/// Apply each set cap to a freshly opened connection (B11).
+fn apply_caps(conn: &Connection, caps: DuckDbCaps) -> Result<(), StoreError> {
+    cap_statements(caps).try_for_each(|statement| {
+        conn.execute_batch(&statement)
+            .map_err(|e| StoreError::Database(format!("apply DuckDB cap `{statement}`: {e}")))
+    })
+}
+
+/// What DuckDB reports for the capped settings now.
+pub(crate) fn reported_settings(conn: &Connection) -> Result<DuckDbSettings, StoreError> {
+    conn.query_row(
+        "SELECT current_setting('memory_limit'), CAST(current_setting('threads') AS BIGINT)",
+        [],
+        |row| {
+            Ok(DuckDbSettings {
+                memory_limit: row.get::<_, String>(0)?,
+                threads: u64::try_from(row.get::<_, i64>(1)?).unwrap_or_default(),
+            })
+        },
+    )
+    .map_err(db_error)
+}
+
 /// The private store: one DuckDB connection plus the AEAD cipher.
 pub struct ReviewStore {
     conn: Mutex<Connection>,
     key: DataKey,
+    /// The DuckDB caps applied at open; the probe reads them back (B11).
+    caps: DuckDbCaps,
 }
 
 impl ReviewStore {
     /// Open (or create) the store file and bring it to the v1 schema,
     /// refusing a file written by a newer build.
     pub fn open(path: &Path, key: DataKey) -> Result<Self, StoreError> {
-        Self::from_connection(Connection::open(path).map_err(db_error)?, key)
+        Self::open_capped(path, key, DuckDbCaps::default())
+    }
+
+    /// [`ReviewStore::open`] with DuckDB's `caps` applied before migrating
+    /// (B11); the probe reads them back.
+    pub fn open_capped(path: &Path, key: DataKey, caps: DuckDbCaps) -> Result<Self, StoreError> {
+        Self::from_connection(Connection::open(path).map_err(db_error)?, key, caps)
     }
 
     /// An in-memory store (the image self-test: no disk, no network).
     pub fn open_in_memory(key: DataKey) -> Result<Self, StoreError> {
-        Self::from_connection(Connection::open_in_memory().map_err(db_error)?, key)
+        Self::from_connection(
+            Connection::open_in_memory().map_err(db_error)?,
+            key,
+            DuckDbCaps::default(),
+        )
     }
 
-    fn from_connection(conn: Connection, key: DataKey) -> Result<Self, StoreError> {
+    fn from_connection(
+        conn: Connection,
+        key: DataKey,
+        caps: DuckDbCaps,
+    ) -> Result<Self, StoreError> {
+        apply_caps(&conn, caps)?;
         migrate(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
             key,
+            caps,
         })
+    }
+
+    /// The caps applied at open.
+    pub(crate) fn caps(&self) -> DuckDbCaps {
+        self.caps
     }
 
     /// Seal `plaintext` bound to `aad` under the active key.
@@ -255,6 +382,79 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    fn report(memory_mb: u64, threads: u64) -> DuckDbSettings {
+        DuckDbSettings {
+            memory_limit: if memory_mb >= 1024 && memory_mb.is_multiple_of(1024) {
+                format!("{}.0 GiB", memory_mb / 1024)
+            } else {
+                format!("{memory_mb}.0 MiB")
+            },
+            threads,
+        }
+    }
+
+    proptest! {
+        /// Universe {memory_limit, threads}: the caps are honoured exactly
+        /// when every SET cap equals what DuckDB reports (an unset cap is
+        /// never checked); a mismatch names the first differing setting.
+        #[test]
+        fn caps_are_honoured_iff_duckdb_reports_what_was_set(
+            requested_mb in proptest::option::of(16u64..=1024),
+            requested_threads in proptest::option::of(1u64..=4),
+            reported_mb in 16u64..=1024,
+            reported_threads in 1u64..=4,
+        ) {
+            let requested = DuckDbCaps { memory_limit_mb: requested_mb, threads: requested_threads };
+            let verdict = caps_honoured(requested, &report(reported_mb, reported_threads));
+            let memory_ok = requested_mb.is_none_or(|mb| mb == reported_mb);
+            let threads_ok = requested_threads.is_none_or(|t| t == reported_threads);
+            match verdict {
+                Ok(()) => prop_assert!(memory_ok && threads_ok),
+                Err(cap) if !memory_ok => prop_assert_eq!(cap.setting, "memory_limit"),
+                Err(cap) => {
+                    prop_assert!(!threads_ok);
+                    prop_assert_eq!(cap.setting, "threads");
+                }
+            }
+        }
+
+        /// Universe: every cap pair. One SET per set cap, none for an unset one.
+        #[test]
+        fn one_statement_per_set_cap(
+            memory_limit_mb in proptest::option::of(16u64..=1024),
+            threads in proptest::option::of(1u64..=4),
+        ) {
+            let statements: Vec<String> = cap_statements(DuckDbCaps { memory_limit_mb, threads }).collect();
+            let expected: Vec<String> = memory_limit_mb
+                .map(|mb| format!("SET memory_limit = '{mb}MiB';"))
+                .into_iter()
+                .chain(threads.map(|t| format!("SET threads = {t};")))
+                .collect();
+            prop_assert_eq!(statements, expected);
+        }
+    }
+
+    // bypass: single wiring example — real DuckDB applies the caps at open
+    // and the probe reads them back and admits the store.
+    #[test]
+    fn caps_applied_at_open_are_read_back_by_the_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let caps = DuckDbCaps {
+            memory_limit_mb: Some(48),
+            threads: Some(1),
+        };
+        let store = ReviewStore::open_capped(
+            &dir.path().join("review-app.duckdb"),
+            DataKey::generate(),
+            caps,
+        )
+        .unwrap();
+        let reported = store.with_connection(reported_settings).unwrap();
+        assert_eq!(caps_honoured(caps, &reported), Ok(()));
+        assert!(matches!(store.probe(), ProbeOutcome::Ok));
+    }
 
     // bypass: one integration example per refusal — the wiring of the
     // version gate into `open` (the verdict itself is property-tested).

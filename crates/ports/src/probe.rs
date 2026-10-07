@@ -148,6 +148,9 @@ pub enum ProbeRefusalReason {
     ReviewStoreAeadCanaryFailed,
     /// An owner-scoped read saw another owner's canary row (I-BRA-1).
     ReviewStoreCrossOwnerBleed,
+    /// DuckDB does not report the `memory_limit` / `threads` the review app
+    /// configured (B11).
+    ReviewStoreCapsNotHonoured,
     /// The OAuth client key cannot sign, or its published half does not verify.
     OAuthClientKeyUnusable,
     /// The published JWKS is not ES256-only or carries a private part.

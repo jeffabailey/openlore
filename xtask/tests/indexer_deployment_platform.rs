@@ -256,7 +256,6 @@ fn the_indexer_container_has_exactly_its_two_mounts_and_the_production_posture()
 
 /// XP-2 @US-IXD-006 @AC-006.4 @AC-006.5 @B11 @DV-IXD-14 @infrastructure @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 03-01: review-app compose B11 caps, init, 192m (DV-IXD-14)"]
 fn the_review_app_container_is_capped_for_sharing_the_host() {
     let compose = read("deploy/review-app/host/compose.yaml");
     assert_eq!(

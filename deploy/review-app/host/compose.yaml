@@ -14,14 +14,15 @@ services:
   review-app:
     image: ghcr.io/jeffabailey/openlore-review-app@${REVIEW_APP_DIGEST:?REVIEW_APP_DIGEST must be a sha256 digest}
     restart: unless-stopped
+    init: true
     user: "65532:65532"
     read_only: true
     tmpfs: ["/tmp:size=16m"]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 128
-    mem_limit: 256m
-    memswap_limit: 256m
+    mem_limit: 192m
+    memswap_limit: 192m
     mem_reservation: 96m
     oom_score_adj: 800
     cpus: 1.0
@@ -31,6 +32,8 @@ services:
       APP_ORIGIN: https://app.openlore.jeffbailey.us
       LISTEN_ADDR: 0.0.0.0:8080
       REVIEW_DB: /data/review-app.duckdb
+      REVIEW_DB_MEMORY_LIMIT_MB: "48"
+      REVIEW_DB_THREADS: "1"
       SECRETS_DIR: /run/secrets
       LOG_FORMAT: json
     volumes:

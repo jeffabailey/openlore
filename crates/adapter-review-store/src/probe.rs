@@ -1,5 +1,6 @@
-//! Earned-Trust probe for the private store (ADR-074). Three hard arms:
+//! Earned-Trust probe for the private store (ADR-074). Four hard arms:
 //!
+//! 0. DuckDB caps (B11): `memory_limit` and `threads` read back as set;
 //! 1. schema version: the file is exactly this build's version;
 //! 2. AEAD canary: a sealed canary opens under its own binding and a blob
 //!    re-bound to another owner does not;
@@ -13,7 +14,9 @@ use ports::{ProbeOutcome, ProbeRefusalReason};
 use serde_json::json;
 
 use crate::schema::{schema_verdict, SchemaVerdict, SCHEMA_VERSION};
-use crate::{db_error, recorded_version, ReviewStore, StoreError};
+use crate::{
+    caps_honoured, db_error, recorded_version, reported_settings, ReviewStore, StoreError,
+};
 
 const CANARY_OWNER: &str = "did:plc:probe-canary-owner";
 const OTHER_OWNER: &str = "did:plc:probe-canary-other";
@@ -29,7 +32,7 @@ type Arm = Result<(), (ProbeRefusalReason, String)>;
 
 /// Run every hard arm; the first refusal wins.
 pub(crate) fn run(store: &ReviewStore) -> ProbeOutcome {
-    let arms: [fn(&ReviewStore) -> Arm; 3] = [schema_arm, aead_arm, cross_owner_arm];
+    let arms: [fn(&ReviewStore) -> Arm; 4] = [caps_arm, schema_arm, aead_arm, cross_owner_arm];
     match arms.iter().find_map(|arm| arm(store).err()) {
         None => ProbeOutcome::Ok,
         Some((reason, detail)) => ProbeOutcome::Refused {
@@ -38,6 +41,29 @@ pub(crate) fn run(store: &ReviewStore) -> ProbeOutcome {
             detail,
         },
     }
+}
+
+fn caps_arm(store: &ReviewStore) -> Arm {
+    let requested = store.caps();
+    store
+        .with_connection(reported_settings)
+        .map_err(|e| {
+            (
+                ProbeRefusalReason::ReviewStoreCapsNotHonoured,
+                format!("DuckDB memory_limit/threads unreadable: {e}"),
+            )
+        })
+        .and_then(|reported| {
+            caps_honoured(requested, &reported).map_err(|cap| {
+                (
+                    ProbeRefusalReason::ReviewStoreCapsNotHonoured,
+                    format!(
+                        "DuckDB {} is {} but {} was set",
+                        cap.setting, cap.reported, cap.requested
+                    ),
+                )
+            })
+        })
 }
 
 fn schema_arm(store: &ReviewStore) -> Arm {
