@@ -102,3 +102,9 @@ path, observability, rollback, security gates). All conditions are addressed in 
 
 No second iteration was run: the critical items were a rejected suggestion and a misreading, both
 now stated in the docs. The remaining items are documentation fixes or are deferred to DELIVER.
+
+## User decisions (2026-10-06)
+- **U-1:** APPROVED. `logs:FilterLogEvents` on the indexer log group only, so a broken log pipeline pages through A3.
+- **U-2:** seed the DID list with `did:plc:pnyxfnpkcldxtitsw64ycahw` only. The operator adds more later with the AWS CLI, and they are picked up on the next pass.
+- **U-3:** APPROVED. Test-fire A1 with synthetic `pass_summary` lines in a `test-fire` stream while the timer is paused (about 75 min), before go-live.
+- The orchestrator verified the rejected A1 `default_value` suggestion: a default would publish 0 on every non-matching batch, so Minimum could never reach 1. With no default, an empty period is missing and treated as notBreaching. Rejection upheld.
