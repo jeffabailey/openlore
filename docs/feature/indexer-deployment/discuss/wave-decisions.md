@@ -61,3 +61,8 @@
 - R-IXD-3: public endpoint abuse. Bounded by NFR-IXD-7. Per-IP rate limiting is OQ-IXD-7.
 - R-IXD-4: the `serve` docstring in `main.rs` says it also runs an ingest loop, but the shipped
   body only serves. DESIGN must make sure one process at a time writes (WD-IXD-2).
+
+## User decisions after DISCUSS (2026-10-06)
+- **OQ-IXD-4, liveness:** YES. Add one liveness alarm (about $0.10/month) that fires when no `pass_summary` has arrived for 45 minutes (a stopped timer or wedged ingest) or the public /search health check fails (dead `serve`). That makes 3 alarm conditions: 2× exit 3, any exit 2, liveness.
+- **OQ-IXD-9, removed DIDs:** PURGE. Claims from an author removed from the DID list are removed from the index on the next pass. Note the conflict with ADR-078's "skips never delete indexed claims": a skip (temporary failure) keeps claims, while removal from the list (an operator decision) purges them. DESIGN must keep the two distinct and add a purge path to the index store (check-arch currently allows DELETE only in purge/expiry files; mirror that). Add or extend a story and ACs.
+- **OQ-IXD-6, CLI default:** NOT in this feature. `openlore search` keeps its current default; revisit once the index has been live for a while.
