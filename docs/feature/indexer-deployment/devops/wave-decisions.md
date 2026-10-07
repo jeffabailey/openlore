@@ -108,3 +108,7 @@ now stated in the docs. The remaining items are documentation fixes or are defer
 - **U-2:** seed the DID list with `did:plc:pnyxfnpkcldxtitsw64ycahw` only. The operator adds more later with the AWS CLI, and they are picked up on the next pass.
 - **U-3:** APPROVED. Test-fire A1 with synthetic `pass_summary` lines in a `test-fire` stream while the timer is paused (about 75 min), before go-live.
 - The orchestrator verified the rejected A1 `default_value` suggestion: a default would publish 0 on every non-matching batch, so Minimum could never reach 1. With no default, an empty period is missing and treated as notBreaching. Rejection upheld.
+
+## User decisions after the DELIVER review (2026-10-07)
+- The full-model review found 3 high and 3 medium findings; ALL are fixed in this delivery, and the low findings beyond L1/L2 go to the backlog.
+- **H3:** fix the CLI near-match sweep (skip it on an empty index; cap the probes) AND add a per-IP rate limit. This reverses the earlier "no per-IP rate limit" decision (ADR-083). Stock Caddy has no rate_limit module (it would need a custom build, i.e. a shared-module change), so the limit is enforced in the indexer binary, keyed on X-Forwarded-For from the trusted proxy only: 10 req/s, burst 50, 429 + Retry-After.
