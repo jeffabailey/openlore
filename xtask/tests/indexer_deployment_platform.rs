@@ -17,6 +17,8 @@
 //! * XP-13 `health-timer.sh` REAL run: a failing `FilterLogEvents` makes the health line `not_live = 1` (fail closed, A3)
 //! * XP-14 `health-timer.sh` REAL run: a hung `FilterLogEvents` is cut off, still not live, and the line is still written
 //! * XP-15 `deploy.sh host install` REAL run: the IMDS probe fails CLOSED (digest-pinned image, positive control, exit 7/28 only)
+//! * XP-16 `deploy.sh deploy <digest>` REAL run: the image's revision label must have green CI (both deploy scripts)
+//! * XP-17 ci.yml: an image is only built, signed and pushed after every test job of the commit is green
 //!
 //! The shell scripts run under `bash` with stub `aws`/`gh`/`cosign`/… on PATH
 //! that record every call; nothing reaches AWS, GitHub or a registry. Live
@@ -960,7 +962,7 @@ fn the_text_helpers_read_what_they_claim() {
 }
 
 // =============================================================================
-// Review fixes (DELIVER Phase 4): H1 IMDS probe, L2 bounded aws
+// Review fixes (DELIVER Phase 4): H1 IMDS probe, M3 green-commit images, L2 bounded aws
 // =============================================================================
 
 /// XP-14 @US-IXD-004 @AC-004.1 @DV-IXD-8 @review-L2 @error @infrastructure @real-io
@@ -1115,5 +1117,140 @@ fn the_imds_probe_accepts_only_a_proven_unreachable_metadata_service() {
     assert!(
         !calls.contains("docker run"),
         "refused before any probe ran\n{calls}"
+    );
+}
+
+/// Stubs for a digest deploy whose image carries `revision` (or no label when `None`) and
+/// whose CI for that revision concluded `ci_conclusion`; the signature verifies.
+fn digest_deploy_stubs(ci_conclusion: &str, revision: Option<&str>) -> Stubs {
+    let stubs = deploy_stubs(ci_conclusion, true);
+    let labels = match revision {
+        Some(rev) => format!("{{\\\"org.opencontainers.image.revision\\\":\\\"{rev}\\\"}}"),
+        None => "{}".to_string(),
+    };
+    stubs.add(
+        "crane",
+        &format!(
+            "case \"$1\" in\n  config) echo \"{{\\\"config\\\":{{\\\"Labels\\\":{labels}}}}}\" ;;\n  *) echo sha256:{} ;;\nesac",
+            "0".repeat(64)
+        ),
+    );
+    stubs
+}
+
+/// XP-16 @US-IXD-006 @AC-006.1 @DV-IXD-2 @review-M3 @error @infrastructure @real-io
+/// @contract-shape:unbounded-preservation
+/// ```gherkin
+/// Scenario: A digest deploy requires green CI for the commit the image was built from
+///   Given a signed digest whose org.opencontainers.image.revision is a commit with red CI
+///   When the operator deploys that digest (indexer or review app)
+///   Then the deploy is refused before the host is touched
+///   And a digest without a revision label is refused too
+/// ```
+#[test]
+fn a_digest_deploy_requires_green_ci_for_the_images_revision() {
+    let digest = format!("sha256:{}", "0".repeat(64));
+    let rev = "4f2c1ab9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3";
+    for script in ["deploy/indexer/deploy.sh", "deploy/review-app/deploy.sh"] {
+        for (stubs, why) in [
+            (
+                digest_deploy_stubs("failure", Some(rev)),
+                "red CI for the image's revision",
+            ),
+            (digest_deploy_stubs("success", None), "no revision label"),
+        ] {
+            let run = bash(
+                script,
+                &["deploy", &digest],
+                &[
+                    ("PATH", stubs.path_env()),
+                    ("HOME", stubs.dir.path().display().to_string()),
+                ],
+            );
+            let calls = stubs.calls();
+            assert_ne!(run.status, 0, "{script}: {why} is refused\n{}", run.out);
+            assert!(
+                run.out.contains("refusing") || run.out.contains("not success"),
+                "{script}: {why}\n{}",
+                run.out
+            );
+            assert!(
+                !calls.contains("ssm send-command"),
+                "{script}: {why}: host untouched\n{calls}"
+            );
+        }
+        let red = digest_deploy_stubs("failure", Some(rev));
+        bash(
+            script,
+            &["deploy", &digest],
+            &[
+                ("PATH", red.path_env()),
+                ("HOME", red.dir.path().display().to_string()),
+            ],
+        );
+        assert!(
+            red.calls().contains(&format!("--commit {rev}")),
+            "{script}: CI was looked up for the image's revision\n{}",
+            red.calls()
+        );
+    }
+    // Non-vacuity (indexer): green CI for the revision gets past the CI gate to the pre-checks.
+    let green = digest_deploy_stubs("success", Some(rev));
+    let run = bash(
+        "deploy/indexer/deploy.sh",
+        &["deploy", &digest],
+        &[
+            ("PATH", green.path_env()),
+            ("HOME", green.dir.path().display().to_string()),
+        ],
+    );
+    assert!(
+        run.out.contains("the PDS _health answers") && !green.calls().contains("ssm send-command"),
+        "green CI passes the gate and stops at the stubbed pre-checks\n{}",
+        run.out
+    );
+}
+
+/// The `needs:` list of a top-level job in a GitHub Actions workflow.
+fn job_needs(workflow: &str, job: &str) -> Vec<String> {
+    let header = format!("\n  {job}:\n");
+    let start = workflow
+        .find(&header)
+        .map(|i| i + header.len())
+        .unwrap_or_else(|| panic!("job {job}"));
+    workflow[start..]
+        .lines()
+        .take_while(|l| l.is_empty() || l.starts_with("    ") || l.trim_start().starts_with('#'))
+        .find_map(|l| l.trim().strip_prefix("needs:"))
+        .map(|v| {
+            v.trim()
+                .trim_matches(|c| c == '[' || c == ']')
+                .split(',')
+                .map(|n| n.trim().to_string())
+                .filter(|n| !n.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// XP-17 @US-IXD-006 @AC-001.6 @AC-006.1 @review-M3 @infrastructure @contract-shape:pure-function
+/// An image is signed only when every test job of its commit is green: each image job
+/// needs the acceptance stage AND the release guard directly (not only through its build).
+#[test]
+fn images_are_signed_only_for_commits_whose_tests_are_all_green() {
+    let ci = read(".github/workflows/ci.yml");
+    for job in ["indexer-image", "review-app-image"] {
+        let needs = job_needs(&ci, job);
+        for test_job in ["test", "release-guard"] {
+            assert!(
+                needs.iter().any(|n| n == test_job),
+                "{job} needs {test_job}: {needs:?}"
+            );
+        }
+    }
+    assert_eq!(
+        job_needs("jobs:\n  a:\n    name: a\n    needs: [x, y]\n  b:\n", "a"),
+        vec!["x".to_string(), "y".to_string()],
+        "non-vacuity of job_needs"
     );
 }

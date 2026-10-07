@@ -11,7 +11,8 @@
 #
 # DIGEST ONLY. <git-sha> must be the full 40-hex commit; it is resolved to the digest CI pushed
 # for it, and from then on only `image@sha256:...` is used. A `sha256:<64 hex>` digest is also
-# accepted. Anything else -- a tag, a branch, a short sha -- is refused before any tool runs.
+# accepted; its signed org.opencontainers.image.revision label names the commit whose CI must be
+# green. Anything else -- a tag, a branch, a short sha -- is refused before any tool runs.
 #
 # Rollback is designed first: the host keeps an append-only releases file
 # (`<utc> <sha> <digest>`) and a pre-deploy copy of the DuckDB file. If the new digest is not
@@ -56,6 +57,18 @@ resolve_digest() { # $1 = git sha -> prints the digest CI pushed as sha-<sha>
   fi
   is_digest "$digest" || die "could not resolve a digest for $ref (got '$digest')"
   echo "$digest"
+}
+
+image_revision() { # $1 = digest -> the commit in the signed image's org.opencontainers.image.revision
+  local ref="$IMAGE@$1" config rev
+  if command -v crane >/dev/null 2>&1; then
+    config=$(crane config "$ref")
+  else
+    config=$(docker buildx imagetools inspect "$ref" --format '{{json .Image}}')
+  fi
+  rev=$(jq -r '(.config.Labels // {})["org.opencontainers.image.revision"] // empty' <<<"$config" 2>/dev/null || true)
+  is_git_sha "$rev" || die "refusing $ref: no 40-hex org.opencontainers.image.revision label (got '$rev')"
+  echo "$rev"
 }
 
 ci_green() { # $1 = git sha
@@ -142,6 +155,10 @@ laptop_deploy() { # $1 = git sha or digest
   cosign verify "$IMAGE@$digest" \
     --certificate-identity-regexp "$CERT_IDENTITY_RE" \
     --certificate-oidc-issuer "$OIDC_ISSUER" >/dev/null
+  if [ "$sha" = unknown ]; then # a digest: its signed revision label names the commit; CI must be green
+    sha=$(image_revision "$digest")
+    ci_green "$sha"
+  fi
   remote deploy "$digest" "$sha"
   post_checks
 }

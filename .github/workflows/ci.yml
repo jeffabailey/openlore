@@ -142,7 +142,8 @@ jobs:
 
   # ------------------------------------------------------------------------------------------
   # Review app image (bluesky-claim-review-app; devops/ci-cd-pipeline.md §3). main pushes only,
-  # after the acceptance stage, so an image never exists for a red commit. CI builds, scans,
+  # after the acceptance stage AND the release guard (both directly in `needs`), so an image is
+  # never signed for a red commit. CI builds, scans,
   # signs and publishes; it never deploys (deploy/review-app/deploy.sh, laptop-initiated).
   # ------------------------------------------------------------------------------------------
 
@@ -188,7 +189,7 @@ jobs:
   review-app-image:
     name: review-app image (smoke, scan, push, sign, attest)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [review-app-build]
+    needs: [review-app-build, test, release-guard]
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
@@ -292,8 +293,8 @@ jobs:
 
   # ------------------------------------------------------------------------------------------
   # Indexer image (indexer-deployment DV-IXD-1; devops/ci-cd-pipeline.md §3). Mirrors the
-  # review-app jobs: main pushes only, after the acceptance stage, so an image never exists for a
-  # red commit. CI builds, smokes, scans, signs and publishes; it never deploys
+  # review-app jobs: main pushes only, the image job after the acceptance stage AND the release
+  # guard, so an image is never signed for a red commit. CI builds, smokes, scans, signs and publishes; it never deploys
   # (deploy/indexer/deploy.sh, laptop-initiated). release-guard above stays as it is; the
   # serve-smoke repeats its loopback-seam check on the shipped image.
   # ------------------------------------------------------------------------------------------
@@ -340,7 +341,7 @@ jobs:
   indexer-image:
     name: indexer image (serve-smoke, scan, push, sign, attest)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [indexer-build]
+    needs: [indexer-build, test, release-guard]
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read

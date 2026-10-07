@@ -14,7 +14,8 @@
 #
 # DIGEST ONLY. <git-sha> must be the full 40-hex commit; it is resolved to the digest CI pushed
 # for it, and from then on only `image@sha256:...` is used. A `sha256:<64 hex>` digest is also
-# accepted. Anything else -- a tag, a branch, a short sha -- is refused before any tool runs.
+# accepted; its signed org.opencontainers.image.revision label names the commit whose CI must be
+# green. Anything else -- a tag, a branch, a short sha -- is refused before any tool runs.
 #
 # Rollback is designed first: the host keeps an append-only releases file
 # (`<utc> <sha> <digest> ready_s=<n>`). If the new digest does not answer /healthz through Caddy
@@ -74,6 +75,18 @@ resolve_digest() { # $1 = git sha -> prints the digest CI pushed as sha-<sha>
   fi
   is_digest "$digest" || die "could not resolve a digest for $ref (got '$digest')"
   echo "$digest"
+}
+
+image_revision() { # $1 = digest -> the commit in the signed image's org.opencontainers.image.revision
+  local ref="$IMAGE@$1" config rev
+  if command -v crane >/dev/null 2>&1; then
+    config=$(crane config "$ref")
+  else
+    config=$(docker buildx imagetools inspect "$ref" --format '{{json .Image}}')
+  fi
+  rev=$(jq -r '(.config.Labels // {})["org.opencontainers.image.revision"] // empty' <<<"$config" 2>/dev/null || true)
+  is_git_sha "$rev" || die "refusing $ref: no 40-hex org.opencontainers.image.revision label (got '$rev')"
+  echo "$rev"
 }
 
 ci_green() { # $1 = git sha
@@ -222,12 +235,16 @@ laptop_deploy() { # $1 = git sha or digest
   else
     die "refusing '$ref': deploy by full 40-hex git sha or sha256:<64 hex> digest only (no tags)"
   fi
-  need gh cosign
+  need gh cosign jq
   if [ "$sha" != unknown ]; then
     ci_green "$sha"
     digest=$(resolve_digest "$sha")
+    verify_signature "$digest"
+  else # a digest: once its signature verifies, its revision label is CI's; that commit must be green
+    verify_signature "$digest"
+    sha=$(image_revision "$digest")
+    ci_green "$sha"
   fi
-  verify_signature "$digest"
   pre_checks
   start_pds_poller
   remote deploy "$digest" "$sha"
