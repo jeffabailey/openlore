@@ -23,9 +23,13 @@
 #
 # The check never fails its own unit: it always exits 0.
 #
+# Every aws call is bounded by `timeout` (INDEXER_AWS_TIMEOUT_S, default 15 s; four calls at
+# most stay inside the unit's TimeoutStartSec=90s), so a slow FilterLogEvents can never cost the
+# health line: a timed-out FilterLogEvents is summary_check = error (not live), with a line.
+#
 # Env (tests): INDEXER_CONFIG_DIR (default /pds/indexer/config), INDEXER_STATE_DIR (default
-# /pds/indexer/state). docker, curl and aws come from PATH. A host without /proc reports 0 for
-# the host memory fields.
+# /pds/indexer/state), INDEXER_AWS_TIMEOUT_S. docker, curl, aws and timeout come from PATH. A
+# host without /proc reports 0 for the host memory fields.
 set -uo pipefail
 
 CONTAINER=openlore-indexer
@@ -43,10 +47,15 @@ FAIL_LIMIT=3
 SUMMARY_WINDOW_S=2700
 DIDS_MAX_AGE_S=7200
 NEVER_RENDERED_AGE_S=999999999
+AWS_TIMEOUT_S="${INDEXER_AWS_TIMEOUT_S:-15}"
 
 now_s() { date +%s; }
 
 is_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
+
+aws_bounded() { # $@ = aws args; killed after AWS_TIMEOUT_S (exit 124 counts as a failure)
+  timeout "$AWS_TIMEOUT_S" aws "$@"
+}
 
 uint_or_zero() {
   if is_uint "${1:-}"; then echo "$1"; else echo 0; fi
@@ -102,7 +111,7 @@ search_probe() { # prints "<search_ok> <search_ms>"
 summary_check() { # prints "<summary_45m> <ok|error>"; any API error fails closed
   local start_ms out
   start_ms=$((($(now_s) - SUMMARY_WINDOW_S) * 1000))
-  if ! out=$(aws logs filter-log-events --region "$REGION" --log-group-name "$LOG_GROUP" \
+  if ! out=$(aws_bounded logs filter-log-events --region "$REGION" --log-group-name "$LOG_GROUP" \
     --filter-pattern '{ $.event = "indexer.ingest.pass_summary" }' \
     --start-time "$start_ms" --max-items 1 --output json \
     --cli-connect-timeout 5 --cli-read-timeout 20 2>/dev/null); then
@@ -145,11 +154,11 @@ emit() { # $1 = the JSON line: stdout (journal) and the host-health stream (best
   msg=${msg//\"/\\\"}
   ms=$(($(now_s) * 1000))
   events="[{\"timestamp\":$ms,\"message\":\"$msg\"}]"
-  if ! aws logs put-log-events --region "$REGION" --log-group-name "$LOG_GROUP" \
+  if ! aws_bounded logs put-log-events --region "$REGION" --log-group-name "$LOG_GROUP" \
     --log-stream-name "$LOG_STREAM" --log-events "$events" >/dev/null 2>&1; then
-    aws logs create-log-stream --region "$REGION" --log-group-name "$LOG_GROUP" \
+    aws_bounded logs create-log-stream --region "$REGION" --log-group-name "$LOG_GROUP" \
       --log-stream-name "$LOG_STREAM" >/dev/null 2>&1 || true
-    aws logs put-log-events --region "$REGION" --log-group-name "$LOG_GROUP" \
+    aws_bounded logs put-log-events --region "$REGION" --log-group-name "$LOG_GROUP" \
       --log-stream-name "$LOG_STREAM" --log-events "$events" >/dev/null 2>&1 ||
       echo "health-timer: could not ship the indexer.host.health line" >&2
   fi

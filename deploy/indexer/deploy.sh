@@ -319,19 +319,34 @@ CONFIG=$BASE/config
 STATE=$BASE/state
 RELEASES=$STATE/releases
 UNITS=/etc/systemd/system
-SITES=/pds/caddy/sites
-IMDS_PROBE_IMAGE="${IMDS_PROBE_IMAGE:-curlimages/curl:8.10.1}"
+SITES="${INDEXER_CADDY_SITES_DIR:-/pds/caddy/sites}"
+# curlimages/curl:8.10.1, multi-arch index digest (read from the registry with `crane digest`).
+IMDS_PROBE_IMAGE="${IMDS_PROBE_IMAGE:-curlimages/curl@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b}"
 
 compose() { docker compose -f "$BASE/compose.yaml" "$@"; }
 pds_caddy() { docker compose -f /pds/compose.yaml exec -T caddy caddy "$@"; }
 
-refuse_unless_isolated() { # §8: never start a public container that could reach the host role
+imds_probe() { # $@ = curl args, run by curl in the pinned probe image on the PDS network
+  docker run --rm --network pds_default "$IMDS_PROBE_IMAGE" "$@" >/dev/null 2>&1
+}
+
+# §8: never start a public container that could reach the host role. Fails CLOSED: only a
+# probe that provably ran curl on pds_default and then could not connect (7) or timed out (28)
+# proves isolation; an answer (0, or 22 for an HTTP error) or any other outcome refuses.
+refuse_unless_isolated() {
+  local rc=0
   [ -d "$SITES" ] || die "refusing: $SITES does not exist (tofu-aws-pds v1.7.0 not applied)"
-  if docker run --rm --network pds_default "$IMDS_PROBE_IMAGE" -fsS -m 3 -X PUT \
-    http://169.254.169.254/latest/api/token \
-    -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' >/dev/null 2>&1; then
-    die "refusing: a container can reach IMDS (hop limit is not 1; run R-REPLACE first)"
-  fi
+  [[ "$IMDS_PROBE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] ||
+    die "refusing: IMDS_PROBE_IMAGE '$IMDS_PROBE_IMAGE' is not pinned by digest"
+  imds_probe --version ||
+    die "refusing: the IMDS probe cannot run curl on pds_default (positive control failed); isolation unproven"
+  imds_probe -sS -m 3 -X PUT http://169.254.169.254/latest/api/token \
+    -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' || rc=$?
+  case "$rc" in
+    7 | 28) echo "IMDS unreachable from pds_default (curl exit $rc)" ;;
+    0 | 22) die "refusing: a container can reach IMDS (hop limit is not 1; run R-REPLACE first)" ;;
+    *) die "refusing: the IMDS probe was inconclusive (exit $rc); isolation unproven" ;;
+  esac
 }
 
 host_install() {

@@ -15,6 +15,8 @@
 //! * XP-11 host IAM: read the DID parameter, write/filter the indexer's own logs, nothing else (AC-003.5)
 //! * XP-12 image + CI: distroless non-root image by digest; build, smoke, scan, sign in CI (AC-001.6, AC-006.1)
 //! * XP-13 `health-timer.sh` REAL run: a failing `FilterLogEvents` makes the health line `not_live = 1` (fail closed, A3)
+//! * XP-14 `health-timer.sh` REAL run: a hung `FilterLogEvents` is cut off, still not live, and the line is still written
+//! * XP-15 `deploy.sh host install` REAL run: the IMDS probe fails CLOSED (digest-pinned image, positive control, exit 7/28 only)
 //!
 //! The shell scripts run under `bash` with stub `aws`/`gh`/`cosign`/… on PATH
 //! that record every call; nothing reaches AWS, GitHub or a registry. Live
@@ -26,8 +28,10 @@
 //! * `render-dids.sh` honours `INDEXER_CONFIG_DIR` (default `/pds/indexer/config`)
 //!   and resolves `aws`, `timeout`, `chown` from `PATH`.
 //! * `deploy.sh` resolves `gh`, `cosign`, `crane`, `aws`, `curl`, `docker` from `PATH`.
-//! * `health-timer.sh run` honours `INDEXER_CONFIG_DIR` and `INDEXER_STATE_DIR`, resolves
-//!   `docker`, `curl`, `aws` from `PATH`, prints its `indexer.host.health` line on stdout,
+//! * `deploy.sh host install` honours `INDEXER_CADDY_SITES_DIR` (default `/pds/caddy/sites`)
+//!   and resolves `docker`, `install` from `PATH`.
+//! * `health-timer.sh run` honours `INDEXER_CONFIG_DIR`, `INDEXER_STATE_DIR` and
+//!   `INDEXER_AWS_TIMEOUT_S` (default 15), resolves `docker`, `curl`, `aws`, `timeout` from `PATH`, prints its `indexer.host.health` line on stdout,
 //!   tolerates a host without `/proc` (fields default to 0) and always exits 0.
 //!
 //! `#[ignore]`d until DELIVER creates the files they inspect.
@@ -546,6 +550,21 @@ fn a_failed_or_empty_read_keeps_the_last_good_list_and_never_fails_the_pass() {
 /// and its `indexer.host.health` line, whitespace removed.
 #[cfg(unix)]
 fn health_run(filter_log_events_fails: bool) -> (Run, String) {
+    let filter = if filter_log_events_fails {
+        "echo 'An error occurred (AccessDeniedException) when calling the FilterLogEvents operation' >&2; exit 254"
+    } else {
+        FOUND_SUMMARY
+    };
+    health_run_with(filter, &[])
+}
+
+/// A `filter-log-events` stub answer that finds one `pass_summary`.
+const FOUND_SUMMARY: &str =
+    "echo '{\"events\":[{\"message\":\"{\\\"event\\\":\\\"indexer.ingest.pass_summary\\\"}\"}]}'; exit 0";
+
+/// `health_run` with an arbitrary `filter-log-events` stub body and extra env.
+#[cfg(unix)]
+fn health_run_with(filter: &str, extra_env: &[(&str, String)]) -> (Run, String) {
     let stubs = Stubs::new();
     stubs.add(
         "docker",
@@ -555,11 +574,6 @@ fn health_run(filter_log_events_fails: bool) -> (Run, String) {
         "curl",
         "case \"$*\" in\n  *healthz*) echo '{\"status\":\"ok\",\"last_successful_pass_at\":null}' ;;\n  *) echo '{\"results\":[]}' ;;\nesac\nexit 0",
     );
-    let filter = if filter_log_events_fails {
-        "echo 'An error occurred (AccessDeniedException) when calling the FilterLogEvents operation' >&2; exit 254"
-    } else {
-        "echo '{\"events\":[{\"message\":\"{\\\"event\\\":\\\"indexer.ingest.pass_summary\\\"}\"}]}'; exit 0"
-    };
     stubs.add(
         "aws",
         &format!("case \"$*\" in\n  *filter-log-events*) {filter} ;;\nesac\nexit 0"),
@@ -567,15 +581,13 @@ fn health_run(filter_log_events_fails: bool) -> (Run, String) {
     let config = tempfile::tempdir().expect("config dir");
     std::fs::write(config.path().join(".rendered-at"), "").expect(".rendered-at");
     let state = tempfile::tempdir().expect("state dir");
-    let run = bash(
-        "deploy/indexer/host/health-timer.sh",
-        &["run"],
-        &[
-            ("PATH", stubs.path_env()),
-            ("INDEXER_CONFIG_DIR", config.path().display().to_string()),
-            ("INDEXER_STATE_DIR", state.path().display().to_string()),
-        ],
-    );
+    let mut env = vec![
+        ("PATH", stubs.path_env()),
+        ("INDEXER_CONFIG_DIR", config.path().display().to_string()),
+        ("INDEXER_STATE_DIR", state.path().display().to_string()),
+    ];
+    env.extend(extra_env.iter().cloned());
+    let run = bash("deploy/indexer/host/health-timer.sh", &["run"], &env);
     let line = run
         .out
         .lines()
@@ -945,4 +957,163 @@ fn the_text_helpers_read_what_they_claim() {
         ("aws_cloudwatch_metric_alarm", "a1")
     );
     assert!(compact(&r[0].2).contains("period = 900"));
+}
+
+// =============================================================================
+// Review fixes (DELIVER Phase 4): H1 IMDS probe, L2 bounded aws
+// =============================================================================
+
+/// XP-14 @US-IXD-004 @AC-004.1 @DV-IXD-8 @review-L2 @error @infrastructure @real-io
+/// @contract-shape:pure-function
+/// ```gherkin
+/// Scenario: A hung FilterLogEvents is cut off and still counts as not live
+///   Given FilterLogEvents would answer a pass_summary, but only after the aws timeout
+///   When the host health check runs
+///   Then the health line is still written, with summary_check error and not_live 1
+/// ```
+#[cfg(unix)]
+#[test]
+fn a_hung_heartbeat_query_is_cut_off_and_the_health_line_is_still_written() {
+    let late_summary = format!("sleep 4 >/dev/null 2>&1; {FOUND_SUMMARY}");
+    let started = std::time::Instant::now();
+    let (run, line) = health_run_with(&late_summary, &[("INDEXER_AWS_TIMEOUT_S", "1".to_string())]);
+    assert_eq!(run.status, 0, "{}", run.out);
+    for needle in [
+        "\"summary_check\":\"error\"",
+        "\"summary_45m\":0",
+        "\"not_live\":1",
+    ] {
+        assert!(
+            line.contains(needle),
+            "a FilterLogEvents that outlives its timeout fails closed: missing {needle}\n{}",
+            run.out
+        );
+    }
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "the late answer was not waited for ({:?})",
+        started.elapsed()
+    );
+}
+
+/// One `deploy.sh host install` with a stub `docker` whose `curl --version` positive
+/// control exits `control_rc` and whose IMDS PUT exits `imds_rc`, and a stub `install`
+/// that stops the run right after the isolation check (so `install -d` in the calls
+/// means "isolation was accepted").
+#[cfg(unix)]
+fn host_install_with_probe(
+    control_rc: i32,
+    imds_rc: i32,
+    extra_env: &[(&str, String)],
+) -> (Run, String) {
+    let stubs = Stubs::new();
+    stubs.add(
+        "docker",
+        &format!(
+            "case \"$*\" in\n  *--version*) exit {control_rc} ;;\n  *169.254.169.254*) exit {imds_rc} ;;\nesac\nexit 0"
+        ),
+    );
+    stubs.add("install", "exit 1");
+    let sites = tempfile::tempdir().expect("sites dir");
+    let mut env = vec![
+        ("PATH", stubs.path_env()),
+        ("HOME", stubs.dir.path().display().to_string()),
+        (
+            "INDEXER_CADDY_SITES_DIR",
+            sites.path().display().to_string(),
+        ),
+    ];
+    env.extend(extra_env.iter().cloned());
+    let run = bash("deploy/indexer/deploy.sh", &["host", "install"], &env);
+    (run, stubs.calls())
+}
+
+/// XP-15 @US-IXD-006 @AC-001.6 @C-1 @review-H1 @error @infrastructure @real-io
+/// @contract-shape:unbounded-preservation
+/// ```gherkin
+/// Scenario: The IMDS isolation probe fails closed
+///   Given the probe image is pinned by digest and runs curl on pds_default
+///   When the IMDS request cannot connect (7) or times out (28)
+///   Then the install proceeds
+///   When the IMDS request succeeds, or ends any other way, or the positive control fails,
+///        or the probe image is not pinned by digest
+///   Then the install is refused before any host file is written
+/// ```
+#[cfg(unix)]
+#[test]
+fn the_imds_probe_accepts_only_a_proven_unreachable_metadata_service() {
+    for imds_rc in [7, 28] {
+        let (run, calls) = host_install_with_probe(0, imds_rc, &[]);
+        assert!(
+            calls.contains("install -d"),
+            "curl exit {imds_rc} proves isolation; the install proceeds\n{}\n{calls}",
+            run.out
+        );
+        let runs: Vec<&str> = calls
+            .lines()
+            .filter(|l| l.starts_with("docker run"))
+            .collect();
+        assert_eq!(
+            runs.len(),
+            2,
+            "a positive control, then the IMDS probe\n{calls}"
+        );
+        assert!(
+            runs[0].contains("--version"),
+            "the positive control runs first\n{calls}"
+        );
+        for line in runs {
+            assert!(
+                line.contains("--network pds_default") && line.contains("curlimages/curl@sha256:"),
+                "the probe runs on pds_default in a digest-pinned image: {line}"
+            );
+        }
+    }
+    for (imds_rc, why) in [
+        (0, "IMDS answered: the container can reach the host role"),
+        (22, "an HTTP error is still an answer from IMDS"),
+        (6, "inconclusive: curl could not resolve"),
+        (
+            125,
+            "inconclusive: docker could not pull or start the probe",
+        ),
+    ] {
+        let (run, calls) = host_install_with_probe(0, imds_rc, &[]);
+        assert_ne!(run.status, 0, "{why}\n{}", run.out);
+        assert!(
+            run.out.contains("refusing"),
+            "{why}: says it refuses\n{}",
+            run.out
+        );
+        assert!(
+            !calls.contains("install -d"),
+            "{why}: no host file written\n{calls}"
+        );
+    }
+    let (run, calls) = host_install_with_probe(125, 7, &[]);
+    assert_ne!(
+        run.status, 0,
+        "a failed positive control proves nothing\n{}",
+        run.out
+    );
+    assert!(run.out.contains("refusing"), "{}", run.out);
+    assert!(
+        !calls.contains("169.254.169.254") && !calls.contains("install -d"),
+        "refused before the IMDS probe\n{calls}"
+    );
+    let (run, calls) = host_install_with_probe(
+        0,
+        7,
+        &[("IMDS_PROBE_IMAGE", "curlimages/curl:8.10.1".to_string())],
+    );
+    assert_ne!(
+        run.status, 0,
+        "a tag-pinned probe image is refused\n{}",
+        run.out
+    );
+    assert!(run.out.contains("refusing"), "{}", run.out);
+    assert!(
+        !calls.contains("docker run"),
+        "refused before any probe ran\n{calls}"
+    );
 }

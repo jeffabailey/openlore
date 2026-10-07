@@ -69,8 +69,10 @@ indexer adds no module change.
    package **public** once, and check that an anonymous `docker pull <image>@<digest>` works.
 3. **I-2 (hard precondition): the tofu-aws-pds v1.7.0 replacement** (R-REPLACE: the Caddy sites
    hook plus IMDS hop limit 1). No indexer container may start before it. `deploy.sh install`
-   checks this. It refuses unless `/pds/caddy/sites` exists **and** an IMDS PUT from a container
-   on `pds_default` fails.
+   checks this, failing closed. It refuses unless `/pds/caddy/sites` exists, the probe image
+   (`curlimages/curl`, pinned by digest; override with `IMDS_PROBE_IMAGE=<image>@sha256:...`)
+   runs `curl --version` on `pds_default`, **and** the IMDS PUT from that container then ends
+   with curl exit 7 (cannot connect) or 28 (timeout). Any other outcome refuses.
 4. **I-3**: if the review app is live, deploy its **B11** build (DuckDB 48 MB / 1 thread,
    `init: true`, 192m): `deploy/review-app/deploy.sh deploy <sha>`, then check `/readyz` 200.
    The two apps fit the host only with both sets of caps in place.
