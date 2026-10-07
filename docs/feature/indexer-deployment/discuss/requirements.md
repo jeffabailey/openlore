@@ -62,8 +62,10 @@ The data (DIDs, times, counts) is illustrative but realistic.
 
 - I-IXD-1 Capability boundary (ADR-023 / I-AV-5): the indexer is signing-incapable and holds no
   local store or secrets.
-- I-IXD-2 Verify-before-index, anti-merging and the ADR-071 verdict are unchanged. This feature
-  deploys the binary without changing it.
+- I-IXD-2 Verify-before-index, anti-merging and the ADR-071 verdict are unchanged. (Amended
+  2026-10-06: the "deploys the binary without changing it" clause is lifted. DESIGN needs binary
+  changes B1-B15, including the in-process triggered pass, the DID-list file, purge, robustness
+  and the review-app DuckDB caps. See design/architecture-design.md and ADR-080..083.)
 - I-IXD-3 Laptop-initiated deploys with no CI AWS roles (ADR-068/075).
 - I-IXD-4 Observability is structural only (WD-105). Logs carry DIDs, URLs, counts and reasons,
   never claim content.

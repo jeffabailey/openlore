@@ -17,7 +17,7 @@
 | AC-002.4 | At most one pass runs at a time | FR-IXD-4 |
 | AC-002.5 | Passes resume unattended after a reboot, or a replacement plus redeploy | FR-IXD-3 |
 | AC-003.1 | A DID-list edit takes effect on the next pass, with no deploy or restart | FR-IXD-6, KPI-IXD-4 |
-| AC-003.2 | A removed DID is not listed, and its indexed claims remain | FR-IXD-6 |
+| AC-003.2 | A DID removed from the list has its indexed claims purged at the start of the next pass that loads the list, whatever that pass's exit code (3 included). A refused, unreadable or empty list purges nothing, and a DID still on the list but skipped keeps its claims. (Amended 2026-10-06 by user decision; ADR-082.) | FR-IXD-6 |
 | AC-003.3 | A malformed list gives exit 2 naming the entry, and the old index stays searchable | FR-IXD-8 |
 | AC-003.4 | A read failure uses the last good list, never an empty one | FR-IXD-7 |
 | AC-003.5 | No AWS credentials in the container | NFR-IXD-8 |

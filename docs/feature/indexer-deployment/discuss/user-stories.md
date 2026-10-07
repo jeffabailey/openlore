@@ -15,7 +15,7 @@
   or secrets. The public surface is read-only search (FR-IXD-2).
 - **C-3 No regression.** The PDS and the review app keep serving through every deploy and
   rollback (NFR-IXD-9). Memory and CPU budgets come from NFR-IXD-4/5.
-- **C-4 Binary unchanged.** The ADR-077/078 behavior, exit codes 0/2/3 and events are used as
+- **C-4 Binary unchanged.** *(Amended 2026-10-06: DESIGN needed binary changes B1-B15; see ADR-080..083.)* The ADR-077/078 behavior, exit codes 0/2/3 and events are used as
   they are. If a DESIGN mechanism for sharing the store (OQ-IXD-1) needs a code change, it is
   the only expected one.
 - **C-5 Re-buildable index (WD-IXD-7).** The index is not backed up, and a rollback never needs

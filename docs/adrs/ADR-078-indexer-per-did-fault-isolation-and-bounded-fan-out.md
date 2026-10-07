@@ -15,6 +15,28 @@
   (`ListingSource::budget()`: `OwnPds` → remaining of the shared deadline, `Fallback` → fresh);
   the shell only builds the deadline. Accepted cost: worst-case time per DID, and so per pass,
   can double.
+- **Amended 2026-10-06** (indexer-deployment, ADR-080/081/082; user decision OQ-IXD-9 "PURGE"):
+  - **§1, skips vs removals.** A skip still persists nothing and still deletes nothing. A DID that the
+    operator **removed from the configured list** is different: with `OPENLORE_INDEXER_PURGE_UNLISTED=1`
+    (production), its indexed claims are purged at the start of the next pass through a separate
+    `IndexPurgePort` that only the pass runner holds (ADR-082). The purge set is the pure difference
+    `indexed authors − configured list`, so a listed-but-skipped DID can never be purged. An empty list
+    suppresses purge, and a malformed or unreadable list refuses the pass before any purge. With the
+    flag unset, the original §1 sentence holds unchanged.
+  - **§2, exit codes.** A purge store failure is a local fault, so it gives **2**. A refused DID-list
+    file (ADR-081) gives **2**. Every pass, including one ending in 2, emits exactly one `pass_summary`
+    with `exit_code` (previously an upsert failure returned before the summary).
+  - **§5, events.** `pass_summary` gains `pass_id`, `exit_code` (already emitted, now part of the
+    contract) and `purged_authors`. `indexer.config.loaded` is also emitted at the start of each pass
+    run inside `serve`. New events: `indexer.ingest.pass_refused`, `indexer.ingest.author_purged` and
+    `indexer.ingest.purge_suppressed`. Every pass event carries `pass_id`.
+  - **§3, fan-out.** The gate phase now consumes each DID's listing as the ordered `buffered(cap)`
+    stream yields it, instead of after all fetches complete. This bounds the listings held in
+    memory to `cap + 1`. Outstanding outbound requests become ≤ cap + 1 (one author-key resolve
+    alongside the fetches). Author keys are cached per author per pass. A pass-level deadline
+    (25 min) ends an overrunning pass with exit 2 (ADR-080 §8).
+  - Exit code **4** exists only for the new `trigger` client and means "no pass ran: `serve` unreachable"
+    (ADR-080).
 
 ## Context
 

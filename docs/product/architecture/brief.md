@@ -44,7 +44,7 @@ Workspace layout — all crates live under `/Users/jeffbailey/Projects/foss/lead
 | `crates/adapter-index-store` | effect      | Implements `IndexStorePort` over a SEPARATE `index.duckdb`; non-`Option` `author_did` rows; `verified_against NOT NULL`; no merged/consensus schema | slice-05     |
 | `crates/adapter-xrpc-query-server` | effect | `hyper` HTTP server of the `org.openlore.appview.searchClaims` XRPC query method (per-result `author_did` always present) | slice-05     |
 | `crates/adapter-index-query` | effect      | CLI-side `IndexQueryPort` XRPC client (bounded timeouts); treats indexer-unreachable as a SOFT non-fatal outcome (graceful degradation) | slice-05     |
-| `crates/openlore-indexer`    | driver (binary) | The SECOND composition root (`serve`/`ingest`/`stats`); self-hostable network service; signing-incapable; holds no local store | slice-05     |
+| `crates/openlore-indexer`    | driver (binary) | The SECOND composition root (`serve`/`ingest`/`stats`, plus `trigger` per ADR-080); self-hostable network service; signing-incapable; holds no local store. In production, `serve` owns the index and runs triggered passes (indexer-deployment). | slice-05     |
 | `crates/review-domain`       | pure core   | Review/consent context: ownership verdict, suggestion lifecycle, reconcile, Publish/Retract/SharePost **plans**, budget arithmetic, maud views (ADR-072/076) | bluesky-claim-review-app |
 | `crates/adapter-atproto-oauth` | effect    | `OAuthPort` + create-only `UserRepoWritePort` over `atrium-oauth` (confidential client, DPoP) (ADR-073) | bluesky-claim-review-app |
 | `crates/adapter-review-store`| effect      | Owner-scoped private state + AEAD secret store over a SEPARATE `review-app.duckdb` (ADR-074) | bluesky-claim-review-app |
@@ -69,6 +69,37 @@ reports 21).**
 > finalize. The hexagonal/modular-monolith STYLE (above) is unchanged by these.
 
 Shipped slice extensions:
+
+- **indexer-deployment: DESIGNED (2026-10-06; DEVOPS and DELIVER pending). IN-PLACE EXTENSION of the
+  indexer root. ZERO new crates, ZERO schema migration, ZERO lexicon change.** It deploys
+  `openlore-indexer` co-located on the PDS host (ADR-075 pattern) as a public, read-only search at
+  `https://index.openlore.jeffbailey.us`, with a pass every 15 minutes.
+  - **ADR-080 (store ownership)**: one long-running `serve` container owns the only `index.duckdb`
+    handle. The host systemd timer runs `openlore-indexer trigger` (via `docker exec`), which asks
+    `serve`, over a Unix-socket control channel, to run one pass in-process and exits with the pass's
+    0/2/3 (busy → 0, `serve` unreachable → 4). Single-flight. A pass holds the store for at most one
+    transaction at a time. Every pass emits exactly one `pass_summary` with `exit_code` and `pass_id`.
+  - **ADR-081 (DID list)**: `OPENLORE_INDEXER_REPO_DIDS_FILE` is read and validated each pass. The host
+    renders the SSM Standard String into a read-only directory mount and keeps the last good copy. A
+    malformed list refuses the pass (exit 2), never `serve`.
+  - **ADR-082 (purge)**: opt-in `OPENLORE_INDEXER_PURGE_UNLISTED`. The pure `plan_purge` takes the set
+    difference of indexed authors and a non-empty loaded list. A separate `IndexPurgePort` is held only
+    by the pass runner, and DELETE lives only in `adapter-index-store/src/purge.rs`. Purge is
+    resumable. Skips still never delete (ADR-078 amended).
+  - **ADR-083 (public surface)**: only search and `GET /healthz` (`last_successful_pass_at`), at Caddy
+    and in the binary. Body 8 KiB, value 512 B, ≤ 1000 rows, header timeout, connection cap. No per-IP
+    rate limit in v1. The CLI default is unchanged.
+  - Ports: `IndexReadPort` is split from `IndexStorePort`, and the search handler holds reads only.
+    New `IndexPurgePort`.
+  - Robustness: the pass runs on a dedicated thread inside `catch_unwind`, with a 25-minute pass
+    deadline. An unusable store makes `serve` exit for a restart. Search returns 500 and `/healthz`
+    returns 503 on store faults (never a false green).
+  - Sizing: stay on t4g.micro (user decision). Indexer container 128m. DuckDB 48 MB with 1 thread in
+    the indexer **and the review app** (the review app's caps were documented but never set; fixed
+    here). Hard measured gate at MemAvailable > 128 MB. t4g.small only by operator decision.
+  - `xtask` deltas (specified): `index_store_delete_only_in_purge`, `index_purge_only_in_pass_runner`,
+    `indexer_search_handler_read_only`.
+  - Detail: `docs/feature/indexer-deployment/design/`.
 
 - **indexer-per-did-pds-fetch: IMPLEMENTED (designed and delivered 2026-10-05). IN-PLACE EXTENSION of the indexer root.
   ZERO new crates, ZERO schema change, ZERO new crates in `Cargo.lock`.** Every pass resolves
