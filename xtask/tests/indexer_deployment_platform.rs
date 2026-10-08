@@ -22,6 +22,8 @@
 //! * XP-18 compose: X-Forwarded-For is trusted only from the Docker bridge ranges pds_default comes from
 //! * XP-19 `health-timer.sh` REAL run: a search answering 500 makes the health line `not_live = 1` (D2)
 //! * XP-20 `health-timer.sh` REAL run: a 503/429/408 or unanswered search is `search_ok = 0` but not `not_live`
+//! * XP-21 review-app `render-secrets.sh` REAL run: two renders replace each secret FILE by rename, drop stale ones, never swap the directory (D3)
+//! * XP-22 review-app `render-secrets.sh` REAL run: a render missing a required secret changes nothing in the directory (D3)
 //!
 //! The shell scripts run under `bash` with stub `aws`/`gh`/`cosign`/… on PATH
 //! that record every call; nothing reaches AWS, GitHub or a registry. Live
@@ -32,6 +34,8 @@
 //!
 //! * `render-dids.sh` honours `INDEXER_CONFIG_DIR` (default `/pds/indexer/config`)
 //!   and resolves `aws`, `timeout`, `chown` from `PATH`.
+//! * review-app `render-secrets.sh` honours `REVIEW_APP_SECRETS_DIR` and `REVIEW_APP_SSM_PATH`
+//!   and resolves `aws`, `chown` from `PATH`.
 //! * `deploy.sh` resolves `gh`, `cosign`, `crane`, `aws`, `curl`, `docker` from `PATH`.
 //! * `deploy.sh host install` honours `INDEXER_CADDY_SITES_DIR` (default `/pds/caddy/sites`)
 //!   and resolves `docker`, `install` from `PATH`.
@@ -541,6 +545,231 @@ fn a_failed_or_empty_read_keeps_the_last_good_list_and_never_fails_the_pass() {
         assert!(
             !r.config.path().join(".repo-dids.new").exists(),
             "[{label}] staging removed"
+        );
+    }
+}
+
+// =============================================================================
+// review-app render-secrets.sh (bluesky-claim-review-app infrastructure-integration §5; D3)
+// =============================================================================
+
+/// A secrets directory inside its own parent (so siblings can be inspected) and a stub `aws`
+/// whose `get-parameters-by-path` prints the names in `names` and whose `get-parameter` prints
+/// `values/<last segment>` (nothing when absent). `chown` is a no-op stub.
+struct Secrets {
+    stubs: Stubs,
+    parent: tempfile::TempDir,
+    names: PathBuf,
+    values: PathBuf,
+}
+
+impl Secrets {
+    fn new() -> Self {
+        let stubs = Stubs::new();
+        let names = stubs.dir.path().join("names");
+        let values = stubs.dir.path().join("values");
+        std::fs::create_dir(&values).expect("values dir");
+        stubs.add(
+            "aws",
+            &format!(
+                "if [ \"$1 $2\" = \"ssm get-parameters-by-path\" ]; then cat '{n}'; exit 0; fi\n\
+                 if [ \"$1 $2\" = \"ssm get-parameter\" ]; then\n\
+                 while [ $# -gt 0 ]; do if [ \"$1\" = --name ]; then n=\"$2\"; fi; shift; done\n\
+                 f='{v}'/\"${{n##*/}}\"; if [ -f \"$f\" ]; then cat \"$f\"; fi; exit 0; fi\nexit 0",
+                n = names.display(),
+                v = values.display()
+            ),
+        );
+        stubs.add("chown", "exit 0");
+        let parent = tempfile::tempdir().expect("secrets parent");
+        std::fs::create_dir(parent.path().join("secrets")).expect("secrets dir");
+        Self {
+            stubs,
+            parent,
+            names,
+            values,
+        }
+    }
+
+    /// SSM holds exactly these `(last segment, value)` parameters.
+    fn parameters_are(&self, parameters: &[(&str, &str)]) {
+        let _ = std::fs::remove_dir_all(&self.values);
+        std::fs::create_dir(&self.values).expect("values dir");
+        let names: Vec<String> = parameters
+            .iter()
+            .map(|(name, _)| format!("/openlore/test/review-app/{name}"))
+            .collect();
+        std::fs::write(&self.names, names.join("\t")).expect("names");
+        for (name, value) in parameters {
+            std::fs::write(self.values.join(name), value).expect("value");
+        }
+    }
+
+    fn dir(&self) -> PathBuf {
+        self.parent.path().join("secrets")
+    }
+
+    fn run(&self) -> Run {
+        bash(
+            "deploy/review-app/host/render-secrets.sh",
+            &[],
+            &[
+                ("PATH", self.stubs.path_env()),
+                ("REVIEW_APP_SECRETS_DIR", self.dir().display().to_string()),
+                (
+                    "REVIEW_APP_SSM_PATH",
+                    "/openlore/test/review-app/".to_string(),
+                ),
+            ],
+        )
+    }
+
+    /// Every entry of a directory (dotfiles included) mapped to its bytes.
+    fn listing(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+        std::fs::read_dir(dir)
+            .expect("read dir")
+            .map(|entry| {
+                let entry = entry.expect("entry");
+                (
+                    entry.file_name().to_string_lossy().into_owned(),
+                    std::fs::read(entry.path()).unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+}
+
+/// XP-21 @D3 @infrastructure @real-io @contract-shape:bounded-change
+#[cfg(unix)]
+#[test]
+fn two_renders_replace_secret_files_and_never_the_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Secrets::new();
+    let dir_inode = inode(&s.dir());
+
+    s.parameters_are(&[
+        ("client-jwk", "sentinel-client-jwk-one"),
+        ("data-key", "sentinel-data-key-one"),
+        ("github-token", "sentinel-github-token-one"),
+        ("log-salt", "sentinel-log-salt-one"),
+        ("retired-token", "sentinel-retired-token-one"),
+    ]);
+    let first = s.run();
+    assert_eq!(first.status, 0, "{}", first.out);
+    let first_inodes: Vec<u64> = ["client-jwk", "data-key", "github-token", "log-salt"]
+        .iter()
+        .map(|name| inode(&s.dir().join(name)))
+        .collect();
+
+    s.parameters_are(&[
+        ("client-jwk", "sentinel-client-jwk-two"),
+        ("data-key", "sentinel-data-key-two"),
+        ("github-token", "sentinel-github-token-two"),
+        ("log-salt", "sentinel-log-salt-two"),
+    ]);
+    let second = s.run();
+    assert_eq!(second.status, 0, "{}", second.out);
+
+    assert_eq!(
+        inode(&s.dir()),
+        dir_inode,
+        "the secrets directory is never swapped (the container pins it)"
+    );
+    let expected: std::collections::BTreeMap<String, Vec<u8>> = [
+        ("client-jwk", "sentinel-client-jwk-two"),
+        ("data-key", "sentinel-data-key-two"),
+        ("github-token", "sentinel-github-token-two"),
+        ("log-salt", "sentinel-log-salt-two"),
+    ]
+    .iter()
+    .map(|(name, value)| (name.to_string(), value.as_bytes().to_vec()))
+    .collect();
+    assert_eq!(
+        Secrets::listing(&s.dir()),
+        expected,
+        "new contents, the stale parameter removed, no staging or temp file left"
+    );
+    for (name, first_inode) in ["client-jwk", "data-key", "github-token", "log-salt"]
+        .iter()
+        .zip(first_inodes)
+    {
+        let path = s.dir().join(name);
+        assert_ne!(inode(&path), first_inode, "{name}: the FILE is replaced");
+        assert_eq!(
+            std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777,
+            0o400,
+            "{name}: mode 0400"
+        );
+    }
+    let siblings: Vec<String> = std::fs::read_dir(s.parent.path())
+        .expect("parent")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        siblings,
+        vec!["secrets".to_string()],
+        "no .secrets.old / .secrets.new.* sibling"
+    );
+    for run in [&first, &second] {
+        assert!(
+            !run.out.contains("sentinel"),
+            "no secret value is printed: {}",
+            run.out
+        );
+    }
+}
+
+/// XP-22 @D3 @error @infrastructure @real-io @contract-shape:unbounded-preservation
+#[cfg(unix)]
+#[test]
+fn a_render_missing_a_required_secret_changes_nothing() {
+    let s = Secrets::new();
+    s.parameters_are(&[
+        ("client-jwk", "sentinel-client-jwk-one"),
+        ("data-key", "sentinel-data-key-one"),
+        ("github-token", "sentinel-github-token-one"),
+        ("log-salt", "sentinel-log-salt-one"),
+    ]);
+    let good = s.run();
+    assert_eq!(good.status, 0, "{}", good.out);
+    std::fs::write(s.dir().join(".operator-note"), "kept").expect("dotfile");
+    let dir_inode = inode(&s.dir());
+    let before = Secrets::listing(&s.dir());
+
+    for (label, parameters) in [
+        (
+            "log-salt missing",
+            [
+                ("client-jwk", "sentinel-client-jwk-two"),
+                ("data-key", "sentinel-data-key-two"),
+                ("github-token", "sentinel-github-token-two"),
+                ("extra", "sentinel-extra-two"),
+            ],
+        ),
+        (
+            "data-key empty",
+            [
+                ("client-jwk", "sentinel-client-jwk-two"),
+                ("data-key", ""),
+                ("github-token", "sentinel-github-token-two"),
+                ("log-salt", "sentinel-log-salt-two"),
+            ],
+        ),
+    ] {
+        s.parameters_are(&parameters);
+        let run = s.run();
+
+        assert_ne!(run.status, 0, "[{label}] the render fails\n{}", run.out);
+        assert_eq!(
+            Secrets::listing(&s.dir()),
+            before,
+            "[{label}] the full directory listing is unchanged"
+        );
+        assert_eq!(inode(&s.dir()), dir_inode, "[{label}] same directory");
+        assert!(
+            !run.out.contains("sentinel"),
+            "[{label}] no secret value is printed: {}",
+            run.out
         );
     }
 }

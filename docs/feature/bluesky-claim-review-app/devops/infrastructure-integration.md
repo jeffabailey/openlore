@@ -186,8 +186,12 @@ aws ssm put-parameter --profile jeff --region us-east-1 --type SecureString \
 1. `render-secrets.sh` runs **on the host as root**, invoked by the deploy over SSM Run Command.
    It calls `aws ssm get-parameters-by-path --path /openlore/prod/review-app/ --with-decryption`
    with the host role.
-2. It writes each value into a new temporary directory (umask 077) and runs `chown 65532:65532`
-   and `chmod 0400` on the files. Then it atomically swaps the directory into `/pds/app/secrets`.
+2. It writes each value into a dot-prefixed temporary file inside `/pds/app/secrets` (umask 077)
+   and checks that every required parameter is present and non-empty. Only then does it run
+   `chown 65532:65532` and `chmod 0400` on each file and rename it over its final name, and remove
+   the files of parameters that no longer exist. It never renames, removes or recreates the
+   directory, because the container's bind mount pins the directory's inode. A render missing a
+   required parameter leaves the directory unchanged.
    It runs with `set +x`; values never reach stdout, so the SSM command output stays clean.
 3. The container mounts `/pds/app/secrets` read-only at `/run/secrets`. **It cannot see
    `/pds/secrets.env`** (PLC rotation key, JWT secrets), `/pds/pds.env`, `/pds/backup-pubkey.pem`
