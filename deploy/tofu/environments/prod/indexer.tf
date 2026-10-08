@@ -88,8 +88,9 @@ resource "aws_cloudwatch_log_metric_filter" "indexer_failure" {
 }
 
 # The host health line computes not_live from every liveness cause (container down, /healthz
-# failing, no shipped pass_summary in 45 min, DID list older than 2 h); render failures surface
-# through that staleness rather than through a filter of their own.
+# failing, no shipped pass_summary in 45 min, DID list older than 2 h, or the search probe
+# answers 500); render failures surface through that staleness rather than through a filter of
+# their own.
 resource "aws_cloudwatch_log_metric_filter" "indexer_not_live" {
   name           = "indexer-not-live"
   log_group_name = aws_cloudwatch_log_group.indexer.name
@@ -150,7 +151,7 @@ resource "aws_cloudwatch_metric_alarm" "indexer_pass_failed" {
 # Missing data is breaching: a dead host, a dead health timer or broken host log shipping pages.
 resource "aws_cloudwatch_metric_alarm" "indexer_not_live" {
   alarm_name          = "openlore-indexer-not-live"
-  alarm_description   = "A3: the index is not live (container down, /healthz failing, no pass in 45 min, stale DID list, or no health lines). Check `deploy.sh status` and the not_live fields; then monitoring-alerting.md §2.3."
+  alarm_description   = "A3: the index is not live (container down, /healthz failing, no pass in 45 min, stale DID list, the search probe answers 500, or no health lines). Check `deploy.sh status` and the not_live fields; then monitoring-alerting.md §2.3."
   namespace           = local.indexer_namespace
   metric_name         = "IndexerNotLive"
   statistic           = "Maximum"

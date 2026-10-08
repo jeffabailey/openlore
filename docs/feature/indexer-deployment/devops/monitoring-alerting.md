@@ -30,7 +30,7 @@ periods have data and both Minimums are 1. Gaps in passes are A3's job, not A1's
 |---|---|---|---|---|---|---|
 | **A1** | `openlore-indexer-total-outage` | `IndexerPassOutage` | Minimum / 900 s | ≥ 1 for **2 of 2** periods | notBreaching | Two consecutive passes skipped every DID |
 | **A2** | `openlore-indexer-pass-failed` | `IndexerFailure` | Sum / 300 s | ≥ 1 for 1 of 1 | notBreaching | Any exit-2 pass, a refused start, or an unusable store |
-| **A3** | `openlore-indexer-not-live` | `IndexerNotLive` | Maximum / 300 s | ≥ 1 for **2 of 2** periods | **breaching** | No `pass_summary` for 45 min, **or** public `/healthz` failing, **or** DID list stale > 2 h, **or** container down, **or** no health lines at all |
+| **A3** | `openlore-indexer-not-live` | `IndexerNotLive` | Maximum / 300 s | ≥ 1 for **2 of 2** periods | **breaching** | No `pass_summary` for 45 min, **or** public `/healthz` failing, **or** DID list stale > 2 h, **or** the search probe answers 500, **or** container down, **or** no health lines at all |
 
 Every `alarm_description` carries a runbook pointer, for example "A3: check `deploy.sh status`
 and the `not_live` cause fields; then monitoring-alerting.md §2.3".

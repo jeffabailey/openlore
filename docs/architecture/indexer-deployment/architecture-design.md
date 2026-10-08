@@ -345,13 +345,13 @@ All changes are in existing crates. There is **no schema migration and no lexico
      - `pass_summary` with `exit_code = 2`;
      - `health.startup.refused` or `indexer.store.unusable`;
      - `pass_summary` of any kind (the heartbeat);
-     - the host health line's `indexer_live = 0`.
+     - the host health line's `not_live = 1`.
 6. **Alarms** (existing SNS topic, `ok_actions`, an `*_alarms_enabled` toggle):
    - A1: 2 consecutive `pass_summary` with `exit_code = 3`;
    - A2: any `pass_summary` with `exit_code = 2`, **or** `health.startup.refused` or
      `indexer.store.unusable` from the indexer;
    - A3 liveness: no `pass_summary` for 45 min (missing data counts as breaching), **or** the host
-     health line reporting `indexer_live = 0`. The host health timer sets `indexer_live = 0` when
+     health line reporting `not_live = 1`. The host health timer sets `not_live = 1` when
      the public `/healthz` probe fails (including a 503 for an unusable store), **or** when the DID
      list is stale, meaning `.rendered-at` is older than 2 h, **or** when the canned search
      answers 500 (`search_status = 500`; a 503, 429, 408 or no answer does not count). That folds

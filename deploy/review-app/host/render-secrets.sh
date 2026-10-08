@@ -72,6 +72,10 @@ done
 
 # rename(2): an atomic FILE replace; the directory inode never changes. The running container
 # sees the new files at once but reads secrets only at startup, so rotation stays restart-based.
+# The renames are atomic one by one, not as a set: if one fails part-way (set -e exits; the trap
+# removes the remaining temp files) the directory holds some new and some old values. That is
+# accepted -- the container only reads them at its next restart, and the next render rewrites
+# every file, so a re-run converges before any restart.
 for file in $staged; do
   mv -f "$(temp_of "$file")" "$SECRETS_DIR/$file"
 done

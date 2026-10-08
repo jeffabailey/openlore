@@ -43,3 +43,6 @@ proptest = { workspace = true }
 # `adapter-atproto-did/src/*.rs` files and drives the EFFECT-shell scan against
 # it, proving `peer_resolve.rs` is in the scan scope. Pure-Rust, dev-only.
 tempfile = { workspace = true }
+# fix-indexer-deployment-follow-ups (L3): XP-19/XP-20 parse the health line as JSON so a
+# malformed line fails instead of matching substrings. Dev-only.
+serde_json = { workspace = true }

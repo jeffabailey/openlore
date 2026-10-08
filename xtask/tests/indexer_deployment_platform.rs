@@ -575,7 +575,9 @@ impl Secrets {
                 "if [ \"$1 $2\" = \"ssm get-parameters-by-path\" ]; then cat '{n}'; exit 0; fi\n\
                  if [ \"$1 $2\" = \"ssm get-parameter\" ]; then\n\
                  while [ $# -gt 0 ]; do if [ \"$1\" = --name ]; then n=\"$2\"; fi; shift; done\n\
-                 f='{v}'/\"${{n##*/}}\"; if [ -f \"$f\" ]; then cat \"$f\"; fi; exit 0; fi\nexit 0",
+                 f='{v}'/\"${{n##*/}}\"\n\
+                 if [ -f \"$f.fail\" ]; then echo 'An error occurred (ThrottlingException)' >&2; exit 254; fi\n\
+                 if [ -f \"$f\" ]; then cat \"$f\"; fi; exit 0; fi\nexit 0",
                 n = names.display(),
                 v = values.display()
             ),
@@ -603,6 +605,12 @@ impl Secrets {
         for (name, value) in parameters {
             std::fs::write(self.values.join(name), value).expect("value");
         }
+    }
+
+    /// `aws ssm get-parameter` for this parameter exits non-zero (until the next
+    /// `parameters_are`).
+    fn reading_fails_for(&self, name: &str) {
+        std::fs::write(self.values.join(format!("{name}.fail")), "").expect("fail marker");
     }
 
     fn dir(&self) -> PathBuf {
@@ -736,7 +744,7 @@ fn a_render_missing_a_required_secret_changes_nothing() {
     let dir_inode = inode(&s.dir());
     let before = Secrets::listing(&s.dir());
 
-    for (label, parameters) in [
+    for (label, parameters, failing_read) in [
         (
             "log-salt missing",
             [
@@ -745,6 +753,7 @@ fn a_render_missing_a_required_secret_changes_nothing() {
                 ("github-token", "sentinel-github-token-two"),
                 ("extra", "sentinel-extra-two"),
             ],
+            None,
         ),
         (
             "data-key empty",
@@ -754,9 +763,23 @@ fn a_render_missing_a_required_secret_changes_nothing() {
                 ("github-token", "sentinel-github-token-two"),
                 ("log-salt", "sentinel-log-salt-two"),
             ],
+            None,
+        ),
+        (
+            "get-parameter fails on the 2nd parameter",
+            [
+                ("client-jwk", "sentinel-client-jwk-two"),
+                ("data-key", "sentinel-data-key-two"),
+                ("github-token", "sentinel-github-token-two"),
+                ("log-salt", "sentinel-log-salt-two"),
+            ],
+            Some("data-key"),
         ),
     ] {
         s.parameters_are(&parameters);
+        if let Some(name) = failing_read {
+            s.reading_fails_for(name);
+        }
         let run = s.run();
 
         assert_ne!(run.status, 0, "[{label}] the render fails\n{}", run.out);
@@ -766,6 +789,14 @@ fn a_render_missing_a_required_secret_changes_nothing() {
             "[{label}] the full directory listing is unchanged"
         );
         assert_eq!(inode(&s.dir()), dir_inode, "[{label}] same directory");
+        let temp_files: Vec<String> = Secrets::listing(&s.dir())
+            .into_keys()
+            .filter(|name| name.ends_with(".new"))
+            .collect();
+        assert!(
+            temp_files.is_empty(),
+            "[{label}] no temp file remains: {temp_files:?}"
+        );
         assert!(
             !run.out.contains("sentinel"),
             "[{label}] no secret value is printed: {}",
@@ -923,18 +954,29 @@ fn a_search_500_makes_the_host_not_live() {
         "the health check never fails its unit\n{}",
         run.out
     );
-    for needle in [
-        "\"healthz_ok\":1",
-        "\"summary_45m\":1",
-        "\"search_ok\":0",
-        "\"search_status\":500",
-        "\"not_live\":1",
+    let fields = health_fields(&line);
+    for (field, want) in [
+        ("healthz_ok", 1),
+        ("summary_45m", 1),
+        ("search_ok", 0),
+        ("search_status", 500),
+        ("not_live", 1),
     ] {
-        assert!(
-            line.contains(needle),
-            "a search the store cannot serve counts as not live: missing {needle}\n{}",
+        assert_eq!(
+            fields[field],
+            serde_json::json!(want),
+            "a search the store cannot serve counts as not live: {field}\n{}",
             run.out
         );
+    }
+}
+
+/// The health line parsed as a JSON object; an invalid line fails the test.
+#[cfg(unix)]
+fn health_fields(line: &str) -> serde_json::Map<String, serde_json::Value> {
+    match serde_json::from_str::<serde_json::Value>(line) {
+        Ok(serde_json::Value::Object(fields)) => fields,
+        other => panic!("the health line is one JSON object: {other:?}\n{line}"),
     }
 }
 
@@ -951,45 +993,27 @@ fn a_search_500_makes_the_host_not_live() {
 #[cfg(unix)]
 #[test]
 fn a_busy_throttled_or_timed_out_search_does_not_make_the_host_not_live() {
-    let table: [(SearchAnswer, &str, &str); 6] = [
-        (
-            SearchAnswer::Status("503"),
-            "\"search_ok\":0",
-            "\"search_status\":503",
-        ),
-        (
-            SearchAnswer::Status("429"),
-            "\"search_ok\":0",
-            "\"search_status\":429",
-        ),
-        (
-            SearchAnswer::Status("408"),
-            "\"search_ok\":0",
-            "\"search_status\":408",
-        ),
-        (
-            SearchAnswer::NoAnswer("7"),
-            "\"search_ok\":0",
-            "\"search_status\":0",
-        ),
-        (
-            SearchAnswer::NoAnswer("28"),
-            "\"search_ok\":0",
-            "\"search_status\":0",
-        ),
-        (
-            SearchAnswer::Status("200"),
-            "\"search_ok\":1",
-            "\"search_status\":200",
-        ),
+    let table: [(SearchAnswer, i64, i64); 6] = [
+        (SearchAnswer::Status("503"), 0, 503),
+        (SearchAnswer::Status("429"), 0, 429),
+        (SearchAnswer::Status("408"), 0, 408),
+        (SearchAnswer::NoAnswer("7"), 0, 0),
+        (SearchAnswer::NoAnswer("28"), 0, 0),
+        (SearchAnswer::Status("200"), 1, 200),
     ];
     for (answer, search_ok, search_status) in table {
         let (run, line) = health_run_answering(FOUND_SUMMARY, &[], answer);
         assert_eq!(run.status, 0, "[{answer:?}] exits 0\n{}", run.out);
-        for needle in [search_ok, search_status, "\"not_live\":0"] {
-            assert!(
-                line.contains(needle),
-                "[{answer:?}] missing {needle} in the health line\n{}",
+        let fields = health_fields(&line);
+        for (field, want) in [
+            ("search_ok", search_ok),
+            ("search_status", search_status),
+            ("not_live", 0),
+        ] {
+            assert_eq!(
+                fields[field],
+                serde_json::json!(want),
+                "[{answer:?}] {field} in the health line\n{}",
                 run.out
             );
         }

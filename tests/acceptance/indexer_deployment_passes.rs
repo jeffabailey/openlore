@@ -690,6 +690,8 @@ fn a_search_that_cannot_read_the_index_logs_a_store_error_without_the_query() {
     while live.events_named("indexer.search.store_error").is_empty() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
+    // Let the log settle so a late duplicate from the same request would be read too.
+    std::thread::sleep(Duration::from_millis(500));
     let reported = live.events_named("indexer.search.store_error");
     assert_eq!(
         reported.len(),
