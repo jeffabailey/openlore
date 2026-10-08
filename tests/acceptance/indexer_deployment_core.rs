@@ -10,8 +10,8 @@
 //! | ID | Contract | Source |
 //! |---|---|---|
 //! | CORE-1..3 | `plan_purge`: set difference; never intersects the list; ⊆ indexed; empty list → suppressed | ADR-082, data-models §3 |
-//! | CORE-4 | DID-list read is total: Loaded(valid, distinct, first-seen) or Refused naming the first bad entry | ADR-081, data-models §2 |
-//! | CORE-5 | pass exit code: 2 ≻ 3 ≻ 0; a cause iff exit 2 | ADR-078 am., data-models §4 |
+//! | CORE-4 | DID-list read is total: Loaded(valid, distinct, first-seen) or Refused naming the first bad entry and its problem (literal table) | ADR-081, data-models §2 |
+//! | CORE-5 | pass exit code: the one failure → 2 + its literal cause token; else 3 iff every listed DID skipped, else 0 (which failure wins: ingest_pass acceptance tests) | ADR-078 am., data-models §4 |
 //! | CORE-6 | single-flight runner: never two passes; busy names the running pass; any ending frees the slot | ADR-080 §3, §7 |
 //! | CORE-7 | pass deadline: past the deadline ⇒ exit 2 `pass_deadline_exceeded`, whatever the pass would have said | ADR-080, B13 |
 //! | CORE-8 | the new settings accept exactly their ranges | data-models §1 |
@@ -44,7 +44,7 @@
 //
 // SCAFFOLD: true
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use proptest::prelude::*;
 
@@ -61,8 +61,15 @@ enum PurgePlanView {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ListReadView {
     Loaded(Vec<String>),
-    /// Names the first bad entry.
-    Malformed(String),
+    /// Names the first bad entry and what is wrong with it.
+    Malformed(String, EntryProblemView),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntryProblemView {
+    NotADid,
+    NotWellFormed,
+    NamesNoRepo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,13 +78,22 @@ enum DidOutcome {
     Skipped,
 }
 
+/// The local fault that ended a pass (data-models §4 `cause`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PassFailureView {
+    ListMalformed,
+    ListUnreadable,
+    UpsertFailed,
+    PurgeFailed,
+    PassPanicked,
+    PassDeadlineExceeded,
+}
+
+/// What a pass reports: AT MOST ONE failure (the pass ends at its first,
+/// ingest_pass.rs) plus each listed DID's outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PassOutcomeView {
-    list_refused: bool,
-    purge_failed: bool,
-    upsert_failed: bool,
-    panicked: bool,
-    deadline_exceeded: bool,
+    failure: Option<PassFailureView>,
     dids: Vec<DidOutcome>,
 }
 
@@ -124,25 +140,29 @@ fn sut_plan_purge(listed: &[String], indexed_authors: &BTreeSet<String>) -> Purg
 
 fn sut_read_did_list(text: &str) -> ListReadView {
     appview_domain::did_list::read_did_list(text).map_or_else(
-        |bad| ListReadView::Malformed(bad.entry),
+        |bad| {
+            use appview_domain::did_list::EntryProblem;
+            let problem = match bad.problem {
+                EntryProblem::NotADid => EntryProblemView::NotADid,
+                EntryProblem::NotWellFormed => EntryProblemView::NotWellFormed,
+                EntryProblem::NamesNoRepo => EntryProblemView::NamesNoRepo,
+            };
+            ListReadView::Malformed(bad.entry, problem)
+        },
         |dids| ListReadView::Loaded(dids.into_iter().map(|did| did.0).collect()),
     )
 }
 
 fn sut_pass_exit(outcome: &PassOutcomeView) -> (i32, Option<String>) {
     use appview_domain::ingest_pass as pass;
-    let failure = [
-        (outcome.list_refused, pass::PassFailure::ListMalformed),
-        (outcome.purge_failed, pass::PassFailure::PurgeFailed),
-        (outcome.upsert_failed, pass::PassFailure::UpsertFailed),
-        (outcome.panicked, pass::PassFailure::PassPanicked),
-        (
-            outcome.deadline_exceeded,
-            pass::PassFailure::PassDeadlineExceeded,
-        ),
-    ]
-    .into_iter()
-    .find_map(|(happened, failure)| happened.then_some(failure));
+    let failure = outcome.failure.map(|failure| match failure {
+        PassFailureView::ListMalformed => pass::PassFailure::ListMalformed,
+        PassFailureView::ListUnreadable => pass::PassFailure::ListUnreadable,
+        PassFailureView::UpsertFailed => pass::PassFailure::UpsertFailed,
+        PassFailureView::PurgeFailed => pass::PassFailure::PurgeFailed,
+        PassFailureView::PassPanicked => pass::PassFailure::PassPanicked,
+        PassFailureView::PassDeadlineExceeded => pass::PassFailure::PassDeadlineExceeded,
+    });
     let summary = pass::summarize_outcomes(outcome.dids.iter().map(|did| match did {
         DidOutcome::Read => pass::PassOutcome::ReadFromOwnPds,
         DidOutcome::Skipped => pass::PassOutcome::Skipped,
@@ -234,45 +254,35 @@ fn bare(author_did: &str) -> String {
     author_did.split('#').next().unwrap_or("").to_string()
 }
 
-/// `did:(plc|web):[A-Za-z0-9._:%-]+`, not ending in `:`, ≤ 2048 bytes (config.rs `repo_did`).
-fn well_formed_repo_did(entry: &str) -> bool {
-    let Some((method, id)) = entry.strip_prefix("did:").and_then(|r| r.split_once(':')) else {
-        return false;
-    };
-    entry.len() <= 2048
-        && (method == "plc" || method == "web")
-        && !id.is_empty()
-        && !id.ends_with(':')
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '%' | '-'))
-}
+/// Each failure's exit and `cause` token, written out from data-models §4
+/// (never from `PassFailure::token`).
+const FAILURE_EXITS: [(PassFailureView, i32, &str); 6] = [
+    (PassFailureView::ListMalformed, 2, "repo_dids_malformed"),
+    (PassFailureView::ListUnreadable, 2, "repo_dids_unreadable"),
+    (PassFailureView::UpsertFailed, 2, "upsert_failed"),
+    (PassFailureView::PurgeFailed, 2, "purge_failed"),
+    (PassFailureView::PassPanicked, 2, "pass_panicked"),
+    (
+        PassFailureView::PassDeadlineExceeded,
+        2,
+        "pass_deadline_exceeded",
+    ),
+];
 
-fn list_oracle(text: &str) -> ListReadView {
-    let mut seen: Vec<String> = Vec::new();
-    for entry in text
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|e| !e.is_empty())
-    {
-        if !well_formed_repo_did(entry) {
-            return ListReadView::Malformed(entry.to_string());
-        }
-        if !seen.iter().any(|s| s == entry) {
-            seen.push(entry.to_string());
-        }
-    }
-    ListReadView::Loaded(seen)
-}
-
-fn exit_oracle(o: &PassOutcomeView) -> i32 {
-    if o.list_refused || o.purge_failed || o.upsert_failed || o.panicked || o.deadline_exceeded {
-        2
-    } else if !o.dids.is_empty() && o.dids.iter().all(|d| *d == DidOutcome::Skipped) {
-        3
-    } else {
-        0
-    }
-}
+/// Bad list entries and their problems, written out from data-models §2 and
+/// the reader's contract examples. None contains a separator.
+const BAD_ENTRIES: [(&str, EntryProblemView); 10] = [
+    ("tomas", EntryProblemView::NotADid),
+    ("did:plc", EntryProblemView::NotADid),
+    ("\u{feff}did:plc:dvolkov3m9q", EntryProblemView::NotADid),
+    ("did:key:z6Mkabc", EntryProblemView::NamesNoRepo),
+    ("did:ethr:0xabc", EntryProblemView::NamesNoRepo),
+    ("did:PLC:dvolkov3m9q", EntryProblemView::NotWellFormed),
+    ("did:plc:", EntryProblemView::NotWellFormed),
+    ("did:plc:abc:", EntryProblemView::NotWellFormed),
+    ("did::abc", EntryProblemView::NotWellFormed),
+    ("did:plc:a/b", EntryProblemView::NotWellFormed),
+];
 
 // =============================================================================
 // Generators
@@ -305,52 +315,54 @@ fn indexed_author_id() -> impl Strategy<Value = String> {
     })
 }
 
-fn outcome() -> impl Strategy<Value = PassOutcomeView> {
-    (
-        any::<bool>(),
-        any::<bool>(),
-        any::<bool>(),
-        any::<bool>(),
-        any::<bool>(),
-        prop::collection::vec(
-            prop_oneof![Just(DidOutcome::Read), Just(DidOutcome::Skipped)],
-            0..6,
-        ),
+fn did_outcomes() -> impl Strategy<Value = Vec<DidOutcome>> {
+    prop::collection::vec(
+        prop_oneof![Just(DidOutcome::Read), Just(DidOutcome::Skipped)],
+        0..6,
     )
-        .prop_map(
-            |(list_refused, purge_failed, upsert_failed, panicked, deadline_exceeded, dids)| {
-                PassOutcomeView {
-                    list_refused,
-                    purge_failed,
-                    upsert_failed,
-                    panicked,
-                    deadline_exceeded,
-                    dids,
-                }
-            },
-        )
 }
 
-/// Text that looks like an operator's list: DIDs, near-DIDs, separators, BOMs, CRLFs.
-fn list_text() -> impl Strategy<Value = String> {
-    let entry = prop_oneof![
-        4 => did(),
-        1 => Just("tomas".to_string()),
-        1 => Just("did:key:z6Mkabc".to_string()),
-        1 => Just("did:plc:".to_string()),
-        1 => Just("\u{feff}did:plc:dvolkov3m9q".to_string()),
-        1 => "[ -~]{0,12}",
-    ];
-    let sep = prop_oneof![
+fn separator() -> impl Strategy<Value = &'static str> {
+    prop_oneof![
         Just(","),
         Just(" "),
         Just(", "),
         Just("\n"),
         Just("\r\n"),
         Just("\t")
-    ];
-    prop::collection::vec((entry, sep), 0..8)
-        .prop_map(|parts| parts.into_iter().map(|(e, s)| format!("{e}{s}")).collect())
+    ]
+}
+
+/// A list of known-good literal DIDs: the expected distinct DIDs in their
+/// first-seen order, and a text naming them in that order, each optionally
+/// followed by a repeat of one already named, joined by any separators.
+fn good_list() -> impl Strategy<Value = (Vec<String>, String)> {
+    Just(DID_POOL.to_vec())
+        .prop_shuffle()
+        .prop_flat_map(|pool| (0..=pool.len()).prop_map(move |n| pool[..n].to_vec()))
+        .prop_flat_map(|distinct| {
+            let n = distinct.len();
+            (
+                Just(distinct),
+                prop::collection::vec((any::<prop::sample::Index>(), any::<bool>()), n),
+                prop::collection::vec(separator(), 2 * n + 1),
+                separator(),
+            )
+        })
+        .prop_map(|(distinct, repeats, seps, lead)| {
+            let mut text = lead.to_string();
+            let mut seps = seps.into_iter();
+            for (i, did) in distinct.iter().enumerate() {
+                text.push_str(did);
+                text.push_str(seps.next().unwrap_or(","));
+                let (pick, repeat) = repeats[i];
+                if repeat {
+                    text.push_str(distinct[pick.index(i + 1)]);
+                    text.push_str(seps.next().unwrap_or(","));
+                }
+            }
+            (distinct.into_iter().map(str::to_string).collect(), text)
+        })
 }
 
 // =============================================================================
@@ -386,23 +398,62 @@ proptest! {
     }
 
     /// CORE-4 @US-IXD-003 @AC-003.3 @ADR-081 @property @C6a @contract-shape:pure-function
-    /// Reading the list is total: for any text it either loads the distinct
-    /// well-formed DIDs in first-seen order, or refuses naming the FIRST bad
-    /// entry. A BOM makes the first entry bad; CRLF is whitespace.
+    /// Reading the list is total: a list of known-good literal DIDs (any
+    /// separators, CRLF included, and repeats) loads them distinct in
+    /// first-seen order; putting a literal bad entry after any good prefix
+    /// refuses the list naming THAT entry and its literal problem, whatever
+    /// follows it. The literal examples are pinned in
+    /// `the_did_list_examples_load_or_refuse_exactly`.
     #[test]
-    fn reading_the_did_list_loads_it_whole_or_names_the_first_bad_entry(text in list_text()) {
-        prop_assert_eq!(sut_read_did_list(&text), list_oracle(&text));
+    fn reading_the_did_list_loads_it_whole_or_names_the_first_bad_entry(
+        (expected, good) in good_list(),
+        bad in proptest::option::of(prop::sample::select(BAD_ENTRIES.to_vec())),
+        sep in separator(),
+        rest in prop::collection::vec(
+            prop_oneof![
+                prop::sample::select(DID_POOL.to_vec()),
+                prop::sample::select(BAD_ENTRIES.to_vec()).prop_map(|(entry, _)| entry),
+            ],
+            0..4,
+        ),
+    ) {
+        match bad {
+            None => prop_assert_eq!(sut_read_did_list(&good), ListReadView::Loaded(expected)),
+            Some((entry, problem)) => {
+                let text = format!("{good}{sep}{entry}{sep}{}", rest.join(sep));
+                prop_assert_eq!(
+                    sut_read_did_list(&text),
+                    ListReadView::Malformed(entry.to_string(), problem)
+                );
+            }
+        }
     }
 
     /// CORE-5 @US-IXD-004 @AC-004.1 @AC-004.2 @AC-004.3 @B4 @property @contract-shape:pure-function
-    /// A local failure (refused list, purge, store write, panic, deadline) is 2
-    /// and wins over a total outage (3, every listed DID skipped), which wins
-    /// over 0; a cause is named exactly when the exit is 2.
+    /// A pass that ended on a local failure exits 2 naming that failure's
+    /// literal cause token, whatever its DIDs did; with no failure it exits 3
+    /// when every listed DID was skipped (a total outage) and 0 otherwise,
+    /// naming no cause. The code under test receives at most one failure:
+    /// which failure ends a pass is ingest_pass.rs's (the first), covered by
+    /// its acceptance tests, not chosen here.
     #[test]
-    fn a_pass_s_exit_code_puts_local_failures_before_outages_before_success(o in outcome()) {
-        let (code, cause) = sut_pass_exit(&o);
-        prop_assert_eq!(code, exit_oracle(&o));
-        prop_assert_eq!(cause.is_some(), code == 2);
+    fn a_pass_s_exit_code_puts_local_failures_before_outages_before_success(
+        failure in proptest::option::of(prop::sample::select(FAILURE_EXITS.to_vec())),
+        dids in did_outcomes(),
+    ) {
+        let outcome = PassOutcomeView { failure: failure.map(|(failure, _, _)| failure), dids };
+        let (code, cause) = sut_pass_exit(&outcome);
+        match failure {
+            Some((_, exit, token)) => {
+                prop_assert_eq!((code, cause.as_deref()), (exit, Some(token)));
+            }
+            None if !outcome.dids.is_empty()
+                && outcome.dids.iter().all(|did| *did == DidOutcome::Skipped) =>
+            {
+                prop_assert_eq!((code, cause), (3, None));
+            }
+            None => prop_assert_eq!((code, cause), (0, None)),
+        }
     }
 
     /// CORE-6 @US-IXD-002 @AC-002.4 @ADR-080 @H2 @property @C2b @contract-shape:pure-function
@@ -531,62 +582,146 @@ fn the_purge_plan_never_names_a_listed_look_alike() {
     );
 }
 
+/// A canonical pass: its label, what it reported, and its literal (exit, cause).
+type CanonicalPass = (&'static str, PassOutcomeView, (i32, Option<&'static str>));
+
 /// CORE-5x @AC-004.1 @contract-shape:pure-function — the closed table of exit codes.
 #[test]
 fn the_exit_codes_of_the_canonical_passes() {
-    let base = PassOutcomeView {
-        list_refused: false,
-        purge_failed: false,
-        upsert_failed: false,
-        panicked: false,
-        deadline_exceeded: false,
-        dids: vec![],
-    };
-    let table: BTreeMap<&str, (PassOutcomeView, i32)> = BTreeMap::from([
-        ("no DIDs configured", (base.clone(), 0)),
+    use DidOutcome::{Read, Skipped};
+    let table: [CanonicalPass; 8] = [
+        (
+            "no DIDs configured",
+            PassOutcomeView {
+                failure: None,
+                dids: vec![],
+            },
+            (0, None),
+        ),
+        (
+            "every DID read",
+            PassOutcomeView {
+                failure: None,
+                dids: vec![Read, Read],
+            },
+            (0, None),
+        ),
         (
             "one read, one skipped",
-            (
-                PassOutcomeView {
-                    dids: vec![DidOutcome::Read, DidOutcome::Skipped],
-                    ..base.clone()
-                },
-                0,
-            ),
+            PassOutcomeView {
+                failure: None,
+                dids: vec![Read, Skipped],
+            },
+            (0, None),
+        ),
+        (
+            "one DID, skipped",
+            PassOutcomeView {
+                failure: None,
+                dids: vec![Skipped],
+            },
+            (3, None),
         ),
         (
             "every DID skipped",
-            (
-                PassOutcomeView {
-                    dids: vec![DidOutcome::Skipped; 3],
-                    ..base.clone()
-                },
-                3,
-            ),
+            PassOutcomeView {
+                failure: None,
+                dids: vec![Skipped; 3],
+            },
+            (3, None),
         ),
         (
             "refused list",
-            (
-                PassOutcomeView {
-                    list_refused: true,
-                    ..base.clone()
-                },
-                2,
-            ),
+            PassOutcomeView {
+                failure: Some(PassFailureView::ListMalformed),
+                dids: vec![],
+            },
+            (2, Some("repo_dids_malformed")),
         ),
         (
             "purge failed while every DID skipped",
-            (
-                PassOutcomeView {
-                    purge_failed: true,
-                    dids: vec![DidOutcome::Skipped],
-                    ..base.clone()
-                },
-                2,
-            ),
+            PassOutcomeView {
+                failure: Some(PassFailureView::PurgeFailed),
+                dids: vec![Skipped],
+            },
+            (2, Some("purge_failed")),
         ),
-    ]);
-    for (label, (outcome, code)) in table {
-        assert_eq!(sut_pass_exit(&outcome).0, code, "{label}");
+        (
+            "store write failed after every DID read",
+            PassOutcomeView {
+                failure: Some(PassFailureView::UpsertFailed),
+                dids: vec![Read, Read],
+            },
+            (2, Some("upsert_failed")),
+        ),
+    ];
+    for (label, outcome, expected) in table {
+        let (code, cause) = sut_pass_exit(&outcome);
+        assert_eq!((code, cause.as_deref()), expected, "{label}");
+    }
+}
+
+// bypass: literal oracle table; a generator would have to mirror the reader.
+/// CORE-4x @ADR-081 @contract-shape:pure-function — the reader's literal examples.
+#[test]
+fn the_did_list_examples_load_or_refuse_exactly() {
+    use EntryProblemView::{NamesNoRepo, NotADid, NotWellFormed};
+    let loaded = |dids: &[&str]| ListReadView::Loaded(dids.iter().map(|d| d.to_string()).collect());
+    let refused = |entry: &str, problem| ListReadView::Malformed(entry.to_string(), problem);
+    let longest = format!("did:plc:{}", "a".repeat(2040));
+    let too_long = format!("{longest}b");
+    let table: Vec<(String, ListReadView)> = vec![
+        (String::new(), loaded(&[])),
+        (" \r\n\t, ,".to_string(), loaded(&[])),
+        (
+            "did:plc:a,did:plc:b".to_string(),
+            loaded(&["did:plc:a", "did:plc:b"]),
+        ),
+        (
+            "did:plc:a did:web:example.com".to_string(),
+            loaded(&["did:plc:a", "did:web:example.com"]),
+        ),
+        (
+            "did:plc:a\r\ndid:plc:b\r\n".to_string(),
+            loaded(&["did:plc:a", "did:plc:b"]),
+        ),
+        (
+            "did:plc:b, did:plc:a,did:plc:b did:plc:a".to_string(),
+            loaded(&["did:plc:b", "did:plc:a"]),
+        ),
+        (
+            "\u{feff}did:plc:a,did:plc:b".to_string(),
+            refused("\u{feff}did:plc:a", NotADid),
+        ),
+        (
+            "did:plc:a tomas did:plc:b".to_string(),
+            refused("tomas", NotADid),
+        ),
+        (
+            "did:key:z6Mkabc".to_string(),
+            refused("did:key:z6Mkabc", NamesNoRepo),
+        ),
+        (
+            "did:PLC:abc".to_string(),
+            refused("did:PLC:abc", NotWellFormed),
+        ),
+        (
+            "did:plc:a,did:key:z6Mk,tomas".to_string(),
+            refused("did:key:z6Mk", NamesNoRepo),
+        ),
+        (
+            "did:plc:a,did:plc:,did:key:z6Mk".to_string(),
+            refused("did:plc:", NotWellFormed),
+        ),
+        (longest.clone(), loaded(&[longest.as_str()])),
+        (
+            format!("did:plc:a {too_long}"),
+            refused(&too_long, NotWellFormed),
+        ),
+    ];
+    assert_eq!(longest.len(), 2048);
+    assert_eq!(too_long.len(), 2049);
+    for (text, expected) in table {
+        assert_eq!(sut_read_did_list(&text), expected, "{text:?}");
     }
 }

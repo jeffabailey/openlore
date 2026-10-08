@@ -359,6 +359,54 @@ mod tests {
         ])
     }
 
+    // bypass: literal oracle table; a generator would have to mirror the code under test.
+    /// The wire text is fixed, not merely self-consistent: each request is
+    /// exactly its literal line, and each literal reply line decodes to its
+    /// reply and is what that reply encodes to (compared as JSON, since key
+    /// order is not part of the protocol), ending in one newline.
+    #[test]
+    fn the_wire_text_of_every_request_and_reply_is_fixed() {
+        let requests = [
+            ("{\"request\":\"run_pass\"}\n", ControlRequest::RunPass),
+            ("{\"request\":\"probe\"}\n", ControlRequest::Probe),
+        ];
+        for (wire, request) in requests {
+            assert_eq!(encode_request(request), wire);
+            assert_eq!(decode_request(wire), Some(request), "{wire:?}");
+        }
+        let replies = [
+            (
+                "{\"reply\":\"completed\",\"pass_id\":\"1728390000000-42\",\"exit_code\":2}",
+                ControlReply::Completed {
+                    pass_id: "1728390000000-42".to_string(),
+                    exit_code: 2,
+                },
+            ),
+            (
+                "{\"reply\":\"busy\",\"running_pass_id\":\"1728390000000-7\"}",
+                ControlReply::Busy {
+                    running_pass_id: "1728390000000-7".to_string(),
+                },
+            ),
+            ("{\"reply\":\"ready\"}", ControlReply::Ready),
+        ];
+        for (wire, reply) in replies {
+            assert_eq!(
+                decode_reply(&format!("{wire}\n")),
+                Some(reply.clone()),
+                "{wire}"
+            );
+            let line = encode_reply(&reply);
+            assert!(
+                line.ends_with('\n') && line.matches('\n').count() == 1,
+                "{line:?}"
+            );
+            let encoded: Value = serde_json::from_str(&line).expect("one JSON line");
+            let expected: Value = serde_json::from_str(wire).expect("a literal JSON line");
+            assert_eq!(encoded, expected, "{wire}");
+        }
+    }
+
     proptest! {
         /// Every reply survives the wire as exactly one line.
         #[test]

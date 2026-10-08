@@ -738,32 +738,131 @@ mod tests {
         }
     }
 
+    /// What a development build does with one fault-seam value.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum SeamOutcome {
+        Loads(TestFault),
+        /// Blank: provokes nothing, like an unset seam.
+        NoFault,
+        Refused,
+    }
+
+    /// The fault seam's documented values, written out literally (never
+    /// derived from `TestFault::ALL`, `token` or `from_token`), with near
+    /// misses of each. Every setting is trimmed, so surrounding whitespace
+    /// still names the fault, and a blank value provokes nothing.
+    const FAULT_SEAM_TABLE: [(&str, SeamOutcome); 18] = [
+        (
+            "first_pass_panics",
+            SeamOutcome::Loads(TestFault::FirstPassPanics),
+        ),
+        (
+            "store_poisoned",
+            SeamOutcome::Loads(TestFault::StorePoisoned),
+        ),
+        (
+            "search_store_read_fails",
+            SeamOutcome::Loads(TestFault::SearchStoreReadFails),
+        ),
+        ("purge_fails", SeamOutcome::Loads(TestFault::PurgeFails)),
+        ("purge_fails ", SeamOutcome::Loads(TestFault::PurgeFails)),
+        (
+            "\tstore_poisoned\n",
+            SeamOutcome::Loads(TestFault::StorePoisoned),
+        ),
+        ("", SeamOutcome::NoFault),
+        ("   ", SeamOutcome::NoFault),
+        ("FIRST_PASS_PANICS", SeamOutcome::Refused),
+        ("Store_Poisoned", SeamOutcome::Refused),
+        ("first_pass", SeamOutcome::Refused),
+        ("purge", SeamOutcome::Refused),
+        ("search_store_read_fail", SeamOutcome::Refused),
+        ("store_poisoned_", SeamOutcome::Refused),
+        ("first pass panics", SeamOutcome::Refused),
+        ("first-pass-panics", SeamOutcome::Refused),
+        ("purge_fails,store_poisoned", SeamOutcome::Refused),
+        ("none", SeamOutcome::Refused),
+    ];
+
+    /// The literal token of each fault. No wildcard arm: a new fault does not
+    /// compile until it has a literal row.
+    const fn literal_token_of(fault: TestFault) -> &'static str {
+        match fault {
+            TestFault::FirstPassPanics => "first_pass_panics",
+            TestFault::StorePoisoned => "store_poisoned",
+            TestFault::SearchStoreReadFails => "search_store_read_fails",
+            TestFault::PurgeFails => "purge_fails",
+        }
+    }
+
+    /// A value from the literal table, or a generated lower-case string that
+    /// is none of the four literal tokens (so always refused).
+    fn arb_fault_seam_value() -> impl Strategy<Value = (String, SeamOutcome)> {
+        prop_oneof![
+            proptest::sample::select(FAULT_SEAM_TABLE.to_vec())
+                .prop_map(|(value, outcome)| (value.to_string(), outcome)),
+            "[a-z_]{1,24}"
+                .prop_filter("not a literal fault token", |value| {
+                    ![
+                        "first_pass_panics",
+                        "store_poisoned",
+                        "search_store_read_fails",
+                        "purge_fails",
+                    ]
+                    .contains(&value.as_str())
+                })
+                .prop_map(|value| (value, SeamOutcome::Refused)),
+        ]
+    }
+
     proptest! {
         /// Universe = the whole loaded [`IndexerConfig`]. The TEST-ONLY fault
         /// seam: a release build refuses it whatever its value, naming it; a
-        /// development build loads exactly the known faults (changing only
-        /// `test_fault`) and refuses any other value.
+        /// development build loads exactly the literal fault its value names
+        /// (changing only `test_fault`), provokes nothing for a blank value,
+        /// and refuses any other value naming it.
         #[test]
         fn the_fault_seam_loads_only_known_faults_and_only_in_a_development_build(
-            value in prop_oneof![
-                proptest::sample::select(TestFault::ALL.to_vec()).prop_map(|f| f.token().to_string()),
-                "[a-z_]{1,24}",
-            ],
+            (value, outcome) in arb_fault_seam_value(),
         ) {
             let env = BTreeMap::from([(TEST_FAULT_VAR, value.clone())]);
             let release = parse_config(|name| env.get(name).cloned(), BuildProfile::Release);
-            prop_assert_eq!(release.map_err(|r| r.variable), Err(TEST_FAULT_VAR));
+            prop_assert_eq!(
+                release.map_err(|r| (r.variable, r.value)),
+                Err((TEST_FAULT_VAR, value.trim().to_string()))
+            );
             let baseline = parse(&BTreeMap::new()).expect("an empty environment loads");
-            match (parse(&env), TestFault::from_token(&value)) {
-                (Ok(config), Some(fault)) => {
+            match (parse(&env), outcome) {
+                (Ok(config), SeamOutcome::Loads(fault)) => {
                     prop_assert_eq!(config, IndexerConfig { test_fault: Some(fault), ..baseline });
                 }
-                (Err(refusal), None) => {
+                (Ok(config), SeamOutcome::NoFault) => prop_assert_eq!(config, baseline),
+                (Err(refusal), SeamOutcome::Refused) => {
                     prop_assert_eq!(refusal.variable, TEST_FAULT_VAR);
                     prop_assert_eq!(refusal.value, value);
                 }
-                (outcome, fault) => prop_assert!(false, "{:?} for {:?}", outcome, fault),
+                (actual, expected) => {
+                    prop_assert!(false, "{:?} for {:?}: expected {:?}", actual, value, expected);
+                }
             }
+        }
+    }
+
+    // bypass: a coverage check over the closed set of faults; a generator adds nothing.
+    /// Every fault has exactly one literal row naming it by its literal token,
+    /// so the table cannot silently fall behind a new fault.
+    #[test]
+    fn every_test_fault_has_a_literal_row() {
+        assert_eq!(TestFault::ALL.len(), 4, "a new fault needs a literal row");
+        for fault in TestFault::ALL {
+            let rows: Vec<&str> = FAULT_SEAM_TABLE
+                .iter()
+                .filter(|(value, outcome)| {
+                    *outcome == SeamOutcome::Loads(fault) && *value == literal_token_of(fault)
+                })
+                .map(|(value, _)| *value)
+                .collect();
+            assert_eq!(rows, [literal_token_of(fault)], "{fault:?}");
         }
     }
 
