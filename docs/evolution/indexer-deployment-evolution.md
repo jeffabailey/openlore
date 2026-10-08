@@ -177,14 +177,22 @@ medium findings plus L1/L2 were fixed:
 - **L3** (corrected 2026-10-08): not a defect. ADR-082 accepts only `1` or unset for
   `OPENLORE_INDEXER_PURGE_UNLISTED`; any other value, `0` included, is refused by design, which is
   what the code does.
+  *Resolved by fix-indexer-deployment-follow-ups (`148e63e`): not a defect; this note corrected.
+  See [`fix-indexer-deployment-follow-ups-evolution.md`](fix-indexer-deployment-follow-ups-evolution.md).*
 - **L4**: stale `SCAFFOLD` headers remain in some files.
 - **L5** (resolved 2026-10-08, fix-indexer-deployment-follow-ups D2): `not_live` now counts a
   canned search answering 500, and the binary logs `indexer.search.store_error`.
+  *Resolved by fix-indexer-deployment-follow-ups (`148e63e`, review fixes `5f2f5a5`).*
 - Tautological oracles (TEST_FAULT property, CORE-4) still present alongside the new concrete tests.
+  *Resolved by fix-indexer-deployment-follow-ups (`13bd6de`): literal oracles for TEST_FAULT,
+  CORE-4, CORE-5 (one failure per call) and the control wire text. Pass-failure precedence is
+  still unpinned.*
 - `send_idempotent` retry is now redundant (one request per search) and could be removed.
 - DuckDB cap parsing is duplicated across the indexer and the review app.
 - `render-secrets.sh` (review app) should move to per-file rename (same inode trap as H1; today
   rotating needs a restart).
+  *Resolved by fix-indexer-deployment-follow-ups (`18f0e01`, `5f2f5a5`): per-file rename, the
+  directory is never swapped; rotation stays restart-based.*
 - Tighten `TRUSTED_PROXIES` to the actual `pds_default` subnet.
 - `deploy.sh` lacks `measure`, `kpi` and `test-alarm` modes; the runbook does them by hand.
 - Mutation run for `adapter-index-store` purge (CI nightly).
