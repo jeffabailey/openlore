@@ -30,3 +30,6 @@ Why missed: the mutants were killed by adding concrete tests, but the self-refer
 - D2: the host health check counts search 500 (not 503/429/408) toward A3 not_live, plus a structured search store-error log event from the binary. No new alarm.
 - D3: include the per-file render-secrets hardening in this delivery.
 - D4: fix all four oracles.
+
+## Known gaps
+- No test pins pass-failure precedence (the first failure ends a pass, ingest_pass.rs): `with_fault` takes one fault; PS-17/PS-20 cover single failures.

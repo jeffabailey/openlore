@@ -433,9 +433,11 @@ proptest! {
     /// A pass that ended on a local failure exits 2 naming that failure's
     /// literal cause token, whatever its DIDs did; with no failure it exits 3
     /// when every listed DID was skipped (a total outage) and 0 otherwise,
-    /// naming no cause. The code under test receives at most one failure:
-    /// which failure ends a pass is ingest_pass.rs's (the first), covered by
-    /// its acceptance tests, not chosen here.
+    /// naming no cause. The code under test receives at most one failure.
+    /// Which failure ends a pass (ingest_pass.rs stops at the first) is NOT
+    /// pinned by any test today: `with_fault` takes one fault and PS-17/PS-20
+    /// cover single failures only. Recorded as a follow-up in
+    /// docs/feature/fix-indexer-deployment-follow-ups/rca.md.
     #[test]
     fn a_pass_s_exit_code_puts_local_failures_before_outages_before_success(
         failure in proptest::option::of(prop::sample::select(FAILURE_EXITS.to_vec())),
