@@ -46,7 +46,7 @@ Runs as root on the host. One JSON line per run to the journal and to stream `ho
 
 ```json
 {"event":"indexer.host.health","ts":"…","running":1,"healthz_ok":1,"search_ok":1,"search_ms":42,
- "summary_45m":1,"summary_check":"ok","dids_age_s":310,"restarts":0,"oom_killed":0,
+ "search_status":200,"summary_45m":1,"summary_check":"ok","dids_age_s":310,"restarts":0,"oom_killed":0,
  "indexer_mem_mb":61,"host_mem_available_mb":243,"swap_in_kb":0,"pds_free_mb":3810,"not_live":0}
 ```
 
@@ -54,11 +54,12 @@ Runs as root on the host. One JSON line per run to the journal and to stream `ho
 |---|---|
 | `running`, `restarts`, `oom_killed`, `indexer_mem_mb` | `docker inspect` / `docker stats` on `openlore-indexer` (restart deltas kept in `/pds/indexer/state/health.state`, as the review-app timer does) |
 | `healthz_ok` | `curl -fsS -m 5 --resolve index.openlore.jeffbailey.us:443:127.0.0.1 https://index.openlore.jeffbailey.us/healthz` returns 200 with `"status":"ok"` (a 503 for an unusable store is a failure) |
-| `search_ok`, `search_ms` | `POST` of a fixed canned body (`/pds/indexer/bin/search-probe.json`, no user data) through the same route; 200 and `time_total` |
+| `search_ok`, `search_ms` | `POST` of a fixed canned body (`/pds/indexer/bin/search-probe.json`, no user data) through the same route; `search_ok` is 1 only for a 2xx answer, `search_ms` its `time_total` |
+| `search_status` | that search's HTTP status (curl without `-f`, so a 500 is still read); 0 when there was no HTTP answer (no connection or a timeout) |
 | `summary_45m`, `summary_check` | `aws logs filter-log-events --log-group-name /openlore/prod/indexer --filter-pattern '{ $.event = "indexer.ingest.pass_summary" }' --start-time <now-45m> --max-items 1`. 1 if any event; `summary_check = error` if the API call fails (then `summary_45m = 0`, fail closed). Because it reads the **shipped** log, it also proves the awslogs pipeline works end to end. |
 | `dids_age_s` | `now - mtime(/pds/indexer/config/.rendered-at)`; a missing file counts as infinitely old |
 | `host_mem_available_mb`, `swap_in_kb`, `pds_free_mb` | `/proc/meminfo`, `/proc/vmstat` delta, `df -Pm /pds` |
-| **`not_live`** | **1 if** `running = 0` **or** `healthz_ok = 0` **or** `summary_45m = 0` (which includes `summary_check = error`) **or** `dids_age_s > 7200`; else 0. This is the single A3 input. The bats test asserts `not_live = 1` for a failing `FilterLogEvents`. |
+| **`not_live`** | **1 if** `running = 0` **or** `healthz_ok = 0` **or** `summary_45m = 0` (which includes `summary_check = error`) **or** `dids_age_s > 7200` **or** `search_status = 500` (the index could not serve the canned search; the binary logs `indexer.search.store_error`); else 0. A 503 (busy during a pass or purge), 429, 408 or 0 (no answer) makes `search_ok = 0` but does **not** count. This is the single A3 input. The bats test asserts `not_live = 1` for a failing `FilterLogEvents`. |
 
 Hung-process guard (mirrors the review-app timer): if the container is running but `/healthz`
 has failed 3 runs in a row (6 min), `docker restart openlore-indexer` and count the restart.

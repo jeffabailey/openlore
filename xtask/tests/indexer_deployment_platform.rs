@@ -20,6 +20,8 @@
 //! * XP-16 `deploy.sh deploy <digest>` REAL run: the image's revision label must have green CI (both deploy scripts)
 //! * XP-17 ci.yml: an image is only built, signed and pushed after every test job of the commit is green
 //! * XP-18 compose: X-Forwarded-For is trusted only from the Docker bridge ranges pds_default comes from
+//! * XP-19 `health-timer.sh` REAL run: a search answering 500 makes the health line `not_live = 1` (D2)
+//! * XP-20 `health-timer.sh` REAL run: a 503/429/408 or unanswered search is `search_ok = 0` but not `not_live`
 //!
 //! The shell scripts run under `bash` with stub `aws`/`gh`/`cosign`/… on PATH
 //! that record every call; nothing reaches AWS, GitHub or a registry. Live
@@ -548,7 +550,7 @@ fn a_failed_or_empty_read_keeps_the_last_good_list_and_never_fails_the_pass() {
 // =============================================================================
 
 /// One `health-timer.sh run` against stub `docker` (container running), `curl`
-/// (`/healthz` ok, search ok), a fresh `.rendered-at`, and a stub `aws` whose
+/// (`/healthz` ok, search answering 200), a fresh `.rendered-at`, and a stub `aws` whose
 /// `filter-log-events` either finds a `pass_summary` or fails. Returns the run
 /// and its `indexer.host.health` line, whitespace removed.
 #[cfg(unix)]
@@ -568,6 +570,35 @@ const FOUND_SUMMARY: &str =
 /// `health_run` with an arbitrary `filter-log-events` stub body and extra env.
 #[cfg(unix)]
 fn health_run_with(filter: &str, extra_env: &[(&str, String)]) -> (Run, String) {
+    health_run_answering(filter, extra_env, SearchAnswer::Status("200"))
+}
+
+/// How the stub `curl` answers the health probe's canned search.
+#[derive(Clone, Copy, Debug)]
+enum SearchAnswer {
+    /// An HTTP answer with this status (curl exits 0: the script calls it without `-f`).
+    Status(&'static str),
+    /// No HTTP answer at all: curl writes `000` and exits with this code
+    /// (7 = could not connect, 28 = timed out).
+    NoAnswer(&'static str),
+}
+
+/// The stub `curl`: `/healthz` answers ok; the search honours `-w` by
+/// substituting `%{http_code}` and `%{time_total}` (0.012 s) into the format,
+/// and `-f` by exiting 22 for a status of 400 or more (as real curl does).
+const CURL_STUB: &str = "case \"$*\" in\n  *healthz*) echo '{\"status\":\"ok\",\"last_successful_pass_at\":null}'; exit 0 ;;\nesac\nfmt=''\nfail=0\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    -w) fmt=\"$2\" ;;\n    --*) ;;\n    -*f*) fail=1 ;;\n  esac\n  shift\ndone\nfmt=\"${fmt//%\\{http_code\\}/@STATUS@}\"\nfmt=\"${fmt//%\\{time_total\\}/0.012}\"\nprintf '%s' \"$fmt\"\nif [ \"$fail\" = 1 ] && [ @STATUS@ -ge 400 ]; then exit 22; fi\nexit @EXIT@";
+
+/// `health_run_with` whose canned search gets `search` from the stub `curl`.
+#[cfg(unix)]
+fn health_run_answering(
+    filter: &str,
+    extra_env: &[(&str, String)],
+    search: SearchAnswer,
+) -> (Run, String) {
+    let (status, exit) = match search {
+        SearchAnswer::Status(status) => (status, "0"),
+        SearchAnswer::NoAnswer(exit) => ("000", exit),
+    };
     let stubs = Stubs::new();
     stubs.add(
         "docker",
@@ -575,7 +606,9 @@ fn health_run_with(filter: &str, extra_env: &[(&str, String)]) -> (Run, String) 
     );
     stubs.add(
         "curl",
-        "case \"$*\" in\n  *healthz*) echo '{\"status\":\"ok\",\"last_successful_pass_at\":null}' ;;\n  *) echo '{\"results\":[]}' ;;\nesac\nexit 0",
+        &CURL_STUB
+            .replace("@STATUS@", status)
+            .replace("@EXIT@", exit),
     );
     stubs.add(
         "aws",
@@ -639,6 +672,98 @@ fn the_liveness_line_fails_closed_when_the_shipped_heartbeat_cannot_be_read() {
             "a FilterLogEvents error counts as not live: missing {needle}\n{}",
             failed.out
         );
+    }
+}
+
+/// XP-19 @fix-indexer-deployment-follow-ups @D2 @ADR-080-7 @error @infrastructure @real-io
+/// @contract-shape:pure-function
+/// ```gherkin
+/// Scenario: A search that answers 500 makes the host not live
+///   Given the indexer container is running, /healthz answers ok, a pass_summary was
+///     shipped and the DID list is fresh
+///   When the host health check runs and the canned search answers HTTP 500
+///   Then the health line reports search_ok 0, search_status 500 and not_live 1
+///   And the check itself still exits 0
+/// ```
+#[cfg(unix)]
+#[test]
+fn a_search_500_makes_the_host_not_live() {
+    let (run, line) = health_run_answering(FOUND_SUMMARY, &[], SearchAnswer::Status("500"));
+    assert_eq!(
+        run.status, 0,
+        "the health check never fails its unit\n{}",
+        run.out
+    );
+    for needle in [
+        "\"healthz_ok\":1",
+        "\"summary_45m\":1",
+        "\"search_ok\":0",
+        "\"search_status\":500",
+        "\"not_live\":1",
+    ] {
+        assert!(
+            line.contains(needle),
+            "a search the store cannot serve counts as not live: missing {needle}\n{}",
+            run.out
+        );
+    }
+}
+
+/// XP-20 @fix-indexer-deployment-follow-ups @D2 @ADR-080-7 @infrastructure @real-io
+/// @contract-shape:pure-function
+/// ```gherkin
+/// Scenario: A busy, throttled or timed-out search does not make the host not live
+///   Given the same healthy host
+///   When the canned search answers 503, 429 or 408, or gets no HTTP answer at all
+///   Then the health line reports search_ok 0 and not_live 0
+///   When the canned search answers 200
+///   Then the health line reports search_ok 1, search_status 200 and not_live 0
+/// ```
+#[cfg(unix)]
+#[test]
+fn a_busy_throttled_or_timed_out_search_does_not_make_the_host_not_live() {
+    let table: [(SearchAnswer, &str, &str); 6] = [
+        (
+            SearchAnswer::Status("503"),
+            "\"search_ok\":0",
+            "\"search_status\":503",
+        ),
+        (
+            SearchAnswer::Status("429"),
+            "\"search_ok\":0",
+            "\"search_status\":429",
+        ),
+        (
+            SearchAnswer::Status("408"),
+            "\"search_ok\":0",
+            "\"search_status\":408",
+        ),
+        (
+            SearchAnswer::NoAnswer("7"),
+            "\"search_ok\":0",
+            "\"search_status\":0",
+        ),
+        (
+            SearchAnswer::NoAnswer("28"),
+            "\"search_ok\":0",
+            "\"search_status\":0",
+        ),
+        (
+            SearchAnswer::Status("200"),
+            "\"search_ok\":1",
+            "\"search_status\":200",
+        ),
+    ];
+    for (answer, search_ok, search_status) in table {
+        let (run, line) = health_run_answering(FOUND_SUMMARY, &[], answer);
+        assert_eq!(run.status, 0, "[{answer:?}] exits 0\n{}", run.out);
+        for needle in [search_ok, search_status, "\"not_live\":0"] {
+            assert!(
+                line.contains(needle),
+                "[{answer:?}] missing {needle} in the health line\n{}",
+                run.out
+            );
+        }
     }
 }
 

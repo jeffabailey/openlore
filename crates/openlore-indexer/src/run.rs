@@ -51,7 +51,9 @@ use crate::probe_gauntlet::{
     capability_boundary_probe, check_probe, control_channel_probe, origin_classification_probe,
     probe_gauntlet, ProbeRefusal,
 };
-use crate::search_handler::{search_handler, unreadable_index, SearchTruncated, SharedIndexReads};
+use crate::search_handler::{
+    search_handler, unreadable_index, SearchStoreError, SearchTruncated, SharedIndexReads,
+};
 use crate::Command;
 
 /// The one shared index handle: read + write side, safe to share across the
@@ -452,6 +454,7 @@ fn serve_searches(wiring: &IndexerWiring, status: StatusReader) -> i32 {
     let handler = search_handler(
         Arc::clone(&wiring.index_reads),
         Arc::new(emit_search_truncated),
+        Arc::new(emit_search_store_error),
     );
 
     let listen_addr: std::net::SocketAddr = match wiring.listen_addr.parse() {
@@ -520,16 +523,30 @@ pub(crate) fn current_thread_runtime() -> std::io::Result<tokio::runtime::Runtim
 /// Log a search cut at the row cap: the dimension and the cap, never the
 /// searched value (ADR-083 §3).
 fn emit_search_truncated(cut: SearchTruncated) {
-    let dimension = match cut.dimension {
+    emit(serde_json::json!({
+        "event": "indexer.search.truncated",
+        "dimension": dimension_token(cut.dimension),
+        "cap": cut.cap,
+    }));
+}
+
+/// Log a search the index could not answer (it is answered 500): the
+/// dimension only, never the searched value or the store's error text
+/// (ADR-080 §7, WD-105). For diagnosis; it pages nothing.
+fn emit_search_store_error(failed: SearchStoreError) {
+    emit(serde_json::json!({
+        "event": "indexer.search.store_error",
+        "dimension": dimension_token(failed.dimension),
+    }));
+}
+
+/// The log token of a search dimension.
+fn dimension_token(dimension: SearchDimension) -> &'static str {
+    match dimension {
         SearchDimension::Object => "object",
         SearchDimension::Subject => "subject",
         SearchDimension::Contributor => "contributor",
-    };
-    emit(serde_json::json!({
-        "event": "indexer.search.truncated",
-        "dimension": dimension,
-        "cap": cut.cap,
-    }));
+    }
 }
 
 /// `openlore-indexer stats` — report index coverage (claims indexed, distinct

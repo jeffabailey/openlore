@@ -38,11 +38,32 @@ pub struct SearchTruncated {
 /// Where a cut search is reported (the composition root logs it).
 pub type TruncationLog = Arc<dyn Fn(SearchTruncated) + Send + Sync>;
 
+/// A search the index could not answer: it becomes a 500 (ADR-080 §7).
+/// Carries the dimension only: never the value, never the store's error text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchStoreError {
+    pub dimension: SearchDimension,
+}
+
+/// Where a search the index could not answer is reported (the composition
+/// root logs it).
+pub type StoreErrorLog = Arc<dyn Fn(SearchStoreError) + Send + Sync>;
+
 /// The `serve` query handler: every request is answered from `reads`; a
-/// search cut at the row cap is reported to `on_truncated`.
-pub fn search_handler(reads: SharedIndexReads, on_truncated: TruncationLog) -> QueryHandler {
+/// search cut at the row cap is reported to `on_truncated`, and a search the
+/// index could not answer to `on_store_error`.
+pub fn search_handler(
+    reads: SharedIndexReads,
+    on_truncated: TruncationLog,
+    on_store_error: StoreErrorLog,
+) -> QueryHandler {
     Arc::new(move |request: SearchQueryRequest| {
-        handle_search(reads.as_ref(), request, on_truncated.as_ref())
+        handle_search(
+            reads.as_ref(),
+            request,
+            on_truncated.as_ref(),
+            on_store_error.as_ref(),
+        )
     })
 }
 
@@ -92,20 +113,26 @@ impl IndexReadPort for UnreadableIndex {
 /// compose per-author via the PURE `appview_domain::compose_results`, and project
 /// the per-author structure back to a FLAT attributed wire response (every
 /// `author_did` present; the `distinct_author_count` is the pure COUNT, never a
-/// merge). A store error is [`IndexUnavailable`] (a 500), never an empty
-/// result the client would read as "no results" (ADR-080 §7).
+/// merge). A store error is reported to `on_store_error` and answered as
+/// [`IndexUnavailable`] (a 500), never an empty result the client would read
+/// as "no results" (ADR-080 §7).
 fn handle_search(
     reads: &dyn IndexReadPort,
     request: SearchQueryRequest,
     on_truncated: &(dyn Fn(SearchTruncated) + Send + Sync),
+    on_store_error: &(dyn Fn(SearchStoreError) + Send + Sync),
 ) -> Result<SearchQueryResponse, IndexUnavailable> {
     let dimension = from_dto_dimension(request.dimension);
+    let unavailable = |_store_error: IndexStoreError| {
+        on_store_error(SearchStoreError { dimension });
+        IndexUnavailable
+    };
     let rows = match dimension {
         SearchDimension::Object => reads.query_by_object(&request.value),
         SearchDimension::Subject => reads.query_by_subject(&request.value),
         SearchDimension::Contributor => reads.query_by_contributor(&Did(request.value.clone())),
     };
-    let (rows, cut) = capped(rows.map_err(|_store_error| IndexUnavailable)?);
+    let (rows, cut) = capped(rows.map_err(unavailable)?);
     if cut {
         on_truncated(SearchTruncated {
             dimension,
@@ -121,7 +148,9 @@ fn handle_search(
     let composed = compose_results(rows.clone(), dimension);
     let results = flat_attributed_rows(&composed, &rows);
     let suggestion = match (dimension, results.is_empty()) {
-        (SearchDimension::Object, true) => suggest_object(reads, &request.value)?,
+        (SearchDimension::Object, true) => {
+            suggest_object(reads, &request.value).map_err(unavailable)?
+        }
         _ => composed.suggestion,
     };
     Ok(SearchQueryResponse {
@@ -139,10 +168,8 @@ fn handle_search(
 fn suggest_object(
     reads: &dyn IndexReadPort,
     object: &str,
-) -> Result<Option<String>, IndexUnavailable> {
-    let near = reads
-        .objects_near(object, SUGGESTION_MAX_DISTANCE)
-        .map_err(|_store_error| IndexUnavailable)?;
+) -> Result<Option<String>, IndexStoreError> {
+    let near = reads.objects_near(object, SUGGESTION_MAX_DISTANCE)?;
     Ok(near_match_suggestion(object, &near))
 }
 
@@ -223,5 +250,149 @@ fn from_dto_dimension(dim: SearchDimensionDto) -> SearchDimension {
         SearchDimensionDto::Object => SearchDimension::Object,
         SearchDimensionDto::Contributor => SearchDimension::Contributor,
         SearchDimensionDto::Subject => SearchDimension::Subject,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use proptest::prelude::*;
+
+    use super::*;
+
+    /// Which reads of the index fail.
+    #[derive(Debug, Clone, Copy)]
+    enum IndexHealth {
+        /// Every read answers (with nothing).
+        Readable,
+        /// Every read fails.
+        Unreadable,
+        /// The dimension queries answer (with nothing); the near-object read fails.
+        NearObjectsUnreadable,
+    }
+
+    struct FakeIndex(IndexHealth);
+
+    impl FakeIndex {
+        fn query(&self) -> Result<Vec<IndexedClaim>, IndexStoreError> {
+            match self.0 {
+                IndexHealth::Unreadable => Err(IndexStoreError::QueryFailed {
+                    message: "fake: the index cannot be read".to_string(),
+                }),
+                _ => Ok(Vec::new()),
+            }
+        }
+    }
+
+    impl IndexReadPort for FakeIndex {
+        fn query_by_object(&self, _: &str) -> Result<Vec<IndexedClaim>, IndexStoreError> {
+            self.query()
+        }
+        fn query_by_contributor(&self, _: &Did) -> Result<Vec<IndexedClaim>, IndexStoreError> {
+            self.query()
+        }
+        fn query_by_subject(&self, _: &str) -> Result<Vec<IndexedClaim>, IndexStoreError> {
+            self.query()
+        }
+        fn get_by_cid(&self, _: &Cid) -> Result<Option<IndexedClaim>, IndexStoreError> {
+            Ok(None)
+        }
+        fn objects_near(&self, _: &str, _: usize) -> Result<Vec<String>, IndexStoreError> {
+            match self.0 {
+                IndexHealth::Readable => Ok(Vec::new()),
+                _ => Err(IndexStoreError::QueryFailed {
+                    message: "fake: the near-object read fails".to_string(),
+                }),
+            }
+        }
+    }
+
+    /// The observable universe of one search: the handler's answer and every
+    /// report it made.
+    #[derive(Debug)]
+    struct Observed {
+        answered: bool,
+        store_errors: Vec<SearchStoreError>,
+        truncations: Vec<SearchTruncated>,
+    }
+
+    fn search_once(health: IndexHealth, dimension: SearchDimensionDto, value: &str) -> Observed {
+        let store_errors = Arc::new(Mutex::new(Vec::new()));
+        let truncations = Arc::new(Mutex::new(Vec::new()));
+        let handler = search_handler(
+            Arc::new(FakeIndex(health)),
+            {
+                let truncations = Arc::clone(&truncations);
+                Arc::new(move |cut| truncations.lock().expect("lock").push(cut))
+            },
+            {
+                let store_errors = Arc::clone(&store_errors);
+                Arc::new(move |failed| store_errors.lock().expect("lock").push(failed))
+            },
+        );
+        let answer = handler(SearchQueryRequest {
+            dimension,
+            value: value.to_string(),
+            cid: None,
+        });
+        if let Err(unavailable) = answer.as_ref() {
+            assert_eq!(*unavailable, IndexUnavailable);
+        }
+        let store_errors = store_errors.lock().expect("lock").clone();
+        let truncations = truncations.lock().expect("lock").clone();
+        Observed {
+            answered: answer.is_ok(),
+            store_errors,
+            truncations,
+        }
+    }
+
+    /// The wire dimension next to the domain dimension it must be reported as
+    /// (a literal table: the oracle never calls the mapping under test).
+    fn dimensions() -> impl Strategy<Value = (SearchDimensionDto, SearchDimension)> {
+        prop_oneof![
+            Just((SearchDimensionDto::Object, SearchDimension::Object)),
+            Just((SearchDimensionDto::Subject, SearchDimension::Subject)),
+            Just((
+                SearchDimensionDto::Contributor,
+                SearchDimension::Contributor
+            )),
+        ]
+    }
+
+    /// A searched value carrying a sentinel no report could contain by accident.
+    fn sentinel_values() -> impl Strategy<Value = String> {
+        "[a-z0-9:/._-]{0,40}".prop_map(|tail| format!("SENTINEL-{tail}"))
+    }
+
+    proptest! {
+        /// State delta over {answer, store-error reports, truncation reports}.
+        #[test]
+        fn a_store_error_is_reported_once_with_the_dimension_and_never_the_value(
+            (wire, domain) in dimensions(),
+            value in sentinel_values(),
+        ) {
+            let unreadable = search_once(IndexHealth::Unreadable, wire, &value);
+            prop_assert!(!unreadable.answered);
+            prop_assert_eq!(&unreadable.store_errors, &vec![SearchStoreError { dimension: domain }]);
+            prop_assert!(unreadable.truncations.is_empty());
+            prop_assert!(!format!("{unreadable:?}").contains("SENTINEL"), "{:?}", unreadable);
+
+            let readable = search_once(IndexHealth::Readable, wire, &value);
+            prop_assert!(readable.answered);
+            prop_assert!(readable.store_errors.is_empty(), "{:?}", readable);
+            prop_assert!(readable.truncations.is_empty());
+
+            // The near-object read is made only for an object search with no rows.
+            let near_fails = search_once(IndexHealth::NearObjectsUnreadable, wire, &value);
+            let expected: Vec<SearchStoreError> = match domain {
+                SearchDimension::Object => vec![SearchStoreError { dimension: SearchDimension::Object }],
+                _ => Vec::new(),
+            };
+            prop_assert_eq!(near_fails.answered, expected.is_empty());
+            prop_assert_eq!(&near_fails.store_errors, &expected);
+            prop_assert!(!format!("{near_fails:?}").contains("SENTINEL"), "{:?}", near_fails);
+        }
     }
 }

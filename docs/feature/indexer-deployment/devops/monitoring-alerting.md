@@ -50,7 +50,11 @@ and the `not_live` cause fields; then monitoring-alerting.md §2.3".
   ≤ 15 min). It also catches a crash-looping `serve` (`health.startup.refused` on each restart)
   and a poisoned store. It returns to OK after one clean period, and the email says so (AC-004.4).
 - **A3, liveness (all three user conditions folded into one alarm):** the host line computes
-  `not_live` from every cause, so one cheap single-metric alarm serves all of them. Two 5-minute
+  `not_live` from every cause, so one cheap single-metric alarm serves all of them. Its causes:
+  container not running, `/healthz` not ok, no shipped `pass_summary` in 45 min, a DID list older
+  than 2 h, or the canned search answering **500** (`search_status = 500`: the index cannot serve
+  searches). A search answering 503 (busy during a pass or purge), 429, 408 or nothing at all does
+  **not** count, so a busy pass never pages. Two 5-minute
   periods (about 10 min) ride out a deploy's ≤ 30 s gap (at most one failing 2-minute sample) and
   a single transient API error. Missing data is breaching, so a dead host, a dead health timer,
   or broken log shipping from the host all page. The 45-minute heartbeat reads the **shipped**
@@ -100,6 +104,7 @@ Read the `cause` of the last `pass_summary` or the refused event:
 | `running = 0` / `oom_killed = 1` | Crash, OOM, or a manual stop | `deploy.sh host-status`. On OOM: memory runbook (infrastructure-integration §9.6). If the PDS is at risk, `deploy.sh stop` first: the PDS holds the operator's identity; the index is expendable. |
 | `healthz_ok = 0` | Hung `serve` (the timer restarts it after 6 min), store unusable (503), Caddy site missing | `curl` the route; check `/pds/caddy/sites/index.caddy` and reload Caddy; `deploy.sh rollback` if it began with a deploy. |
 | `summary_45m = 0` | Pass timer stopped, `trigger` exit 4 (socket missing), passes hanging, or awslogs broken | `systemctl list-timers openlore-indexer-*`; journal of `openlore-indexer-pass.service` (exit codes); if the journal shows passes but CloudWatch does not, check dockerd's awslogs errors (`journalctl -u docker`) and the IAM policy. |
+| `search_status = 500` | The index cannot serve searches (`/healthz` may still be ok) | Read `indexer.search.store_error` events (they name the dimension only) in `/openlore/prod/indexer`; `deploy.sh host-status`; if it persists, `deploy.sh redeploy` reopens the store; `deploy.sh rollback` if it began with a deploy. |
 | `summary_check = error` | Host role cannot call `FilterLogEvents` | Check `indexer-iam.tf` was applied; IMDS reachable from the host. |
 | `dids_age_s > 7200` | SSM reads failing for 2 h (`render_failed` in the journal and `host-dids` stream), parameter deleted, IAM | `aws ssm get-parameter` from the laptop; re-apply IAM. Passes keep using the last good list meanwhile. |
 

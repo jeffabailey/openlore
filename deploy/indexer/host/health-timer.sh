@@ -16,7 +16,13 @@
 #                                        the last 45 min; any FilterLogEvents error sets
 #                                        summary_check = error and summary_45m = 0: fail closed)
 #             or dids_age_s > 7200      (.rendered-at older than 2 h; missing = infinitely old)
+#             or search_status = 500    (the canned search answered 500: the index could not
+#                                        serve it; the binary logs indexer.search.store_error)
 #              else 0.
+#
+# search_status is the canned search's HTTP status (0 when there was none: no connection or a
+# timeout). search_ok = 1 only for a 2xx answer. 503 (busy during a pass or purge), 429, 408 and
+# 0 make search_ok 0 but never not_live, so a busy pass never pages; A3's 2-of-2 absorbs a blip.
 #
 # Hung-process guard (as the review-app timer): if the container runs but /healthz has failed
 # FAIL_LIMIT runs in a row, `docker restart openlore-indexer` and count the restart.
@@ -93,19 +99,21 @@ healthz_ok() { # 1 if /healthz answers 200 with "status":"ok" through Caddy on l
   if [[ "${body//[[:space:]]/}" == *'"status":"ok"'* ]]; then echo 1; else echo 0; fi
 }
 
-search_probe() { # prints "<search_ok> <search_ms>"
-  local seconds
-  if seconds=$(curl -fsS -o /dev/null -m 5 -w '%{time_total}' \
+search_probe() { # prints "<search_ok> <search_ms> <search_status>"
+  # No -f: a 500 must still be read. curl writes 000 when there was no HTTP answer.
+  local out status="" seconds="" search_ok=0 search_ms=0
+  out=$(curl -sS -o /dev/null -m 5 -w '%{http_code} %{time_total}' \
     --resolve "$HOST:443:127.0.0.1" -X POST -H 'content-type: application/json' \
-    --data "$SEARCH_BODY" "https://$HOST$SEARCH_PATH" 2>/dev/null); then
+    --data "$SEARCH_BODY" "https://$HOST$SEARCH_PATH" 2>/dev/null) || true
+  read -r status seconds <<<"$out" || true
+  if [[ "$status" =~ ^[0-9]{1,3}$ ]]; then status=$((10#$status)); else status=0; fi
+  if [ "$status" -ge 200 ] && [ "$status" -le 299 ]; then
+    search_ok=1
     if [[ "$seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-      echo "1 $(awk -v s="$seconds" 'BEGIN { printf "%d", s * 1000 }')"
-    else
-      echo "1 0"
+      search_ms=$(awk -v s="$seconds" 'BEGIN { printf "%d", s * 1000 }')
     fi
-  else
-    echo "0 0"
   fi
+  echo "$search_ok $search_ms $status"
 }
 
 summary_check() { # prints "<summary_45m> <ok|error>"; any API error fails closed
@@ -165,7 +173,7 @@ emit() { # $1 = the JSON line: stdout (journal) and the host-health stream (best
 }
 
 run_once() {
-  local cid running=0 healthz=0 search_ok=0 search_ms=0 restarts=0 oom=0 mem_mb=0 count=0
+  local cid running=0 healthz=0 search_ok=0 search_ms=0 search_status=0 restarts=0 oom=0 mem_mb=0 count=0
   local fails=0 summary_45m=0 summary_state=error dids_age not_live=0
   local prev_cid="" prev_count=0 prev_oom=0 prev_fails=0 prev_swapin=""
   local host_mem swapin swap_in_kb=0 pds_free
@@ -209,14 +217,14 @@ run_once() {
         is_uint "$count" || count=0
       fi
     fi
-    read -r search_ok search_ms <<<"$(search_probe)"
+    read -r search_ok search_ms search_status <<<"$(search_probe)"
   fi
 
   read -r summary_45m summary_state <<<"$(summary_check)"
   dids_age=$(dids_age_s)
 
   if [ "$running" != 1 ] || [ "$healthz" != 1 ] || [ "$summary_45m" != 1 ] ||
-    [ "$dids_age" -gt "$DIDS_MAX_AGE_S" ]; then
+    [ "$dids_age" -gt "$DIDS_MAX_AGE_S" ] || [ "${search_status:-0}" = 500 ]; then
     not_live=1
   fi
 
@@ -231,8 +239,8 @@ run_once() {
     echo "${cid:--} $count $oom $fails ${swapin:-}" >"$STATE" 2>/dev/null || true
   fi
 
-  emit "$(printf '{"event":"indexer.host.health","ts":"%s","running":%d,"healthz_ok":%d,"search_ok":%d,"search_ms":%d,"summary_45m":%d,"summary_check":"%s","dids_age_s":%d,"restarts":%d,"oom_killed":%d,"indexer_mem_mb":%d,"host_mem_available_mb":%d,"swap_in_kb":%d,"pds_free_mb":%d,"not_live":%d}' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$running" "$healthz" "${search_ok:-0}" "${search_ms:-0}" \
+  emit "$(printf '{"event":"indexer.host.health","ts":"%s","running":%d,"healthz_ok":%d,"search_ok":%d,"search_ms":%d,"search_status":%d,"summary_45m":%d,"summary_check":"%s","dids_age_s":%d,"restarts":%d,"oom_killed":%d,"indexer_mem_mb":%d,"host_mem_available_mb":%d,"swap_in_kb":%d,"pds_free_mb":%d,"not_live":%d}' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$running" "$healthz" "${search_ok:-0}" "${search_ms:-0}" "$(uint_or_zero "${search_status:-0}")" \
     "${summary_45m:-0}" "${summary_state:-error}" "$dids_age" "$restarts" "$oom" \
     "$(uint_or_zero "$mem_mb")" \
     "$(uint_or_zero "$host_mem")" "$swap_in_kb" \

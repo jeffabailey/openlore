@@ -250,7 +250,7 @@ AC-006.3. A pass in progress is abandoned (`trigger` exits 4) and recovers on th
 | Performance | Search ≤ 1 s p95, including during a pass | One process. A pass holds the store for at most one transaction. Row cap 1000. Executor never blocked by the pass (ADR-080 §6). |
 | Reliability: fault tolerance | One PDS down never fails the pass | Unchanged ADR-078 isolation |
 | Reliability: recoverability | Crash or kill mid-pass or mid-purge, a panic, a poisoned store | Per-claim transactions, resumable purge, rebuildable index, `restart: unless-stopped`. `catch_unwind` per pass. Exit on an unusable store. `/healthz` 503 and search 500 instead of a false green (ADR-080 §7). |
-| Reliability: liveness | Stuck pass, dead timer, stale DID list | 25-minute pass deadline. A3 covers no `pass_summary` in 45 min, a failing `/healthz`, and a DID list stale for more than 2 h. |
+| Reliability: liveness | Stuck pass, dead timer, stale DID list | 25-minute pass deadline. A3 covers no `pass_summary` in 45 min, a failing `/healthz`, a DID list stale for more than 2 h, and the canned search answering 500 (503, 429 and 408 do not count). |
 | Reliability: availability | 99% monthly, ≤ 30 s per deploy | One container, readiness through `/healthz`, automatic rollback |
 | Security: integrity | No public request can change the index | Two-layer route allowlist. Search handler holds the read port only. Control channel is a Unix socket. |
 | Security: confidentiality and isolation | No credentials, no `/pds`, read-only root, non-root | ADR-075 container posture. DID list rendered on the host. |
@@ -353,8 +353,9 @@ All changes are in existing crates. There is **no schema migration and no lexico
    - A3 liveness: no `pass_summary` for 45 min (missing data counts as breaching), **or** the host
      health line reporting `indexer_live = 0`. The host health timer sets `indexer_live = 0` when
      the public `/healthz` probe fails (including a 503 for an unusable store), **or** when the DID
-     list is stale, meaning `.rendered-at` is older than 2 h. That folds M5 into A3, so there is
-     no extra alarm.
+     list is stale, meaning `.rendered-at` is older than 2 h, **or** when the canned search
+     answers 500 (`search_status = 500`; a 503, 429, 408 or no answer does not count). That folds
+     M5 into A3, so there is no extra alarm.
 
    Each must be test-fired before go-live, at ≤ $0.30/month.
 7. **Freshness command**: `deploy.sh status`, a Logs Insights query as in §6.3, answering in ≤ 10 s.

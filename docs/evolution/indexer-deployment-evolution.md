@@ -174,9 +174,12 @@ medium findings plus L1/L2 were fixed:
 
 ## Open follow-ups
 
-- **L3**: `PURGE_UNLISTED=0` is refused, while ADR-082 lists it as a valid value.
+- **L3** (corrected 2026-10-08): not a defect. ADR-082 accepts only `1` or unset for
+  `OPENLORE_INDEXER_PURGE_UNLISTED`; any other value, `0` included, is refused by design, which is
+  what the code does.
 - **L4**: stale `SCAFFOLD` headers remain in some files.
-- **L5**: `not_live` ignores a search 500 (only `/healthz` is probed).
+- **L5** (resolved 2026-10-08, fix-indexer-deployment-follow-ups D2): `not_live` now counts a
+  canned search answering 500, and the binary logs `indexer.search.store_error`.
 - Tautological oracles (TEST_FAULT property, CORE-4) still present alongside the new concrete tests.
 - `send_idempotent` retry is now redundant (one request per search) and could be removed.
 - DuckDB cap parsing is duplicated across the indexer and the review app.

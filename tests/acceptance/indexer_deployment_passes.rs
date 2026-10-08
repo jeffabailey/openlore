@@ -658,6 +658,53 @@ fn a_search_that_cannot_read_the_index_is_reported_as_unavailable_never_as_no_re
     );
 }
 
+/// fix-indexer-deployment-follow-ups D2
+/// ```gherkin
+/// @US-IXD-001 @ADR-080-7 @error @real-io @contract-shape:bounded-change
+/// Scenario: A search that cannot read the index logs a store error without the query
+///   Given the index cannot be read when anyone searches
+///   When someone searches by object for a sentinel value
+///   Then the public search answers with a server error
+///   And the index logs exactly one indexer.search.store_error naming the object dimension
+///   And that event never carries the searched value
+/// ```
+#[test]
+fn a_search_that_cannot_read_the_index_logs_a_store_error_without_the_query() {
+    const SENTINEL: &str = "https://openlore.invalid/store-error-sentinel-7f3a";
+    let world = given_authors_publish_on_their_own_pdses();
+    let live = LiveIndex::deploy(
+        &world,
+        Deployment::listing(&dids(&[Author::Priya])).with_fault(Fault::SearchCannotReadTheStore),
+    );
+    assert!(
+        live.events_named("indexer.search.store_error").is_empty(),
+        "non-vacuity: no store error before any search\n{}",
+        live.dump()
+    );
+
+    let (status, body, _) = live.public_search("object", SENTINEL);
+
+    assert_eq!(status, 500, "{body}\n{}", live.dump());
+    // The event line is written before the 500 goes out; give the reader thread a moment.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while live.events_named("indexer.search.store_error").is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let reported = live.events_named("indexer.search.store_error");
+    assert_eq!(
+        reported.len(),
+        1,
+        "exactly one store error\n{}",
+        live.dump()
+    );
+    assert_eq!(reported[0]["dimension"], "object", "{}", reported[0]);
+    assert!(
+        !live.dump().contains("store-error-sentinel-7f3a"),
+        "the searched value is never logged\n{}",
+        live.dump()
+    );
+}
+
 // =============================================================================
 // Health and restarts (ADR-083 §2, ADR-080 Earned Trust)
 // =============================================================================

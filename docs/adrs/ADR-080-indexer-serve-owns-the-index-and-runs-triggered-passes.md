@@ -85,6 +85,11 @@ Facts from the code (2026-10-06):
      (`run.rs` `rows.unwrap_or_default()`), which looks like "no results" to the client and hides
      the fault.
    - `GET /healthz` returns **503** while the store is marked unusable (ADR-083).
+   - *Amendment 2026-10-08 (fix-indexer-deployment-follow-ups RCA, D2):* a search store error is
+     now logged as `indexer.search.store_error {dimension}` (never the query value) before the 500,
+     and the host health check counts a canned search answering 500 (`search_status = 500`)
+     toward `not_live`, so alarm A3 pages a store that cannot serve searches. A 503, 429 or 408
+     does not count.
 8. **Pass-level deadline.** A pass that has not finished within **25 minutes** (configurable) is
    ended with `pass_summary {exit_code: 2, cause: "pass_deadline_exceeded"}`. Upserts already
    committed stay committed. This bounds the gate phase, whose app-signed author-key resolution is

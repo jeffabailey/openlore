@@ -273,5 +273,6 @@ stale-list and missing-heartbeat causes of A3. They are not fired live.
 | `running = 0` / `oom_killed = 1` | `deploy.sh host-status`; on OOM see §6; if the PDS is at risk, `deploy.sh stop` first |
 | `healthz_ok = 0` | a hung `serve` (the timer restarts it after 3 failed runs), an unusable store (503), or a missing Caddy site |
 | `summary_45m = 0` | the pass timer, exit 4 in the pass unit's journal, or broken awslogs shipping (`journalctl -u docker`) |
+| `search_status = 500` | the index cannot serve searches: read the `indexer.search.store_error` events (dimension only, no query); `deploy.sh redeploy` reopens the store. A 503, 429, 408 or 0 sets `search_ok = 0` but never `not_live` |
 | `summary_check = error` | the host role cannot call `FilterLogEvents`: check that `indexer-iam.tf` is applied |
 | `dids_age_s > 7200` | `render_failed` in the journal and the `host-dids` stream: SSM, IAM, or a deleted parameter |
