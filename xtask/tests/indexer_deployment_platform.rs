@@ -24,6 +24,8 @@
 //! * XP-20 `health-timer.sh` REAL run: a 503/429/408 or unanswered search is `search_ok = 0` but not `not_live`
 //! * XP-21 review-app `render-secrets.sh` REAL run: two renders replace each secret FILE by rename, drop stale ones, never swap the directory (D3)
 //! * XP-22 review-app `render-secrets.sh` REAL run: a render missing a required secret changes nothing in the directory (D3)
+//! * XP-23..XP-30 `deploy.sh host install/deploy/redeploy` REAL run (both apps): IMDS isolation, the PDS Caddy sites mount + import, adapt + validate before reload (S7, N3)
+//! * XP-31 `deploy.sh host deploy` REAL run: the indexer readiness wait is overridable for the first deploy (N4)
 //!
 //! The shell scripts run under `bash` with stub `aws`/`gh`/`cosign`/… on PATH
 //! that record every call; nothing reaches AWS, GitHub or a registry. Live
@@ -37,7 +39,9 @@
 //! * review-app `render-secrets.sh` honours `REVIEW_APP_SECRETS_DIR` and `REVIEW_APP_SSM_PATH`
 //!   and resolves `aws`, `chown` from `PATH`.
 //! * `deploy.sh` resolves `gh`, `cosign`, `crane`, `aws`, `curl`, `docker` from `PATH`.
-//! * `deploy.sh host install` honours `INDEXER_CADDY_SITES_DIR` (default `/pds/caddy/sites`)
+//! * `deploy.sh host install` honours `INDEXER_CADDY_SITES_DIR` / `REVIEW_APP_CADDY_SITES_DIR`
+//!   (default `/pds/caddy/sites`) and `INDEXER_BASE_DIR` / `REVIEW_APP_BASE_DIR` (default
+//!   `/pds/indexer`, `/pds/app`)
 //!   and resolves `docker`, `install` from `PATH`.
 //! * `health-timer.sh run` honours `INDEXER_CONFIG_DIR`, `INDEXER_STATE_DIR` and
 //!   `INDEXER_AWS_TIMEOUT_S` (default 15), resolves `docker`, `curl`, `aws`, `timeout` from `PATH`, prints its `indexer.host.health` line on stdout,
@@ -1380,36 +1384,366 @@ fn a_hung_heartbeat_query_is_cut_off_and_the_health_line_is_still_written() {
     );
 }
 
-/// One `deploy.sh host install` with a stub `docker` whose `curl --version` positive
-/// control exits `control_rc` and whose IMDS PUT exits `imds_rc`, and a stub `install`
-/// that stops the run right after the isolation check (so `install -d` in the calls
-/// means "isolation was accepted").
+// =============================================================================
+// Host install fails closed (fix-go-live-runbook-gaps S7, N3, N4): IMDS isolation, the PDS
+// Caddy's sites mount + import, and a site Caddy proves it serves before it is reloaded.
+// =============================================================================
+
+/// One app's host side as the tests see it (literal values, never read from the scripts).
+struct HostApp {
+    script: &'static str,
+    sites_env: &'static str,
+    base_env: &'static str,
+    host: &'static str,
+    site_file: &'static str,
+    render: &'static str,
+}
+
+const REVIEW_APP: HostApp = HostApp {
+    script: "deploy/review-app/deploy.sh",
+    sites_env: "REVIEW_APP_CADDY_SITES_DIR",
+    base_env: "REVIEW_APP_BASE_DIR",
+    host: "app.openlore.jeffbailey.us",
+    site_file: "app.caddy",
+    render: "render-secrets.sh",
+};
+
+const INDEXER: HostApp = HostApp {
+    script: "deploy/indexer/deploy.sh",
+    sites_env: "INDEXER_CADDY_SITES_DIR",
+    base_env: "INDEXER_BASE_DIR",
+    host: "index.openlore.jeffbailey.us",
+    site_file: "index.caddy",
+    render: "render-dids.sh",
+};
+
+const BOTH_APPS: [&HostApp; 2] = [&REVIEW_APP, &INDEXER];
+
+const IMPORTING_CADDYFILE: &str =
+    "{\n  admin localhost:2019\n}\n\nimport /etc/caddy/sites/*.caddy\n\nopenlore.jeffbailey.us {\n  reverse_proxy pds:3000\n}\n";
+const SEEDED_SHA: &str = "4f2c1ab9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3";
+
+fn seeded_digest() -> String {
+    format!("sha256:{}", "1".repeat(64))
+}
+
+/// What the stub host answers. Every stub can fail: each field has a value that makes it.
+#[derive(Clone)]
+struct HostAnswers {
+    /// `docker run <probe> --version` (the positive control)
+    control_rc: i32,
+    /// `docker run <probe> … 169.254.169.254 …` (the IMDS PUT)
+    imds_rc: i32,
+    /// `docker inspect` of the PDS Caddy container
+    inspect_rc: i32,
+    /// its Mounts as `Source:Destination` lines; `@SITES@` is the sites dir under test
+    mounts: String,
+    /// `/etc/caddy/Caddyfile` read inside the Caddy container (`None`: the read fails)
+    caddyfile: Option<String>,
+    /// `caddy adapt` output; `@HOST@` is the app's host (`None`: adapt fails)
+    adapt: Option<String>,
+    /// `caddy validate`
+    validate_rc: i32,
+    /// body of the app's render script (`exit 1` stops a deploy right after it); `@BASE@` = app base
+    render: String,
+    /// body of the `curl` stub
+    curl: String,
+    sites_exists: bool,
+    releases_seeded: bool,
+}
+
+impl HostAnswers {
+    fn isolated() -> Self {
+        Self {
+            control_rc: 0,
+            imds_rc: 7,
+            inspect_rc: 0,
+            mounts: "/pds/caddy/data:/data\n/pds/caddy/etc/caddy:/etc/caddy\n@SITES@:/etc/caddy/sites"
+                .to_string(),
+            caddyfile: Some(IMPORTING_CADDYFILE.to_string()),
+            adapt: Some(
+                "{\"apps\":{\"http\":{\"servers\":{\"srv0\":{\"routes\":[{\"match\":[{\"host\":[\"openlore.jeffbailey.us\"]}]},{\"match\":[{\"host\":[\"@HOST@\"]}]}]}}}}}"
+                    .to_string(),
+            ),
+            validate_rc: 0,
+            render: "exit 1".to_string(),
+            curl: "exit 7".to_string(),
+            sites_exists: true,
+            releases_seeded: true,
+        }
+    }
+}
+
+struct HostRun {
+    run: Run,
+    calls: String,
+    sites: PathBuf,
+    base: PathBuf,
+    _keep: (Stubs, tempfile::TempDir, tempfile::TempDir),
+}
+
+impl HostRun {
+    fn installed_anything(&self) -> bool {
+        self.calls.lines().any(|l| l.starts_with("install "))
+    }
+
+    fn position(&self, needle: &str) -> Option<usize> {
+        self.calls.lines().position(|l| l.contains(needle))
+    }
+
+    fn site_path(&self, app: &HostApp) -> PathBuf {
+        self.sites.join(app.site_file)
+    }
+}
+
+#[cfg(unix)]
+fn write_recording_stub(path: &Path, log: &Path, name: &str, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(
+        path,
+        format!(
+            "#!/usr/bin/env bash\necho \"{name} $*\" >> '{}'\n{body}\n",
+            log.display()
+        ),
+    )
+    .expect("write stub");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod stub");
+}
+
+/// `deploy.sh host <args>` for `app` against a stub host answering `answers`; `install`
+/// records and succeeds (writing a placeholder for a `*.caddy` target so its removal shows).
+#[cfg(unix)]
+fn host_run(
+    app: &HostApp,
+    args: &[&str],
+    answers: &HostAnswers,
+    extra_env: &[(&str, String)],
+) -> HostRun {
+    let stubs = Stubs::new();
+    let base_dir = tempfile::tempdir().expect("app base dir");
+    let sites_root = tempfile::tempdir().expect("sites dir");
+    let sites = if answers.sites_exists {
+        sites_root.path().to_path_buf()
+    } else {
+        sites_root.path().join("absent")
+    };
+    let base = base_dir.path().to_path_buf();
+    let files = stubs.dir.path().to_path_buf();
+    let log = files.join("calls.log");
+
+    std::fs::write(
+        files.join("mounts.txt"),
+        answers
+            .mounts
+            .replace("@SITES@", &sites.display().to_string()),
+    )
+    .expect("mounts");
+    let caddyfile_answer = match &answers.caddyfile {
+        Some(text) => {
+            std::fs::write(files.join("Caddyfile.txt"), text).expect("Caddyfile");
+            format!("cat '{}'", files.join("Caddyfile.txt").display())
+        }
+        None => "echo 'cat: /etc/caddy/Caddyfile: No such file' >&2; exit 1".to_string(),
+    };
+    let adapt_answer = match &answers.adapt {
+        Some(text) => {
+            std::fs::write(files.join("adapt.json"), text.replace("@HOST@", app.host))
+                .expect("adapt");
+            format!("cat '{}'", files.join("adapt.json").display())
+        }
+        None => "echo 'adapt: Caddyfile:5 - Error during parsing' >&2; exit 1".to_string(),
+    };
+    stubs.add(
+        "docker",
+        &format!(
+            "case \"$*\" in\n  run*--version*) exit {control} ;;\n  run*169.254.169.254*) exit {imds} ;;\n  *' ps -q caddy'*) echo pds-caddy-1; exit 0 ;;\n  inspect*) [ {inspect} = 0 ] || exit {inspect}; cat '{mounts}'; exit 0 ;;\n  *'exec -T caddy cat /etc/caddy/Caddyfile'*) {caddyfile_answer} ;;\n  *'caddy adapt'*) {adapt_answer} ;;\n  *'caddy validate'*) exit {validate} ;;\nesac\nexit 0",
+            control = answers.control_rc,
+            imds = answers.imds_rc,
+            inspect = answers.inspect_rc,
+            mounts = files.join("mounts.txt").display(),
+            validate = answers.validate_rc,
+        ),
+    );
+    stubs.add(
+        "install",
+        "last=\"${!#}\"\nif [ \"$1\" != -d ]; then\n  case \"$last\" in *.caddy) printf 'site\\n' >\"$last\" ;; esac\nfi\nexit 0",
+    );
+    stubs.add("systemctl", "exit 0");
+    stubs.add("curl", &answers.curl);
+
+    std::fs::create_dir_all(base.join("bin")).expect("bin");
+    std::fs::create_dir_all(base.join("state")).expect("state");
+    write_recording_stub(
+        &base.join("bin").join(app.render),
+        &log,
+        app.render,
+        &answers
+            .render
+            .replace("@BASE@", &base.display().to_string()),
+    );
+    write_recording_stub(
+        &base.join("bin/health-timer.sh"),
+        &log,
+        "health-timer.sh",
+        "exit 0",
+    );
+    if answers.releases_seeded {
+        std::fs::write(
+            base.join("state/releases"),
+            format!("2026-10-01T00:00:00Z {SEEDED_SHA} {}\n", seeded_digest()),
+        )
+        .expect("releases");
+    }
+
+    let mut env = vec![
+        ("PATH", stubs.path_env()),
+        ("HOME", files.display().to_string()),
+        (app.sites_env, sites.display().to_string()),
+        (app.base_env, base.display().to_string()),
+    ];
+    env.extend(extra_env.iter().cloned());
+    let mut argv = vec!["host"];
+    argv.extend_from_slice(args);
+    let run = bash(app.script, &argv, &env);
+    HostRun {
+        run,
+        calls: stubs.calls(),
+        sites,
+        base,
+        _keep: (stubs, base_dir, sites_root),
+    }
+}
+
+/// A refusal is total: non-zero, says so, and the host's state delta is empty (no `install`,
+/// no Caddy reload, no site file).
+#[cfg(unix)]
+fn assert_refused_untouched(app: &HostApp, host: &HostRun, why: &str) {
+    assert_ne!(
+        host.run.status, 0,
+        "{}: {why}\n{}",
+        app.script, host.run.out
+    );
+    assert!(
+        host.run.out.contains("refusing"),
+        "{}: {why}: says it refuses\n{}",
+        app.script,
+        host.run.out
+    );
+    assert!(
+        !host.installed_anything(),
+        "{}: {why}: no host file written\n{}",
+        app.script,
+        host.calls
+    );
+    assert!(
+        !host.calls.contains("caddy reload"),
+        "{}: {why}: Caddy not reloaded\n{}",
+        app.script,
+        host.calls
+    );
+    assert!(
+        !host.site_path(app).exists(),
+        "{}: {why}: no site file left behind",
+        app.script
+    );
+}
+
+/// `deploy.sh host install` with a probe whose positive control exits `control_rc` and whose
+/// IMDS PUT exits `imds_rc` (the Caddy checks pass).
 #[cfg(unix)]
 fn host_install_with_probe(
+    app: &HostApp,
     control_rc: i32,
     imds_rc: i32,
     extra_env: &[(&str, String)],
 ) -> (Run, String) {
-    let stubs = Stubs::new();
-    stubs.add(
-        "docker",
-        &format!(
-            "case \"$*\" in\n  *--version*) exit {control_rc} ;;\n  *169.254.169.254*) exit {imds_rc} ;;\nesac\nexit 0"
-        ),
-    );
-    stubs.add("install", "exit 1");
-    let sites = tempfile::tempdir().expect("sites dir");
-    let mut env = vec![
-        ("PATH", stubs.path_env()),
-        ("HOME", stubs.dir.path().display().to_string()),
+    let answers = HostAnswers {
+        control_rc,
+        imds_rc,
+        ..HostAnswers::isolated()
+    };
+    let host = host_run(app, &["install"], &answers, extra_env);
+    (host.run, host.calls)
+}
+
+#[cfg(unix)]
+fn assert_the_imds_probe_fails_closed(app: &HostApp) {
+    let script = app.script;
+    for imds_rc in [7, 28] {
+        let (run, calls) = host_install_with_probe(app, 0, imds_rc, &[]);
+        assert!(
+            calls.contains("install -d"),
+            "{script}: curl exit {imds_rc} proves isolation; the install proceeds\n{}\n{calls}",
+            run.out
+        );
+        let runs: Vec<&str> = calls
+            .lines()
+            .filter(|l| l.starts_with("docker run"))
+            .collect();
+        assert_eq!(
+            runs.len(),
+            2,
+            "{script}: a positive control, then the IMDS probe\n{calls}"
+        );
+        assert!(
+            runs[0].contains("--version"),
+            "{script}: the positive control runs first\n{calls}"
+        );
+        for line in runs {
+            assert!(
+                line.contains("--network pds_default") && line.contains("curlimages/curl@sha256:"),
+                "{script}: the probe runs on pds_default in a digest-pinned image: {line}"
+            );
+        }
+    }
+    for (imds_rc, why) in [
+        (0, "IMDS answered: the container can reach the host role"),
+        (22, "an HTTP error is still an answer from IMDS"),
+        (6, "inconclusive: curl could not resolve"),
         (
-            "INDEXER_CADDY_SITES_DIR",
-            sites.path().display().to_string(),
+            125,
+            "inconclusive: docker could not pull or start the probe",
         ),
-    ];
-    env.extend(extra_env.iter().cloned());
-    let run = bash("deploy/indexer/deploy.sh", &["host", "install"], &env);
-    (run, stubs.calls())
+    ] {
+        let (run, calls) = host_install_with_probe(app, 0, imds_rc, &[]);
+        assert_ne!(run.status, 0, "{script}: {why}\n{}", run.out);
+        assert!(
+            run.out.contains("refusing"),
+            "{script}: {why}: says it refuses\n{}",
+            run.out
+        );
+        assert!(
+            !calls.lines().any(|l| l.starts_with("install ")),
+            "{script}: {why}: no host file written\n{calls}"
+        );
+    }
+    let (run, calls) = host_install_with_probe(app, 125, 7, &[]);
+    assert_ne!(
+        run.status, 0,
+        "{script}: a failed positive control proves nothing\n{}",
+        run.out
+    );
+    assert!(run.out.contains("refusing"), "{script}: {}", run.out);
+    assert!(
+        !calls.contains("169.254.169.254") && !calls.lines().any(|l| l.starts_with("install ")),
+        "{script}: refused before the IMDS probe\n{calls}"
+    );
+    let (run, calls) = host_install_with_probe(
+        app,
+        0,
+        7,
+        &[("IMDS_PROBE_IMAGE", "curlimages/curl:8.10.1".to_string())],
+    );
+    assert_ne!(
+        run.status, 0,
+        "{script}: a tag-pinned probe image is refused\n{}",
+        run.out
+    );
+    assert!(run.out.contains("refusing"), "{script}: {}", run.out);
+    assert!(
+        !calls.contains("docker run") && !calls.lines().any(|l| l.starts_with("install ")),
+        "{script}: refused before any probe ran\n{calls}"
+    );
 }
 
 /// XP-15 @US-IXD-006 @AC-001.6 @C-1 @review-H1 @error @infrastructure @real-io
@@ -1426,79 +1760,466 @@ fn host_install_with_probe(
 #[cfg(unix)]
 #[test]
 fn the_imds_probe_accepts_only_a_proven_unreachable_metadata_service() {
-    for imds_rc in [7, 28] {
-        let (run, calls) = host_install_with_probe(0, imds_rc, &[]);
+    assert_the_imds_probe_fails_closed(&INDEXER);
+}
+
+/// XP-23 @S7 @error @infrastructure @real-io @contract-shape:unbounded-preservation
+/// ```gherkin
+/// Scenario: The review-app install runs the same IMDS isolation contract as the indexer
+///   Given the review app's host install
+///   When the IMDS request ends 7 or 28 after a passing positive control
+///   Then the install proceeds
+///   When it ends 0, 22, 6 or 125, or the control fails, or the probe image is tag-pinned
+///   Then the install is refused before any `install` call
+/// ```
+#[cfg(unix)]
+#[test]
+fn the_review_app_imds_probe_accepts_only_a_proven_unreachable_metadata_service() {
+    assert_the_imds_probe_fails_closed(&REVIEW_APP);
+}
+
+/// XP-24 @S7 @error @infrastructure @real-io @contract-shape:unbounded-preservation
+/// ```gherkin
+/// Scenario: An install refuses unless the PDS Caddy bind-mounts the sites directory
+///   Given the PDS Caddy container mounts <source> at <destination>
+///   When either app is installed
+///   Then it proceeds only for source = the sites dir and destination = /etc/caddy/sites
+/// ```
+#[cfg(unix)]
+#[test]
+fn an_install_refuses_unless_caddy_mounts_the_sites_dir() {
+    for app in BOTH_APPS {
+        let ok = host_run(app, &["install"], &HostAnswers::isolated(), &[]);
+        assert_eq!(ok.run.status, 0, "{}: proceeds\n{}", app.script, ok.run.out);
         assert!(
-            calls.contains("install -d"),
-            "curl exit {imds_rc} proves isolation; the install proceeds\n{}\n{calls}",
-            run.out
+            ok.calls.contains("docker inspect") && ok.calls.contains("caddy reload"),
+            "{}: the mounts were inspected and the site went live\n{}",
+            app.script,
+            ok.calls
         );
-        let runs: Vec<&str> = calls
-            .lines()
-            .filter(|l| l.starts_with("docker run"))
-            .collect();
-        assert_eq!(
-            runs.len(),
-            2,
-            "a positive control, then the IMDS probe\n{calls}"
-        );
-        assert!(
-            runs[0].contains("--version"),
-            "the positive control runs first\n{calls}"
-        );
-        for line in runs {
+        for (mounts, inspect_rc, why) in [
+            (
+                "/pds/caddy/data:/data\n/tmp/other:/etc/caddy/sites",
+                0,
+                "the right destination from another source",
+            ),
+            (
+                "/pds/caddy/data:/data\n@SITES@:/srv/sites",
+                0,
+                "the right source at another destination",
+            ),
+            ("/pds/caddy/data:/data", 0, "no sites mount at all"),
+            (
+                "/pds/caddy/data:/data\n@SITES@:/etc/caddy/sites",
+                1,
+                "docker inspect failed",
+            ),
+        ] {
+            let answers = HostAnswers {
+                mounts: mounts.to_string(),
+                inspect_rc,
+                ..HostAnswers::isolated()
+            };
+            let host = host_run(app, &["install"], &answers, &[]);
+            assert_refused_untouched(app, &host, why);
             assert!(
-                line.contains("--network pds_default") && line.contains("curlimages/curl@sha256:"),
-                "the probe runs on pds_default in a digest-pinned image: {line}"
+                host.run.out.contains("tofu-aws-pds v1.7.0"),
+                "{}: {why}: points at the module release\n{}",
+                app.script,
+                host.run.out
             );
         }
     }
-    for (imds_rc, why) in [
-        (0, "IMDS answered: the container can reach the host role"),
-        (22, "an HTTP error is still an answer from IMDS"),
-        (6, "inconclusive: curl could not resolve"),
-        (
-            125,
-            "inconclusive: docker could not pull or start the probe",
-        ),
-    ] {
-        let (run, calls) = host_install_with_probe(0, imds_rc, &[]);
-        assert_ne!(run.status, 0, "{why}\n{}", run.out);
+}
+
+/// XP-25 @S7 @error @infrastructure @real-io @contract-shape:unbounded-preservation
+/// ```gherkin
+/// Scenario: An install refuses unless the Caddyfile imports the sites
+///   Given the Caddyfile inside the PDS Caddy container
+///   When it has a line `import /etc/caddy/sites/*.caddy` (optionally indented)
+///   Then the install proceeds
+///   When the import is commented out, names another directory, is inside other text, is absent,
+///        or the Caddyfile cannot be read
+///   Then the install is refused before any host file is written
+/// ```
+#[cfg(unix)]
+#[test]
+fn an_install_refuses_unless_the_caddyfile_imports_the_sites() {
+    for app in BOTH_APPS {
+        for caddyfile in [
+            "import /etc/caddy/sites/*.caddy\n",
+            "{\n  admin localhost:2019\n}\n\t  import   /etc/caddy/sites/*.caddy\n",
+        ] {
+            let answers = HostAnswers {
+                caddyfile: Some(caddyfile.to_string()),
+                ..HostAnswers::isolated()
+            };
+            let host = host_run(app, &["install"], &answers, &[]);
+            assert_eq!(
+                host.run.status, 0,
+                "{}: {caddyfile:?} imports the sites\n{}",
+                app.script, host.run.out
+            );
+            assert!(host.calls.contains("caddy reload"), "{}", host.calls);
+        }
+        for (caddyfile, why) in [
+            (
+                Some("# import /etc/caddy/sites/*.caddy\nopenlore.jeffbailey.us {\n}\n"),
+                "a commented import",
+            ),
+            (
+                Some("import /etc/caddy/other/*.caddy\n"),
+                "an import of another directory",
+            ),
+            (
+                Some("respond \"import /etc/caddy/sites/*.caddy\"\n"),
+                "the import inside other text",
+            ),
+            (
+                Some("openlore.jeffbailey.us {\n  reverse_proxy pds:3000\n}\n"),
+                "no import",
+            ),
+            (None, "the Caddyfile cannot be read"),
+        ] {
+            let answers = HostAnswers {
+                caddyfile: caddyfile.map(str::to_string),
+                ..HostAnswers::isolated()
+            };
+            let host = host_run(app, &["install"], &answers, &[]);
+            assert_refused_untouched(app, &host, why);
+            assert!(
+                host.run.out.contains("tofu-aws-pds v1.7.0"),
+                "{}: {why}: points at the module release\n{}",
+                app.script,
+                host.run.out
+            );
+        }
+    }
+}
+
+/// XP-26 @S7 @error @infrastructure @real-io @contract-shape:bounded-change
+/// ```gherkin
+/// Scenario: A site Caddy does not serve is removed and refused
+///   Given the site file is placed in the sites dir
+///   When `caddy adapt` of the Caddyfile does not name the app's host (or fails)
+///   Then the site file is removed, Caddy is not reloaded, and the install exits non-zero
+///   When it names the host
+///   Then Caddy is reloaded after adapt and validate
+/// ```
+#[cfg(unix)]
+#[test]
+fn a_site_caddy_does_not_serve_is_removed_and_refused() {
+    for app in BOTH_APPS {
+        for (adapt, why) in [
+            (
+                Some("{\"apps\":{\"http\":{\"servers\":{\"srv0\":{\"routes\":[{\"match\":[{\"host\":[\"openlore.jeffbailey.us\"]}]}]}}}}}"),
+                "the adapted config serves only the PDS",
+            ),
+            (
+                Some("{\"apps\":{\"http\":{\"servers\":{\"srv0\":{\"routes\":[{\"match\":[{\"host\":[\"x@HOST@\"]}]}]}}}}}"),
+                "the adapted config serves another host containing it",
+            ),
+            (None, "caddy adapt failed"),
+        ] {
+            let answers = HostAnswers {
+                adapt: adapt.map(str::to_string),
+                ..HostAnswers::isolated()
+            };
+            let host = host_run(app, &["install"], &answers, &[]);
+            assert_ne!(host.run.status, 0, "{}: {why}\n{}", app.script, host.run.out);
+            assert!(
+                host.calls
+                    .contains(&host.site_path(app).display().to_string()),
+                "{}: {why}: the site file was placed first\n{}",
+                app.script,
+                host.calls
+            );
+            assert!(
+                !host.site_path(app).exists(),
+                "{}: {why}: the site file is removed",
+                app.script
+            );
+            assert!(
+                !host.calls.contains("caddy reload"),
+                "{}: {why}: Caddy not reloaded\n{}",
+                app.script,
+                host.calls
+            );
+        }
+        let ok = host_run(app, &["install"], &HostAnswers::isolated(), &[]);
+        assert_eq!(ok.run.status, 0, "{}\n{}", app.script, ok.run.out);
+        let adapt = ok.position("caddy adapt").expect("adapt ran");
+        let validate = ok.position("caddy validate").expect("validate ran");
+        let reload = ok.position("caddy reload").expect("reload ran");
         assert!(
-            run.out.contains("refusing"),
-            "{why}: says it refuses\n{}",
-            run.out
+            adapt < reload && validate < reload,
+            "{}: reload after adapt and validate\n{}",
+            app.script,
+            ok.calls
         );
+        assert!(ok.site_path(app).exists(), "{}: the site stays", app.script);
+    }
+}
+
+/// XP-27 @S7 @error @infrastructure @real-io @contract-shape:unbounded-preservation
+/// ```gherkin
+/// Scenario: A deploy or redeploy that fails the probe leaves the running app untouched
+///   Given a host with a release recorded
+///   When `host deploy <digest> <sha>` or `host redeploy` runs and IMDS answers (or the import is commented)
+///   Then no secrets are rendered, no image is pulled, nothing is stopped and nothing is started
+/// ```
+#[cfg(unix)]
+#[test]
+fn a_deploy_or_redeploy_that_fails_the_probe_leaves_the_running_app_untouched() {
+    let digest = format!("sha256:{}", "0".repeat(64));
+    for app in BOTH_APPS {
+        for args in [
+            vec!["deploy", digest.as_str(), SEEDED_SHA],
+            vec!["redeploy"],
+        ] {
+            let reached = host_run(app, &args, &HostAnswers::isolated(), &[]);
+            assert!(
+                reached.calls.contains(app.render),
+                "{} {args:?}: non-vacuity: an isolated host reaches the render\n{}\n{}",
+                app.script,
+                reached.run.out,
+                reached.calls
+            );
+            for (answers, why) in [
+                (
+                    HostAnswers {
+                        imds_rc: 0,
+                        ..HostAnswers::isolated()
+                    },
+                    "IMDS answered",
+                ),
+                (
+                    HostAnswers {
+                        caddyfile: Some("# import /etc/caddy/sites/*.caddy\n".to_string()),
+                        ..HostAnswers::isolated()
+                    },
+                    "the sites import is commented out",
+                ),
+            ] {
+                let host = host_run(app, &args, &answers, &[]);
+                let why = format!("{args:?}: {why}");
+                assert_refused_untouched(app, &host, &why);
+                for forbidden in [app.render, "docker pull"] {
+                    assert!(
+                        !host.calls.contains(forbidden),
+                        "{}: {why}: no {forbidden}\n{}",
+                        app.script,
+                        host.calls
+                    );
+                }
+                for line in host.calls.lines().filter(|l| l.contains("compose")) {
+                    for verb in [" stop", " down", " up "] {
+                        assert!(
+                            !line.contains(verb),
+                            "{}: {why}: the app is not stopped or started: {line}",
+                            app.script
+                        );
+                    }
+                }
+                assert!(
+                    !host.base.join(".env").exists(),
+                    "{}: {why}: the running digest is unchanged",
+                    app.script
+                );
+            }
+        }
+    }
+}
+
+/// XP-28 @S7 @error @infrastructure @real-io @contract-shape:unbounded-preservation
+/// ```gherkin
+/// Scenario: The review-app install never creates the sites directory
+///   Given the sites directory does not exist (tofu-aws-pds v1.7.0 not applied)
+///   When the review app is installed
+///   Then it refuses, and the directory still does not exist
+/// ```
+#[cfg(unix)]
+#[test]
+fn the_review_app_install_never_creates_the_sites_directory() {
+    let app = &REVIEW_APP;
+    let host = host_run(
+        app,
+        &["install"],
+        &HostAnswers {
+            sites_exists: false,
+            ..HostAnswers::isolated()
+        },
+        &[],
+    );
+    assert_refused_untouched(app, &host, "the sites dir is missing");
+    assert!(!host.sites.exists(), "the sites dir was not created");
+    let ok = host_run(app, &["install"], &HostAnswers::isolated(), &[]);
+    assert_eq!(ok.run.status, 0, "{}", ok.run.out);
+    let sites = ok.sites.display().to_string();
+    for line in ok.calls.lines() {
         assert!(
-            !calls.contains("install -d"),
-            "{why}: no host file written\n{calls}"
+            !((line.starts_with("install -d") || line.starts_with("mkdir"))
+                && line.contains(&sites)),
+            "the install never creates the sites dir: {line}"
         );
     }
-    let (run, calls) = host_install_with_probe(125, 7, &[]);
-    assert_ne!(
-        run.status, 0,
-        "a failed positive control proves nothing\n{}",
-        run.out
+    for line in read(app.script).lines() {
+        assert!(
+            !((line.contains("install -d") || line.contains("mkdir"))
+                && (line.contains("/pds/caddy/sites") || line.contains("$SITES"))),
+            "no code path creates the sites dir: {line}"
+        );
+    }
+}
+
+/// XP-29 @N3 @error @infrastructure @real-io @contract-shape:bounded-change
+/// ```gherkin
+/// Scenario: A rejected app site is removed and Caddy is not reloaded
+///   Given the site file is placed and Caddy serves its host
+///   When `caddy validate` rejects the Caddyfile
+///   Then the site file is removed, Caddy is not reloaded, and the install exits non-zero
+/// ```
+#[cfg(unix)]
+#[test]
+fn a_rejected_app_site_is_removed_and_caddy_is_not_reloaded() {
+    for app in BOTH_APPS {
+        let host = host_run(
+            app,
+            &["install"],
+            &HostAnswers {
+                validate_rc: 1,
+                ..HostAnswers::isolated()
+            },
+            &[],
+        );
+        assert_ne!(host.run.status, 0, "{}\n{}", app.script, host.run.out);
+        assert!(host.calls.contains("caddy validate"), "{}", host.calls);
+        assert!(!host.calls.contains("caddy reload"), "{}", host.calls);
+        assert!(
+            !host.site_path(app).exists(),
+            "{}: the rejected site is removed",
+            app.script
+        );
+        let ok = host_run(app, &["install"], &HostAnswers::isolated(), &[]);
+        let validate = ok.position("caddy validate").expect("validate ran");
+        let reload = ok.position("caddy reload").expect("reload ran");
+        assert!(
+            validate < reload,
+            "{}: validate before reload\n{}",
+            app.script,
+            ok.calls
+        );
+    }
+}
+
+/// The text between the shared-contract markers of a deploy script.
+fn shared_isolation_contract(script: &str) -> String {
+    let text = read(script);
+    let start = text
+        .find("# >>> shared isolation contract")
+        .unwrap_or_else(|| panic!("{script}: has the shared isolation contract"));
+    let end = text
+        .find("# <<< shared isolation contract")
+        .unwrap_or_else(|| panic!("{script}: closes the shared isolation contract"));
+    text[start..end].to_string()
+}
+
+/// XP-30 @S7 @infrastructure @contract-shape:pure-function
+/// ```gherkin
+/// Scenario: Both apps refuse with the same isolation contract
+///   Then the isolation and Caddy-site functions are identical text in both deploy scripts
+///   And both pin the probe image by digest and accept only curl exit 7 or 28
+///   And both key the sites dir on SITES
+/// ```
+#[test]
+fn both_apps_refuse_with_the_same_isolation_contract() {
+    let indexer = shared_isolation_contract(INDEXER.script);
+    let review_app = shared_isolation_contract(REVIEW_APP.script);
+    assert_eq!(indexer, review_app, "the shared isolation contract drifted");
+    for needle in [
+        "refuse_unless_isolated()",
+        "curlimages/curl@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b",
+        "7 | 28)",
+        "0 | 22)",
+        "'^[[:space:]]*import[[:space:]]+/etc/caddy/sites/\\*\\.caddy'",
+        "docker inspect",
+        "adapt --config",
+        "validate --config",
+    ] {
+        assert!(
+            indexer.contains(needle),
+            "the contract has {needle}\n{indexer}"
+        );
+    }
+    assert!(read(REVIEW_APP.script)
+        .lines()
+        .any(|l| l == "SITES=\"${REVIEW_APP_CADDY_SITES_DIR:-/pds/caddy/sites}\""));
+    assert!(read(INDEXER.script)
+        .lines()
+        .any(|l| l == "SITES=\"${INDEXER_CADDY_SITES_DIR:-/pds/caddy/sites}\""));
+}
+
+/// XP-31 @N4 @infrastructure @real-io @contract-shape:bounded-change
+/// ```gherkin
+/// Scenario: The first indexer deploy may wait longer for its certificate
+///   Given the operator passes a readiness wait for a deploy (default 60 s)
+///   When the new digest never answers /healthz
+///   Then the host polls for exactly that long, and a wait that is not a number is refused
+/// ```
+#[cfg(unix)]
+#[test]
+fn the_first_indexer_deploy_may_wait_longer_for_its_certificate() {
+    let digest = format!("sha256:{}", "0".repeat(64));
+    let answers = HostAnswers {
+        render: "mkdir -p '@BASE@/config' && echo did:plc:abc > '@BASE@/config/repo-dids'"
+            .to_string(),
+        releases_seeded: false,
+        ..HostAnswers::isolated()
+    };
+    let host = host_run(
+        &INDEXER,
+        &["deploy", &digest, SEEDED_SHA, "4"],
+        &answers,
+        &[],
     );
+    assert_ne!(host.run.status, 0, "never ready\n{}", host.run.out);
+    let polls = host
+        .calls
+        .lines()
+        .filter(|l| l.starts_with("curl") && l.contains("/healthz"))
+        .count();
+    assert_eq!(
+        polls, 2,
+        "a 4 s wait polls twice, 2 s apart\n{}",
+        host.calls
+    );
+
+    let host = host_run(
+        &INDEXER,
+        &["deploy", &digest, SEEDED_SHA, "soon"],
+        &answers,
+        &[],
+    );
+    assert_ne!(host.run.status, 0, "{}", host.run.out);
+    assert!(host.run.out.contains("refusing"), "{}", host.run.out);
+    assert!(!host.installed_anything(), "{}", host.calls);
+
+    let stubs = deploy_stubs("success", true);
+    let run = bash(
+        INDEXER.script,
+        &["deploy", &digest],
+        &[
+            ("PATH", stubs.path_env()),
+            ("HOME", stubs.dir.path().display().to_string()),
+            ("INDEXER_READY_WAIT_S", "soon".to_string()),
+        ],
+    );
+    assert_ne!(run.status, 0, "{}", run.out);
     assert!(run.out.contains("refusing"), "{}", run.out);
     assert!(
-        !calls.contains("169.254.169.254") && !calls.contains("install -d"),
-        "refused before the IMDS probe\n{calls}"
-    );
-    let (run, calls) = host_install_with_probe(
-        0,
-        7,
-        &[("IMDS_PROBE_IMAGE", "curlimages/curl:8.10.1".to_string())],
-    );
-    assert_ne!(
-        run.status, 0,
-        "a tag-pinned probe image is refused\n{}",
-        run.out
-    );
-    assert!(run.out.contains("refusing"), "{}", run.out);
-    assert!(
-        !calls.contains("docker run"),
-        "refused before any probe ran\n{calls}"
+        stubs.calls().is_empty(),
+        "refused before any tool ran\n{}",
+        stubs.calls()
     );
 }
 

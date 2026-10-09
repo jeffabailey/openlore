@@ -19,7 +19,8 @@
 #
 # Rollback is designed first: the host keeps an append-only releases file
 # (`<utc> <sha> <digest> ready_s=<n>`). If the new digest does not answer /healthz through Caddy
-# within 60 s, the host restarts the previous digest by itself and this exits 1. There is no
+# within 60 s (INDEXER_READY_WAIT_S=<s> on the laptop overrides it: the FIRST deploy also waits
+# for Caddy to issue index.'s certificate, so give it longer, e.g. 300), the host restarts the previous digest by itself and this exits 1. There is no
 # data restore: the index is a rebuildable cache with no schema change between releases;
 # `rollback --reset-index` moves it aside and lets the next passes rebuild it.
 #
@@ -54,6 +55,7 @@ die() {
 
 is_digest() { [[ "$1" =~ ^sha256:[0-9a-f]{64}$ ]]; }
 is_git_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
+is_wait() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 2 ]; }
 
 # --------------------------------------------------------------------------------------------
 # Laptop side
@@ -227,7 +229,8 @@ post_checks() {
 }
 
 laptop_deploy() { # $1 = git sha or digest
-  local ref="${1:-}" sha=unknown digest
+  local ref="${1:-}" sha=unknown digest wait_s="${INDEXER_READY_WAIT_S:-60}"
+  is_wait "$wait_s" || die "refusing INDEXER_READY_WAIT_S='$wait_s': whole seconds, at least 2"
   if is_digest "$ref"; then
     digest="$ref"
   elif is_git_sha "$ref"; then
@@ -247,7 +250,7 @@ laptop_deploy() { # $1 = git sha or digest
   fi
   pre_checks
   start_pds_poller
-  remote deploy "$digest" "$sha"
+  remote deploy "$digest" "$sha" "$wait_s"
   post_checks
   stop_pds_poller
   echo "deployed $IMAGE@$digest"
@@ -330,31 +333,57 @@ laptop_status() {
 # Host side (root, via SSM). Paths per infrastructure-integration.md §1.
 # --------------------------------------------------------------------------------------------
 
-BASE=/pds/indexer
+BASE="${INDEXER_BASE_DIR:-/pds/indexer}"
 DATA=$BASE/data
 CONFIG=$BASE/config
 STATE=$BASE/state
 RELEASES=$STATE/releases
 UNITS=/etc/systemd/system
 SITES="${INDEXER_CADDY_SITES_DIR:-/pds/caddy/sites}"
+compose() { docker compose -f "$BASE/compose.yaml" "$@"; }
+
+# >>> shared isolation contract: byte-identical in deploy/indexer/deploy.sh and
+# deploy/review-app/deploy.sh (xtask both_apps_refuse_with_the_same_isolation_contract).
+# Needs SITES (the host dir the PDS Caddy serves as /etc/caddy/sites) and die.
 # curlimages/curl:8.10.1, multi-arch index digest (read from the registry with `crane digest`).
 IMDS_PROBE_IMAGE="${IMDS_PROBE_IMAGE:-curlimages/curl@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b}"
+CADDY_SITES=/etc/caddy/sites
+CADDYFILE=/etc/caddy/Caddyfile
+NEEDS_MODULE="apply tofu-aws-pds v1.7.0 (R-REPLACE) first"
 
-compose() { docker compose -f "$BASE/compose.yaml" "$@"; }
-pds_caddy() { docker compose -f /pds/compose.yaml exec -T caddy caddy "$@"; }
+pds_compose() { docker compose -f /pds/compose.yaml "$@"; }
+pds_caddy() { pds_compose exec -T caddy caddy "$@"; }
 
 imds_probe() { # $@ = curl args, run by curl in the pinned probe image on the PDS network
   docker run --rm --network pds_default "$IMDS_PROBE_IMAGE" "$@" >/dev/null 2>&1
 }
 
+# A site file in $SITES is only served if the PDS Caddy bind-mounts THAT directory at
+# /etc/caddy/sites and its Caddyfile imports it on a live (uncommented) line.
+refuse_unless_caddy_imports_sites() {
+  local caddy mounts caddyfile
+  caddy=$(pds_compose ps -q caddy 2>/dev/null) || caddy=""
+  [ -n "$caddy" ] || die "refusing: the PDS Caddy container is not running; $NEEDS_MODULE"
+  mounts=$(docker inspect --format '{{range .Mounts}}{{.Source}}:{{.Destination}}{{println}}{{end}}' "$caddy" 2>/dev/null) ||
+    die "refusing: cannot inspect the PDS Caddy container's mounts; $NEEDS_MODULE"
+  grep -qxF "$SITES:$CADDY_SITES" <<<"$mounts" ||
+    die "refusing: the PDS Caddy does not mount $SITES at $CADDY_SITES; $NEEDS_MODULE"
+  caddyfile=$(pds_compose exec -T caddy cat "$CADDYFILE" 2>/dev/null) ||
+    die "refusing: cannot read $CADDYFILE in the PDS Caddy container; $NEEDS_MODULE"
+  grep -qE '^[[:space:]]*import[[:space:]]+/etc/caddy/sites/\*\.caddy' <<<"$caddyfile" ||
+    die "refusing: $CADDYFILE does not import $CADDY_SITES/*.caddy; $NEEDS_MODULE"
+}
+
 # §8: never start a public container that could reach the host role. Fails CLOSED: only a
 # probe that provably ran curl on pds_default and then could not connect (7) or timed out (28)
 # proves isolation; an answer (0, or 22 for an HTTP error) or any other outcome refuses.
+# Runs before any host file is written.
 refuse_unless_isolated() {
   local rc=0
-  [ -d "$SITES" ] || die "refusing: $SITES does not exist (tofu-aws-pds v1.7.0 not applied)"
+  [ -d "$SITES" ] || die "refusing: $SITES does not exist; $NEEDS_MODULE"
   [[ "$IMDS_PROBE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] ||
     die "refusing: IMDS_PROBE_IMAGE '$IMDS_PROBE_IMAGE' is not pinned by digest"
+  refuse_unless_caddy_imports_sites
   imds_probe --version ||
     die "refusing: the IMDS probe cannot run curl on pds_default (positive control failed); isolation unproven"
   imds_probe -sS -m 3 -X PUT http://169.254.169.254/latest/api/token \
@@ -365,6 +394,25 @@ refuse_unless_isolated() {
     *) die "refusing: the IMDS probe was inconclusive (exit $rc); isolation unproven" ;;
   esac
 }
+
+# Places one app's site file, then reloads Caddy only once the adapted config serves the
+# app's host and the whole Caddyfile validates; otherwise removes the file and refuses.
+install_caddy_site() { # $1 = site file, $2 = the host it serves
+  local site adapted
+  site="$SITES/$(basename "$1")"
+  install -m 0644 -o root -g root "$1" "$site"
+  adapted=$(pds_caddy adapt --config "$CADDYFILE" 2>/dev/null) || adapted=""
+  if [[ "$adapted" != *"\"$2\""* ]]; then
+    rm -f "$site"
+    die "refusing: Caddy does not serve $2 with $site in place; removed it, the PDS sites are unchanged"
+  fi
+  if ! pds_caddy validate --config "$CADDYFILE"; then
+    rm -f "$site"
+    die "refusing: Caddy rejected $site; removed it, the PDS sites are unchanged"
+  fi
+  pds_caddy reload --config "$CADDYFILE"
+}
+# <<< shared isolation contract
 
 host_install() {
   local src
@@ -378,18 +426,13 @@ host_install() {
   install -m 0644 -o root -g root "$src"/openlore-indexer-*.service "$src"/openlore-indexer-*.timer "$UNITS/"
   systemctl daemon-reload
   systemctl enable --now openlore-indexer-health.timer
-  install -m 0644 -o root -g root "$src/index.caddy" "$SITES/index.caddy"
-  if ! pds_caddy validate --config /etc/caddy/Caddyfile; then
-    rm -f "$SITES/index.caddy"
-    die "Caddy rejected index.caddy; removed it, the PDS and app sites are unchanged"
-  fi
-  pds_caddy reload --config /etc/caddy/Caddyfile
+  install_caddy_site "$src/index.caddy" "$INDEX_HOST"
   echo "host files installed"
 }
 
-wait_ready() { # prints the seconds taken; 0 if /healthz is ok through Caddy within 60 s
+wait_ready() { # $1 = seconds to wait (default 60); prints the seconds taken once /healthz is ok through Caddy
   local i body
-  for i in $(seq 1 30); do
+  for i in $(seq 1 $((${1:-60} / 2))); do
     body=$(curl -fsS -m 5 --resolve "$INDEX_HOST:443:127.0.0.1" "https://$INDEX_HOST/healthz" 2>/dev/null || true)
     if [[ "${body//[[:space:]]/}" == *'"status":"ok"'* ]]; then
       echo "$((i * 2))"
@@ -428,16 +471,17 @@ passes_on() {
   systemctl start --no-block openlore-indexer-pass.service
 }
 
-host_deploy() { # $1 = digest, $2 = git sha (or "unknown")
-  local digest="$1" sha="${2:-unknown}" prev ready_s
+host_deploy() { # $1 = digest, $2 = git sha (or "unknown"), $3 = readiness wait in seconds (default 60)
+  local digest="$1" sha="${2:-unknown}" wait_s="${3:-60}" prev ready_s
   is_digest "$digest" || die "refusing non-digest '$digest'"
+  is_wait "$wait_s" || die "refusing readiness wait '$wait_s': whole seconds, at least 2"
   host_install
   "$BASE/bin/render-dids.sh"
   [ -f "$CONFIG/repo-dids" ] || die "no DID list: put /openlore/prod/indexer/repo-dids first"
   docker pull "$IMAGE@$digest" # while the old version still serves
   prev=$(releases_digest 1)
   start_digest "$digest"
-  if ready_s=$(wait_ready); then
+  if ready_s=$(wait_ready "$wait_s"); then
     record_release "$sha $digest ready_s=$ready_s"
     passes_on
     # The moved-aside index from an earlier --reset-index is no longer a rollback aid.

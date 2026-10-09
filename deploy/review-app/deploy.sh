@@ -167,23 +167,97 @@ laptop_deploy() { # $1 = git sha or digest
 # Host side (root, via SSM). Paths per infrastructure-integration.md §1.
 # --------------------------------------------------------------------------------------------
 
-APP=/pds/app
+APP="${REVIEW_APP_BASE_DIR:-/pds/app}"
 RELEASES=$APP/state/releases
 DB=$APP/data/review-app.duckdb
+# Created by tofu-aws-pds v1.7.0, never by this script: its absence means the module is not applied.
+SITES="${REVIEW_APP_CADDY_SITES_DIR:-/pds/caddy/sites}"
 
 compose() { docker compose -f "$APP/compose.yaml" "$@"; }
+
+# >>> shared isolation contract: byte-identical in deploy/indexer/deploy.sh and
+# deploy/review-app/deploy.sh (xtask both_apps_refuse_with_the_same_isolation_contract).
+# Needs SITES (the host dir the PDS Caddy serves as /etc/caddy/sites) and die.
+# curlimages/curl:8.10.1, multi-arch index digest (read from the registry with `crane digest`).
+IMDS_PROBE_IMAGE="${IMDS_PROBE_IMAGE:-curlimages/curl@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b}"
+CADDY_SITES=/etc/caddy/sites
+CADDYFILE=/etc/caddy/Caddyfile
+NEEDS_MODULE="apply tofu-aws-pds v1.7.0 (R-REPLACE) first"
+
+pds_compose() { docker compose -f /pds/compose.yaml "$@"; }
+pds_caddy() { pds_compose exec -T caddy caddy "$@"; }
+
+imds_probe() { # $@ = curl args, run by curl in the pinned probe image on the PDS network
+  docker run --rm --network pds_default "$IMDS_PROBE_IMAGE" "$@" >/dev/null 2>&1
+}
+
+# A site file in $SITES is only served if the PDS Caddy bind-mounts THAT directory at
+# /etc/caddy/sites and its Caddyfile imports it on a live (uncommented) line.
+refuse_unless_caddy_imports_sites() {
+  local caddy mounts caddyfile
+  caddy=$(pds_compose ps -q caddy 2>/dev/null) || caddy=""
+  [ -n "$caddy" ] || die "refusing: the PDS Caddy container is not running; $NEEDS_MODULE"
+  mounts=$(docker inspect --format '{{range .Mounts}}{{.Source}}:{{.Destination}}{{println}}{{end}}' "$caddy" 2>/dev/null) ||
+    die "refusing: cannot inspect the PDS Caddy container's mounts; $NEEDS_MODULE"
+  grep -qxF "$SITES:$CADDY_SITES" <<<"$mounts" ||
+    die "refusing: the PDS Caddy does not mount $SITES at $CADDY_SITES; $NEEDS_MODULE"
+  caddyfile=$(pds_compose exec -T caddy cat "$CADDYFILE" 2>/dev/null) ||
+    die "refusing: cannot read $CADDYFILE in the PDS Caddy container; $NEEDS_MODULE"
+  grep -qE '^[[:space:]]*import[[:space:]]+/etc/caddy/sites/\*\.caddy' <<<"$caddyfile" ||
+    die "refusing: $CADDYFILE does not import $CADDY_SITES/*.caddy; $NEEDS_MODULE"
+}
+
+# §8: never start a public container that could reach the host role. Fails CLOSED: only a
+# probe that provably ran curl on pds_default and then could not connect (7) or timed out (28)
+# proves isolation; an answer (0, or 22 for an HTTP error) or any other outcome refuses.
+# Runs before any host file is written.
+refuse_unless_isolated() {
+  local rc=0
+  [ -d "$SITES" ] || die "refusing: $SITES does not exist; $NEEDS_MODULE"
+  [[ "$IMDS_PROBE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] ||
+    die "refusing: IMDS_PROBE_IMAGE '$IMDS_PROBE_IMAGE' is not pinned by digest"
+  refuse_unless_caddy_imports_sites
+  imds_probe --version ||
+    die "refusing: the IMDS probe cannot run curl on pds_default (positive control failed); isolation unproven"
+  imds_probe -sS -m 3 -X PUT http://169.254.169.254/latest/api/token \
+    -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' || rc=$?
+  case "$rc" in
+    7 | 28) echo "IMDS unreachable from pds_default (curl exit $rc)" ;;
+    0 | 22) die "refusing: a container can reach IMDS (hop limit is not 1; run R-REPLACE first)" ;;
+    *) die "refusing: the IMDS probe was inconclusive (exit $rc); isolation unproven" ;;
+  esac
+}
+
+# Places one app's site file, then reloads Caddy only once the adapted config serves the
+# app's host and the whole Caddyfile validates; otherwise removes the file and refuses.
+install_caddy_site() { # $1 = site file, $2 = the host it serves
+  local site adapted
+  site="$SITES/$(basename "$1")"
+  install -m 0644 -o root -g root "$1" "$site"
+  adapted=$(pds_caddy adapt --config "$CADDYFILE" 2>/dev/null) || adapted=""
+  if [[ "$adapted" != *"\"$2\""* ]]; then
+    rm -f "$site"
+    die "refusing: Caddy does not serve $2 with $site in place; removed it, the PDS sites are unchanged"
+  fi
+  if ! pds_caddy validate --config "$CADDYFILE"; then
+    rm -f "$site"
+    die "refusing: Caddy rejected $site; removed it, the PDS sites are unchanged"
+  fi
+  pds_caddy reload --config "$CADDYFILE"
+}
+# <<< shared isolation contract
 
 host_install() {
   local src
   src=$(cd "$(dirname "$0")" && pwd)
-  install -d -m 0755 -o root -g root "$APP" "$APP/bin" /pds/caddy/sites
+  refuse_unless_isolated
+  install -d -m 0755 -o root -g root "$APP" "$APP/bin"
   install -d -m 0700 -o 65532 -g 65532 "$APP/data"
   install -d -m 0700 -o root -g root "$APP/state"
   install -m 0644 -o root -g root "$src/compose.yaml" "$APP/compose.yaml"
   install -m 0755 -o root -g root "$src/render-secrets.sh" "$src/health-timer.sh" "$APP/bin/"
-  install -m 0644 -o root -g root "$src/app.caddy" /pds/caddy/sites/app.caddy
   "$APP/bin/health-timer.sh" install
-  docker compose -f /pds/compose.yaml exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+  install_caddy_site "$src/app.caddy" "$APP_HOST"
   echo "host files installed"
 }
 
