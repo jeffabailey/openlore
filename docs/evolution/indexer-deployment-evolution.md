@@ -199,6 +199,11 @@ medium findings plus L1/L2 were fixed:
 
 ## Operator go-live sequence (`deploy/indexer/README.md`)
 
+> **Superseded 2026-10-09 (fix-go-live-runbook-gaps).** This list is kept as history. It
+> test-fired the alarms before enabling them and ran its own order next to the review app's. The
+> one ordered sequence for both apps is now the
+> [Go-live checklist](../../deploy/README.md#go-live-checklist): enable the alarms, then test-fire.
+
 1. Release tofu-aws-pds v1.7.0 and bump the module ref.
 2. Verified PDS identity backup.
 3. Instance replacement (R-REPLACE, shared with the review app, once).

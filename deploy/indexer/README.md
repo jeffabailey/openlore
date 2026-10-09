@@ -85,33 +85,21 @@ A failed run does not stop the timer. You can see failures with `systemctl --fai
 
 ## 1. Sequencing (once)
 
-There is exactly one instance replacement, and the review-app rollout owns it (R-REPLACE). The
-indexer adds no module change.
+The go-live order for the indexer **and** the review app is the one
+[Go-live checklist](../README.md#go-live-checklist) in `deploy/README.md`: tofu-aws-pds v1.7.0
+first, the one instance replacement (R-REPLACE, which also creates `indexer.tf` with alarms
+disabled), the DID list, the public image, install and first deploy, the rollback drill, the
+memory gate, enabling the alarms and then test-firing them, and the announcement. This runbook
+keeps only the detail of the indexer's own steps.
 
-1. **I-0** (any time): apply `deploy/tofu/bootstrap/indexer-iam.tf` and
-   `deploy/tofu/environments/prod/indexer.tf` with `indexer_alarms_enabled = false`. Run
-   `check-plan.sh tfplan` **without** `OPENLORE_ALLOW_DELETE`. If it refuses because the v1.7.0
-   bump is already committed, do not override it. Fold these creates into R-REPLACE step 4
-   instead.
-2. **I-1**: CI publishes the first `ghcr.io/jeffabailey/openlore-indexer` image. Make the GHCR
-   package **public** once, and check that an anonymous `docker pull <image>@<digest>` works.
-3. **I-2 (hard precondition): the tofu-aws-pds v1.7.0 replacement** (R-REPLACE: the Caddy sites
-   hook plus IMDS hop limit 1). No indexer container may start before it. `deploy.sh install`
-   checks this, failing closed. It refuses unless `/pds/caddy/sites` exists, the probe image
-   (`curlimages/curl`, pinned by digest; override with `IMDS_PROBE_IMAGE=<image>@sha256:...`)
-   runs `curl --version` on `pds_default`, **and** the IMDS PUT from that container then ends
-   with curl exit 7 (cannot connect) or 28 (timeout). Any other outcome refuses.
-4. **I-3**: if the review app is live, deploy its **B11** build (DuckDB 48 MB / 1 thread,
-   `init: true`, 192m): `deploy/review-app/deploy.sh deploy <sha>`, then check `/readyz` 200.
-   The two apps fit the host only with both sets of caps in place.
-5. **I-4**: the indexer's first deploy (§2).
-6. **I-5**: the memory re-measure gate (§6) and the rollback drill (§4.1).
-7. **I-6**: confirm the SNS subscription, set `indexer_alarms_enabled = true`, apply, and
-   test-fire A1, A2 and A3 (§7).
-8. **I-7**: announce `OPENLORE_INDEXER_URL=https://index.openlore.jeffbailey.us`.
+*Superseded 2026-10-09 (fix-go-live-runbook-gaps): the I-0..I-7 list that stood here disagreed
+with the review app's sequence on the alarm enable vs test-fire order; the checklist replaces it.*
 
-After any later replacement, R-REPLACE step 7 ("redeploy apps") includes
-`deploy/indexer/deploy.sh redeploy` (§8).
+`deploy.sh install` fails closed. It refuses unless `/pds/caddy/sites` exists, the PDS Caddy
+imports it, the probe image (`curlimages/curl`, pinned by digest; override with
+`IMDS_PROBE_IMAGE=<image>@sha256:...`) runs `curl --version` on `pds_default`, **and** the IMDS
+PUT from that container then ends with curl exit 7 (cannot connect) or 28 (timeout). Any other
+outcome refuses.
 
 ## 2. First deploy (I-4)
 
@@ -126,7 +114,8 @@ until you fix it or remove the site
    directories, scripts, units, the health timer and the Caddy site. Caddy must accept the
    config (`caddy validate`) before it reloads. Otherwise `index.caddy` is removed and the
    install aborts.
-3. `deploy/indexer/deploy.sh deploy <sha>`. Read the summary. The post-checks are: `/healthz`
+3. `deploy/indexer/deploy.sh deploy <sha>` (the first time, with `INDEXER_READY_WAIT_S=300`:
+   the readiness wait includes certificate issuance for `index.`). Read the summary. The post-checks are: `/healthz`
    ok, a POST search returns 200 JSON, GET `createRecord` returns 404, POST `/healthz` returns
    404, an 8 KB body is not 413, a 9 KB body is 413, and `PDS _health: n/n ok during deploy`.
 4. Before the first pass, a POST search returns an empty result with 200, not a 5xx.
@@ -200,56 +189,18 @@ Beyond that, move it to the Advanced tier.
 
 ## 6. Memory re-measure gate (I-5, hard)
 
-Run this with the production DID list in place and both apps on their final caps (indexer
-128m, review app 192m with DuckDB 48 MB / 1 thread).
-
-1. Open a session on the host (`aws ssm start-session --target <instance-id>`) and sample for
-   20 minutes, every 5 s:
-
-   ```sh
-   for c in openlore-indexer review-app-review-app-1; do
-     id=$(docker inspect -f '{{.Id}}' "$c"); echo "$c /sys/fs/cgroup/system.slice/docker-$id.scope/memory.peak"
-   done
-   grep -E '^(MemAvailable)' /proc/meminfo; grep '^pswpin ' /proc/vmstat   # minimum and delta over the window
-   ```
-
-   Also poll PDS `_health` every 10 s.
-2. During the window, run `deploy.sh trigger` (a full pass), start a 10-repo review-app scan
-   from the app UI, and run the search burst from the laptop:
-   `seq 100 | xargs -P 10 -I{} curl -s -o /dev/null -w '%{http_code} %{time_total}\n' -X POST -H 'content-type: application/json' --data @search.json https://index.openlore.jeffbailey.us/xrpc/org.openlore.appview.searchClaims`.
-   Every response must be 200, with p95 ≤ 1 s.
-3. PASS when both `memory.peak` values stay under their limits, `MemAvailable` stays above the
-   platform-architecture §6 floor, `pswpin` does not grow, and PDS `_health` is 200 throughout.
-   Also check the DuckDB read-back (48 MB / 1 thread) in each app's startup probe event.
-4. The next day, `CPUCreditBalance` for the last 24 h must be flat or rising.
-5. **On FAIL:** lower `OPENLORE_INDEXER_MAX_CONCURRENT_FETCHES` to 2 (edit `host/compose.yaml`,
-   then redeploy), lower the review-app scan concurrency to 1, and re-measure. If it still
-   fails, **stop. Moving to t4g.small is an operator decision.** It means editing
-   `instance_type` in `deploy/environments/prod.json` and applying a plan that shows an
-   in-place update (no replace). The instance stops and starts, which is **a second PDS outage
-   of a few minutes**. Then redeploy both apps and re-measure. Record the decision in
-   `docs/feature/indexer-deployment/devops/wave-decisions.md`.
+The runnable gate (a 5 s / 20 min sampling loop that prints `memory.peak`, literal PASS
+thresholds, a defined search body and a load under the rate limit) is the *Memory gate* step of
+the [Go-live checklist](../README.md#go-live-checklist). Re-run it after any change to the caps,
+the DID list size or the instance type. Its fail path lowers
+`OPENLORE_INDEXER_MAX_CONCURRENT_FETCHES` to 2 and `OPENLORE_REVIEW_SCAN_CONCURRENCY` to 1.
 
 ## 7. Alarm test-fire (I-6, U-3)
 
-Preconditions: `indexer_alarms_enabled = true` is applied, and
-`aws sns list-subscriptions-by-topic` shows no `PendingConfirmation`. Each alarm must reach
-ALARM and then return to OK, and both emails must arrive.
-
-- **A2 (end to end, purge-safe):** append `,not-a-did` to the SSM value (§5), then run
-  `deploy.sh trigger`. A refused list purges nothing, and the old index stays searchable. The
-  ALARM email arrives within 15 min. Restore the value and run `deploy.sh trigger` again; the
-  OK email follows the clean pass.
-- **A1 (synthetic, about 75 min):** stop the pass timer (`deploy.sh stop` would also stop the
-  container, so instead use an SSM session: `sudo systemctl stop openlore-indexer-pass.timer`).
-  Create the stream `test-fire` in `/openlore/prod/indexer`. In quarter-hour P1, inject one
-  line `{"event":"indexer.ingest.pass_summary","exit_code":3,"pass_id":"TEST-a1-1"}` with
-  `aws logs put-log-events`, and in P2 inject `exit_code` 0: **no alarm**. Then inject exit 3 in
-  P3 and P4: **ALARM**. Then inject exit 0 in P5: **OK**. Restart the timer
-  (`sudo systemctl start openlore-indexer-pass.timer`). The TEST lines keep `summary_45m = 1`,
-  so A3 stays quiet, and `deploy.sh status` ignores `TEST*` pass ids.
-- **A3 (end to end):** `deploy.sh stop`, wait about 10 min (ALARM, `running = 0`,
-  `healthz_ok = 0`), then `deploy.sh start` (OK).
+The alarms are enabled first and then test-fired: the exact A1, A2 and A3 procedures (the A1
+`put-log-events` commands into the `test-fire` stream, and the warning that a pass timer stopped
+for more than 2 h fires A3) are steps 14 and 15 of the
+[Go-live checklist](../README.md#go-live-checklist).
 
 The xtask test XP-13 (`health-timer.sh` with fake `docker`, `curl` and `aws`) covers the
 stale-list and missing-heartbeat causes of A3. They are not fired live.

@@ -343,6 +343,10 @@ must pass `check-plan.sh` **without** `OPENLORE_ALLOW_DELETE`.
 
 ## 8. Sequencing with tofu-aws-pds v1.7.0 and the review-app go-live
 
+> *Superseded 2026-10-09 (fix-go-live-runbook-gaps):* the I-0..I-7 table below is design
+> history. The operator's one ordered sequence for both apps (alarms enabled, then test-fired) is
+> the [Go-live checklist](../../../../deploy/README.md#go-live-checklist).
+
 There is exactly **one** instance replacement (R-REPLACE, owned by the review-app rollout,
 `docs/feature/bluesky-claim-review-app/devops/infrastructure-integration.md` §7.1). This feature
 adds no module change and no replace.
@@ -450,18 +454,23 @@ the value and wait for the next pass.
 ### 9.6 Memory re-measure gate (I-5, hard)
 
 1. Make sure the production DID list is in place and both apps run their final caps.
-2. `deploy.sh measure 20` starts sampling every 5 s for 20 minutes: cgroup v2 `memory.peak` of
-   both app containers (`/sys/fs/cgroup/system.slice/docker-<id>.scope/memory.peak`, resolved
-   from `docker inspect`), `MemAvailable` minimum, `pswpin` delta, PDS `_health` every 10 s.
+2. Sample every 5 s for 20 minutes: cgroup v2 `memory.peak` of both app containers
+   (`/sys/fs/cgroup/system.slice/docker-<id>.scope/memory.peak`, resolved from `docker inspect`),
+   `MemAvailable` minimum, `pswpin` delta, PDS `_health` every 10 s. *As built (2026-10-09):* no
+   `measure` mode was written; the runnable loop, the PASS thresholds and the search load are the
+   memory gate step of the go-live checklist.
 3. During the window: `deploy.sh trigger` (a full pass), start a 10-repo review-app scan from
    the app UI, and run the search burst from the laptop:
-   `seq 100 | xargs -P 10 -I{} curl -s -o /dev/null -w '%{http_code} %{time_total}\n' -X POST -H 'content-type: application/json' --data @search.json https://index.openlore.jeffbailey.us/xrpc/org.openlore.appview.searchClaims`
-   (all 200, p95 ≤ 1 s: NFR-IXD-7 and AC-002.2).
-4. `measure` prints PASS/FAIL against platform-architecture §6, plus the DuckDB read-back from
+   paced under the per-client limit of 10/s, burst 50 (the checklist's load uses four workers
+   with a 0.5 s pause; a 429 is counted, not failed), with all other responses 200 and p95 ≤ 1 s
+   (NFR-IXD-7 and AC-002.2).
+4. PASS/FAIL is read against platform-architecture §6 (indexer ≤ 100 MB, review app ≤ 128 MB,
+   `MemAvailable` > 128 MB), plus the DuckDB read-back from
    each app's startup probe event.
 5. Next day: `CPUCreditBalance` for the last 24 h is flat or rising (NFR-IXD-5).
 6. On FAIL: lower `OPENLORE_INDEXER_MAX_CONCURRENT_FETCHES` to 2 (compose edit + redeploy),
-   lower the review-app scan concurrency to 1, and re-measure. If it still fails, **stop and ask
+   lower the review-app scan concurrency to 1 (`OPENLORE_REVIEW_SCAN_CONCURRENCY: "1"` in its
+   compose file, then `deploy/review-app/deploy.sh redeploy`), and re-measure. If it still fails, **stop and ask
    the operator**: t4g.small means editing `instance_type` in `deploy/environments/prod.json`,
    a plan that shows an in-place update (no replace), and an apply that stops and starts the
    instance (a few minutes of PDS downtime). Then redeploy both apps and re-measure. Record the

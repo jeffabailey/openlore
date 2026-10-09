@@ -88,12 +88,15 @@ DuckDB allows **one process** per file, so the `kpi` subcommand cannot open the 
 2. **Loopback admin listener** (the primary source for windows longer than 30 days, such as the
    4-week baseline and the 60-day objective, because `kpi_counters` keeps all history). `127.0.0.1:9090` **inside the container's network namespace**.
    Caddy and the PDS cannot reach it, because they reach the app only on `:8080`.
-   - Routes: `GET /admin/kpi?from=&to=` (JSON sums), `POST /admin/purge` (body: a DID),
-     `POST /admin/test-alarm?kind=guardrail|token` (emits `guardrail.breach{kpi:"TEST"}` or
-     `github.token.expiring{days_left:-1}`, for alarm tests A-7 and A-8).
+   - Routes: `GET /admin/kpi?from=&to=` (JSON sums) and `POST /admin/purge` (body: a DID).
+     *Corrected 2026-10-09:* a third route for alarm tests was designed here but never built;
+     A-7 and A-8 are test-fired by putting `guardrail.breach` / `github.token.expiring` lines into
+     a `test-fire` log stream (go-live checklist step 15, `deploy/README.md`).
    - `openlore-review-app kpi` and `purge` become **clients** of this listener, run as
      `docker exec <container> /openlore-review-app kpi --from ... --to ...`. That needs no shell
-     in distroless, and `deploy.sh kpi|purge` wraps it over SSM.
+     in distroless. *As built (2026-10-09):* there are no `kpi`/`purge` subcommands and no
+     `deploy.sh` wrapper; the listener is `ADMIN_LISTEN_ADDR` (default `127.0.0.1:8081`), read with
+     `docker run --rm --network container:review-app-review-app-1 curlimages/curl -s 'http://127.0.0.1:8081/admin/kpi?from=<monday>&to=<sunday>'` on the host (SSM session).
    - check-arch: the admin router module is the only place that binds `127.0.0.1`. A test
      asserts the listener is never bound on `0.0.0.0`.
 
@@ -115,11 +118,11 @@ structural guarantees**: they would catch a regression that slipped past types a
 
 ## 5. Dashboards and reading cadence
 
-- **Weekly (product owner = Jeff):** run `deploy.sh kpi --from <monday> --to <sunday>`, which
-  prints every section §3 formula with its numerator and denominator. Or use the Logs Insights
+- **Weekly (product owner = Jeff):** read the sums from the admin listener (§4:
+  `docker run --rm --network container:review-app-review-app-1 curlimages/curl -s 'http://127.0.0.1:8081/admin/kpi?from=<monday>&to=<sunday>'` on the host (SSM session)) and work out each section §3 formula with its numerator and denominator. Or use the Logs Insights
   saved query `review-app/kpi-weekly`, which parses `kpi.rollup` lines and sums each counter
   over the window (up to the 30-day log retention). The baseline and the 60-day objective use
-  `deploy.sh kpi`.
+  the admin listener.
 - **Daily (DEVOPS):** guardrails alarm by themselves (A-7). Nothing to do unless paged.
 - **Dashboard:** the optional `openlore-review-app` CloudWatch dashboard (observability-design
   §5) carries a Logs Insights widget with North Star numerator and denominator by week, the

@@ -129,8 +129,13 @@ merged the app and the deploy tooling (wave-decisions, Sequencing).
 - [ ] Disconnect verified, including revoke 200 handling, and the access-token window recorded
 - [ ] Every active alarm fired once in a test and returned to OK:
   - `deploy.sh stop` fires A-3 (`app_running = 0`) and A-1 (Caddy 503), then `deploy.sh redeploy`;
-  - `POST /admin/test-alarm?kind=guardrail` fires A-7;
-  - `POST /admin/test-alarm?kind=token` fires A-8.
+  - a `{"event":"guardrail.breach","kpi":"TEST"}` line fires A-7, and a
+    `{"event":"github.token.expiring","days_left":-1}` line fires A-8, each put with
+    `aws logs put-log-events` (millisecond timestamp) into a `test-fire` stream of
+    `/openlore/prod/review-app`; the exact commands are step 15 of the [Go-live checklist](../../../../deploy/README.md#go-live-checklist).
+    (The `test-alarm` admin route this item first named was never built; corrected 2026-10-09.)
 - [ ] `review_app_alarms_enabled = true` applied; the SNS subscription is confirmed (existing)
 - [ ] Log sample reviewed by hand: no forbidden field (observability-design §3)
-- [ ] Runbook `deploy/review-app/README.md` written from infrastructure-integration §7
+- [ ] Runbook `deploy/review-app/README.md` written from infrastructure-integration §7 (a short
+      runbook pointing to the [Go-live checklist](../../../../deploy/README.md#go-live-checklist), which orders these items:
+      alarms enabled first, then test-fired)

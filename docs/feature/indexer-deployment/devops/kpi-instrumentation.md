@@ -10,9 +10,9 @@
 
 ## 1. KPI → collection → measurement
 
-| KPI | Target | Data collection | Measurement (`deploy.sh kpi` unless noted) | Cadence |
+| KPI | Target | Data collection | Measurement (saved Logs Insights queries unless noted; the planned `kpi` mode of `deploy.sh` was not built) | Cadence |
 |---|---|---|---|---|
-| **KPI-IXD-1** network reach | ≥ 2 distinct PDS hosts in results within 1 day of go-live; 100% of rows attributed | Nightly `index-smoke` (ci-cd-pipeline §6): a fixed broad search, each distinct author DID resolved via PLC / `did:web` to its PDS endpoint | `hosts = count(distinct endpoint)`; `attributed = rows with non-empty author / rows`. Printed in the nightly job log; laptop variant `deploy.sh kpi --reach` | Nightly; first reading within 24 h of I-7 |
+| **KPI-IXD-1** network reach | ≥ 2 distinct PDS hosts in results within 1 day of go-live; 100% of rows attributed | Nightly `index-smoke` (ci-cd-pipeline §6): a fixed broad search, each distinct author DID resolved via PLC / `did:web` to its PDS endpoint | `hosts = count(distinct endpoint)`; `attributed = rows with non-empty author / rows`. Printed in the nightly job log; no laptop variant (the planned `kpi` mode was not built) | Nightly; first reading within 24 h of I-7 |
 | **KPI-IXD-2** publish-to-search | ≤ 30 min, 5 of 5 samples | Manual timed sample: publish a claim from a test author on a listed PDS at T (record T); poll the public search for its subject every 60 s; record T_found | `T_found - T` per sample; recorded in the baseline doc | 5 samples in the first 2 weeks |
 | **KPI-IXD-3** freshness | Last exit-0 pass ≤ 30 min old in ≥ 98% of hourly checks over 30 days | `pass_summary` lines (exit 0 timestamps) | The `indexer/kpi-freshness` saved query (not the `limit 8` status query) returns every exit-0 `@timestamp` in the window (≤ 2,880 rows, under the 10,000 limit); `jq` computes, for each hour boundary h, `h - max(ts ≤ h) ≤ 30 min`; ratio = good hours / hours | Weekly; 30-day baseline |
 | **KPI-IXD-4** coverage changes without deploys | 100% of DID-list edits applied on the next pass; 0 deploys | `aws ssm get-parameter-history` (each version's `LastModifiedDate` and value); `indexer.config.loaded` (`repo_did_count`, `repo_dids_age_secs`); host `releases` | For each version v: the first `config.loaded` after v's timestamp has `repo_did_count = count(DIDs in v)` and is ≤ 15 min (+ pass duration) later; no `releases` line between v and that pass | Per edit; summarized weekly |
@@ -29,8 +29,8 @@
 
 ## 3. Dashboards and reading cadence
 
-- **Weekly (Jeff, 5 min):** `deploy.sh kpi` prints KPI-IXD-3, -4, -5 and the guardrails with
-  numerators and denominators. The nightly `index-smoke` log gives KPI-IXD-1.
+- **Weekly (Jeff, 5 min):** the saved Logs Insights queries give KPI-IXD-3, -4, -5 and the guardrails with
+  numerators and denominators (a `kpi` mode of `deploy.sh` was designed but not built). The nightly `index-smoke` log gives KPI-IXD-1.
 - **Per deploy:** the `deploy.sh` summary gives KPI-IXD-6.
 - **Dashboard:** none (saved queries suffice; see observability-design §5).
 - **Baseline:** KPI-IXD-1 at day 1; KPI-IXD-2 after 5 samples; KPI-IXD-3/5 after 30 days;

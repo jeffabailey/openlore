@@ -64,12 +64,15 @@
 
 ## Rollout sequence
 
+> *2026-10-09 (fix-go-live-runbook-gaps):* this table is the design-time history. The
+> operator's one ordered sequence for both apps is the [Go-live checklist](../../../../deploy/README.md#go-live-checklist).
+
 | Step | What | Who | Downtime | Gate |
 |---|---|---|---|---|
 | R-0 | Before US-BRA-004 ships, run on the **OpenLore PDS** from the laptop: SPIKE-1 (a self-attested `createRecord` with the `jeff` app password `/openlore/prod/cli-app-password`, then read back with CID == rkey) and SPIKE-3 (granular scopes, using a loopback OAuth client signed in as `jeff`, a create outside the scope refused). If SPIKE-3 fails on this PDS, use the `transition:generic` fallback plus disclosure (user decision 2). | Operator | none | Pass recorded in design wave-decisions |
 | R-1 | Put the SSM parameters (`client-jwk`, `data-key`, `github-token`, `log-salt`). Create the PAT (public read, no permissions, expiry noted). Release `tofu-aws-pds` v1.7.0. | Operator + module repo | none | Parameters exist; the v1.7.0 tag exists on GitHub (deploy-pds-check validates it) |
 | R-2 | **R-REPLACE**: verified identity backup → apply bootstrap (IAM) → prod plan with `OPENLORE_ALLOW_DELETE=1` gate → apply (replace + alarms created disabled) → verify PDS, sites hook and IMDS closed | Operator | **a few minutes of PDS downtime** | infrastructure-integration §7.1 all green |
-| R-3 | Make the GHCR package public (once, after the first image push): repo → Packages → openlore-review-app → Package settings → Change visibility. **Failure mode:** if this is skipped, `deploy.sh` fails at pull with an auth error. `deploy.sh` checks anonymous pull first and prints this step. | Operator | none | Anonymous `docker pull` works |
+| R-3 | Make the GHCR package public (once, after the first image push): repo → Packages → openlore-review-app → Package settings → Change visibility. **Failure mode:** if this is skipped, `deploy.sh` fails at pull with an auth error. *Corrected 2026-10-09:* `deploy.sh` does **not** check anonymous pull; the go-live checklist (`deploy/README.md`, step 8) has the manual signed-out `docker pull <image>@<digest>` check. | Operator | none | Anonymous `docker pull` works |
 | R-4 | First app deploy: `deploy.sh install` then `deploy <sha>` | Operator | none for the PDS | `/readyz` 200; `/oauth/*` byte-equal at the public origin; certificate issued for `app.` |
 | R-5 | **Soft launch (not announced):** confidential `private_key_jwt` sign-in on bsky.social and the OpenLore PDS; publish, share and retract with the test accounts; **RSS re-measure gate** (10-repo scan, platform-architecture §6) → t4g.small if it fails; disconnect and revoke check, recording the access-token lifetime; **rollback drill** N → N-1; client-JWK rotation dry run (optional) | Operator | none | Production readiness checklist (monitoring-alerting §3) |
 | R-6 | **Precondition: R-5 is complete, including the rollback drill, and O-4 is done** (`aws sns list-subscriptions-by-topic` shows a confirmed subscription, not `PendingConfirmation`). Then set `review_app_alarms_enabled = true` (plan, gate, apply). Fire A-1, A-3, A-7 and A-8 once as a test (monitoring-alerting §3). | Operator | none | Notifications received, then OK |
@@ -105,7 +108,7 @@
 |---|---|---|
 | U-1 | **IMDS hop limit 1 in `tofu-aws-pds` v1.7.0: approved.** | Every AWS call in the module runs on the host: the user-data SSM get/put, the `aws s3 cp` backup, and the `aws cloudwatch put-metric-data` `ExecStartPost`. The PDS blobstore is disk. The-reality-base has no container-side AWS use (GitHub Actions plus IAM; `deploy/pds-upstream/installer.sh` only reads the public IP on the host). The stale comment at `modules/pds/main.tf:312` is corrected in v1.7.0 (platform-architecture §4, infrastructure-integration §2). |
 | U-2 | **Monitoring trimmed to essentials.** Keep A-1 (external `/healthz`), A-3 (restart/OOM, process down), A-7 (guardrail breach, pages on the first one) and A-8 (GitHub token, 14 days ahead). | Readiness, app memory, host memory, CPU-credit and startup-refused alarms are dropped. Their signals stay as log lines (monitoring-alerting §1.1). The host timer writes logs instead of `PutMetricData`. The R-5 memory re-measure stays a hard gate. **Cost ~$2/month typical, at most ~$2.85** (was ~$4-5; platform-architecture §7). |
-| U-3 | **Log retention: 30 days.** | KPI windows longer than 30 days (the 4-week baseline, the 60-day objective) read `kpi_counters` through `deploy.sh kpi` (observability-design §6, kpi-instrumentation §4). |
+| U-3 | **Log retention: 30 days.** | KPI windows longer than 30 days (the 4-week baseline, the 60-day objective) read `kpi_counters` through the admin listener (`GET /admin/kpi`) (observability-design §6, kpi-instrumentation §4). |
 
 ## Open items: operator action
 

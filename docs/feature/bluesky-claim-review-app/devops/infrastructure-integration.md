@@ -238,6 +238,10 @@ which is out of scope (revisit if the PDS image provenance changes).
 
 ## 7. Runbooks (outlines; DELIVER turns them into `deploy/review-app/README.md`)
 
+*2026-10-09 (fix-go-live-runbook-gaps):* the go-live order for both apps is the one [Go-live checklist](../../../../deploy/README.md#go-live-checklist)
+in `deploy/README.md`; `deploy/review-app/README.md` is the app's short runbook. The outlines
+below keep the detail of each step.
+
 The laptop needs: `AWS_PROFILE=jeff`, `gh` (signed in), `cosign`, and `crane` or
 `docker buildx imagetools`. The instance id comes from
 `tofu -chdir=deploy/tofu/environments/prod output -raw instance_id`.
@@ -245,7 +249,9 @@ The laptop needs: `AWS_PROFILE=jeff`, `gh` (signed in), `cosign`, and `crane` or
 ### 7.1 R-REPLACE: planned instance replacement (once, for module v1.7.0; also any future user-data change)
 
 Rollback for this runbook comes first. The old instance is terminated, so there is no rollback
-to the same instance. The rollback path is: re-pin `v1.6.0`, run plan with
+to the same instance. The rollback path is: if either app runs, stop both first
+(`deploy/review-app/deploy.sh stop` and `deploy/indexer/deploy.sh stop`), because v1.6.0 brings
+back IMDS hop limit 2; then re-pin `v1.6.0`, run plan with
 `-replace=module.pds.aws_instance.pds`, and apply. The data volume and EIP survive either way.
 The identity is protected by step 1.
 
@@ -261,7 +267,8 @@ The identity is protected by step 1.
    - confirm no container needs IMDS: `grep -i aws /pds/pds.env` returns nothing (the
      blobstore is disk). This is the evidence for M-2.
 3. Bump both roots to `v1.7.0`. Apply the bootstrap root first (only `review-app-iam.tf` is new).
-4. `tofu plan -out=tfplan` in prod. Expect exactly: instance **replace**, a metadata-options
+4. `tofu plan -replace=module.pds.aws_instance.pds -out=tfplan` in prod (a plain plan is an
+   in-place stop/start: the module has no `user_data_replace_on_change`). Expect exactly: instance **replace**, a metadata-options
    change folded into the replace, the volume attachment replace, and the new `review-app.tf`
    creates **with alarms disabled** (`review_app_alarms_enabled = false`). Run
    `OPENLORE_ALLOW_DELETE=1 ../../../check-plan.sh tfplan`. It must refuse nothing protected.
@@ -360,5 +367,5 @@ Expected downtime is about 5-15 s (container stop, start and probes). During it,
   Best-effort server-side revocation is impossible without the decrypted tokens. This is
   documented: the access-token lifetime bounds the exposure.
 - **Purge a user on request without their session** (operator): there is no hosted admin
-  surface. DELIVER provides `deploy.sh purge <did>`, which calls an internal loopback-only admin
-  endpoint (§kpi-instrumentation 4) that runs the same `purge(OwnerScope)` transaction.
+  surface. The operator calls the internal loopback-only admin endpoint `POST /admin/purge`
+  (§kpi-instrumentation 4; no `deploy.sh` mode wraps it) that runs the same `purge(OwnerScope)` transaction.

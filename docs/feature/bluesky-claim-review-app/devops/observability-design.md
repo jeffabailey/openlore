@@ -124,7 +124,7 @@ of 3 dashboards. The account has none today, so it is **free**. It holds:
 
 | Data | Retention | Rationale |
 |---|---|---|
-| `/openlore/prod/review-app` log group (app events and `host-health` stream) | **30 days** (user decision 2026-10-04) | Minimizes the retention of pseudonymous data. KPI windows longer than 30 days, such as the 60-day objective and the 4-week baseline, are read from `kpi_counters` (indefinite, aggregate only) through the admin endpoint (`deploy.sh kpi`, kpi-instrumentation §4). |
+| `/openlore/prod/review-app` log group (app events and `host-health` stream) | **30 days** (user decision 2026-10-04) | Minimizes the retention of pseudonymous data. KPI windows longer than 30 days, such as the 60-day objective and the 4-week baseline, are read from `kpi_counters` (indefinite, aggregate only) through the admin endpoint (`GET /admin/kpi`, kpi-instrumentation §4). |
 | Log-filter metrics | CloudWatch default (15 months, downsampled) | No PII |
 | `kpi_counters` (DuckDB) | Indefinite, aggregate only | ADR-074 |
 | Docker local log cache | Default dual-logging cache (5 × 20 MB) on the root volume | Lost on replacement; acceptable |

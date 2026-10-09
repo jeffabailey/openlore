@@ -113,7 +113,7 @@ Read the `cause` of the last `pass_summary` or the refused event:
 Precondition: `indexer_alarms_enabled = true` applied, SNS subscription confirmed
 (`aws sns list-subscriptions-by-topic` shows no `PendingConfirmation`).
 
-| Alarm | Procedure (`deploy.sh test-alarm …`) | Expect |
+| Alarm | Procedure (by hand: the planned `test-alarm` mode was not built; exact commands in the go-live checklist, step 15) | Expect |
 |---|---|---|
 | **A2** (end to end, purge-safe) | Append `,not-a-did` to the SSM value; `deploy.sh trigger`; wait. Restore the value; `deploy.sh trigger`. A refused list purges nothing (AC-003.2), and the old index stays searchable (AC-003.3). | ALARM email ≤ 15 min after the pass; OK email after the clean pass |
 | **A1** (synthetic, because a real all-skip run needs a production config change) | Stop the pass timer. Create stream `test-fire`. Inject one `pass_summary` line (`exit_code: 3`, `pass_id: "TEST-a1-1"`) in quarter-hour period P1 and an `exit_code: 0` line in P2: **no alarm** (AC-004.1 negative). Then exit 3 in P3 and P4: **ALARM**. Then exit 0 in P5: **OK**. Restart the timer. About 75 min. The TEST lines keep `summary_45m = 1`, so A3 stays quiet; `deploy.sh status` excludes `TEST*` pass ids. | No alarm after P2; ALARM after P4; OK after P5 |

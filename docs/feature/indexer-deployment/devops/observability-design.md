@@ -8,7 +8,7 @@
 
 | SLO | SLI | Target | Window | Error budget | Alerting |
 |---|---|---|---|---|---|
-| **Freshness** (KPI-IXD-3) | Fraction of hourly checks where the last exit-0 `pass_summary` is ≤ 30 min old | ≥ 98% | 30 days | about 14 hourly checks/month | A1/A2 catch the causes; A3 catches a stopped pipeline. Reviewed weekly with `deploy.sh kpi`. |
+| **Freshness** (KPI-IXD-3) | Fraction of hourly checks where the last exit-0 `pass_summary` is ≤ 30 min old | ≥ 98% | 30 days | about 14 hourly checks/month | A1/A2 catch the causes; A3 catches a stopped pipeline. Reviewed weekly with the saved queries. |
 | **Search availability** | Fraction of 2-min `indexer.host.health` samples with `healthz_ok = 1` | ≥ 99% | Calendar month | about 7.3 h | A3 (10 min of failure) |
 | **Search latency** (NFR-IXD-3) | `search_ms` of the health timer's canned search, p95 | ≤ 1000 ms | Weekly review | 5% of samples | None in v1 (review only) |
 | **Pass integrity** | `pass_summary` with exit 2 | 0 | Always | none: any exit 2 pages | A2 |
@@ -77,7 +77,7 @@ stale-list and missing-heartbeat paths that are not test-fired live.
 | `indexer/freshness` | `filter event = "indexer.ingest.pass_summary" and pass_id not like /^TEST/ \| fields @timestamp, exit_code, configured, own_pds, fallback, skipped, purged_authors, duration_ms, pass_id \| sort @timestamp desc \| limit 8` | `deploy.sh status` (last 8 exit codes, age of last pass of any kind) |
 | (same, `and exit_code = 0 … limit 1`) | last successful pass time, age, counts | `deploy.sh status` |
 | `indexer/skips` | `filter event in ["indexer.ingest.source_skipped", "indexer.ingest.author_purged", "indexer.ingest.pass_refused"] and pass_id = "<id>" \| fields event, did, reason, cause, claims_removed` | `deploy.sh status`, purge audit |
-| `indexer/kpi-freshness` | `filter event = "indexer.ingest.pass_summary" and exit_code = 0 and pass_id not like /^TEST/ \| fields @timestamp \| sort @timestamp asc \| limit 10000` over the full 30 days (no small limit; ≤ 2,880 rows) | KPI-IXD-3 (`deploy.sh kpi` computes hourly freshness in `jq`) |
+| `indexer/kpi-freshness` | `filter event = "indexer.ingest.pass_summary" and exit_code = 0 and pass_id not like /^TEST/ \| fields @timestamp \| sort @timestamp asc \| limit 10000` over the full 30 days (no small limit; ≤ 2,880 rows) | KPI-IXD-3 (hourly freshness worked out from the rows; the planned `kpi` mode was not built) |
 | `indexer/exit-codes` | `filter event = "indexer.ingest.pass_summary" and pass_id not like /^TEST/ \| stats count() by exit_code, bin(1d)` | KPI-IXD-5 |
 | (ad hoc) `indexer/host-health` | `filter event = "indexer.host.health" \| stats min(host_mem_available_mb), max(indexer_mem_mb), pct(search_ms, 95), avg(healthz_ok) by bin(1h)` | availability and latency SLIs, memory guardrail |
 
