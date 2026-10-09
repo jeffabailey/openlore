@@ -8,6 +8,8 @@ use std::net::SocketAddr;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
+use ports::duckdb_caps::DuckDbCap;
+
 /// The granular scope set (ADR-073 / SPIKE-3): claim and post creation only.
 pub(crate) const DEFAULT_OAUTH_SCOPES: &str =
     "atproto repo:org.openlore.claim?action=create repo:app.bsky.feed.post?action=create";
@@ -16,7 +18,11 @@ pub(crate) const DEFAULT_OAUTH_SCOPES: &str =
 pub(crate) const DB_MEMORY_LIMIT_MB_VAR: &str = "REVIEW_DB_MEMORY_LIMIT_MB";
 /// DuckDB's worker threads for the private store (B11).
 pub(crate) const DB_THREADS_VAR: &str = "REVIEW_DB_THREADS";
+/// The admissible ranges, as literals: the property tests' oracle for the
+/// shared [`DuckDbCap::range`].
+#[cfg(test)]
 const DB_MEMORY_LIMIT_MB_RANGE: RangeInclusive<u64> = 16..=1024;
+#[cfg(test)]
 const DB_THREADS_RANGE: RangeInclusive<u64> = 1..=4;
 /// The production sizes (architecture-design §3): 48 MiB, one thread.
 const DEFAULT_DB_MEMORY_LIMIT_MB: u64 = 48;
@@ -144,16 +150,16 @@ pub(crate) fn parse_config(
         listen: socket_addr("LISTEN_ADDR", get("LISTEN_ADDR").unwrap_or("0.0.0.0:8080"))?,
         admin_listen,
         review_db: PathBuf::from(get("REVIEW_DB").unwrap_or("/data/review-app.duckdb")),
-        db_memory_limit_mb: ranged_number(
+        db_memory_limit_mb: db_cap(
             DB_MEMORY_LIMIT_MB_VAR,
             get(DB_MEMORY_LIMIT_MB_VAR),
-            DB_MEMORY_LIMIT_MB_RANGE,
+            DuckDbCap::MemoryLimitMb,
             DEFAULT_DB_MEMORY_LIMIT_MB,
         )?,
-        db_threads: ranged_number(
+        db_threads: db_cap(
             DB_THREADS_VAR,
             get(DB_THREADS_VAR),
-            DB_THREADS_RANGE,
+            DuckDbCap::Threads,
             DEFAULT_DB_THREADS,
         )?,
         secrets_dir: PathBuf::from(get("SECRETS_DIR").unwrap_or("/run/secrets")),
@@ -166,25 +172,20 @@ pub(crate) fn parse_config(
     })
 }
 
-/// A whole number within `range`, or `default` when unset (pure, total).
-fn ranged_number(
+/// A DuckDB cap within its shared range, or `default` when unset (pure, total).
+fn db_cap(
     name: &'static str,
     value: Option<&str>,
-    range: RangeInclusive<u64>,
+    cap: DuckDbCap,
     default: u64,
 ) -> Result<u64, ConfigError> {
-    let Some(value) = value else {
-        return Ok(default);
-    };
-    value
-        .parse::<u64>()
-        .ok()
-        .filter(|number| range.contains(number))
-        .ok_or_else(|| ConfigError::OutOfRange {
+    value.map_or(Ok(default), |value| {
+        cap.parse(value).map_err(|refused| ConfigError::OutOfRange {
             name,
             value: value.to_string(),
-            range,
+            range: refused.range,
         })
+    })
 }
 
 fn socket_addr(name: &'static str, value: &str) -> Result<SocketAddr, ConfigError> {

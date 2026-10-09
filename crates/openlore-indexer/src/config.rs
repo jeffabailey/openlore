@@ -23,6 +23,7 @@ use appview_domain::did_list::MAX_DID_LENGTH;
 use appview_domain::ingest_pass::pds_endpoint_admissible;
 use appview_domain::FallbackUrl;
 use claim_domain::Did;
+use ports::duckdb_caps::DuckDbCap;
 use ports::net_policy::TransportPolicy;
 
 /// The repo DIDs one ingest pass enumerates.
@@ -79,10 +80,6 @@ const MAX_CONCURRENT_FETCHES_RANGE: RangeInclusive<u64> = 1..=16;
 /// One DID's whole fetch — resolving plus every listing page (ADR-078).
 const DEFAULT_PER_DID_TIMEOUT_SECS: u64 = 30;
 const PER_DID_TIMEOUT_SECS_RANGE: RangeInclusive<u64> = 1..=600;
-
-/// The DuckDB caps' admissible ranges (data-models §1); production 48 MiB, 1 thread.
-const DUCKDB_MEMORY_LIMIT_MB_RANGE: RangeInclusive<u64> = 16..=1024;
-const DUCKDB_THREADS_RANGE: RangeInclusive<u64> = 1..=4;
 
 /// One pass's deadline (ADR-080 §8): 25 minutes unless configured.
 const DEFAULT_PASS_DEADLINE_SECS: u64 = 1500;
@@ -256,15 +253,15 @@ pub fn parse_config(
     )?;
     let purge_unlisted = purge_switch(setting(PURGE_UNLISTED_VAR).as_deref())?;
     let set = |name: &str| lookup(name).map(|value| value.trim().to_string());
-    let duckdb_memory_limit_mb = optional_number(
+    let duckdb_memory_limit_mb = duckdb_cap(
         DUCKDB_MEMORY_LIMIT_MB_VAR,
         set(DUCKDB_MEMORY_LIMIT_MB_VAR).as_deref(),
-        DUCKDB_MEMORY_LIMIT_MB_RANGE,
+        DuckDbCap::MemoryLimitMb,
     )?;
-    let duckdb_threads = optional_number(
+    let duckdb_threads = duckdb_cap(
         DUCKDB_THREADS_VAR,
         set(DUCKDB_THREADS_VAR).as_deref(),
-        DUCKDB_THREADS_RANGE,
+        DuckDbCap::Threads,
     )?;
     let pass_deadline_secs = bounded_number(
         PASS_DEADLINE_SECS_VAR,
@@ -468,15 +465,18 @@ fn bounded_number(
     value.map_or(Ok(default), |value| ranged_number(variable, value, range))
 }
 
-/// A set whole number within `range`; unset stays `None` (the consumer's
+/// A set DuckDB cap within its shared range; unset stays `None` (DuckDB's
 /// own default applies).
-fn optional_number(
+fn duckdb_cap(
     variable: &'static str,
     value: Option<&str>,
-    range: RangeInclusive<u64>,
+    cap: DuckDbCap,
 ) -> Result<Option<u64>, ConfigError> {
     value
-        .map(|value| ranged_number(variable, value, range))
+        .map(|value| {
+            cap.parse(value)
+                .map_err(|refused| ConfigError::new(variable, value, refused.to_string()))
+        })
         .transpose()
 }
 

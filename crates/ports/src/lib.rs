@@ -149,6 +149,8 @@ pub use contribution_link::{
 // `IndexStorePort` exposes NO aggregate-across-authors method (anti-merging at
 // the type + surface level). NO new external dependency added to `ports`.
 
+/// The DuckDB caps the indexer (B9) and the review app (B11) accept.
+pub mod duckdb_caps;
 mod identity_resolve;
 mod index_query;
 mod index_store;
