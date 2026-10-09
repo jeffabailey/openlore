@@ -68,10 +68,10 @@ fn an_event_exactly_one_window_old_no_longer_counts() {
 
 #[test]
 fn a_scan_a_full_day_old_is_forgotten() {
-    let (aged, first) = admit_scan(ScanBudget::default(), OWNER, 0);
+    let (aged, first) = admit_scan(ScanBudget::default(), OWNER, 0, 2);
     assert_eq!(first, ScanAdmission::Admitted);
-    let (after_a_day, again) = admit_scan(release_scan(aged, OWNER), OWNER, DAY_SECS);
-    let (fresh, _) = admit_scan(ScanBudget::default(), OWNER, DAY_SECS);
+    let (after_a_day, again) = admit_scan(release_scan(aged, OWNER), OWNER, DAY_SECS, 2);
+    let (fresh, _) = admit_scan(ScanBudget::default(), OWNER, DAY_SECS, 2);
     assert_eq!(again, ScanAdmission::Admitted);
     assert_eq!(after_a_day, fresh);
 }

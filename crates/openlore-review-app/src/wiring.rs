@@ -575,6 +575,6 @@ fn app(wired: Wired) -> App {
         review_write: wired.store,
         mapping: wired.mapping,
         verify_attempts: VerifyAttempts::default(),
-        scan_limiter: ScanLimiter::default(),
+        scan_limiter: ScanLimiter::new(wired.config.scan_concurrency),
     }
 }

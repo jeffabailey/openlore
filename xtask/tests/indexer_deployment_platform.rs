@@ -282,6 +282,11 @@ fn the_review_app_container_is_capped_for_sharing_the_host() {
         yaml_value(&compose, "REVIEW_DB_THREADS").as_deref(),
         Some("1")
     );
+    assert_eq!(
+        yaml_value(&compose, "OPENLORE_REVIEW_SCAN_CONCURRENCY").as_deref(),
+        Some("2"),
+        "the scan concurrency is set explicitly (fail-path knob, fix-go-live-runbook-gaps S6)"
+    );
     let oom: i64 = yaml_value(&compose, "oom_score_adj")
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);

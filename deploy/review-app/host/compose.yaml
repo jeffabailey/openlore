@@ -34,6 +34,7 @@ services:
       REVIEW_DB: /data/review-app.duckdb
       REVIEW_DB_MEMORY_LIMIT_MB: "48"
       REVIEW_DB_THREADS: "1"
+      OPENLORE_REVIEW_SCAN_CONCURRENCY: "2"
       SECRETS_DIR: /run/secrets
       LOG_FORMAT: json
     volumes:

@@ -108,6 +108,7 @@ services:
     environment:
       APP_ORIGIN: https://app.openlore.jeffbailey.us
       REVIEW_DB: /data/review-app.duckdb
+      OPENLORE_REVIEW_SCAN_CONCURRENCY: "2"
       SECRETS_DIR: /run/secrets
       LOG_FORMAT: json
       OAUTH_SCOPES: "atproto repo:org.openlore.claim?action=create repo:app.bsky.feed.post?action=create"
@@ -127,6 +128,11 @@ networks:
   pds_default:
     external: true
 ```
+
+`OPENLORE_REVIEW_SCAN_CONCURRENCY` is how many scans the app runs at once across everyone
+(default 2). It must be a whole number from 1 to 4; anything else (including 0, which would
+refuse every scan) refuses startup, naming the variable. The memory gate's fail path lowers it
+to 1 (indexer-deployment infrastructure-integration, memory gate).
 
 `/pds/app/.env` holds only `REVIEW_APP_IMAGE=<digest ref>`, which is not secret. It is written
 by the deploy so `docker compose` restarts the exact pinned digest after a reboot.

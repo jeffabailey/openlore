@@ -83,3 +83,50 @@ fn the_review_app_accepts_database_caps_within_their_range_and_refuses_the_rest(
         }
     }
 }
+
+const SCAN_CONCURRENCY: &str = "OPENLORE_REVIEW_SCAN_CONCURRENCY";
+
+fn with_scan_concurrency(value: &str) -> impl FnOnce(&mut AppSettings) {
+    let value = value.to_string();
+    move |s: &mut AppSettings| s.extra_env.push((SCAN_CONCURRENCY.to_string(), value))
+}
+
+/// RAC-2 (fix-go-live-runbook-gaps S6)
+/// ```gherkin
+/// @error @real-io @driving_port @contract-shape:unbounded-preservation
+/// Scenario: The review app refuses a scan concurrency outside its range
+///   Given Jeff sets the review app's scan concurrency to <value>
+///   When the review app starts
+///   Then it <outcome>
+///   Examples:
+///     | value | outcome                                        |
+///     | 1     | reports healthy (the fail-path setting)        |
+///     | 0     | refuses to start, naming the scan concurrency  |
+///     | 5     | refuses to start, naming the scan concurrency  |
+/// ```
+#[test]
+fn the_review_app_refuses_a_scan_concurrency_outside_its_range() {
+    let (_gh, _net, startup) = ReviewWorld::launch(|_, _| {}, with_scan_concurrency("1"));
+    let Startup::Ready(app) = startup else {
+        panic!("the review app starts with a scan concurrency of 1");
+    };
+    assert_eq!(app.get("/healthz").0, 200);
+    drop(app);
+    for value in ["0", "5"] {
+        let (_gh, _net, startup) = ReviewWorld::launch(|_, _| {}, with_scan_concurrency(value));
+        match startup {
+            Startup::Ready(_) => panic!("{SCAN_CONCURRENCY}={value} must be refused"),
+            Startup::Refused { exit_code, logs } => {
+                assert!(
+                    exit_code.is_some() && exit_code != Some(0),
+                    "{value}: non-zero exit"
+                );
+                assert!(logs.contains("health.startup.refused"), "{value}\n{logs}");
+                assert!(
+                    logs.contains(SCAN_CONCURRENCY),
+                    "the refusal names {SCAN_CONCURRENCY}\n{logs}"
+                );
+            }
+        }
+    }
+}

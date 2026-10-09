@@ -237,6 +237,11 @@ Tags and short shas are refused. A deploy installs the host files, renders secre
 digest while the old one serves, copies the DuckDB file aside, starts the new digest and waits
 90 s for `/readyz` through Caddy; if it is not ready it rolls back by itself and exits 1.
 
+Resource settings in `review-app/host/compose.yaml` (each refuses startup, naming itself, when out
+of range): `REVIEW_DB_MEMORY_LIMIT_MB` (16..=1024, set to 48), `REVIEW_DB_THREADS` (1..=4, set to
+1) and `OPENLORE_REVIEW_SCAN_CONCURRENCY` (1..=4, default and set to 2), the number of scans the
+app runs at once; the memory gate's fail path lowers it to 1.
+
 Operator follow-ups before the first deploy (in order):
 
 1. Release `tofu-aws-pds` **v1.7.0** (Caddy `import /etc/caddy/sites/*.caddy` with

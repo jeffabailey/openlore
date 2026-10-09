@@ -19,25 +19,41 @@ pub(crate) fn unix_now_secs() -> i64 {
     i64::try_from(unix_now()).unwrap_or_default()
 }
 
-/// Who is scanning and who scanned recently.
-#[derive(Default)]
-pub(crate) struct ScanLimiter(Mutex<ScanBudget>);
+/// Who is scanning and who scanned recently, and how many scans may run at
+/// once.
+pub(crate) struct ScanLimiter {
+    budget: Mutex<ScanBudget>,
+    max_running: usize,
+}
 
 impl ScanLimiter {
+    /// A limiter admitting at most `max_running` concurrent scans.
+    pub(crate) fn new(max_running: usize) -> Self {
+        Self {
+            budget: Mutex::new(ScanBudget::default()),
+            max_running,
+        }
+    }
+
     /// Ask the budget whether `owner_did` may start a scan now; an admitted
     /// scan holds its slot until [`ScanLimiter::release`].
     pub(crate) fn admit(&self, owner_did: &str) -> ScanAdmission {
-        let Ok(mut budget) = self.0.lock() else {
+        let Ok(mut budget) = self.budget.lock() else {
             return ScanAdmission::AppBusy;
         };
-        let (next, admission) = admit_scan(std::mem::take(&mut *budget), owner_did, unix_now());
+        let (next, admission) = admit_scan(
+            std::mem::take(&mut *budget),
+            owner_did,
+            unix_now(),
+            self.max_running,
+        );
         *budget = next;
         admission
     }
 
     /// The scan by `owner_did` ended.
     pub(crate) fn release(&self, owner_did: &str) {
-        if let Ok(mut budget) = self.0.lock() {
+        if let Ok(mut budget) = self.budget.lock() {
             *budget = release_scan(std::mem::take(&mut *budget), owner_did);
         }
     }

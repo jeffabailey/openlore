@@ -9,6 +9,7 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use ports::duckdb_caps::DuckDbCap;
+use review_domain::budget::DEFAULT_CONCURRENT_SCANS;
 
 /// The granular scope set (ADR-073 / SPIKE-3): claim and post creation only.
 pub(crate) const DEFAULT_OAUTH_SCOPES: &str =
@@ -24,6 +25,10 @@ pub(crate) const DB_THREADS_VAR: &str = "REVIEW_DB_THREADS";
 const DB_MEMORY_LIMIT_MB_RANGE: RangeInclusive<u64> = 16..=1024;
 #[cfg(test)]
 const DB_THREADS_RANGE: RangeInclusive<u64> = 1..=4;
+/// Scans the app runs at once (fix-go-live-runbook-gaps S6): the memory
+/// gate's fail path lowers it to 1.
+pub(crate) const SCAN_CONCURRENCY_VAR: &str = "OPENLORE_REVIEW_SCAN_CONCURRENCY";
+const SCAN_CONCURRENCY_RANGE: RangeInclusive<u64> = 1..=4;
 /// The production sizes (architecture-design §3): 48 MiB, one thread.
 const DEFAULT_DB_MEMORY_LIMIT_MB: u64 = 48;
 const DEFAULT_DB_THREADS: u64 = 1;
@@ -103,6 +108,8 @@ pub(crate) struct AppConfig {
     pub(crate) db_memory_limit_mb: u64,
     /// DuckDB `threads` for the private store (B11).
     pub(crate) db_threads: u64,
+    /// Scans that may run at once (`OPENLORE_REVIEW_SCAN_CONCURRENCY`).
+    pub(crate) scan_concurrency: usize,
     pub(crate) secrets_dir: PathBuf,
     pub(crate) oauth_scopes: String,
     pub(crate) github_api_base: String,
@@ -162,6 +169,7 @@ pub(crate) fn parse_config(
             DuckDbCap::Threads,
             DEFAULT_DB_THREADS,
         )?,
+        scan_concurrency: scan_concurrency(get(SCAN_CONCURRENCY_VAR))?,
         secrets_dir: PathBuf::from(get("SECRETS_DIR").unwrap_or("/run/secrets")),
         oauth_scopes: get("OAUTH_SCOPES")
             .unwrap_or(DEFAULT_OAUTH_SCOPES)
@@ -185,6 +193,23 @@ fn db_cap(
             value: value.to_string(),
             range: refused.range,
         })
+    })
+}
+
+/// The scan concurrency: a whole number in 1..=4, or the budget's default
+/// when unset (pure, total). Zero is refused: it would refuse every scan.
+fn scan_concurrency(value: Option<&str>) -> Result<usize, ConfigError> {
+    value.map_or(Ok(DEFAULT_CONCURRENT_SCANS), |value| {
+        value
+            .parse::<u64>()
+            .ok()
+            .filter(|number| SCAN_CONCURRENCY_RANGE.contains(number))
+            .and_then(|number| usize::try_from(number).ok())
+            .ok_or_else(|| ConfigError::OutOfRange {
+                name: SCAN_CONCURRENCY_VAR,
+                value: value.to_string(),
+                range: SCAN_CONCURRENCY_RANGE,
+            })
     })
 }
 
@@ -430,6 +455,62 @@ mod tests {
                     ),
                 },
             }
+        }
+
+        /// Universe: OPENLORE_REVIEW_SCAN_CONCURRENCY unset, blank, or any
+        /// u64 written in decimal. Unset/blank yields 2; n is accepted as n
+        /// exactly when 1 <= n <= 4; anything else is refused naming the
+        /// variable, echoing the value and the range 1..=4.
+        #[test]
+        fn a_scan_concurrency_is_accepted_exactly_within_its_range(
+            setting in proptest::option::of(prop_oneof![
+                (0u64..10).prop_map(Some),
+                any::<u64>().prop_map(Some),
+                Just(None),
+            ]),
+        ) {
+            let mut env = BTreeMap::from([("APP_ORIGIN".to_string(), "https://app.example".to_string())]);
+            let text = setting.map(|number| number.map_or_else(|| "  ".to_string(), |n| n.to_string()));
+            if let Some(text) = &text {
+                env.insert("OPENLORE_REVIEW_SCAN_CONCURRENCY".to_string(), text.clone());
+            }
+            let parsed = parse_config(&env, BuildProfile::Release).map(|c| c.scan_concurrency);
+            match setting.flatten() {
+                None => prop_assert_eq!(parsed, Ok(2)),
+                Some(n) if (1..=4).contains(&n) => prop_assert_eq!(parsed, Ok(n as usize)),
+                Some(n) => prop_assert_eq!(
+                    parsed,
+                    Err(ConfigError::OutOfRange {
+                        name: "OPENLORE_REVIEW_SCAN_CONCURRENCY",
+                        value: n.to_string(),
+                        range: 1..=4,
+                    })
+                ),
+            }
+        }
+
+        /// Universe: texts holding a character that is neither a digit, a
+        /// `+` nor whitespace (which the shared trim may strip at the ends).
+        /// Always refused, naming the variable.
+        #[test]
+        fn text_with_a_non_digit_is_never_a_scan_concurrency(
+            prefix in "[0-9]{0,3}",
+            junk in "[^0-9+\\s]",
+            suffix in "[0-9]{0,3}",
+        ) {
+            let text = format!("{prefix}{junk}{suffix}");
+            let env = BTreeMap::from([
+                ("APP_ORIGIN".to_string(), "https://app.example".to_string()),
+                ("OPENLORE_REVIEW_SCAN_CONCURRENCY".to_string(), text.clone()),
+            ]);
+            prop_assert_eq!(
+                parse_config(&env, BuildProfile::Release).map(|c| c.scan_concurrency),
+                Err(ConfigError::OutOfRange {
+                    name: "OPENLORE_REVIEW_SCAN_CONCURRENCY",
+                    value: text,
+                    range: 1..=4,
+                })
+            );
         }
 
         /// Universe: data-key texts — the documented JSON with any kid and
