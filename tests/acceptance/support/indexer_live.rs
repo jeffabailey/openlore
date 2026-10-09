@@ -28,7 +28,7 @@
 //! `openlore search` output, the fake network's request log, and the index rows
 //! once `serve` is stopped.
 //!
-//! ## Fault seam (DISTILL-proposed; DELIVER owns the final name)
+//! ## Fault seam
 //!
 //! A panicking pass, a poisoned store, a failing purge and a failing store read
 //! cannot be provoked from outside a real process, so the scenarios that need

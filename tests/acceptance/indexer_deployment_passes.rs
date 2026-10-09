@@ -24,10 +24,6 @@
 //!
 //! Story line (Pillar 2): PS-10 → PS-13 → PS-25 chain from
 //! `journey::given_authors_publish_on_their_own_pdses` + a live index.
-//!
-//! All scenarios are `#[ignore]`d at DISTILL hand-off.
-//
-// SCAFFOLD: true
 #![cfg(unix)]
 
 mod support;

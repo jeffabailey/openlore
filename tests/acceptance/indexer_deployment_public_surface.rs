@@ -10,10 +10,6 @@
 //! Layer 3 (real `serve`; in-test HTTP client on the public listener).
 //! Example-only; the route allowlist and the bounds classification are
 //! properties at layer 2 in `indexer_deployment_core.rs`.
-//!
-//! All scenarios are `#[ignore]`d at DISTILL hand-off.
-//
-// SCAFFOLD: true
 #![cfg(unix)]
 
 mod support;

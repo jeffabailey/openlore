@@ -27,10 +27,6 @@
 //! Story line (Pillar 2): DL-30 (add Tomás) → DL-31 (a second edit) and PG-40
 //! (remove Dmitri) → PG-47 (purge again / list him again) chain from
 //! `journey::given_authors_publish_on_their_own_pdses` + the first pass.
-//!
-//! All scenarios are `#[ignore]`d at DISTILL hand-off.
-//
-// SCAFFOLD: true
 #![cfg(unix)]
 
 mod support;

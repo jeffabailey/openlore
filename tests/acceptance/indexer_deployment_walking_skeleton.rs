@@ -12,12 +12,6 @@
 //! Story line (Pillar 2): WS-1 (Maria finds Priya and Dmitri) → WS-2 (a claim
 //! Priya approves later shows up after the next pass). WS-0 is the edge before
 //! any pass. All share `journey::given_authors_publish_on_their_own_pdses`.
-//!
-//! RED evidence: `docs/feature/indexer-deployment/distill/red-classification.md`.
-//! Every scenario is `#[ignore]`d at DISTILL hand-off; DELIVER enables them one
-//! at a time.
-//
-// SCAFFOLD: true
 #![cfg(unix)]
 
 mod support;

@@ -11,8 +11,7 @@
 //! * XD-6 `check-probes` sees a `probe()` on the purge port implementation
 //! * XD-7 non-vacuity: the scanners see planted violations
 //!
-//! These complement DELIVER's own fixture-based unit tests of the rule
-//! functions. `#[ignore]`d until DELIVER lands the rules and the modules.
+//! These complement the fixture-based unit tests of the rule functions.
 
 use std::path::{Path, PathBuf};
 

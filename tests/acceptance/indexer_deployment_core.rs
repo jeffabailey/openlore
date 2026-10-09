@@ -27,22 +27,14 @@
 //! CLI_FORBIDDEN_INDEXER_DEPS) and the indexer is bin-only. The rest stay here
 //! and bind to pure functions in `appview-domain`.
 //!
-//! ## Binding seam (RED scaffold, Mandate 7)
+//! ## Binding seam (Mandate 7)
 //!
-//! None of these functions exist yet, so every property calls a `sut_*`
-//! binding whose body is `todo!()` — a panic, classified RED (not BROKEN).
-//! DELIVER replaces each binding body with ONE call into the production
-//! function (the view types here are the observable contract; DELIVER maps its
-//! ADTs onto them). Bindings needing a function private to the
-//! `openlore-indexer` binary crate (config parsing, routing) may instead move
-//! the property verbatim into that crate's unit tests. CORE-11 binds to the
-//! REAL `adapter-index-store` over a temp DuckDB (in-process; the same shape as
-//! the existing `atomic_upsert_properties`).
+//! Every property calls a `sut_*` binding that makes ONE call into the
+//! production function and maps its ADTs onto the view types here (the view
+//! types are the observable contract).
 //!
 //! Closed-world finite tables (2 routes, 3 exit codes) are exhaustive examples
 //! beside the generators (falsifier gate).
-//
-// SCAFFOLD: true
 
 use std::collections::BTreeSet;
 
@@ -125,7 +117,7 @@ enum RunnerReply {
 }
 
 // =============================================================================
-// RED binding seam — DELIVER binds each to ONE production call
+// Binding seam — each binds to ONE production call
 // =============================================================================
 
 fn sut_plan_purge(listed: &[String], indexed_authors: &BTreeSet<String>) -> PurgePlanView {

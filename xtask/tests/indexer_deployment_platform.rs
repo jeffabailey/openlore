@@ -30,7 +30,7 @@
 //! deploy, rollback drill, alarm test-fire and the memory gate stay in the
 //! runbook (`deploy/indexer/README.md`; DEVOPS I-4..I-6).
 //!
-//! ## Testability contract for the scripts (DISTILL-proposed; DELIVER owns names)
+//! ## Testability contract for the scripts
 //!
 //! * `render-dids.sh` honours `INDEXER_CONFIG_DIR` (default `/pds/indexer/config`)
 //!   and resolves `aws`, `timeout`, `chown` from `PATH`.
@@ -42,8 +42,6 @@
 //! * `health-timer.sh run` honours `INDEXER_CONFIG_DIR`, `INDEXER_STATE_DIR` and
 //!   `INDEXER_AWS_TIMEOUT_S` (default 15), resolves `docker`, `curl`, `aws`, `timeout` from `PATH`, prints its `indexer.host.health` line on stdout,
 //!   tolerates a host without `/proc` (fields default to 0) and always exits 0.
-//!
-//! `#[ignore]`d until DELIVER creates the files they inspect.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
