@@ -547,6 +547,7 @@ async fn bind(
 /// driven ports the pages use.
 fn app(wired: Wired) -> App {
     let mode = permission_mode(&wired.config.oauth_scopes);
+    let scan_limiter = scan_limiter(&wired.config);
     let github = GithubAdapter::with_token(
         wired.config.github_api_base.as_str(),
         wired.github_token.expose(),
@@ -575,6 +576,45 @@ fn app(wired: Wired) -> App {
         review_write: wired.store,
         mapping: wired.mapping,
         verify_attempts: VerifyAttempts::default(),
-        scan_limiter: ScanLimiter::new(wired.config.scan_concurrency),
+        scan_limiter,
+    }
+}
+
+/// The scan limiter, admitting as many concurrent scans as the config allows.
+fn scan_limiter(config: &AppConfig) -> ScanLimiter {
+    ScanLimiter::new(config.scan_concurrency)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use review_domain::budget::ScanAdmission;
+
+    /// The limiter the app is wired with, from this environment.
+    fn wired_limiter(scan_concurrency: Option<&str>) -> ScanLimiter {
+        let mut env =
+            BTreeMap::from([("APP_ORIGIN".to_string(), "https://app.example".to_string())]);
+        if let Some(value) = scan_concurrency {
+            env.insert(
+                "OPENLORE_REVIEW_SCAN_CONCURRENCY".to_string(),
+                value.to_string(),
+            );
+        }
+        let config = parse_config(&env, BuildProfile::Release).expect("a valid config");
+        scan_limiter(&config)
+    }
+
+    #[test]
+    fn the_configured_scan_concurrency_reaches_the_limiter() {
+        let one = wired_limiter(Some("1"));
+        assert_eq!(one.admit("did:plc:first"), ScanAdmission::Admitted);
+        assert_eq!(one.admit("did:plc:second"), ScanAdmission::AppBusy);
+        one.release("did:plc:first");
+        assert_eq!(one.admit("did:plc:second"), ScanAdmission::Admitted);
+
+        let default = wired_limiter(None);
+        assert_eq!(default.admit("did:plc:first"), ScanAdmission::Admitted);
+        assert_eq!(default.admit("did:plc:second"), ScanAdmission::Admitted);
+        assert_eq!(default.admit("did:plc:third"), ScanAdmission::AppBusy);
     }
 }
