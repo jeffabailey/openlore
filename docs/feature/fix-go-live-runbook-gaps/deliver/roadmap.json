@@ -1,0 +1,172 @@
+{
+  "roadmap": {
+    "project_id": "fix-go-live-runbook-gaps",
+    "created_at": "2026-10-09T22:23:14Z",
+    "total_steps": 3,
+    "source": "docs/feature/fix-go-live-runbook-gaps/rca.md",
+    "paradigm": "functional (ADR-007)",
+    "out_of_scope": "B1: tofu-aws-pds v1.7.0 (M-1 sites mount + import, M-2 hop limit 1, tests, CHANGELOG, tag) is written by the operator in the other repo. This delivery only states it as checklist step 0 with a `git ls-remote --tags` check. Operator decisions (t4g.small, I-0 placement, go-live order of the apps, TRUSTED_PROXIES, DID list, PAT expiry, downtime window) are not changed."
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Make the go-live runbook executable and drift-proof (review app + indexer)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "S6: OPENLORE_REVIEW_SCAN_CONCURRENCY setting for the review app's scan limiter",
+          "description": "The memory gate's fail path says 'lower the review-app scan concurrency to 1', but no setting exists: the limit is the literal CONCURRENT_SCANS = 2 (crates/review-domain/src/budget.rs:30, used at :71) and the root builds ScanLimiter::default() (crates/openlore-review-app/src/wiring.rs:578). Add OPENLORE_REVIEW_SCAN_CONCURRENCY: unset = 2 (today's value), a whole number in 1..=4 accepted, anything else (0, 5, blank-after-trim handled as unset like other vars, signed, decimal, suffixed, overflow) refused at startup with ConfigError::OutOfRange naming the variable and the range. Thread the value into the pure budget decision and the limiter; set it explicitly in deploy/review-app/host/compose.yaml; document it.",
+          "criteria": [
+            "With OPENLORE_REVIEW_SCAN_CONCURRENCY unset, the parsed config carries a scan concurrency of 2 and the app admits at most 2 concurrent scans (unchanged behaviour).",
+            "For every decimal u64 n, the setting is accepted as n exactly when 1 <= n <= 4; otherwise the config is refused with OutOfRange { name: \"OPENLORE_REVIEW_SCAN_CONCURRENCY\", value: <given>, range: 1..=4 }.",
+            "Any text containing a non-digit character (other than a leading '+', matching DuckDbCap::parse semantics) is refused.",
+            "For every limit L in 1..=4 and every sequence of start/finish steps over 4 DIDs, the number of running scans never exceeds L, and a start is answered AppBusy exactly when L scans are running and the DID is otherwise admissible.",
+            "With L = 2 the budget's admissions are identical, step for step, to today's behaviour (regression guard for the default).",
+            "The review app binary refuses to start (non-zero exit, error names the variable) when OPENLORE_REVIEW_SCAN_CONCURRENCY=0 or 5, and starts with 1.",
+            "deploy/review-app/host/compose.yaml sets OPENLORE_REVIEW_SCAN_CONCURRENCY: \"2\" and the compose cap test asserts that literal.",
+            "The variable is documented where the review app's other caps are (deploy/README.md review-app section, devops platform-architecture/infrastructure-integration env table)."
+          ],
+          "estimated_hours": 3,
+          "dependencies": [],
+          "files_to_modify": [
+            "crates/review-domain/src/budget.rs",
+            "crates/review-domain/tests/domain_contracts.rs",
+            "crates/openlore-review-app/src/config.rs",
+            "crates/openlore-review-app/src/limiter.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "tests/acceptance/review_app_resource_caps.rs",
+            "deploy/review-app/host/compose.yaml",
+            "xtask/tests/indexer_deployment_platform.rs",
+            "deploy/README.md",
+            "docs/feature/bluesky-claim-review-app/devops/infrastructure-integration.md"
+          ],
+          "test_file": "crates/openlore-review-app/src/config.rs",
+          "scenario_name": "a_scan_concurrency_is_accepted_exactly_within_its_range",
+          "scenario_fns": [
+            "crates/openlore-review-app/src/config.rs::tests::a_scan_concurrency_is_accepted_exactly_within_its_range (proptest; universe = every u64 in decimal x unset; literal oracle 1..=4, default 2)",
+            "crates/openlore-review-app/src/config.rs::tests::text_with_a_non_digit_is_never_a_scan_concurrency (proptest)",
+            "crates/review-domain/src/budget.rs::tests::running_scans_never_exceed_the_configured_concurrency (proptest; L in 1..=4 literal, step sequences over 4 DIDs; state-delta: running-set size before/after each step)",
+            "crates/review-domain/src/budget.rs::tests::a_limit_of_two_admits_exactly_as_before (proptest; compares against a literal-2 reference model written in the test, not CONCURRENT_SCANS)",
+            "tests/acceptance/review_app_resource_caps.rs::the_review_app_refuses_a_scan_concurrency_outside_its_range (integration, single-example: 0 and 5 refused, 1 accepted)",
+            "xtask/tests/indexer_deployment_platform.rs::the_review_app_container_is_capped_for_sharing_the_host (extend: OPENLORE_REVIEW_SCAN_CONCURRENCY == \"2\")"
+          ],
+          "test_command": "cargo test -p review-domain budget && cargo test -p openlore-review-app --lib config && cargo test -p openlore-review-app --test review_app_resource_caps && cargo test -p xtask --test indexer_deployment_platform the_review_app_container_is_capped_for_sharing_the_host",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: bug-prone legacy code = Stage 1 (state-delta capture of hidden mutations first).\nRED first: write all scenario_fns, run test_command, record the failure (compile error on the missing field/parameter counts as RED for new API; the compose assertion and the integration refusal must fail by assertion).\nDesign (WHAT, crafter owns HOW): contract shapes \u2014 parse_config stays pure-function (env map -> Result<AppConfig, ConfigError>); admit_scan stays pure-function with the limit as an explicit input (parameter or a field of ScanBudget; choose one, keep release_scan unchanged); ScanLimiter is bounded-change (only its own Mutex<ScanBudget>). The composition root builds the limiter from config.scan_concurrency instead of ScanLimiter::default(). Keep CONCURRENT_SCANS as the documented default (or rename to DEFAULT_CONCURRENT_SCANS) so call sites and docs stay truthful.\nValidation style: mirror db_cap (config.rs:176-189) and DuckDbCap::parse (crates/ports/src/duckdb_caps.rs:29-35): whole decimal, no inner trimming beyond the shared `get` trim, range check, OutOfRange carries name/value/range. Do NOT add a variant to ports::DuckDbCap: scan concurrency is not a DuckDB cap and has a single consumer (rejected alternative: shared ports module \u2014 adds a cross-crate dependency for one app; rejected alternative: unvalidated usize parse \u2014 fails open on 0, which would deadlock every scan as AppBusy).\nOracles: literal values only (1..=4, default 2, the literal variable name). Never call or mirror production code in an oracle: do not reference CONCURRENT_SCANS, DuckDbCap::range or the new constant from the test's expected side. Note the existing budget.rs:159 assertion uses CONCURRENT_SCANS as oracle \u2014 switch it to the literal while touching the file.\nLESSONS: oracles use literal values, never call/mirror production code; run dependent suites narrowly (the test_command above, not the workspace); deploy/** is checked by deploy-pds-check (compose resolve + mount guard) so keep compose valid; no AWS/tofu actions.\nMutation scope (per-feature, >= 80%): budget.rs admit_scan, config.rs scan-concurrency parse, wiring line."
+        },
+        {
+          "id": "01-02",
+          "name": "S7 + N3 (+N4): review-app deploy.sh install fails closed like the indexer",
+          "description": "deploy/review-app/deploy.sh host_install (176-188) has no IMDS isolation check, no check that Caddy actually imports the sites directory, creates /pds/caddy/sites itself (:179, defeating the indexer's existence check at deploy/indexer/deploy.sh:355) and reloads Caddy without validating (:186). Make it fail closed: run the same refuse_unless_isolated contract as the indexer (digest-pinned curlimages/curl probe on pds_default; positive control first; only curl exit 7/28 proves isolation), refuse unless the Caddy container sees /etc/caddy/sites and /etc/caddy/Caddyfile imports /etc/caddy/sites/*.caddy, never create /pds/caddy/sites, run `caddy validate` before reload and remove app.caddy if it is rejected. N4 if cheap: the indexer's first-deploy readiness wait (60 s) is overridable for the first deploy that includes certificate issuance.",
+          "criteria": [
+            "host install proceeds only when the probe's positive control (curl --version on pds_default) succeeds AND the IMDS PUT ends with curl exit 7 or 28.",
+            "IMDS exit 0, 22, 6, 125, a failed positive control, or a probe image not pinned by @sha256:<64 hex> each refuse with a message containing 'refusing' and a non-zero exit, before any `install` call.",
+            "MANDATORY in BOTH scripts (same shared function text, same SITES variable): (a) `docker inspect` of the PDS Caddy container shows a mount with Source == \"$SITES\" (host /pds/caddy/sites) AND Destination == /etc/caddy/sites, else refuse; a mount with the right destination but any other source refuses.",
+            "MANDATORY in BOTH scripts: (b) the Caddyfile read from inside the Caddy container matches the anchored regex `^[[:space:]]*import[[:space:]]+/etc/caddy/sites/\\*\\.caddy` on some line, else refuse; a commented `# import /etc/caddy/sites/*.caddy` (or the import inside any other text on the line) refuses. Checks (a) and (b) run before any host file is written; the message points at tofu-aws-pds v1.7.0 / R-REPLACE.",
+            "MANDATORY in BOTH scripts: (c) after the site file (app.caddy / index.caddy) is placed, `caddy adapt --config /etc/caddy/Caddyfile` output must contain the app's host (app.<PDS_HOSTNAME> / index.<PDS_HOSTNAME>); if it does not, the site file is removed, Caddy is NOT reloaded, and the install refuses.",
+            "`host deploy` and `host redeploy` with a failed isolation/sites check record NO render-secrets, NO docker pull, NO stop (compose stop/down) and NO compose up: the running app is untouched (both call host_install first; review-app deploy.sh:233 and :290).",
+            "No code path of deploy/review-app/deploy.sh creates /pds/caddy/sites (no install -d / mkdir naming it); a missing sites directory refuses.",
+            "`caddy validate --config /etc/caddy/Caddyfile` runs after app.caddy is placed and before `caddy reload`; on validate failure app.caddy is removed, reload is NOT called, and install exits non-zero.",
+            "The isolation function in both deploy.sh scripts is behaviourally identical (same probe image digest, same exit-code table); a drift between them fails a test.",
+            "Both deploy/review-app and deploy/indexer scripts stay `bash -n` clean and `shellcheck -S info` clean.",
+            "(N4, optional) the indexer's ready wait is overridable for the first deploy (default unchanged at 60 s) and the override is covered by a test; if skipped, 01-03's checklist documents the certificate-issuance wait."
+          ],
+          "estimated_hours": 6,
+          "dependencies": [],
+          "files_to_modify": [
+            "deploy/review-app/deploy.sh",
+            "deploy/indexer/deploy.sh",
+            "xtask/tests/indexer_deployment_platform.rs",
+            ".github/workflows/deploy-pds-check.yml"
+          ],
+          "test_file": "xtask/tests/indexer_deployment_platform.rs",
+          "scenario_name": "the_review_app_install_refuses_unless_isolated_and_imported",
+          "scenario_fns": [
+            "xtask/tests/indexer_deployment_platform.rs::the_review_app_imds_probe_accepts_only_a_proven_unreachable_metadata_service (recording PATH stubs; table over imds rc 7/28 accept, 0/22/6/125 refuse, failed control refuse, tag-pinned image refuse)",
+            "xtask/tests/indexer_deployment_platform.rs::an_install_refuses_unless_caddy_mounts_the_sites_dir (both scripts; docker inspect stub returns: correct Source+Destination -> proceeds; Destination /etc/caddy/sites with Source /tmp/other -> refuse; no sites mount -> refuse; inspect fails -> refuse; no `install` call recorded on refusal)",
+            "xtask/tests/indexer_deployment_platform.rs::an_install_refuses_unless_the_caddyfile_imports_the_sites (both scripts; Caddyfile stub text: `import /etc/caddy/sites/*.caddy` and indented form -> proceeds; `# import /etc/caddy/sites/*.caddy` -> refuse; `import /etc/caddy/other/*.caddy` -> refuse; no import -> refuse)",
+            "xtask/tests/indexer_deployment_platform.rs::a_site_caddy_does_not_serve_is_removed_and_refused (both scripts; caddy adapt stub output lacking the app host -> site file removed, no `caddy reload`, non-zero exit; output containing the literal host -> reload recorded after adapt and validate)",
+            "xtask/tests/indexer_deployment_platform.rs::a_deploy_or_redeploy_that_fails_the_probe_leaves_the_running_app_untouched (both scripts, `host deploy <digest> <sha>` and `host redeploy` with releases seeded; probe IMDS rc 0, and separately a commented import: recorded calls contain no render-secrets, no `docker pull`, no `compose ... stop`/`down`, no `compose ... up`)",
+            "xtask/tests/indexer_deployment_platform.rs::the_review_app_install_never_creates_the_sites_directory (missing REVIEW_APP_CADDY_SITES_DIR -> refuse; recorded calls never contain the sites path in an install -d/mkdir)",
+            "xtask/tests/indexer_deployment_platform.rs::a_rejected_app_site_is_removed_and_caddy_is_not_reloaded (caddy validate stub exits 1 -> app.caddy removed, no `caddy reload` in calls, non-zero exit; validate exits 0 -> validate recorded before reload)",
+            "xtask/tests/indexer_deployment_platform.rs::both_apps_refuse_with_the_same_isolation_contract (the two scripts' isolation functions and probe digest are identical text)"
+          ],
+          "test_command": "cargo test -p xtask --test indexer_deployment_platform -- review_app_imds review_app_install rejected_app_site both_apps_refuse the_imds_probe an_install_refuses a_site_caddy a_deploy_or_redeploy &&shellcheck -S info deploy/review-app/*.sh deploy/review-app/host/*.sh deploy/indexer/*.sh deploy/indexer/host/*.sh",
+          "implementation_notes": "EXEMPT FROM PARADIGM: shell/doc artefact; compensate with xtask tests.\nSTAGE CONTEXT: bug-prone legacy code = Stage 1 (state-delta capture of hidden mutations first): every refusal test asserts the recorded-calls log (the state delta of the host) contains no `install`, no `caddy reload`, and no write to the sites dir.\nRED first: write all scenario_fns and show them failing against today's deploy/review-app/deploy.sh (today install runs `install -d ... /pds/caddy/sites` with no probe, so every refusal assertion fails).\nPattern to follow: refuse_unless_isolated + imds_probe + IMDS_PROBE_IMAGE (deploy/indexer/deploy.sh:339-367) and its tests host_install_with_probe / the_imds_probe_accepts_only_a_proven_unreachable_metadata_service (xtask/tests/indexer_deployment_platform.rs:1383-1500). Reuse decision: each deploy.sh is shipped to the host as a self-contained payload (review-app :96, indexer :121 copy deploy.sh itself), and deploy-pds-check shellchecks only deploy/review-app and deploy/indexer, so copy the function verbatim into the review-app script and guard drift with both_apps_refuse_with_the_same_isolation_contract. Rejected alternative: a sourced deploy/lib/isolation.sh \u2014 needs both payload copies, both shellcheck globs and the SSM runner to agree; more moving parts for ~20 lines. If the crafter prefers the shared file anyway, add it to both payload cp lines and both shellcheck steps in .github/workflows/deploy-pds-check.yml.\nTest seam: add REVIEW_APP_CADDY_SITES_DIR (default /pds/caddy/sites) mirroring INDEXER_CADDY_SITES_DIR so tests point at a temp dir. Sites-hook checks are MANDATORY and live in the shared isolation/readiness function, byte-identical in both scripts and keyed on the same variable name SITES (review app: SITES=\"${REVIEW_APP_CADDY_SITES_DIR:-/pds/caddy/sites}\"; indexer keeps INDEXER_CADDY_SITES_DIR) so both_apps_refuse_with_the_same_isolation_contract holds: (a) `docker inspect` the PDS Caddy container's Mounts; require one entry with Source == \"$SITES\" and Destination == /etc/caddy/sites (a destination match alone is foolable); (b) read /etc/caddy/Caddyfile from inside the container and require the anchored regex ^[[:space:]]*import[[:space:]]+/etc/caddy/sites/\\*\\.caddy (grep -E), so a commented import fails; (c) a second shared function, called after the site file is placed with the expected host as argument, runs `caddy adapt --config /etc/caddy/Caddyfile` and requires the host in its output, else removes the file and refuses; then validate, then reload. The indexer's existing tests' docker stub must answer inspect/cat/adapt (update host_install_with_probe), and its existing behaviour stays green. host_deploy/host_redeploy call host_install first (review-app :233/:290, indexer :434/:496), so the guard covers them; the untouched-app scenario proves the ordering cannot regress.\nCI stubs must be able to FAIL: every stub (docker, caddy via docker, install) must have a configurable non-zero branch exercised by at least one test; a stub that always succeeds hid a gap last time. Assert on recorded calls, not only on exit codes.\nOracles: literal values (exit codes 7/28 vs 0/22/6/125, the literal digest prefix curlimages/curl@sha256:, literal paths). No production function is called from the expected side.\nLESSONS: deploy/** is checked by deploy-pds-check (shellcheck stricter than local: run shellcheck -S info locally); run dependent suites narrowly; no AWS/tofu actions; never run the scripts against a real host.\nContract shape: host_install is unbounded-preservation until the probe passes (refusal = zero host mutations), then bounded-change (APP dirs, app.caddy, timer)."
+        },
+        {
+          "id": "01-03",
+          "name": "B2, S3-S5, S8, S9, N1, N2: one ordered go-live checklist + doc-drift guard",
+          "description": "Write ONE ordered go-live checklist for both apps in deploy/README.md and make every other runbook point to it; fix the mismatches the review found; add an xtask doc-drift test so runbooks can no longer name routes, deploy.sh modes or OPENLORE_* settings that do not exist, or a replacement plan without -replace=. The drift test is the regression: it must FAIL on today's docs.",
+          "criteria": [
+            "deploy/README.md has a single '## Go-live checklist' section, numbered, covering both apps; step 0 is 'tofu-aws-pds v1.7.0 is released' with the check `git ls-remote --tags <tofu-aws-pds repo> v1.7.0` showing the tag BEFORE any ?ref= bump (B1 stays operator work).",
+            "B2: every replacement plan reads `tofu plan -replace=module.pds.aws_instance.pds -out=tfplan` (infrastructure-integration.md:258 fixed; the checklist uses it).",
+            "S3: deploy/indexer/README.md \u00a71, docs/evolution/indexer-deployment-evolution.md 'Operator go-live sequence', deploy/README.md 'Operator follow-ups' and the new deploy/review-app/README.md point to the checklist instead of carrying their own sequences; the applies are not duplicated; alarms are ENABLED (apply) and THEN test-fired, for both apps.",
+            "S4: review-app A-7/A-8 test-fires use `aws logs create-log-stream` into a `test-fire` stream of /openlore/prod/review-app and `aws logs put-log-events` with a millisecond timestamp and a `guardrail.breach` / `github.token.expiring` line, as exact commands; no `/admin/test-alarm` remains (monitoring-alerting.md:132-133, kpi-instrumentation.md:92).",
+            "S5: the memory gate is runnable: a 5 s / 20 min sampling loop that prints memory.peak VALUES (cat, not echo of the path), MemAvailable and pswpin; concrete PASS thresholds indexer memory.peak <= 100 MB, review app memory.peak <= 128 MB, MemAvailable > 128 MB (platform-architecture.md:156-158); a defined search request body inline; a request rate under 10/s with burst under 50 (or 429 counted as expected and excluded from the 200 check).",
+            "S6 wiring: the fail path names OPENLORE_REVIEW_SCAN_CONCURRENCY=1 (from 01-01) with the edit-compose-then-redeploy steps.",
+            "S8: the R-REPLACE rollback first runs `deploy/review-app/deploy.sh stop` and `deploy/indexer/deploy.sh stop` before re-pinning v1.6.0 (hop limit 2 returns).",
+            "S9: deploy/README.md says 192 MB (not 256); devops wave-decisions.md R-3 no longer claims deploy.sh checks anonymous pull (the checklist has the manual anonymous `docker pull <image>@<digest>` check); deploy/review-app/README.md exists as a short stub pointing to the checklist.",
+            "N1: exact A1 drill commands (create-log-stream; put-log-events with `$(date +%s000)` timestamps) and a warning that stopping the pass timer for over 2 h makes the DID list stale and fires A3. N2: prerequisites list IAM (ssm:SendCommand, ssm:StartSession, logs:StartQuery, logs:PutLogEvents), `gh variable set REVIEW_APP_LIVE --body true`, and `dig +short index.<host>` / `dig +short app.<host>` before install. N4 documented if 01-02 did not make the wait configurable.",
+            "The doc-drift test passes on the fixed docs and, run against today's docs, fails naming at least: /admin/test-alarm (bluesky-claim-review-app/devops/monitoring-alerting.md:132,133 and kpi-instrumentation.md:92) and the plain replacement plan (bluesky-claim-review-app/devops/infrastructure-integration.md:258)."
+          ],
+          "estimated_hours": 5,
+          "dependencies": [
+            "01-01",
+            "01-02"
+          ],
+          "files_to_modify": [
+            "xtask/tests/go_live_runbook_drift.rs",
+            "deploy/README.md",
+            "deploy/review-app/README.md",
+            "deploy/indexer/README.md",
+            "docs/evolution/indexer-deployment-evolution.md",
+            "docs/feature/bluesky-claim-review-app/devops/infrastructure-integration.md",
+            "docs/feature/bluesky-claim-review-app/devops/monitoring-alerting.md",
+            "docs/feature/bluesky-claim-review-app/devops/kpi-instrumentation.md",
+            "docs/feature/bluesky-claim-review-app/devops/wave-decisions.md",
+            "docs/feature/indexer-deployment/devops/infrastructure-integration.md"
+          ],
+          "test_file": "xtask/tests/go_live_runbook_drift.rs",
+          "scenario_name": "runbooks_name_only_admin_routes_the_review_app_serves",
+          "scenario_fns": [
+            "xtask/tests/go_live_runbook_drift.rs::runbooks_name_only_admin_routes_the_review_app_serves (fails today: /admin/test-alarm)",
+            "xtask/tests/go_live_runbook_drift.rs::every_replacement_plan_in_a_runbook_carries_replace (fails today: infrastructure-integration.md:258)",
+            "xtask/tests/go_live_runbook_drift.rs::runbooks_name_only_deploy_sh_modes_the_scripts_accept",
+            "xtask/tests/go_live_runbook_drift.rs::runbooks_name_only_openlore_settings_the_code_reads",
+            "xtask/tests/go_live_runbook_drift.rs::the_drift_scanner_flags_literal_drift_fixtures (proptest over generated markdown: known tokens + one injected unknown route/mode/setting/plain-replacement-plan at a random line; expected finding is the literal injected token and line; proves each check can FAIL)",
+            "xtask/tests/go_live_runbook_drift.rs::one_ordered_go_live_checklist_owns_the_sequence (fails today: no checklist; asserts step 0 + ls-remote, enable-before-test-fire order for both apps, rollback stops both apps before v1.6.0, the other runbooks link to it)",
+            "xtask/tests/go_live_runbook_drift.rs::the_memory_gate_is_runnable_and_falsifiable (fails today: echo of the path, no loop, search.json undefined, xargs -P 10; asserts literal 100 MB / 128 MB / MemAvailable > 128 thresholds)"
+          ],
+          "test_command": "cargo test -p xtask --test go_live_runbook_drift",
+          "implementation_notes": "EXEMPT FROM PARADIGM: shell/doc artefact; compensate with xtask tests. Exception: the drift scanner's own self-test (the_drift_scanner_flags_literal_drift_fixtures) is a proptest over generated markdown, since the scanner is a pure text function.\nSTAGE CONTEXT: bug-prone legacy code = Stage 1 (state-delta capture of hidden mutations first).\nRED first (mandatory evidence): write go_live_runbook_drift.rs BEFORE editing any doc, run `cargo test -p xtask --test go_live_runbook_drift`, and record the failure output showing at least /admin/test-alarm (monitoring-alerting.md:132,133; kpi-instrumentation.md:92) and the plain plan at bluesky-claim-review-app/devops/infrastructure-integration.md:258. Only then fix the docs.\nScanner scope (universe): deploy/**/*.md excluding deploy/tofu/**/.terraform/**; docs/feature/bluesky-claim-review-app/devops/*.md; docs/feature/indexer-deployment/devops/*.md; docs/evolution/indexer-deployment-evolution.md (its sequence is in S3).\nCode-side truth (read as text, not executed): admin routes = the (METHOD, \"/admin/...\") literals in crates/openlore-review-app/src/admin.rs route table (today /admin/kpi, /admin/purge); deploy.sh modes = the arms of the top-level `case \"$cmd\"` and `host_main` in each deploy.sh (split on `|`); OPENLORE_* settings = names that appear as literals in crates/**/src/**/*.rs, deploy/**/*.sh, deploy/**/compose.yaml or deploy/tofu/**/*.tf (excluding .terraform) \u2014 never in *.md, so a doc cannot vouch for itself.\nMatching rules (avoid false positives): admin = regex `/admin/[a-z-]+`; modes = `deploy\\.sh[ \\t]+([a-z][a-z-]*)` inside code spans/fences, checked against that app's script when the path is qualified (deploy/indexer/ vs deploy/review-app/) or the doc lives under that app's folder, else against the union; also expand `install | redeploy | stop` lists; setting = `OPENLORE_[A-Z0-9_]+`. Replacement plan = a line containing `tofu plan` and `-out=` whose contiguous block (until a blank line or fence end) contains `OPENLORE_ALLOW_DELETE=1`, or which sits under a heading containing `R-REPLACE`; it must contain `-replace=`. Verified negatives to keep passing: deploy/README.md:97 (normal prod plan, no ALLOW_DELETE=1 in its block), deploy/README.md:142 (has -replace=), indexer-deployment infrastructure-integration.md:367 (says 'without OPENLORE_ALLOW_DELETE'), infrastructure-integration.md:276 (`tofu plan` with no -out). Each finding prints file:line and the token.\nChecklist content (WHAT): step 0 v1.7.0 released + `git ls-remote --tags` check; bump both roots together; verified identity backup; R-REPLACE with `-replace=module.pds.aws_instance.pds` and `OPENLORE_ALLOW_DELETE=1 check-plan.sh` (rollback first: stop both apps, then re-pin v1.6.0 with -replace=); post-replace verification; bootstrap + prod applies once (review-app.tf and indexer.tf, alarms disabled); SSM secrets; GHCR public + anonymous pull check per image; DID list; review-app deploy, indexer deploy (first-deploy wait includes certificate issuance); rollback drills; memory gate; confirm SNS subscription; enable alarms (apply); THEN test-fire A-1/A-3/A-7/A-8 and A1/A2/A3; REVIEW_APP_LIVE; announce. Keep operator decisions as explicit decision points, not choices made.\nMemory gate: loop such as `for i in $(seq 240); do ... cat \"$cg/memory.peak\"; grep MemAvailable /proc/meminfo; sleep 5; done` (crafter writes the exact text); cgroup path per container id; search body inline (e.g. a heredoc with a literal query object); load generator paced under 10/s with burst < 50 (e.g. `xargs -P 4` with a per-request sleep, or count 429 as expected). Verify the request shape against the searchClaims handler before writing it.\nS9: compose mem_limit is 192m (deploy/review-app/host/compose.yaml:24). Prefer fixing the wave-decisions R-3 text over adding an anonymous-pull check to deploy.sh (not cheap: needs an unauthenticated registry call path); record the dated correction inline, do not rewrite history.\nLESSONS: oracles use literal values, never call/mirror production code (the self-test fixtures and threshold assertions are literal strings; the real-doc checks read code as TEXT, never link the crates); CI stubs must be able to FAIL (the scanner self-test injects drift and asserts it is caught); run dependent suites narrowly; deploy/** is checked by deploy-pds-check (any shell snippet added under deploy/ must pass shellcheck -S info if it is a .sh file); no AWS/tofu actions \u2014 commands are written, never run."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/review-domain/src/",
+      "crates/openlore-review-app/src/",
+      "deploy/review-app/",
+      "deploy/indexer/",
+      "deploy/README.md",
+      "docs/feature/bluesky-claim-review-app/devops/",
+      "docs/feature/indexer-deployment/devops/",
+      "docs/evolution/"
+    ],
+    "test_directories": [
+      "xtask/tests/",
+      "tests/acceptance/",
+      "crates/review-domain/tests/"
+    ],
+    "excluded_patterns": [
+      "deploy/tofu/**/.terraform/**",
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer (opus), F1/F2 addressed",
+    "approved_at": "2026-10-09"
+  }
+}
