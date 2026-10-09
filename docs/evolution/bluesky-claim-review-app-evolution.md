@@ -163,6 +163,9 @@ Each step also has a `chore: execution log` commit.
 
 **Operator steps before go-live** (DEVOPS rollout R-0..R-7):
 
+> Superseded by the consolidated checklist in [deploy/README.md](../../deploy/README.md#go-live-checklist)
+> (fix-go-live-runbook-gaps). This list is kept as history.
+
 1. Release `tofu-aws-pds` **v1.7.0**: the Caddy sites mount, IMDS hop limit 1, and the fix for
    the stale comment at `modules/pds/main.tf:312`. Bump the ref in both roots together.
 2. SSM parameters: `client-jwk`, `data-key` (JSON key set), `github-token`, `log-salt`.
