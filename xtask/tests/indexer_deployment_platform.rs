@@ -1427,6 +1427,11 @@ fn seeded_digest() -> String {
     format!("sha256:{}", "1".repeat(64))
 }
 
+/// The release before the seeded one: what a rollback starts.
+fn previous_digest() -> String {
+    format!("sha256:{}", "2".repeat(64))
+}
+
 /// What the stub host answers. Every stub can fail: each field has a value that makes it.
 #[derive(Clone)]
 struct HostAnswers {
@@ -1590,7 +1595,11 @@ fn host_run(
     if answers.releases_seeded {
         std::fs::write(
             base.join("state/releases"),
-            format!("2026-10-01T00:00:00Z {SEEDED_SHA} {}\n", seeded_digest()),
+            format!(
+                "2026-09-01T00:00:00Z {SEEDED_SHA} {}\n2026-10-01T00:00:00Z {SEEDED_SHA} {}\n",
+                previous_digest(),
+                seeded_digest()
+            ),
         )
         .expect("releases");
     }
@@ -1737,6 +1746,18 @@ fn assert_the_imds_probe_fails_closed(app: &HostApp) {
     assert_ne!(
         run.status, 0,
         "{script}: a tag-pinned probe image is refused\n{}",
+        run.out
+    );
+    assert!(run.out.contains("refusing"), "{script}: {}", run.out);
+    assert!(
+        !calls.contains("docker run") && !calls.lines().any(|l| l.starts_with("install ")),
+        "{script}: refused before any probe ran\n{calls}"
+    );
+    let other_digest = format!("curlimages/curl@sha256:{}", "a".repeat(64));
+    let (run, calls) = host_install_with_probe(app, 0, 7, &[("IMDS_PROBE_IMAGE", other_digest)]);
+    assert_ne!(
+        run.status, 0,
+        "{script}: a probe image pinned to any other digest is refused\n{}",
         run.out
     );
     assert!(run.out.contains("refusing"), "{script}: {}", run.out);
@@ -2028,6 +2049,61 @@ fn a_deploy_or_redeploy_that_fails_the_probe_leaves_the_running_app_untouched() 
                 );
             }
         }
+    }
+}
+
+/// XP-27b @S7 @review-L3 @error @infrastructure @real-io @contract-shape:unbounded-preservation
+/// ```gherkin
+/// Scenario: A rollback or start that fails the probe starts nothing
+///   Given a host with two releases recorded
+///   When `host rollback` (either app) or `host start` (indexer) runs and IMDS answers
+///   Then it refuses, and nothing is stopped, started or written to .env
+/// ```
+#[cfg(unix)]
+#[test]
+fn a_rollback_or_start_that_fails_the_probe_starts_nothing() {
+    let cases: [(&HostApp, &[&str]); 3] = [
+        (&REVIEW_APP, &["rollback"]),
+        (&INDEXER, &["rollback"]),
+        (&INDEXER, &["start"]),
+    ];
+    for (app, args) in cases {
+        let reached = host_run(app, args, &HostAnswers::isolated(), &[]);
+        assert!(
+            reached
+                .calls
+                .lines()
+                .any(|l| l.contains("compose") && l.contains(" up ")),
+            "{} {args:?}: non-vacuity: an isolated host starts a container\n{}\n{}",
+            app.script,
+            reached.run.out,
+            reached.calls
+        );
+        let host = host_run(
+            app,
+            args,
+            &HostAnswers {
+                imds_rc: 0,
+                ..HostAnswers::isolated()
+            },
+            &[],
+        );
+        let why = format!("{args:?}: IMDS answered");
+        assert_refused_untouched(app, &host, &why);
+        for line in host.calls.lines().filter(|l| l.contains("compose")) {
+            for verb in [" stop", " down", " up ", " start"] {
+                assert!(
+                    !line.contains(verb),
+                    "{}: {why}: nothing is stopped or started: {line}",
+                    app.script
+                );
+            }
+        }
+        assert!(
+            !host.base.join(".env").exists(),
+            "{}: {why}: no digest is written",
+            app.script
+        );
     }
 }
 

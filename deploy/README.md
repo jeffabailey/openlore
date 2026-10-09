@@ -286,7 +286,7 @@ creates `/pds/caddy/sites`, mounts it at `/etc/caddy/sites:ro` and adds
 its comment); plus tests, CHANGELOG and the tag. Check the tag exists **before** any ref bump:
 
 ```sh
-git ls-remote --tags https://github.com/jeffabailey/tofu-aws-pds v1.7.0   # must print one refs/tags/v1.7.0 line
+git ls-remote --tags --refs https://github.com/jeffabailey/tofu-aws-pds v1.7.0   # must print exactly one refs/tags/v1.7.0 line
 ```
 
 No line, no go: stop here.
@@ -487,10 +487,13 @@ leave headroom under it.
    8/s with at most 4 in flight. A 429 is the limiter, not a failure: it is counted and left out
    of the 200 and p95 checks; any other status fails.
 
+   The search must hit real rows: take its subject from one of the seeded DID's own claims
+   (`OPENLORE_DID`, section 4b) and check the index returns it before the load.
+
    ```sh
-   cat > search.json <<'EOF'
-   {"dimension":"subject","value":"rust"}
-   EOF
+   subject=$(curl -fsS "https://openlore.jeffbailey.us/xrpc/com.atproto.repo.listRecords?repo=$OPENLORE_DID&collection=org.openlore.claim&limit=1" | jq -er '.records[0].value.subject')
+   jq -n --arg value "$subject" '{dimension: "subject", value: $value}' > search.json
+   curl -fsS -X POST -H "content-type: application/json" --data @search.json https://index.openlore.jeffbailey.us/xrpc/org.openlore.appview.searchClaims | jq -e '.total_claims > 0'   # must print true
    seq 100 | xargs -P 4 -I{} sh -c 'curl -s -o /dev/null -w "%{http_code} %{time_total}\n" -X POST -H "content-type: application/json" --data @search.json https://index.openlore.jeffbailey.us/xrpc/org.openlore.appview.searchClaims; sleep 0.5' > search-load.txt
    awk '{print $1}' search-load.txt | sort | uniq -c                  # only 200 (and 429) allowed
    awk '$1 == 200 {print $2}' search-load.txt | sort -n | awk '{t[NR] = $1} END {print "p95 s", t[int(NR * 0.95)]}'

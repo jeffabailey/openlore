@@ -346,7 +346,9 @@ compose() { docker compose -f "$BASE/compose.yaml" "$@"; }
 # deploy/review-app/deploy.sh (xtask both_apps_refuse_with_the_same_isolation_contract).
 # Needs SITES (the host dir the PDS Caddy serves as /etc/caddy/sites) and die.
 # curlimages/curl:8.10.1, multi-arch index digest (read from the registry with `crane digest`).
-IMDS_PROBE_IMAGE="${IMDS_PROBE_IMAGE:-curlimages/curl@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b}"
+PINNED_PROBE_IMAGE=curlimages/curl@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b
+# Only the pinned image proves anything: an override is refused, never trusted.
+IMDS_PROBE_IMAGE="${IMDS_PROBE_IMAGE:-$PINNED_PROBE_IMAGE}"
 CADDY_SITES=/etc/caddy/sites
 CADDYFILE=/etc/caddy/Caddyfile
 NEEDS_MODULE="apply tofu-aws-pds v1.7.0 (R-REPLACE) first"
@@ -381,8 +383,8 @@ refuse_unless_caddy_imports_sites() {
 refuse_unless_isolated() {
   local rc=0
   [ -d "$SITES" ] || die "refusing: $SITES does not exist; $NEEDS_MODULE"
-  [[ "$IMDS_PROBE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] ||
-    die "refusing: IMDS_PROBE_IMAGE '$IMDS_PROBE_IMAGE' is not pinned by digest"
+  [ "$IMDS_PROBE_IMAGE" = "$PINNED_PROBE_IMAGE" ] ||
+    die "refusing: IMDS_PROBE_IMAGE '$IMDS_PROBE_IMAGE' is not the pinned probe $PINNED_PROBE_IMAGE"
   refuse_unless_caddy_imports_sites
   imds_probe --version ||
     die "refusing: the IMDS probe cannot run curl on pds_default (positive control failed); isolation unproven"
@@ -520,6 +522,7 @@ host_rollback() { # $1 = --reset-index or empty
   local prev
   prev=$(releases_digest 2)
   [ -n "$prev" ] || die "no previous release in $RELEASES"
+  refuse_unless_isolated
   systemctl stop openlore-indexer-pass.timer || true
   stop_indexer
   if [ "${1:-}" = "--reset-index" ]; then reset_index; fi
@@ -558,6 +561,7 @@ host_start() {
   local cur
   cur=$(releases_digest 1)
   [ -n "$cur" ] || die "nothing deployed yet; use deploy.sh deploy <git-sha>"
+  refuse_unless_isolated
   start_digest "$cur"
   wait_ready >/dev/null || {
     echo "start not ready; see deploy.sh host-status" >&2

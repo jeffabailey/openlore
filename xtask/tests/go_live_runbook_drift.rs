@@ -6,8 +6,8 @@
 //! re-runs user-data). These tests read the runbooks AND the code as text and compare the names.
 //! The code side is never linked or executed: the admin routes are the string literals in the
 //! review app's route table, the modes are the `case` arms of each `deploy.sh`, and the
-//! `OPENLORE_*` settings are the names written in non-Markdown sources (a doc cannot vouch for
-//! itself).
+//! `OPENLORE_*` settings are the names on the code (non-comment) lines of non-Markdown sources
+//! (neither a doc nor a comment can vouch for itself).
 //!
 //! The scanner is a set of pure text functions; `the_drift_scanner_flags_literal_drift_fixtures`
 //! proves each check can fail by injecting literal drift into generated Markdown.
@@ -128,6 +128,19 @@ fn settings_in(text: &str) -> Vec<String> {
     tokens_with_prefix(text, "OPENLORE_", |c| {
         c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'
     })
+}
+
+/// The settings a source READS: names on its code lines (env lookups, config parsing, compose
+/// keys), never on a `//` or `#` comment line, which vouches for nothing.
+fn code_settings(source: &str) -> Vec<String> {
+    source
+        .lines()
+        .filter(|line| {
+            let code = line.trim_start();
+            !(code.starts_with("//") || code.starts_with('#'))
+        })
+        .flat_map(settings_in)
+        .collect()
 }
 
 /// The code a line carries: the whole line inside a fence, else its inline code spans.
@@ -403,7 +416,10 @@ fn code_truth() -> Truth {
         admin_routes: admin_routes_of(&read("crates/openlore-review-app/src/admin.rs")),
         indexer_modes: script_modes(&read("deploy/indexer/deploy.sh")),
         review_app_modes: script_modes(&read("deploy/review-app/deploy.sh")),
-        settings: sources.iter().flat_map(|p| settings_in(&read(p))).collect(),
+        settings: sources
+            .iter()
+            .flat_map(|p| code_settings(&read(p)))
+            .collect(),
     }
 }
 
@@ -622,6 +638,19 @@ proptest! {
 }
 
 #[test]
+fn the_setting_truth_skips_comment_lines() {
+    let source = "// OPENLORE_RUST_LINE_COMMENT\n  /// OPENLORE_RUST_DOC\n# OPENLORE_SHELL_COMMENT\n    # OPENLORE_YAML_COMMENT\nstd::env::var(\"OPENLORE_READ\")\n      OPENLORE_COMPOSE_KEY: \"1\"\n";
+    let expected: BTreeSet<String> = ["OPENLORE_READ", "OPENLORE_COMPOSE_KEY"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    assert_eq!(
+        code_settings(source).into_iter().collect::<BTreeSet<_>>(),
+        expected
+    );
+}
+
+#[test]
 fn the_mode_truth_is_read_from_the_case_arms() {
     let script = "host_main() {\n  case \"$mode\" in\n    install) a ;;\n    host-status) b ;;\n    *) die ;;\n  esac\n}\ncase \"$cmd\" in\n  deploy) x ;;\n  install | redeploy | stop) remote \"$cmd\" ;;\n  rollback)\n    case \"${1:-}\" in \"\" | --restore-db) ;; *) die ;; esac\n    ;;\n  *)\n    exit 2\n    ;;\nesac\n";
     let expected: BTreeSet<String> = [
@@ -699,8 +728,12 @@ fn one_ordered_go_live_checklist_owns_the_sequence() {
     assert_before(checklist, "v1.7.0", "?ref=v1.7.0");
     assert_before(
         checklist,
-        "git ls-remote --tags https://github.com/jeffabailey/tofu-aws-pds v1.7.0",
+        "git ls-remote --tags --refs https://github.com/jeffabailey/tofu-aws-pds v1.7.0",
         "?ref=v1.7.0",
+    );
+    assert!(
+        !checklist.contains("git ls-remote --tags https://"),
+        "without --refs an annotated tag prints a second ^{{}} line"
     );
 
     // B2 + S8: the replacement carries -replace=; its rollback stops BOTH apps before v1.6.0.
@@ -819,7 +852,7 @@ fn the_memory_gate_is_runnable_and_falsifiable() {
         );
         if text.contains("@search.json") {
             assert!(
-                text.contains("> search.json <<"),
+                text.contains("> search.json"),
                 "{runbook}: search.json is never defined"
             );
         }
@@ -838,9 +871,10 @@ fn the_memory_gate_is_runnable_and_falsifiable() {
         "indexer `memory.peak` ≤ 100 MB",
         "review app `memory.peak` ≤ 128 MB",
         "`MemAvailable` > 128 MB",
-        // a defined search body
-        "cat > search.json <<'EOF'",
-        "{\"dimension\":\"subject\",\"value\":\"rust\"}",
+        // a search body whose subject the seeded DID's own claims carry, proven non-empty
+        "com.atproto.repo.listRecords?repo=$OPENLORE_DID&collection=org.openlore.claim",
+        "jq -n --arg value \"$subject\" '{dimension: \"subject\", value: $value}' > search.json",
+        "jq -e '.total_claims > 0'",
         // a rate under 10/s burst 50, and 429 accounted for
         "xargs -P 4",
         "429",
