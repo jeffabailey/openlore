@@ -280,7 +280,7 @@ for the next. Nothing here runs from CI: every command is run by the operator fr
 
 ### 0. tofu-aws-pds v1.7.0 is released
 
-The roots pin module v1.6.0 today. v1.7.0 is operator work in the `tofu-aws-pds` repo (B1): M-1
+The roots pin module v1.7.0 (released 2026-10-10; rollback re-pins v1.6.0). v1.7.0 was operator work in the `tofu-aws-pds` repo (B1): M-1
 creates `/pds/caddy/sites`, mounts it at `/etc/caddy/sites:ro` and adds
 `import /etc/caddy/sites/*.caddy` to the Caddyfile; M-2 sets the IMDS hop limit to 1 (and fixes
 its comment); plus tests, CHANGELOG and the tag. Check the tag exists **before** any ref bump:
