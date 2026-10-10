@@ -42,3 +42,6 @@ docs/feature/*/deliver/.develop-progress.json
 atproto/node_modules/
 atproto/.dev.vars
 atproto/.wrangler/
+# nWave activation marker (keep .nwave/local-config.json trackable)
+.nwave/*
+!.nwave/local-config.json
