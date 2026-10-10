@@ -96,8 +96,26 @@ jobs:
     runs-on: ubuntu-latest
     needs: [fmt, clippy, deny, check-arch, check-probes]
     steps:
+      # The workspace's test binaries (each linking DuckDB) outgrew the ~14 GB free on
+      # ubuntu-latest: rustc hit ENOSPC and ld died with SIGBUS. Drop preinstalled SDKs
+      # this job never uses (~25-30 GB) before restoring the cache.
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/boost
+          sudo docker image prune --all --force > /dev/null || true
+          df -h /
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-only: dependency debuginfo drops from full (Cargo.toml's dev default, kept for
+      # local debugging) to line tables, which still give backtraces with line numbers.
+      - name: Slim dependency debuginfo (CI only)
+        run: |
+          mkdir -p "$CARGO_HOME"
+          printf '[profile.dev.package."*"]\ndebug = "line-tables-only"\n' >> "$CARGO_HOME/config.toml"
+        env:
+          CARGO_HOME: /home/runner/.cargo
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
