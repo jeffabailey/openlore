@@ -1,4 +1,4 @@
-# Nightly — mutation testing advisory per devops/ci-cd-pipeline.md §6, plus the review app's
+# Weekly — mutation testing advisory per devops/ci-cd-pipeline.md §6, plus the review app's
 # read-only live-contract smoke (bluesky-claim-review-app devops/ci-cd-pipeline.md §6).
 #
 # Runs cargo-mutants against the pure-core claim-domain crate. ADVISORY ONLY:
@@ -7,15 +7,16 @@
 # below threshold becomes a release-time blocker only (release.yml lands when
 # the first vX.Y.Z tag is cut — out of scope for slice-01 step 06-08).
 #
-# Trigger: daily at 08:00 UTC (ci-cd-pipeline.md §6 specifies 02:00 UTC, but
-# 08:00 UTC keeps overnight feedback ready for the start of the dev day in
-# Pacific timezone — single-dev pragma). Also dispatchable on demand.
+# Trigger: weekly, Mondays at 08:00 UTC (ci-cd-pipeline.md §6 specifies nightly at
+# 02:00 UTC; weekly cuts CI minutes and issue noise, and 08:00 UTC Monday keeps the
+# feedback ready for the start of the dev week in Pacific timezone — single-dev
+# pragma). Also dispatchable on demand.
 
-name: Nightly Mutation Tests
+name: Weekly Mutation Tests
 
 on:
   schedule:
-    - cron: "0 8 * * *"
+    - cron: "0 8 * * 1"
   workflow_dispatch:
 
 env:
@@ -47,7 +48,7 @@ jobs:
 
   # Advisory, read-only, no secret beyond GITHUB_TOKEN. The image half runs always; the
   # production half runs once the operator sets the repo variable REVIEW_APP_LIVE=true after
-  # the first deploy (R-DEPLOY), so an undeployed app does not open an issue every night.
+  # the first deploy (R-DEPLOY), so an undeployed app does not open an issue every week.
   live-contract-smoke:
     name: review-app live-contract smoke (advisory)
     runs-on: ubuntu-24.04-arm
@@ -122,5 +123,5 @@ jobs:
             gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "Failed again: $RUN_URL"
           else
             gh issue create -R "$GITHUB_REPOSITORY" --label live-smoke \
-              --title "review-app live-contract smoke failing" --body "Nightly smoke failed: $RUN_URL"
+              --title "review-app live-contract smoke failing" --body "Weekly smoke failed: $RUN_URL"
           fi
