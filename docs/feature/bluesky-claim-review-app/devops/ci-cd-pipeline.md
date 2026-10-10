@@ -173,7 +173,7 @@ to what needs no credential:
 |---|---|---|
 | Production endpoints | `curl` `https://app.openlore.jeffbailey.us/healthz`, `/oauth/client-metadata.json` (validate the required fields; `client_id` equals the URL) and `/oauth/jwks.json` (ES256 only, no `d`) | AC-000, client-metadata drift |
 | Self-attested reader path | Run the release CLI's `peer pull` (or the indexer ingest) against the test account `canzantest.bsky.social` / `did:plc:ds4bj4ymxzwpisg4qhlislvc`, which holds the SPIKE-1 self-attested claim; assert `provenance=self-attested`, no reject and a recomputed CID equal to the rkey | **KPI-BRA-6** (production evidence) |
-| Authorization-server metadata | GET bsky.social's `/.well-known/oauth-protected-resource`, then the authorization server's `/.well-known/oauth-authorization-server`; assert `pushed_authorization_request_endpoint` and `dpop_signing_alg_values_supported` contains ES256 | ADR-073 contract drift |
+| Authorization-server metadata | GET the test account's PDS (resolved via PLC) `/.well-known/oauth-protected-resource`, then the authorization server's `/.well-known/oauth-authorization-server`; assert `pushed_authorization_request_endpoint` and `dpop_signing_alg_values_supported` contains ES256 | ADR-073 contract drift |
 | PLC and handle resolution | Resolve the test handle to the DID document; assert the shape | Contract drift |
 
 Advisory: `continue-on-error: true` at job level, with a step that opens or updates a GitHub

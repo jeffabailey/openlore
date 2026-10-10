@@ -94,10 +94,15 @@ jobs:
           curl -fsS -m 10 "$APP/oauth/jwks.json" | jq -e '
             (.keys | length) > 0 and (.keys | all(.alg == "ES256" and (has("d") | not)))' > /dev/null
 
-      - name: Authorization-server contract (bsky.social)
+      # Protected-resource metadata lives on the account's PDS, not on the bsky.social
+      # entryway (which 404s it), so resolve the test account's PDS from PLC first.
+      - name: Authorization-server contract (test account's PDS → bsky.social)
         run: |
           set -euo pipefail
-          issuer=$(curl -fsS -m 10 https://bsky.social/.well-known/oauth-protected-resource | jq -r '.authorization_servers[0]')
+          pds=$(curl -fsS -m 10 "https://plc.directory/$TEST_DID" | jq -r '.service[] | select(.id == "#atproto_pds") | .serviceEndpoint')
+          [[ "$pds" =~ ^https:// ]] || { echo "::error::no PDS endpoint for $TEST_DID"; exit 1; }
+          issuer=$(curl -fsS -m 10 "$pds/.well-known/oauth-protected-resource" | jq -r '.authorization_servers[0]')
+          [[ "$issuer" =~ ^https:// ]] || { echo "::error::no authorization server listed by $pds"; exit 1; }
           curl -fsS -m 10 "$issuer/.well-known/oauth-authorization-server" | jq -e '
             (.pushed_authorization_request_endpoint | type) == "string"
             and (.dpop_signing_alg_values_supported | index("ES256")) != null' > /dev/null
