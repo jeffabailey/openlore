@@ -348,3 +348,28 @@ mod confidence_wire_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod bare_did_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn a_did_url_names_its_did_and_a_bare_did_names_itself() {
+        assert_eq!(
+            bare_did("did:plc:abc#org.openlore.application"),
+            "did:plc:abc"
+        );
+        assert_eq!(bare_did("did:plc:abc"), "did:plc:abc");
+    }
+
+    proptest! {
+        /// Only the first `#` splits: the fragment, and anything after it, is dropped.
+        #[test]
+        fn the_fragment_is_dropped(did in "did:plc:[a-z2-7]{24}", fragment in "[a-z.#]{0,20}") {
+            let did_url = format!("{did}#{fragment}");
+            prop_assert_eq!(bare_did(&did_url), did.as_str());
+            prop_assert_eq!(bare_did(&did), did.as_str());
+        }
+    }
+}

@@ -197,4 +197,61 @@ mod tests {
             result
         );
     }
+
+    /// A store holding exactly one signed claim, `b`, under `b_cid`.
+    struct OneClaim {
+        b_cid: Cid,
+        b: crate::SignedClaim,
+    }
+
+    impl ClaimLookup for OneClaim {
+        fn signed_by_cid(&self, cid: &Cid) -> Option<crate::SignedClaim> {
+            (*cid == self.b_cid).then(|| self.b.clone())
+        }
+    }
+
+    /// A store whose claim B references `b_refs_to`; A references B.
+    fn a_referencing_b_which_references(b_refs_to: Cid) -> (UnsignedClaim, OneClaim) {
+        let b_cid = Cid("bafyreiclaimbxxxxxxxxxxxxxxxxxxxxxxxxxxx".into());
+        let mut b_unsigned = sample_unsigned();
+        b_unsigned.object = "org.openlore.philosophy.test-driven".into();
+        b_unsigned.references.push(ClaimReference {
+            ref_type: ReferenceType::Counters,
+            cid: b_refs_to,
+        });
+        let signature = crate::sign(&b_cid, &crate::SigningKey(vec![7u8; 32])).expect("sign");
+        let mut a = sample_unsigned();
+        a.references.push(ClaimReference {
+            ref_type: ReferenceType::Supersedes,
+            cid: b_cid.clone(),
+        });
+        let b = crate::SignedClaim {
+            unsigned: b_unsigned,
+            signature,
+        };
+        (a, OneClaim { b_cid, b })
+    }
+
+    /// Rejection: A → B → A (B references A's body CID) → `Err(CycleDetected)`
+    /// naming A's body CID. Mirrors ADR-008 Earned Trust 3.
+    #[test]
+    fn validate_rejects_a_two_hop_cycle() {
+        let a_body = body_cid_of(&sample_unsigned()).expect("body cid");
+        let (a, store) = a_referencing_b_which_references(a_body.clone());
+        let result = reference_rules_validate(&a, Some(&store));
+        assert!(
+            matches!(&result, Err(ClaimError::CycleDetected { cid }) if *cid == a_body),
+            "expected Err(CycleDetected {{ {a_body:?} }}), got {result:?}"
+        );
+    }
+
+    /// Happy path: B references some OTHER claim, so A → B closes no loop → Ok.
+    #[test]
+    fn validate_accepts_a_referenced_claim_that_does_not_point_back() {
+        let (a, store) = a_referencing_b_which_references(Cid(
+            "bafyreiunrelatedxxxxxxxxxxxxxxxxxxxxxxxx".into(),
+        ));
+        let result = reference_rules_validate(&a, Some(&store));
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+    }
 }

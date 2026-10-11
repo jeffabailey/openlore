@@ -355,5 +355,28 @@ mod tests {
             provenance_verdict(&record, &rkey, &repo, RecordOrigin::AuthorPds, None),
             Err(ProvenanceRejection::NoAppKey)
         );
+        // The signature is checked over the RECOMPUTED CID, never the one the
+        // record carries: a stale or forged `signed_cid` neither lets a record
+        // through nor gets a correctly signed one refused.
+        let ClaimRecord::AppSigned(signed) = record else {
+            unreachable!()
+        };
+        let carried_cid_forged = ClaimRecord::AppSigned(SignedClaim {
+            signature: SignatureBlock {
+                signed_cid: Cid("bafyreiforgedxxxxxxxxxxxxxxxxxxxxxxxxxxx".into()),
+                ..signed.signature.clone()
+            },
+            ..signed
+        });
+        assert!(matches!(
+            provenance_verdict(
+                &carried_cid_forged,
+                &rkey,
+                &repo,
+                RecordOrigin::Relay,
+                Some(&key)
+            ),
+            Ok(Provenance::AppSigned { .. })
+        ));
     }
 }
