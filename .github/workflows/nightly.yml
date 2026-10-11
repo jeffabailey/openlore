@@ -35,9 +35,16 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants
+      # Some mutants turn a bounded loop into an unbounded `Vec::push` (e.g. `carry /= 58`
+      # -> `carry %= 58` in base58btc_encode). Within the 60 s timeout that exhausts the
+      # runner's RAM and the runner itself is shut down, failing the job despite
+      # continue-on-error. A virtual-memory cap makes such a mutant abort on allocation
+      # failure instead (reported as caught); 6 GiB leaves rustc/ld ample headroom.
       - name: cargo mutants -p claim-domain
         continue-on-error: true
-        run: cargo mutants -p claim-domain --no-shuffle --timeout 60
+        run: |
+          ulimit -v $((6 * 1024 * 1024))
+          cargo mutants -p claim-domain --no-shuffle --timeout 60
       - name: Upload mutants report
         if: always()
         uses: actions/upload-artifact@v4
