@@ -1,0 +1,111 @@
+{
+  "roadmap": {
+    "project_id": "fix-pass-failure-precedence",
+    "created_at": "2026-10-11T00:00:00Z",
+    "total_steps": 2,
+    "source": "docs/feature/fix-pass-failure-precedence/rca.md",
+    "paradigm": "functional (ADR-007)",
+    "out_of_scope": "Multi-fault acceptance seam (with_faults / a TEST_FAULT set in crates/openlore-indexer/src/config.rs): declined by the user 2026-10-11; precedence is pinned at the pure core instead. No push: commit locally and hold until the user says so. No change to the async fetch deadline (timeout_at), the gate-as-soon-as-fetched streaming, the post-pass tail (tally.emit + checkpoint) or any event/exit-code shape beyond the deadline edge case in 01-02."
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Pull pass-failure precedence into the pure core (ADR-007) and let the first failure win over the deadline",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "First failure ends the pass",
+          "description": "Today 'the first failure ends the pass' lives only in async shell control flow (crates/openlore-indexer/src/ingest_pass.rs: early returns for list :112-115 and purge :106-109; `break` on the deadline :377-379 and on a gate stop :385-387; `?` inside gate_fetch :523-528), so no unit test can reach it (RCA why 3/5). Add a pure first-failure combinator to appview-domain::ingest_pass (e.g. `until_first_failure`) over a lazily consumed sequence of fallible steps. It stops consuming at the first failing step and returns the values in order plus that first failure. A failing step may still carry a value: today `outcomes.push(fetch.outcome())` runs BEFORE gate_fetch (:384-388), so a DID whose gate stops the pass is counted in summary.configured/own_pds/fallback. The step type must keep that (e.g. Err carries (Option<T>, PassFailure); the combinator appends the failing step's value, when present, after the Ok values). Route the indexer's per-DID loop in pass_work through it in production: each step = await the next fetch under the existing timeout_at deadline (timeout -> failure with no value), emit its fetch events, take its PassOutcome, gate it (GateStop -> failure carrying that PassOutcome; success -> Ok(PassOutcome)). The stage chain in listed_pass_work (list -> purge -> work) is also expressed as first-failure (through the combinator or plain Result short-circuit; crafter's choice, no test-only function). Observable behaviour is unchanged.",
+          "criteria": [
+            "Property (generated sequences of 0..16 steps, each Ok(i), Err(None, f) or Err(Some(i), f) with f drawn from all six PassFailure values, 0..n failures at random positions; each step records that it ran): when the sequence has at least one failure, exactly (index of the first failure + 1) steps ran and no later step ran. Kills: deleting the stop (`break` / early return / `?` removed so consumption continues).",
+            "Property, same universe: the returned failure equals the FIRST failure in the sequence (expectation computed in the test by a hand-written scan of the generated vector, not by calling the combinator or any production helper). Kills: 'keep the last failure' (overwrite on every failure) and 'keep any failure'.",
+            "Property, same universe: the returned values equal, in order, the Ok values before the first failure followed by the first failure's carried value when it carries one (all Ok values when there is no failure). Kills: reversed/dropped/duplicated values, returning values from after the failure, and dropping the failing step's carried value.",
+            "Property, same universe restricted to all-Ok sequences: every step ran and the failure is None. Kills: an unconditional Some(..) and an off-by-one that drops the last step.",
+            "Literal oracle example (single-example, documented `// bypass:` as the readable twin of the property): steps [failure UpsertFailed carrying value 'a', failure PurgeFailed] -> failure Some(PassFailure::UpsertFailed), values ['a'], exactly 1 step ran.",
+            "The gate-stopped DID is still counted (shell, falsifiable): PS-17 (tests/acceptance/indexer_deployment_passes.rs:475, listing Priya then Dmitri, Dmitri's upsert fails) additionally asserts the pass summary has configured == 2, own_pds == 2, fallback == 0, skipped == 0. Today's code passes this; a reroute that drops the failing DID's outcome reports configured == 1 and fails it.",
+            "Production routing is real: pass_work's DID loop calls the appview-domain combinator (grep shows the call in crates/openlore-indexer/src/ingest_pass.rs; the hand-written `failure = Some(..); break` loop is gone). No #[cfg(test)]-only wrapper stands in for it.",
+            "The async fetch deadline (tokio::time::timeout_at on the fetch stream) and gate-as-soon-as-fetched streaming stay in the shell step, outside the pure combinator; the combinator has no async, no I/O, no clock.",
+            "Behaviour unchanged: the existing indexer acceptance suites (indexer_deployment_passes incl. PS-17 and PS-20, indexer_deployment_core, indexer_deployment_walking_skeleton) and the openlore-indexer unit tests pass with no edits to their existing expectations; events, exit codes and pass_summary fields are the same for single-failure passes."
+          ],
+          "estimated_hours": 3,
+          "dependencies": [],
+          "files_to_modify": [
+            "crates/appview-domain/src/ingest_pass.rs",
+            "crates/openlore-indexer/src/ingest_pass.rs",
+            "tests/acceptance/indexer_deployment_passes.rs"
+          ],
+          "test_file": "crates/appview-domain/src/ingest_pass.rs",
+          "scenario_name": "a_pass_stops_at_its_first_failure_and_reports_it",
+          "scenario_fns": [
+            "crates/appview-domain/src/ingest_pass.rs::tests::a_pass_stops_at_its_first_failure_and_reports_it (proptest; universe = generated step vectors 0..16 long of Ok(v) / failure-without-value / failure-with-value over all six PassFailure values; state-delta = the per-step 'ran' log before/after; oracle = hand-written first-failure scan)",
+            "crates/appview-domain/src/ingest_pass.rs::tests::with_no_failure_every_step_runs_in_order (proptest; all-Ok vectors)",
+            "crates/appview-domain/src/ingest_pass.rs::tests::an_upsert_failure_then_a_purge_failure_reports_the_upsert_failure (literal example: UpsertFailed carrying 'a' then PurgeFailed => UpsertFailed, values ['a'], 1 call)",
+            "tests/acceptance/indexer_deployment_passes.rs::a_pass_that_cannot_store_a_claim_ends_with_exit_2_and_search_keeps_answering (PS-17, extended: configured 2, own_pds 2, fallback 0, skipped 0)"
+          ],
+          "test_command": "cargo test -p appview-domain --lib ingest_pass && cargo test -p openlore-indexer && cargo test -p cli --test indexer_deployment_passes --test indexer_deployment_core --test indexer_deployment_walking_skeleton",
+          "implementation_notes": "TEST PARADIGM (mandatory): unit tests are property-based (proptest strategies + state-delta assertions over the declared universe). Single-example unit tests are FALLBACK only; the literal UpsertFailed->PurgeFailed example is kept deliberately as the readable oracle and carries a `// bypass:` comment saying so. Acceptance tests stay single-example; PS-17 only gains count assertions.\nSTAGE CONTEXT: bug-prone legacy code = Stage 1 (state-delta capture of hidden mutations first): the property records which steps ran, so a step that runs after the first failure is a visible state delta.\nRED first: write the pure scenario_fns against a missing combinator (compile error counts as RED for new API). The PS-17 count assertions pass on today's code by design (characterization guard); record that, then reroute and keep them green.\nDesign (WHAT, crafter owns HOW): contract shape of the combinator = pure-function (input: a lazily consumed sequence of steps, each Ok(T) or a failure carrying Option<T> + PassFailure; output: (Vec<T>, Option<PassFailure>)). Laziness is the point: the shell's steps are effectful (fetch await, event emission, upserts), so 'stops consuming' == 'later stages and DIDs are not attempted'. The element type for the DID loop is PassOutcome (crates/appview-domain/src/ingest_pass.rs:335), the type summarize_outcomes (:391) already consumes. The shell can build the iterator with std::iter::from_fn around runtime.block_on(timeout_at(deadline, fetches.next())) + gate_fetch: Ok(None) = end of sequence; the timeout = failure PassDeadlineExceeded with no value (no DID was fetched); a GateStop = failure stop.failure() carrying fetch.outcome() (the fetched DID is counted, as today); a gated DID = Ok(fetch.outcome()). Alternative accepted if the crafter prefers it: record the outcome before gating in the shell and keep a plain Result<T, PassFailure> step, as long as the PS-17 count criterion holds and the combinator still decides stop + which failure. Keep tally.emit(pass) and checkpoint(wiring) AFTER the combinator returns, exactly as today. The per-record `?` inside gate_fetch may stay (already first-failure within one DID step); the listed_pass_work stage chain may stay as Result short-circuit, but its order (list refusal, then purge failure, then work) must not change.\nRejected alternatives: (a) a TEST_FAULT set / with_faults acceptance seam (user declined; widens the release-refused seam surface); (b) a test-only pure replica of the loop (would test a copy, not production; RCA root cause is that the decision never lived in the core); (c) folding the async deadline into the combinator (puts a clock inside the pure core; RCA risk note says keep timeout_at outside).\nOracles: literal values only. The expected failure/values/call-count are computed in the test by a hand-written scan of the generated vector, never by calling until_first_failure, pass_exit or any production helper.\nMutation scope (per-feature, >= 80%): the new combinator in crates/appview-domain/src/ingest_pass.rs and the rerouted pass_work loop in crates/openlore-indexer/src/ingest_pass.rs. Named kills: stop-removed (continue past a failure), keep-last-failure, drop-final-Ok, drop-failing-step-value (pure property + PS-17 counts). EXPECTED EQUIVALENT MUTANT (record as an accepted survivor, do not chase): in the shell, mapping the fetch timeout to end-of-sequence instead of PassDeadlineExceeded is masked, because elapsed > deadline at summary time so within_deadline still yields pass_deadline_exceeded on the natural Completed/TotalOutage exit (this stays true after 01-02, which only spares an already-Failed exit).\nLESSONS: run dependent suites narrowly (test_command above, not the workspace; CI verifies the full suite); oracles never mirror production code; commit locally, do not push."
+        },
+        {
+          "id": "01-02",
+          "name": "A natural failure outranks the deadline override",
+          "description": "Bug (RCA): within_deadline (crates/appview-domain/src/ingest_pass.rs:486-496, applied in finish_pass crates/openlore-indexer/src/ingest_pass.rs:332-336) turns ANY exit into Failed(PassDeadlineExceeded) when elapsed > deadline at summary time. The post-failure tail (tally.emit + checkpoint) is not time-boxed, so an early UpsertFailed can be reported as pass_deadline_exceeded, a later condition. User decision 2026-10-11: the first failure wins. Change within_deadline so the override applies ONLY when the natural exit is not already Failed: a natural Failed(f) stands even past the deadline; a natural Completed or TotalOutage past the deadline still becomes Failed(PassDeadlineExceeded); at or within the deadline the natural exit stands.",
+          "criteria": [
+            "Property (deadline_ms in 1..10_000_000, elapsed_ms in 0..20_000_000, natural over Completed, TotalOutage and Failed(f) for EVERY PassFailure variant): if natural is Failed(f) the result is Failed(f) whatever elapsed is; else if elapsed_ms > deadline_ms the result is Failed(PassDeadlineExceeded); else the result is natural. Kills: removing the 'not already Failed' guard (old behaviour), and inverting it.",
+            "Literal oracle example: within_deadline(Failed(UpsertFailed), deadline + 1 ns, deadline) == Failed(UpsertFailed) (exit 2, cause token \"upsert_failed\"); within_deadline(Completed, deadline + 1 ns, deadline) == Failed(PassDeadlineExceeded). Kills: the same guard mutants as a readable twin; the existing equality case (elapsed == deadline keeps natural) still kills `>` -> `>=`.",
+            "INTENTIONAL SPEC CHANGE (user decision 2026-10-11, rca.md 'Decisions'): the existing property past_its_deadline_a_pass_fails_and_within_it_nothing_changes (crates/appview-domain/src/ingest_pass.rs:656-676), which asserted natural=Failed(UpsertFailed)/Failed(PurgeFailed) past the deadline becomes PassDeadlineExceeded, is rewritten to the new rule (renamed accordingly) and its doc comment says the old expectation was changed on purpose, citing this feature.",
+            "INTENTIONAL SPEC CHANGE, acceptance twin: CORE-7 (tests/acceptance/indexer_deployment_core.rs:499-515, sut_deadline_outcome :203-223, matrix row :16) asserts the full (code, cause) pair on EVERY branch with literal expectations: natural 2 (UpsertFailed) -> (2, Some(\"upsert_failed\")) both within and past the deadline; natural 0 / 3 past the deadline -> (2, Some(\"pass_deadline_exceeded\")); natural 0 / 3 within the deadline -> (0 or 3, None). The within-deadline branch no longer checks the code alone (today :513). The test name and the :16 row no longer say 'whatever it would have said'.",
+            "crates/appview-domain/tests/deployment_contracts.rs::a_pass_ending_exactly_at_its_deadline_keeps_its_own_exit still passes unchanged (it only uses Completed/TotalOutage).",
+            "The CORE-5 comment (tests/acceptance/indexer_deployment_core.rs:428-432) no longer says precedence is unpinned; it names the pure tests from 01-01 (a_pass_stops_at_its_first_failure_and_reports_it, an_upsert_failure_then_a_purge_failure_reports_the_upsert_failure) and this step's deadline property as where precedence is pinned.",
+            "Docs stating the old rule get a dated amendment note (history not rewritten): within_deadline's and finish_pass's doc comments ('whatever it came to'); ADR-080 \u00a78 ('a pass that already failed keeps its own cause'); docs/feature/indexer-deployment/distill/test-scenarios.md:79 (CORE-7 row 'fails whatever it would have said'); docs/evolution/indexer-deployment-evolution.md:186-189 ('Pass-failure precedence is still unpinned' marked resolved by this feature); docs/architecture/indexer-deployment/data-models.md:101-102 (precedence sentence adds the deadline rule). Check: `grep -rn \"whatever it\" docs/ --include=*.md` outside docs/feature/indexer-deployment/deliver/** and docs/feature/fix-pass-failure-precedence/** returns only lines carrying the dated amendment (or none)."
+          ],
+          "estimated_hours": 2,
+          "dependencies": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "crates/appview-domain/src/ingest_pass.rs",
+            "crates/openlore-indexer/src/ingest_pass.rs",
+            "tests/acceptance/indexer_deployment_core.rs",
+            "docs/adrs/ADR-080-indexer-serve-owns-the-index-and-runs-triggered-passes.md",
+            "docs/architecture/indexer-deployment/data-models.md",
+            "docs/evolution/indexer-deployment-evolution.md",
+            "docs/feature/indexer-deployment/distill/test-scenarios.md"
+          ],
+          "test_file": "crates/appview-domain/src/ingest_pass.rs",
+          "scenario_name": "a_natural_failure_stands_past_the_deadline",
+          "scenario_fns": [
+            "crates/appview-domain/src/ingest_pass.rs::tests::past_its_deadline_only_a_pass_that_had_not_failed_becomes_deadline_exceeded (proptest; replaces past_its_deadline_a_pass_fails_and_within_it_nothing_changes; universe = elapsed x deadline x every PassExit incl. Failed(each PassFailure); oracle written as literal branches in the test)",
+            "crates/appview-domain/src/ingest_pass.rs::tests::an_upsert_failure_past_the_deadline_still_reports_upsert_failed (literal example: Failed(UpsertFailed) at deadline + 1 ns => Failed(UpsertFailed), token \"upsert_failed\"; Completed at deadline + 1 ns => \"pass_deadline_exceeded\")",
+            "tests/acceptance/indexer_deployment_core.rs::a_pass_past_its_deadline_fails_unless_it_had_already_failed (CORE-7, proptest; renamed from a_pass_past_its_deadline_fails_whatever_it_would_have_said; asserts (code, cause) on both branches)"
+          ],
+          "test_command": "cargo test -p appview-domain && cargo test -p openlore-indexer && cargo test -p cli --test indexer_deployment_core --test indexer_deployment_passes",
+          "implementation_notes": "TEST PARADIGM (mandatory): unit tests are property-based (proptest + literal-branch oracle over the declared universe). The literal example is a deliberate readable oracle with a `// bypass:` comment. CORE-7 stays a property at the acceptance layer.\nSTAGE CONTEXT: bug-prone legacy code = Stage 1.\nRED first: update the two properties and add the literal example BEFORE touching within_deadline; run test_command and record the failure (natural Failed(UpsertFailed) past the deadline returns PassDeadlineExceeded today).\nDesign (WHAT): within_deadline stays pure-function, same signature (natural: PassExit, elapsed, deadline) -> PassExit; the only change is the guard 'natural is not Failed'. finish_pass is unchanged apart from its doc comment. A pass that hit PassDeadlineExceeded inside the loop (fetch timeout or author-key resolve) is already Failed(PassDeadlineExceeded) naturally, so it keeps that cause; the override now only catches a pass that ended Completed/TotalOutage but whose tail ran past the deadline.\nSPEC CHANGE CALL-OUT: two existing tests encoded the old behaviour (unit property :656-676 and CORE-7). Changing their expectations is the user's decision (rca.md Decisions, 2026-10-11: 'the first failure wins'), not test-weakening; say so in each test's doc comment and in the commit message. Operator-visible effect: only the edge case 'early failure followed by a slow tail' changes cause from pass_deadline_exceeded to the real first failure; exit code stays 2.\nOracles: literal branches and literal tokens (\"upsert_failed\", \"pass_deadline_exceeded\"), never calling pass_exit/within_deadline on the expected side.\nMutation scope (per-feature, >= 80%): within_deadline. Named kills: guard deleted (old behaviour), guard inverted, `>` -> `>=` (existing equality test).\nLESSONS: run dependent suites narrowly; docs get dated amendment notes, history is not rewritten (leave docs/feature/indexer-deployment/deliver/** and mutation reports as historical record); commit locally, do NOT push (user push hold)."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/appview-domain/src/",
+      "crates/openlore-indexer/src/",
+      "docs/adrs/",
+      "docs/architecture/indexer-deployment/",
+      "docs/evolution/",
+      "docs/feature/indexer-deployment/distill/"
+    ],
+    "test_directories": [
+      "crates/appview-domain/src/",
+      "crates/appview-domain/tests/",
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "docs/feature/indexer-deployment/deliver/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer (opus), 1 HIGH + 2 MEDIUM + 3 LOW addressed in one revision",
+    "approved_at": "2026-10-11"
+  }
+}
