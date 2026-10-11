@@ -13,7 +13,7 @@
 //! | CORE-4 | DID-list read is total: Loaded(valid, distinct, first-seen) or Refused naming the first bad entry and its problem (literal table) | ADR-081, data-models §2 |
 //! | CORE-5 | pass exit code: the one failure → 2 + its literal cause token; else 3 iff every listed DID skipped, else 0 (which failure wins: ingest_pass acceptance tests) | ADR-078 am., data-models §4 |
 //! | CORE-6 | single-flight runner: never two passes; busy names the running pass; any ending frees the slot | ADR-080 §3, §7 |
-//! | CORE-7 | pass deadline: past the deadline ⇒ exit 2 `pass_deadline_exceeded`, whatever the pass would have said | ADR-080, B13 |
+//! | CORE-7 | pass deadline: a natural failure keeps its own cause; otherwise past the deadline ⇒ exit 2 `pass_deadline_exceeded` (amended 2026-10-11, fix-pass-failure-precedence) | ADR-080 §8, B13 |
 //! | CORE-8 | the new settings accept exactly their ranges | data-models §1 |
 //! | CORE-9 | public routes: exactly POST searchClaims + GET /healthz; bounds 8 KiB / 512 B | ADR-083 |
 //! | CORE-10 | health projection: 503 `store_unusable` or 200 with exactly status + time | ADR-083 §2, data-models §6 |
@@ -426,10 +426,12 @@ proptest! {
     /// literal cause token, whatever its DIDs did; with no failure it exits 3
     /// when every listed DID was skipped (a total outage) and 0 otherwise,
     /// naming no cause. The code under test receives at most one failure.
-    /// Which failure ends a pass (ingest_pass.rs stops at the first) is NOT
-    /// pinned by any test today: `with_fault` takes one fault and PS-17/PS-20
-    /// cover single failures only. Recorded as a follow-up in
-    /// docs/feature/fix-indexer-deployment-follow-ups/rca.md.
+    /// Which failure ends a pass is pinned in `appview_domain::ingest_pass`
+    /// (fix-pass-failure-precedence): the first one, by
+    /// `a_pass_stops_at_its_first_failure_and_reports_it` and
+    /// `an_upsert_failure_then_a_purge_failure_reports_the_upsert_failure`;
+    /// and it outranks the deadline, by
+    /// `past_its_deadline_only_a_pass_that_had_not_failed_becomes_deadline_exceeded`.
     #[test]
     fn a_pass_s_exit_code_puts_local_failures_before_outages_before_success(
         failure in proptest::option::of(prop::sample::select(FAILURE_EXITS.to_vec())),
@@ -497,20 +499,36 @@ proptest! {
     }
 
     /// CORE-7 @US-IXD-002 @M1 @B13 @property @contract-shape:pure-function
-    /// Past the deadline the pass is a failure named `pass_deadline_exceeded`,
-    /// whatever it would otherwise have ended with; within it nothing changes.
+    /// A pass that had already failed (natural 2, `upsert_failed`) keeps its
+    /// own cause within and past the deadline; a pass that completed (0) or
+    /// saw a total outage (3) past the deadline is exit 2
+    /// `pass_deadline_exceeded`; within it, it keeps its code and names no cause.
+    ///
+    /// INTENTIONAL SPEC CHANGE (fix-pass-failure-precedence, user decision
+    /// 2026-10-11): this was `a_pass_past_its_deadline_fails_whatever_it_would_have_said`,
+    /// which expected a natural failure past the deadline to become
+    /// `pass_deadline_exceeded`. The first failure now wins.
     #[test]
-    fn a_pass_past_its_deadline_fails_whatever_it_would_have_said(
+    fn a_pass_past_its_deadline_fails_unless_it_had_already_failed(
         deadline_secs in 60u64..=7200,
         elapsed_ms in 0u64..8_000_000,
         natural in prop::sample::select(vec![0, 2, 3]),
     ) {
         let (code, cause) = sut_deadline_outcome(elapsed_ms, deadline_secs, natural);
-        if elapsed_ms > deadline_secs * 1000 {
-            prop_assert_eq!(code, 2);
-            prop_assert_eq!(cause.as_deref(), Some("pass_deadline_exceeded"));
-        } else {
-            prop_assert_eq!(code, natural);
+        let past_deadline = elapsed_ms > deadline_secs * 1000;
+        match (natural, past_deadline) {
+            (2, _) => {
+                prop_assert_eq!(code, 2);
+                prop_assert_eq!(cause.as_deref(), Some("upsert_failed"));
+            }
+            (_, true) => {
+                prop_assert_eq!(code, 2);
+                prop_assert_eq!(cause.as_deref(), Some("pass_deadline_exceeded"));
+            }
+            (_, false) => {
+                prop_assert_eq!(code, natural);
+                prop_assert_eq!(cause, None);
+            }
         }
     }
 

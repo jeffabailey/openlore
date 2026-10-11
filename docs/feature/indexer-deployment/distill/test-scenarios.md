@@ -76,7 +76,7 @@ Error / edge / adversarial share: 31 of 74 (42 %). Walking skeletons: 3. Propert
 | CORE-4 | Reading the DID list loads it whole or names the first bad entry | `@property` AC-003.3 |
 | CORE-5 | A pass's exit code puts local failures before outages before success (+ pinned table) | `@property` AC-004.1..3 |
 | CORE-6 | The runner never runs two passes and always frees its slot (model-based) | `@property` AC-002.4, H2 |
-| CORE-7 | A pass past its deadline fails whatever it would have said | `@property` M1 |
+| CORE-7 | A pass past its deadline fails whatever it would have said *(amended 2026-10-11, fix-pass-failure-precedence: unless it had already failed — its own failure stands; now `a_pass_past_its_deadline_fails_unless_it_had_already_failed`)* | `@property` M1 |
 | CORE-8 | Each new setting accepts exactly its range | `@property` data-models §1 |
 | CORE-9 / 9b | Only two routes exist on the public listener; requests are admitted exactly within bounds | `@property` AC-001.3, NFR-IXD-7 |
 | CORE-10 | The health response is honest and minimal | `@property` ADR-083 §2 |

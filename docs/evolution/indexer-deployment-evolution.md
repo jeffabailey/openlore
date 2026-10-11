@@ -187,6 +187,8 @@ medium findings plus L1/L2 were fixed:
   *Resolved by fix-indexer-deployment-follow-ups (`13bd6de`): literal oracles for TEST_FAULT,
   CORE-4, CORE-5 (one failure per call) and the control wire text. Pass-failure precedence is
   still unpinned.*
+  *Amended 2026-10-11: precedence resolved by fix-pass-failure-precedence — the first failure
+  ends the pass (`until_first_failure`) and outranks the deadline override (`within_deadline`).*
 - `send_idempotent` retry is now redundant (one request per search) and could be removed.
 - DuckDB cap parsing is duplicated across the indexer and the review app.
 - `render-secrets.sh` (review app) should move to per-file rename (same inode trap as H1; today

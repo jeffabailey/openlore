@@ -523,16 +523,23 @@ pub fn until_first_failure<T>(steps: impl IntoIterator<Item = PassStep<T>>) -> P
 /// The pass's exit once its deadline is taken into account (ADR-080 §8, B13):
 /// a pass that ran past `deadline` failed `pass_deadline_exceeded`, whatever
 /// it would otherwise have ended with; within it, `natural` stands.
+///
+/// Amended 2026-10-11 (fix-pass-failure-precedence): the first failure wins —
+/// a pass that had already failed keeps its own failure even past the
+/// deadline (its post-failure tail is not time-boxed); only a pass that
+/// completed or saw a total outage becomes `pass_deadline_exceeded`.
 #[must_use]
 pub fn within_deadline(
     natural: PassExit,
     elapsed: std::time::Duration,
     deadline: std::time::Duration,
 ) -> PassExit {
-    if elapsed > deadline {
-        PassExit::Failed(PassFailure::PassDeadlineExceeded)
-    } else {
-        natural
+    match natural {
+        PassExit::Failed(_) => natural,
+        PassExit::Completed | PassExit::TotalOutage if elapsed > deadline => {
+            PassExit::Failed(PassFailure::PassDeadlineExceeded)
+        }
+        PassExit::Completed | PassExit::TotalOutage => natural,
     }
 }
 
@@ -640,6 +647,28 @@ mod tests {
         assert_eq!(progress.failure, Some(PassFailure::UpsertFailed));
         assert_eq!(progress.values, vec![b'a']);
         assert_eq!(ran, vec![0]);
+    }
+
+    /// bypass: the readable twin of
+    /// `past_its_deadline_only_a_pass_that_had_not_failed_becomes_deadline_exceeded`
+    /// — an early upsert failure whose tail ran one nanosecond past the
+    /// deadline still reports `upsert_failed` (fix-pass-failure-precedence);
+    /// a completed pass that late is `pass_deadline_exceeded`.
+    #[test]
+    fn an_upsert_failure_past_the_deadline_still_reports_upsert_failed() {
+        let deadline = std::time::Duration::from_secs(60);
+        let late = deadline + std::time::Duration::from_nanos(1);
+        let failed = within_deadline(PassExit::Failed(PassFailure::UpsertFailed), late, deadline);
+        assert_eq!(failed, PassExit::Failed(PassFailure::UpsertFailed));
+        assert_eq!(failed.code(), 2);
+        assert_eq!(
+            failed.cause().map(PassFailure::token),
+            Some("upsert_failed")
+        );
+        assert_eq!(
+            within_deadline(PassExit::Completed, late, deadline),
+            PassExit::Failed(PassFailure::PassDeadlineExceeded)
+        );
     }
 
     /// bypass: closed-world table — every gate refusal maps to exactly one
@@ -751,25 +780,36 @@ mod tests {
             }
         }
 
-        /// Universe {code, cause}: past the deadline the exit is 2
-        /// `pass_deadline_exceeded` whatever the natural exit; at or within it
-        /// the natural exit is unchanged (CORE-7's unit-level twin).
+        /// Universe {code, cause}: a pass that had already failed keeps its
+        /// own failure whatever the clock says; any other pass past the
+        /// deadline is exit 2 `pass_deadline_exceeded`; at or within it the
+        /// natural exit is unchanged (CORE-7's unit-level twin).
+        ///
+        /// INTENTIONAL SPEC CHANGE (fix-pass-failure-precedence, user decision
+        /// 2026-10-11): this replaces
+        /// `past_its_deadline_a_pass_fails_and_within_it_nothing_changes`, which
+        /// expected a natural `UpsertFailed`/`PurgeFailed` past the deadline to
+        /// become `PassDeadlineExceeded`. The first failure now wins.
         #[test]
-        fn past_its_deadline_a_pass_fails_and_within_it_nothing_changes(
+        fn past_its_deadline_only_a_pass_that_had_not_failed_becomes_deadline_exceeded(
             deadline_ms in 1u64..10_000_000,
             elapsed_ms in 0u64..20_000_000,
             natural in prop_oneof![
-                Just(PassExit::Completed), Just(PassExit::TotalOutage),
-                Just(PassExit::Failed(PassFailure::UpsertFailed)),
-                Just(PassExit::Failed(PassFailure::PurgeFailed)),
+                Just(PassExit::Completed),
+                Just(PassExit::TotalOutage),
+                arb_pass_failure().prop_map(PassExit::Failed),
             ],
         ) {
             let ms = std::time::Duration::from_millis;
             let exit = within_deadline(natural, ms(elapsed_ms), ms(deadline_ms));
-            if elapsed_ms > deadline_ms {
-                prop_assert_eq!(exit, PassExit::Failed(PassFailure::PassDeadlineExceeded));
-            } else {
-                prop_assert_eq!(exit, natural);
+            match natural {
+                PassExit::Failed(failure) => {
+                    prop_assert_eq!(exit, PassExit::Failed(failure));
+                }
+                PassExit::Completed | PassExit::TotalOutage if elapsed_ms > deadline_ms => {
+                    prop_assert_eq!(exit, PassExit::Failed(PassFailure::PassDeadlineExceeded));
+                }
+                PassExit::Completed | PassExit::TotalOutage => prop_assert_eq!(exit, natural),
             }
         }
 

@@ -95,6 +95,10 @@ Facts from the code (2026-10-06):
    committed stay committed. This bounds the gate phase, whose app-signed author-key resolution is
    outside the per-DID budget (ADR-078 §4). Within a pass, author keys are **cached per author
    DID**, so each author is resolved at most once per pass.
+   *Amended 2026-10-11 (fix-pass-failure-precedence): a pass that had already ended on a local
+   failure keeps that failure's cause even when its summary is written past the deadline (the
+   first failure wins; its post-failure tail is not time-boxed). Only a pass that would have
+   exited 0 or 3 becomes `pass_deadline_exceeded`. The exit code is 2 either way.*
 
    **Gate each DID as its fetch completes, in config order.** The pass consumes the ordered
    `buffered(cap)` stream item by item. It no longer collects every listing before the gate phase,

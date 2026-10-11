@@ -100,6 +100,9 @@ time in RFC3339 plus a sequence number).
 
 Exit-code precedence for one pass is unchanged from ADR-078, extended: a refused list, a purge failure
 or an upsert failure gives **2**, which takes precedence over **3**, which takes precedence over **0**.
+*Amended 2026-10-11 (fix-pass-failure-precedence): a pass ends at its first local failure, and that
+failure's `cause` stands even past the pass deadline; only a pass that would have exited 0 or 3
+becomes 2 `pass_deadline_exceeded`.*
 
 ## 5. Control channel (logical protocol over the Unix socket)
 

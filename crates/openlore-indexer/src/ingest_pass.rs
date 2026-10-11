@@ -330,6 +330,9 @@ impl PassWork {
 
 /// Write the pass's ONE summary (last of its events) and return its exit code;
 /// a pass that ran past `deadline` failed, whatever it came to (B13).
+/// Amended 2026-10-11 (fix-pass-failure-precedence): a pass that had already
+/// failed keeps its own failure; only one that had not becomes
+/// `pass_deadline_exceeded` (see [`within_deadline`]).
 fn finish_pass(
     pass: Option<PassLabel>,
     work: &PassWork,
