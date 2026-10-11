@@ -1972,6 +1972,269 @@ pub fn scan_index_purge_only_in_pass_runner(workspace_root: &Path) -> anyhow::Re
     Ok(findings)
 }
 
+// -----------------------------------------------------------------------------
+// `indexer_search_events_carry_no_query` (ADR-083 §3, ADR-080 §7, WD-105)
+// -----------------------------------------------------------------------------
+
+/// The event-name prefix of the indexer's search events.
+const SEARCH_EVENT_PREFIX: &str = "indexer.search.";
+
+/// The only fields a search event may carry: never the searched value, never
+/// the store's error text.
+const SEARCH_EVENT_FIELDS: &[&str] = &["event", "dimension", "cap"];
+
+/// The typed reports a search event is built from — the only parameters a
+/// search-event emitter may take.
+const SEARCH_EVENT_REPORTS: &[&str] = &["SearchTruncated", "SearchStoreError"];
+
+/// The only field types a search report may hold: none can carry text.
+const SEARCH_REPORT_FIELD_TYPES: &[&str] = &["SearchDimension", "usize"];
+
+/// Ways the search handler could log on its own, past the typed reports.
+const SEARCH_HANDLER_LOG_TOKENS: &[&str] =
+    &["println!", "print!", "emit(", "emit_", "tracing::", "log::"];
+
+/// What one indexer source contributes to the search-event rule: its
+/// findings, how many search-event emitters it holds, and which report
+/// structs it defines (the shell refuses a tree where either is missing).
+#[derive(Debug, Default)]
+pub struct SearchEventScan {
+    pub findings: Vec<String>,
+    pub emitters: usize,
+    pub reports: BTreeSet<String>,
+}
+
+/// The last path segment of a plain type (`ports::SearchDimension` →
+/// `SearchDimension`); `None` for references, tuples and the like.
+fn type_name(ty: &syn::Type) -> Option<String> {
+    match ty {
+        syn::Type::Path(path) => path.path.segments.last().map(|s| s.ident.to_string()),
+        _ => None,
+    }
+}
+
+/// The `"key": value` fields of a `json!({ ... })` object; `None` when the
+/// body is not a flat object.
+fn json_object_fields(mac: &syn::Macro) -> Option<Vec<(String, syn::Expr)>> {
+    mac.parse_body_with(|input: syn::parse::ParseStream| {
+        let content;
+        syn::braced!(content in input);
+        let mut fields = Vec::new();
+        while !content.is_empty() {
+            let key: syn::LitStr = content.parse()?;
+            content.parse::<syn::Token![:]>()?;
+            fields.push((key.value(), content.parse::<syn::Expr>()?));
+            if !content.is_empty() {
+                content.parse::<syn::Token![,]>()?;
+            }
+        }
+        Ok(fields)
+    })
+    .ok()
+}
+
+/// The search event a `json!` macro builds: `Some(fields)` when its
+/// `"event"` names an `indexer.search.*` event, `Some(empty)` when it
+/// mentions one but is not a flat object (reported as unreadable).
+fn search_event_fields(mac: &syn::Macro) -> Option<Vec<String>> {
+    let is_json = mac.path.segments.last().is_some_and(|s| s.ident == "json");
+    if !is_json || !mac.tokens.to_string().contains(SEARCH_EVENT_PREFIX) {
+        return None;
+    }
+    let Some(fields) = json_object_fields(mac) else {
+        return Some(Vec::new());
+    };
+    let names_search_event = fields.iter().any(|(key, value)| {
+        key == "event"
+            && matches!(value, syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. })
+                if s.value().starts_with(SEARCH_EVENT_PREFIX))
+    });
+    names_search_event.then(|| fields.into_iter().map(|(key, _)| key).collect())
+}
+
+/// Collects, within one fn body, the search events it builds and every
+/// field it adds by string index (`event["key"] = …`).
+#[derive(Default)]
+struct SearchEventCollector {
+    events: Vec<Vec<String>>,
+    indexed_keys: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for SearchEventCollector {
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if let Some(fields) = search_event_fields(mac) {
+            self.events.push(fields);
+        }
+        use syn::punctuated::Punctuated;
+        if let Ok(args) =
+            mac.parse_body_with(Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated)
+        {
+            args.iter().for_each(|arg| self.visit_expr(arg));
+        }
+    }
+
+    fn visit_expr_index(&mut self, index: &'ast syn::ExprIndex) {
+        if let syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(key),
+            ..
+        }) = index.index.as_ref()
+        {
+            self.indexed_keys.push(key.value());
+        }
+        syn::visit::visit_expr_index(self, index);
+    }
+}
+
+/// Walks one file's production items for search-event emitters and report
+/// structs, recording findings as it goes.
+struct SearchEventRule {
+    scan: SearchEventScan,
+}
+
+impl SearchEventRule {
+    fn check_fn(&mut self, name: &syn::Ident, sig: &syn::Signature, body: &syn::Block) {
+        let mut collector = SearchEventCollector::default();
+        collector.visit_block(body);
+        if collector.events.is_empty() {
+            return;
+        }
+        self.scan.emitters += 1;
+        let findings = &mut self.scan.findings;
+        for fields in &collector.events {
+            if fields.is_empty() {
+                findings.push(format!(
+                    "`{name}` builds a search event that is not a flat object"
+                ));
+            }
+            for key in fields.iter().chain(&collector.indexed_keys) {
+                if !SEARCH_EVENT_FIELDS.contains(&key.as_str()) {
+                    findings.push(format!("`{name}` puts field `{key}` on a search event"));
+                }
+            }
+        }
+        for input in &sig.inputs {
+            let typed = match input {
+                syn::FnArg::Typed(pat) => type_name(&pat.ty),
+                syn::FnArg::Receiver(_) => None,
+            };
+            if !typed.is_some_and(|t| SEARCH_EVENT_REPORTS.contains(&t.as_str())) {
+                findings.push(format!(
+                    "`{name}` builds a search event from something other than a typed report"
+                ));
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for SearchEventRule {
+    fn visit_attribute(&mut self, _attr: &'ast syn::Attribute) {}
+
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if !is_test_only(&item.attrs) {
+            syn::visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if !is_test_only(&item.attrs) {
+            self.check_fn(&item.sig.ident, &item.sig, &item.block);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !is_test_only(&item.attrs) {
+            self.check_fn(&item.sig.ident, &item.sig, &item.block);
+        }
+    }
+
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        let name = item.ident.to_string();
+        if is_test_only(&item.attrs) || !SEARCH_EVENT_REPORTS.contains(&name.as_str()) {
+            return;
+        }
+        for field in &item.fields {
+            let ty = type_name(&field.ty);
+            if !ty.is_some_and(|t| SEARCH_REPORT_FIELD_TYPES.contains(&t.as_str())) {
+                let field_name = field
+                    .ident
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default();
+                self.scan.findings.push(format!(
+                    "`{name}.{field_name}` can hold more than a dimension or a count"
+                ));
+            }
+        }
+        self.scan.reports.insert(name);
+    }
+}
+
+/// Pure rule over one indexer source (`file_name` picks out the search
+/// handler): every `indexer.search.*` event carries only
+/// [`SEARCH_EVENT_FIELDS`] and is built by a fn that takes only the typed
+/// reports; those reports hold no text; and the search handler does not log
+/// on its own. Test code is exempt.
+pub fn classify_search_event_fields(
+    file_name: &str,
+    source: &str,
+) -> anyhow::Result<SearchEventScan> {
+    let file = syn::parse_file(source).map_err(|e| anyhow::anyhow!("syn parse: {e}"))?;
+    let mut rule = SearchEventRule {
+        scan: SearchEventScan::default(),
+    };
+    rule.visit_file(&file);
+    if file_name.contains("search") {
+        let production = source.split("#[cfg(test)]").next().unwrap_or_default();
+        rule.scan.findings.extend(
+            classify_forbidden_tokens(production, SEARCH_HANDLER_LOG_TOKENS)
+                .into_iter()
+                .map(|finding| format!("the search handler logs on its own: {finding}")),
+        );
+    }
+    Ok(rule.scan)
+}
+
+/// Effect shell for `indexer_search_events_carry_no_query`. A tree with no
+/// search-event emitter, or missing either report struct, is itself a
+/// finding (the rule must never pass vacuously).
+pub fn scan_indexer_search_events_carry_no_query(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<String>> {
+    const RULE: &str = "indexer_search_events_carry_no_query";
+    let mut findings = Vec::new();
+    let mut emitters = 0usize;
+    let mut reports = BTreeSet::new();
+    for path in rust_sources_under(&workspace_root.join(INDEXER_SOURCE_DIR)) {
+        let source = std::fs::read_to_string(&path)?;
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let scan = classify_search_event_fields(&file_name, &source)
+            .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        emitters += scan.emitters;
+        reports.extend(scan.reports);
+        findings.extend(scan.findings.into_iter().map(|finding| {
+            format!(
+                "{RULE}: {}: {finding} — a search event never carries the searched value \
+                 or the store's error text (ADR-083 §3)",
+                path.display()
+            )
+        }));
+    }
+    let all_reports = SEARCH_EVENT_REPORTS
+        .iter()
+        .all(|report| reports.contains(*report));
+    if emitters == 0 || !all_reports {
+        findings.push(format!(
+            "{RULE}: no `{SEARCH_EVENT_PREFIX}*` emitter or report struct ({}) under \
+             {INDEXER_SOURCE_DIR} — the rule would pass vacuously",
+            SEARCH_EVENT_REPORTS.join(", ")
+        ));
+    }
+    Ok(findings)
+}
+
 /// Tables keyed by `owner_did` in `review-app.duckdb` (ADR-074).
 const REVIEW_OWNER_TABLES: &[&str] = &[
     "accounts",
@@ -2166,6 +2429,7 @@ pub fn run() -> anyhow::Result<i32> {
     let search_handler_findings = scan_indexer_search_handler_read_only(&workspace_root)?;
     let index_delete_findings = scan_index_store_delete_only_in_purge(&workspace_root)?;
     let index_purge_findings = scan_index_purge_only_in_pass_runner(&workspace_root)?;
+    let search_event_findings = scan_indexer_search_events_carry_no_query(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -2183,6 +2447,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(search_handler_findings);
     rendered.extend(index_delete_findings);
     rendered.extend(index_purge_findings);
+    rendered.extend(search_event_findings);
 
     if rendered.is_empty() {
         println!(
@@ -3600,6 +3865,155 @@ mod search_handler_read_only_tests {
         );
         assert_eq!(
             scan_index_purge_only_in_pass_runner(&empty)
+                .expect("scan")
+                .len(),
+            1
+        );
+    }
+
+    // --- `indexer_search_events_carry_no_query` -------------------------
+
+    /// The two real report structs and emitters, as the rule must accept them.
+    const SAFE_SEARCH_EVENTS: &str = r#"
+        pub struct SearchTruncated { pub dimension: SearchDimension, pub cap: usize }
+        pub struct SearchStoreError { pub dimension: SearchDimension }
+        fn emit_search_truncated(cut: SearchTruncated) {
+            emit(serde_json::json!({
+                "event": "indexer.search.truncated",
+                "dimension": dimension_token(cut.dimension),
+                "cap": cut.cap,
+            }));
+        }
+        fn emit_search_store_error(failed: SearchStoreError) {
+            emit(json!({ "event": "indexer.search.store_error", "dimension": dimension_token(failed.dimension) }));
+        }
+        fn other(cfg: &IndexerConfig) { emit(json!({ "event": "indexer.config.loaded", "plc_endpoint": cfg.plc })); }
+    "#;
+
+    #[test]
+    fn search_events_built_from_the_typed_reports_pass() {
+        let scan = classify_search_event_fields("run.rs", SAFE_SEARCH_EVENTS).expect("parse");
+        assert_eq!(scan.findings, Vec::<String>::new());
+        assert_eq!(scan.emitters, 2);
+        assert_eq!(
+            scan.reports,
+            BTreeSet::from([
+                "SearchStoreError".to_string(),
+                "SearchTruncated".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn a_search_event_that_could_carry_the_query_is_a_finding() {
+        // (source, findings): each planted leak names one way the searched
+        // value or the store's error text could reach a log line.
+        let table: &[(&str, usize)] = &[
+            // an extra field on a search event
+            (
+                r#"fn e(cut: SearchTruncated) { emit(json!({ "event": "indexer.search.truncated", "cap": cut.cap, "value": v })); }"#,
+                1,
+            ),
+            // an emitter fed the raw request instead of a typed report
+            (
+                r#"fn e(request: &SearchQueryRequest) { emit(json!({ "event": "indexer.search.truncated", "dimension": request.value })); }"#,
+                1,
+            ),
+            // a field added after the event is built
+            (
+                r#"fn e(cut: SearchTruncated) { let mut ev = json!({ "event": "indexer.search.truncated" }); ev["query"] = q.into(); emit(ev); }"#,
+                1,
+            ),
+            // a report struct that can hold text
+            ("pub struct SearchStoreError { pub dimension: SearchDimension, pub detail: String }", 1),
+            ("pub struct SearchTruncated { pub dimension: SearchDimension, pub value: &'static str }", 1),
+            // a leaky emitter as a method, or inside a nested module
+            (
+                r#"impl L { fn e(&self) { emit(json!({ "event": "indexer.search.truncated" })); } }"#,
+                1,
+            ),
+            (
+                r#"mod inner { fn e(r: Req) { emit(json!({ "event": "indexer.search.truncated" })); } }"#,
+                1,
+            ),
+            // not search events: the prefix only in another field, or outside `json!`
+            (
+                r#"fn e(r: Req) { emit(json!({ "event": "indexer.config.loaded", "note": "indexer.search.x" })); }"#,
+                0,
+            ),
+            (r#"fn e(r: Req) { let s = format!("indexer.search.x {}", r.value); }"#, 0),
+            // test-only methods are exempt
+            (
+                r#"impl L { #[test] fn e(&self) { emit(json!({ "event": "indexer.search.x", "value": v })); } }"#,
+                0,
+            ),
+        ];
+        for (source, findings) in table {
+            let scan = classify_search_event_fields("run.rs", source).expect("parse");
+            assert_eq!(
+                scan.findings.len(),
+                *findings,
+                "{source}: {:?}",
+                scan.findings
+            );
+        }
+    }
+
+    #[test]
+    fn the_search_handler_never_logs_on_its_own() {
+        let leak = "fn handle(request: SearchQueryRequest) { println!(\"{}\", request.value); }";
+        assert_eq!(
+            classify_search_event_fields("search_handler.rs", leak)
+                .expect("parse")
+                .findings
+                .len(),
+            1
+        );
+        // Another module may print; test code in the handler may too.
+        assert!(classify_search_event_fields("run.rs", leak)
+            .expect("parse")
+            .findings
+            .is_empty());
+        let test_only = "#[cfg(test)] mod tests { fn t() { println!(\"x\"); } }";
+        assert!(classify_search_event_fields("search_handler.rs", test_only)
+            .expect("parse")
+            .findings
+            .is_empty());
+    }
+
+    #[test]
+    fn search_events_in_test_code_are_not_scanned() {
+        let source = r#"#[cfg(test)] mod tests { fn e(r: Req) { emit(json!({ "event": "indexer.search.x", "value": r.value })); } }"#;
+        let scan = classify_search_event_fields("run.rs", source).expect("parse");
+        assert!(scan.findings.is_empty());
+        assert_eq!(scan.emitters, 0);
+    }
+
+    #[test]
+    fn the_search_event_rule_passes_on_the_real_tree_and_refuses_a_vacuous_one() {
+        let root = locate_workspace_root().expect("workspace root");
+        assert_eq!(
+            scan_indexer_search_events_carry_no_query(&root).expect("scan"),
+            Vec::<String>::new()
+        );
+        // An emitter without its report structs is still vacuous.
+        let partial = tempfile::tempdir().expect("tempdir");
+        let src = partial.path().join(INDEXER_SOURCE_DIR);
+        std::fs::create_dir_all(&src).expect("mkdir");
+        std::fs::write(
+            src.join("run.rs"),
+            r#"fn e(cut: SearchTruncated) { emit(json!({ "event": "indexer.search.truncated" })); }"#,
+        )
+        .expect("write");
+        assert_eq!(
+            scan_indexer_search_events_carry_no_query(partial.path())
+                .expect("scan")
+                .len(),
+            1
+        );
+        let empty = std::env::temp_dir().join("openlore-xtask-no-indexer-sources");
+        assert_eq!(
+            scan_indexer_search_events_carry_no_query(&empty)
                 .expect("scan")
                 .len(),
             1
