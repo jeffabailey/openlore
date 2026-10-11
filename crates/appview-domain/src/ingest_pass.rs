@@ -479,6 +479,47 @@ pub const fn pass_exit(failure: Option<PassFailure>, summary: &PassSummary) -> P
     }
 }
 
+/// One step of a pass: its value, or the failure that ends the pass — still
+/// carrying the step's value when it produced one (a DID whose store failed
+/// was fetched, so the summary counts it).
+pub type PassStep<T> = Result<T, (Option<T>, PassFailure)>;
+
+/// What a pass's steps came to: their values in order and the failure that
+/// ended them, if one did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PassProgress<T> {
+    pub values: Vec<T>,
+    pub failure: Option<PassFailure>,
+}
+
+/// "First failure ends the pass" (ADR-078 §2): consume `steps` until the
+/// first failing one — no later step runs — and report that failure, with
+/// the values before it followed by the failing step's own value.
+pub fn until_first_failure<T>(steps: impl IntoIterator<Item = PassStep<T>>) -> PassProgress<T> {
+    let progress = steps
+        .into_iter()
+        .try_fold(Vec::new(), |mut values, step| match step {
+            Ok(value) => {
+                values.push(value);
+                Ok(values)
+            }
+            Err((carried, failure)) => {
+                values.extend(carried);
+                Err((values, failure))
+            }
+        });
+    match progress {
+        Ok(values) => PassProgress {
+            values,
+            failure: None,
+        },
+        Err((values, failure)) => PassProgress {
+            values,
+            failure: Some(failure),
+        },
+    }
+}
+
 /// The pass's exit once its deadline is taken into account (ADR-080 §8, B13):
 /// a pass that ran past `deadline` failed `pass_deadline_exceeded`, whatever
 /// it would otherwise have ended with; within it, `natural` stands.
@@ -542,6 +583,63 @@ mod tests {
                 pds_url: None,
             },
         }
+    }
+
+    /// A generated pass step: a value, or a failure that may carry one.
+    #[derive(Debug, Clone, Copy)]
+    enum StepSpec {
+        Succeeds(u8),
+        Fails(Option<u8>, PassFailure),
+    }
+
+    const fn step_of(spec: StepSpec) -> PassStep<u8> {
+        match spec {
+            StepSpec::Succeeds(value) => Ok(value),
+            StepSpec::Fails(carried, failure) => Err((carried, failure)),
+        }
+    }
+
+    fn arb_pass_failure() -> impl Strategy<Value = PassFailure> {
+        prop_oneof![
+            Just(PassFailure::ListMalformed),
+            Just(PassFailure::ListUnreadable),
+            Just(PassFailure::UpsertFailed),
+            Just(PassFailure::PurgeFailed),
+            Just(PassFailure::PassPanicked),
+            Just(PassFailure::PassDeadlineExceeded),
+        ]
+    }
+
+    fn arb_step() -> impl Strategy<Value = StepSpec> {
+        prop_oneof![
+            any::<u8>().prop_map(StepSpec::Succeeds),
+            (proptest::option::of(any::<u8>()), arb_pass_failure())
+                .prop_map(|(carried, failure)| StepSpec::Fails(carried, failure)),
+        ]
+    }
+
+    /// Run `specs` through the combinator lazily; which steps ran, and what it
+    /// returned.
+    fn run_steps(specs: &[StepSpec]) -> (Vec<usize>, PassProgress<u8>) {
+        let ran = std::cell::RefCell::new(Vec::new());
+        let progress = until_first_failure(specs.iter().enumerate().map(|(index, spec)| {
+            ran.borrow_mut().push(index);
+            step_of(*spec)
+        }));
+        (ran.into_inner(), progress)
+    }
+
+    /// bypass: the readable twin of `a_pass_stops_at_its_first_failure_and_reports_it`
+    /// — an upsert failure carrying its DID's value, then a purge failure.
+    #[test]
+    fn an_upsert_failure_then_a_purge_failure_reports_the_upsert_failure() {
+        let (ran, progress) = run_steps(&[
+            StepSpec::Fails(Some(b'a'), PassFailure::UpsertFailed),
+            StepSpec::Fails(None, PassFailure::PurgeFailed),
+        ]);
+        assert_eq!(progress.failure, Some(PassFailure::UpsertFailed));
+        assert_eq!(progress.values, vec![b'a']);
+        assert_eq!(ran, vec![0]);
     }
 
     /// bypass: closed-world table — every gate refusal maps to exactly one
@@ -673,6 +771,47 @@ mod tests {
             } else {
                 prop_assert_eq!(exit, natural);
             }
+        }
+
+        /// Universe {steps run, failure, values}: the pass stops at its first
+        /// failing step (no later step runs) and reports that failure, with
+        /// the values before it plus the failing step's own value.
+        #[test]
+        fn a_pass_stops_at_its_first_failure_and_reports_it(
+            specs in proptest::collection::vec(arb_step(), 0..16)
+        ) {
+            let (ran, progress) = run_steps(&specs);
+            let mut expected_values = Vec::new();
+            let mut first_failure = None;
+            for (index, spec) in specs.iter().enumerate() {
+                match *spec {
+                    StepSpec::Succeeds(value) => expected_values.push(value),
+                    StepSpec::Fails(carried, failure) => {
+                        if let Some(value) = carried {
+                            expected_values.push(value);
+                        }
+                        first_failure = Some((index, failure));
+                        break;
+                    }
+                }
+            }
+            let steps_run = first_failure.map_or(specs.len(), |(index, _)| index + 1);
+            prop_assert_eq!(ran, (0..steps_run).collect::<Vec<_>>());
+            prop_assert_eq!(progress.failure, first_failure.map(|(_, failure)| failure));
+            prop_assert_eq!(progress.values, expected_values);
+        }
+
+        /// Universe {steps run, failure, values}: with no failure every step
+        /// runs in order and every value is returned in order.
+        #[test]
+        fn with_no_failure_every_step_runs_in_order(
+            values in proptest::collection::vec(any::<u8>(), 0..16)
+        ) {
+            let specs: Vec<StepSpec> = values.iter().copied().map(StepSpec::Succeeds).collect();
+            let (ran, progress) = run_steps(&specs);
+            prop_assert_eq!(ran, (0..values.len()).collect::<Vec<_>>());
+            prop_assert_eq!(progress.failure, None);
+            prop_assert_eq!(progress.values, values);
         }
 
         /// Universe {own, foreign}: every record of the requested repo is

@@ -15,8 +15,9 @@ use futures_util::stream::{self, StreamExt};
 
 use appview_domain::did_list::read_did_list;
 use appview_domain::ingest_pass::{
-    classify_fetch_failure, pass_exit, refusal_cause_of, summarize_outcomes, within_deadline,
-    ClassifiedSkip, FetchFailure, PassExit, PassFailure, RefusalCause, SkipReason,
+    classify_fetch_failure, pass_exit, refusal_cause_of, summarize_outcomes, until_first_failure,
+    within_deadline, ClassifiedSkip, FetchFailure, PassExit, PassFailure, PassOutcome, PassStep,
+    RefusalCause, SkipReason,
 };
 use appview_domain::pass_runner::PassId;
 use appview_domain::{
@@ -95,25 +96,31 @@ fn listed_pass_work(
     purge: Option<RunnerPurge<'_>>,
     started: Instant,
 ) -> PassWork {
-    match pass_list(wiring) {
-        Ok((repo_dids, source)) => {
-            emit_pass_config_loaded(wiring, pass, &repo_dids, source);
-            match purge_removed_authors(purge, &repo_dids, pass) {
-                Ok(purged_authors) => PassWork {
-                    purged_authors,
-                    ..pass_work(wiring, &repo_dids, Some(pass), started)
-                },
-                Err(purged_authors) => PassWork {
-                    purged_authors,
-                    ..PassWork::failed(PassFailure::PurgeFailed)
-                },
-            }
-        }
-        Err(refusal) => {
-            emit_pass_refused(pass, &refusal);
-            PassWork::failed(refusal.cause)
-        }
-    }
+    staged_pass_work(wiring, pass, purge, started).unwrap_or_else(|stopped| stopped)
+}
+
+/// The pass's stages in order — list, purge, work — each ending the pass at
+/// its first failure (`Err` = the work of the pass that stopped there).
+fn staged_pass_work(
+    wiring: &IndexerWiring,
+    pass: PassLabel,
+    purge: Option<RunnerPurge<'_>>,
+    started: Instant,
+) -> Result<PassWork, PassWork> {
+    let (repo_dids, source) = pass_list(wiring).map_err(|refusal| {
+        emit_pass_refused(pass, &refusal);
+        PassWork::failed(refusal.cause)
+    })?;
+    emit_pass_config_loaded(wiring, pass, &repo_dids, source);
+    let purged_authors =
+        purge_removed_authors(purge, &repo_dids, pass).map_err(|purged_authors| PassWork {
+            purged_authors,
+            ..PassWork::failed(PassFailure::PurgeFailed)
+        })?;
+    Ok(PassWork {
+        purged_authors,
+        ..pass_work(wiring, &repo_dids, Some(pass), started)
+    })
 }
 
 /// At pass start, before any fetch: when purging is enabled, purge the
@@ -364,36 +371,50 @@ fn pass_work(
             .map(|repo_did| fetch_repo(wiring, repo_did))
             .buffered(wiring.max_concurrent_fetches),
     );
-    let mut outcomes = Vec::with_capacity(repo_dids.len());
     let mut tally = IngestTally::default();
     let mut author_keys = AuthorKeys::new(deadline);
-    let mut failure = None;
-    loop {
-        let fetch = match runtime
-            .block_on(async { tokio::time::timeout_at(deadline, fetches.next()).await })
-        {
-            Ok(Some(fetch)) => fetch,
-            Ok(None) => break,
-            Err(_deadline_passed) => {
-                failure = Some(PassFailure::PassDeadlineExceeded);
-                break;
-            }
-        };
-        emit_fallback_read(pass, &fetch);
-        emit_source_skipped(pass, &fetch);
-        outcomes.push(fetch.outcome());
-        if let Err(stop) = gate_fetch(wiring, &runtime, &fetch, &mut author_keys, &mut tally) {
-            failure = Some(stop.failure());
-            break;
+    let did_steps = std::iter::from_fn(|| {
+        let fetched =
+            runtime.block_on(async { tokio::time::timeout_at(deadline, fetches.next()).await });
+        match fetched {
+            Ok(Some(fetch)) => Some(gated_did(
+                wiring,
+                &runtime,
+                pass,
+                &fetch,
+                &mut author_keys,
+                &mut tally,
+            )),
+            Ok(None) => None,
+            Err(_deadline_passed) => Some(Err((None, PassFailure::PassDeadlineExceeded))),
         }
-    }
+    });
+    let progress = until_first_failure(did_steps);
     tally.emit(pass);
     checkpoint(wiring);
     PassWork {
-        summary: summarize_outcomes(outcomes),
-        failure,
+        summary: summarize_outcomes(progress.values),
+        failure: progress.failure,
         purged_authors: 0,
     }
+}
+
+/// One fetched DID as a pass step: announce its fetch, gate it; its outcome
+/// counts even when its gate stops the pass.
+fn gated_did(
+    wiring: &IndexerWiring,
+    runtime: &tokio::runtime::Runtime,
+    pass: Option<PassLabel>,
+    fetch: &DidFetch,
+    author_keys: &mut AuthorKeys,
+    tally: &mut IngestTally,
+) -> PassStep<PassOutcome> {
+    emit_fallback_read(pass, fetch);
+    emit_source_skipped(pass, fetch);
+    let outcome = fetch.outcome();
+    gate_fetch(wiring, runtime, fetch, author_keys, tally)
+        .map(|()| outcome)
+        .map_err(|stop| (Some(outcome), stop.failure()))
 }
 
 /// The end-of-pass checkpoint. Everything it folds in is already committed,
