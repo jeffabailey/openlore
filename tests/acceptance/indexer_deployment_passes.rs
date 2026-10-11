@@ -486,8 +486,17 @@ fn a_pass_that_cannot_store_a_claim_ends_with_exit_2_and_search_keeps_answering(
         "{summary}"
     );
     // The DID whose store failure ended the pass is still accounted for.
-    for (count, expected) in [("configured", 2), ("own_pds", 2), ("fallback", 0), ("skipped", 0)] {
-        assert_eq!(summary[count].as_u64(), Some(expected), "{count}: {summary}");
+    for (count, expected) in [
+        ("configured", 2),
+        ("own_pds", 2),
+        ("fallback", 0),
+        ("skipped", 0),
+    ] {
+        assert_eq!(
+            summary[count].as_u64(),
+            Some(expected),
+            "{count}: {summary}"
+        );
     }
     then_maria_finds(&world, &live, Author::Priya, 2);
     assert_eq!(live.health().0, 200, "{}", live.dump());
