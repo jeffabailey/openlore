@@ -1,7 +1,7 @@
 # OpenLore — Resume Context
 
 ## Current Task
-Nothing in flight. Seven deliveries done (latest `fix-pass-failure-precedence`, 2026-10-11: first failure ends the pass and outranks the deadline override; committed locally, push held), none deployed; history in `docs/evolution/`. CI: `nightly.yml` weekly (Mon 08:00 UTC), claim-domain mutation kill rate 98.6%.
+Nothing in flight. Seven deliveries done (latest `fix-pass-failure-precedence`, 2026-10-11: first failure ends the pass and outranks the deadline override; pushed, CI green on 1825503), none deployed; history in `docs/evolution/`. CI: `nightly.yml` weekly (Mon 08:00 UTC), claim-domain mutation kill rate 98.6%.
 
 ## Key Decisions
 - One go-live checklist for both apps in `deploy/README.md`; both `deploy.sh` fail closed; `go_live_runbook_drift` keeps runbooks honest.
