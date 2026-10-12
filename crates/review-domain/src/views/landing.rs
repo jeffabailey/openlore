@@ -83,10 +83,13 @@ pub fn landing_page(mode: PermissionMode, failure: Option<SignInFailure>) -> Str
             }
             form method="post" action="/signin" {
                 label for="handle" { "Your Bluesky handle" }
-                input id="handle" name="handle" type="text" autocomplete="username"
+                input id="handle" name="handle" type="text" list="handle-suggestions"
+                    autocomplete="off" autocapitalize="none" spellcheck="false"
                     placeholder="you.bsky.social" required;
+                datalist id="handle-suggestions" {}
                 button type="submit" { (SIGN_IN_LABEL) }
             }
+            script src="/assets/handle.js" {}
         },
     )
 }

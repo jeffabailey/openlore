@@ -155,6 +155,37 @@ pub const COPY_SCRIPT: &str = "document.querySelectorAll('[data-copy]').forEach(
   });\n\
 });\n";
 
+/// The handle field's typeahead: after a short pause, ask Bluesky's public
+/// AppView for matching accounts and offer their handles in the field's
+/// datalist. Results are set as text properties (never parsed as HTML), a
+/// stale answer is dropped, and any failure leaves a plain text field.
+pub const HANDLE_SCRIPT: &str = "(function () {\n\
+  var input = document.getElementById('handle');\n\
+  var list = document.getElementById('handle-suggestions');\n\
+  if (!input || !list || !window.fetch) return;\n\
+  var timer = null, latest = '';\n\
+  input.addEventListener('input', function () {\n\
+    var q = input.value.trim().replace(/^@/, '');\n\
+    clearTimeout(timer);\n\
+    latest = q;\n\
+    if (q.length < 2) { list.replaceChildren(); return; }\n\
+    timer = setTimeout(function () {\n\
+      fetch('https://public.api.bsky.app/xrpc/app.bsky.actor.searchActorsTypeahead?limit=8&q=' + encodeURIComponent(q))\n\
+        .then(function (r) { return r.ok ? r.json() : { actors: [] }; })\n\
+        .then(function (body) {\n\
+          if (q !== latest) return;\n\
+          list.replaceChildren.apply(list, (body.actors || []).map(function (a) {\n\
+            var o = document.createElement('option');\n\
+            o.value = a.handle;\n\
+            if (a.displayName) o.label = a.displayName;\n\
+            return o;\n\
+          }));\n\
+        })\n\
+        .catch(function () {});\n\
+    }, 200);\n\
+  });\n\
+})();\n";
+
 /// The queue's keyboard triage (A approve, E edit, N not me, J/K move).
 pub const TRIAGE_SCRIPT: &str = "(function () {\n\
   var cards = function () { return Array.prototype.slice.call(document.querySelectorAll('article')); };\n\

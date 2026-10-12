@@ -30,6 +30,12 @@ use crate::routes::signin;
 
 /// Sent on every response (AC-000.2, NFR-BRA-2): HTTPS only, own scripts
 /// only, never framed, no MIME sniffing, no cross-origin referrer.
+///
+/// `form-action` also governs where a form submission is redirected, and the
+/// sign-in form's `/signin` answers 303 to the person's own authorization
+/// server, which can be any HTTPS origin; with `'self'` alone browsers drop
+/// that redirect and signing in does nothing. `connect-src` lets the handle
+/// field's typeahead ask Bluesky's public AppView, straight from the browser.
 pub(crate) const SECURITY_HEADERS: [(&str, &str); 4] = [
     (
         "strict-transport-security",
@@ -37,7 +43,8 @@ pub(crate) const SECURITY_HEADERS: [(&str, &str); 4] = [
     ),
     (
         "content-security-policy",
-        "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "default-src 'self'; connect-src 'self' https://public.api.bsky.app; \
+         frame-ancestors 'none'; base-uri 'none'; form-action 'self' https:",
     ),
     ("x-content-type-options", "nosniff"),
     ("referrer-policy", "same-origin"),
@@ -87,6 +94,7 @@ pub(crate) enum Route {
     Jwks,
     CopyScript,
     TriageScript,
+    HandleScript,
     NotFound,
 }
 
@@ -103,6 +111,7 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
         "/oauth/jwks.json" => Route::Jwks,
         "/assets/copy.js" => Route::CopyScript,
         "/assets/triage.js" => Route::TriageScript,
+        "/assets/handle.js" => Route::HandleScript,
         _ => Route::NotFound,
     }
 }
@@ -186,6 +195,11 @@ pub(crate) fn respond(surface: &Surface, route: Route) -> Response<Full<Bytes>> 
             StatusCode::OK,
             "text/javascript; charset=utf-8",
             review_domain::views::TRIAGE_SCRIPT.to_string(),
+        ),
+        Route::HandleScript => (
+            StatusCode::OK,
+            "text/javascript; charset=utf-8",
+            review_domain::views::HANDLE_SCRIPT.to_string(),
         ),
         Route::NotFound => (StatusCode::NOT_FOUND, text, "not found".to_string()),
     };
@@ -401,6 +415,58 @@ mod tests {
                 set_cookie,
             }),
         ]
+    }
+
+    fn csp_directive(name: &str) -> Vec<&'static str> {
+        let (_, csp) = SECURITY_HEADERS
+            .iter()
+            .find(|(header, _)| *header == "content-security-policy")
+            .expect("a CSP is sent");
+        csp.split(';')
+            .map(str::trim)
+            .find_map(|d| d.strip_prefix(name).filter(|rest| rest.starts_with(' ')))
+            .map(|rest| rest.split_whitespace().collect())
+            .unwrap_or_default()
+    }
+
+    /// Go-live 2026-10-12: `form-action 'self'` made the browser drop the
+    /// sign-in form's 303 to the person's authorization server, so pressing
+    /// "Sign in with Bluesky" did nothing. Any HTTPS server may be theirs.
+    #[test]
+    fn the_sign_in_form_may_redirect_to_any_https_authorization_server_and_nowhere_else() {
+        assert_eq!(csp_directive("form-action"), vec!["'self'", "https:"]);
+    }
+
+    /// The handle typeahead may call Bluesky's public AppView and nothing
+    /// else off-origin; scripts stay the app's own.
+    #[test]
+    fn pages_may_only_connect_to_the_app_and_the_public_bluesky_appview() {
+        assert_eq!(
+            csp_directive("connect-src"),
+            vec!["'self'", "https://public.api.bsky.app"]
+        );
+        assert_eq!(csp_directive("default-src"), vec!["'self'"]);
+        assert!(
+            csp_directive("script-src").is_empty(),
+            "scripts fall back to 'self'"
+        );
+        assert_eq!(csp_directive("frame-ancestors"), vec!["'none'"]);
+        assert_eq!(csp_directive("base-uri"), vec!["'none'"]);
+    }
+
+    #[test]
+    fn the_handle_typeahead_script_is_served_as_javascript() {
+        assert_eq!(
+            route(&Method::GET, "/assets/handle.js"),
+            Route::HandleScript
+        );
+        assert_eq!(route(&Method::POST, "/assets/handle.js"), Route::NotFound);
+        let response = respond(&surface(), Route::HandleScript);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "text/javascript; charset=utf-8"
+        );
     }
 
     proptest! {

@@ -113,6 +113,9 @@ fn every_page_tells_the_browser_to_use_https_only_and_never_frame_it() {
     );
     assert!(h("content-security-policy").contains("default-src 'self'"));
     assert!(h("content-security-policy").contains("frame-ancestors 'none'"));
+    // The sign-in form's 303 goes to the person's HTTPS authorization server;
+    // `form-action 'self'` alone made browsers drop it (go-live 2026-10-12).
+    assert!(h("content-security-policy").contains("form-action 'self' https:"));
     assert_eq!(h("x-content-type-options"), "nosniff");
     assert_eq!(h("referrer-policy"), "same-origin");
 }

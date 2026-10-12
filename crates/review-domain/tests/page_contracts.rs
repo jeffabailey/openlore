@@ -175,6 +175,37 @@ fn the_landing_page_explains_and_shows_the_sign_in_failure() {
     }
 }
 
+/// The handle field offers Bluesky accounts as you type (the typeahead other
+/// Bluesky apps have), from the app's own script, with the browser's own
+/// username autofill off so it does not cover the suggestions.
+#[test]
+fn the_handle_field_offers_bluesky_accounts_as_you_type() {
+    let html = landing_page(PermissionMode::Granular, None);
+    for part in [
+        r#"list="handle-suggestions""#,
+        r#"autocomplete="off""#,
+        r#"autocapitalize="none""#,
+        r#"<datalist id="handle-suggestions"></datalist>"#,
+        r#"<script src="/assets/handle.js"></script>"#,
+    ] {
+        assert!(html.contains(part), "landing page lacks {part}\n{html}");
+    }
+    for part in [
+        "https://public.api.bsky.app/xrpc/app.bsky.actor.searchActorsTypeahead?limit=8&q=",
+        "encodeURIComponent(q)",
+        "getElementById('handle-suggestions')",
+        "o.value = a.handle",
+        "if (q !== latest) return;",
+        "q.length < 2",
+    ] {
+        assert!(HANDLE_SCRIPT.contains(part), "typeahead lacks {part}");
+    }
+    assert!(
+        !HANDLE_SCRIPT.contains("innerHTML"),
+        "suggestions are text, never parsed as HTML"
+    );
+}
+
 // ------------------------------------------------------------ github
 
 #[test]
