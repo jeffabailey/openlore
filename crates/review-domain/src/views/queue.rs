@@ -118,6 +118,15 @@ fn scan_action(latest: Option<ScanRun>) -> Option<&'static str> {
     }
 }
 
+/// How often the queue reloads itself while a scan runs.
+const SCAN_RELOAD_SECONDS: u8 = 3;
+
+/// Whether the latest scan is still running, so the page should reload
+/// itself to show what it found.
+fn scan_running(latest: Option<ScanRun>) -> bool {
+    latest.is_some_and(|run| run.status == ScanStatus::Running)
+}
+
 /// What the latest scan says above the cards, if anything.
 fn scan_notice(latest: Option<ScanRun>, pending: &[Suggestion], tally: &Tally) -> Option<String> {
     let run = latest?;
@@ -316,6 +325,9 @@ fn verified_queue(login: &str, view: &QueueView<'_>) -> Markup {
         }
         @if let Some(notice) = scan_notice(view.latest_scan, view.pending, &view.tally) {
             p role="status" { (notice) }
+        }
+        @if scan_running(view.latest_scan) {
+            meta http-equiv="refresh" content=(SCAN_RELOAD_SECONDS);
         }
         @if view.tally.published > 0 {
             p { (view.pending.len()) " pending · " (view.tally.published) " published" }

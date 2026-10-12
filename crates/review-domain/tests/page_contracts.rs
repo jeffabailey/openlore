@@ -562,6 +562,29 @@ fn only_a_completed_scan_shows_its_summary() {
     }
 }
 
+/// Live 2026-10-12: the scan finished in 20 s but the queue kept saying
+/// "Scanning your repos…" until the person reloaded. While a scan runs the
+/// page reloads itself (no script, so the CSP is untouched); once it has
+/// stopped, for whatever reason, it stays put.
+#[test]
+fn the_queue_reloads_itself_only_while_a_scan_runs() {
+    const RELOAD: &str = r#"<meta http-equiv="refresh" content="3">"#;
+    let running = verified_queue(Some(run(ScanStatus::Running)), &[], Tally::default(), None);
+    assert!(running.contains(RELOAD), "{running}");
+    for latest in [
+        None,
+        Some(run(ScanStatus::Completed)),
+        Some(run(ScanStatus::RateLimited)),
+        Some(run(ScanStatus::Interrupted)),
+        Some(run(ScanStatus::OwnershipFailed)),
+    ] {
+        assert!(
+            !verified_queue(latest, &[], Tally::default(), None).contains(RELOAD),
+            "{latest:?}"
+        );
+    }
+}
+
 #[test]
 fn a_paused_scan_says_when_it_resumes() {
     let html = verified_queue(
