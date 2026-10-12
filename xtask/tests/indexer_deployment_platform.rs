@@ -2520,3 +2520,42 @@ fn the_rate_limit_trusts_forwarded_clients_only_from_the_pds_network() {
         "non-vacuity of the network helpers"
     );
 }
+
+/// XP-28 @US-BRA-go-live @infrastructure @real-io @regression
+/// ```gherkin
+/// Scenario: The first review-app deploy on a fresh host succeeds
+///   Given an isolated host with no release recorded and no DuckDB file yet
+///   When `host deploy <digest> <sha>` runs and the new digest answers /readyz
+///   Then it exits 0, says it deployed the digest, and records exactly that release
+/// ```
+/// Go-live 2026-10-11: the first deploy aborted after recording the release because the
+/// pre-copy name was never set without a DuckDB file (`pre: unbound variable` under `set -u`).
+#[cfg(unix)]
+#[test]
+fn the_first_review_app_deploy_on_a_fresh_host_succeeds() {
+    let digest = format!("sha256:{}", "0".repeat(64));
+    let answers = HostAnswers {
+        render: "exit 0".to_string(),
+        curl: "exit 0".to_string(),
+        releases_seeded: false,
+        ..HostAnswers::isolated()
+    };
+    let host = host_run(&REVIEW_APP, &["deploy", &digest, SEEDED_SHA], &answers, &[]);
+    assert!(
+        !host.base.join("data/review-app.duckdb").exists(),
+        "non-vacuity: a fresh host has no DuckDB file"
+    );
+    assert_eq!(host.run.status, 0, "first deploy\n{}", host.run.out);
+    assert!(
+        host.run.out.contains(&format!("deployed {digest}")),
+        "{}",
+        host.run.out
+    );
+    let releases =
+        std::fs::read_to_string(host.base.join("state/releases")).expect("releases recorded");
+    assert_eq!(releases.lines().count(), 1, "{releases}");
+    assert!(
+        releases.contains(&format!("{SEEDED_SHA} {digest}")),
+        "{releases}"
+    );
+}

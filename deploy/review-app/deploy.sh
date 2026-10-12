@@ -304,7 +304,7 @@ restore_db() {
 }
 
 host_deploy() { # $1 = digest, $2 = git sha (or "unknown")
-  local digest="$1" sha="${2:-unknown}" prev pre
+  local digest="$1" sha="${2:-unknown}" prev pre=""
   is_digest "$digest" || die "refusing non-digest '$digest'"
   host_install
   "$APP/bin/render-secrets.sh"
@@ -321,7 +321,10 @@ host_deploy() { # $1 = digest, $2 = git sha (or "unknown")
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $sha $digest" >>"$RELEASES"
     chmod 0600 "$RELEASES"
     # Keep only this deploy's pre-copy (the rollback aid for the NEXT deploy is taken then).
-    find "$APP/data" -maxdepth 1 -name 'review-app.duckdb.pre-*' ! -name "${pre##*/}*" -delete 2>/dev/null || true
+    # A first deploy has no DuckDB file yet, so there is no pre-copy and nothing to prune.
+    if [ -n "$pre" ]; then
+      find "$APP/data" -maxdepth 1 -name 'review-app.duckdb.pre-*' ! -name "${pre##*/}*" -delete 2>/dev/null || true
+    fi
     echo "deployed $digest"
     return 0
   fi
