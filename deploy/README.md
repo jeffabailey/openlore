@@ -224,7 +224,12 @@ keyless and attested (SBOMs + SLSA provenance). CI never deploys.
 | `tofu/environments/prod/review-app.tf` | Log group (30 days), Route 53 health check, alarms A-1/A-3/A-7/A-8 on the backup-alarm topic |
 | `tofu/bootstrap/review-app-iam.tf` | Inline policy on `openlore-pds-host-prod`: read the app's SSM params, write its log group |
 
-Deploy (laptop, `AWS_PROFILE=jeff`, with `gh`, `cosign`, `jq` and `crane` or `docker buildx`):
+Deploy (laptop, `AWS_PROFILE=jeff`, with `gh`, `cosign`, `jq` and `crane` or `docker buildx`).
+`deploy/ops.sh review-app <mode> [args]` and `deploy/ops.sh indexer <mode> [args]` run these
+scripts with that setup done: `AWS_PROFILE=jeff`, `AWS_REGION=us-east-1` (override with
+`OPENLORE_AWS_PROFILE` / `OPENLORE_AWS_REGION`) and an empty throwaway `DOCKER_CONFIG`, so `crane`
+and `cosign` read the public images anonymously instead of through the macOS keychain credential
+helper, which fails in a non-interactive session ("does not allow user interaction"):
 
 ```sh
 deploy/review-app/deploy.sh deploy <40-hex git sha>   # CI green + cosign verify, then Recreate by digest
@@ -404,8 +409,8 @@ docker pull ghcr.io/jeffabailey/openlore-indexer@sha256:<digest>
 ### 9. Review app: install and first deploy
 
 ```sh
-deploy/review-app/deploy.sh install
-deploy/review-app/deploy.sh deploy <40-hex git sha>
+deploy/ops.sh review-app install
+deploy/ops.sh review-app deploy <40-hex git sha>
 ```
 
 `install` fails closed (step 01-02 of fix-go-live-runbook-gaps): it refuses unless the IMDS probe
@@ -419,8 +424,8 @@ removed before any reload. A refusal means step 5 or 6 is not done. The deploy w
 ### 10. Indexer: install and first deploy
 
 ```sh
-deploy/indexer/deploy.sh install
-INDEXER_READY_WAIT_S=300 deploy/indexer/deploy.sh deploy <40-hex git sha>
+deploy/ops.sh indexer install
+INDEXER_READY_WAIT_S=300 deploy/ops.sh indexer deploy <40-hex git sha>
 ```
 
 `install` makes the same IMDS and Caddy-sites refusals. The first deploy's readiness wait

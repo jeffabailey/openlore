@@ -800,7 +800,7 @@ fn one_ordered_go_live_checklist_owns_the_sequence() {
     assert_before(
         checklist,
         "dig +short app.openlore.jeffbailey.us",
-        "deploy/review-app/deploy.sh install",
+        "deploy/ops.sh review-app install",
     );
 
     // S9: the compose cap, not 256 MB.

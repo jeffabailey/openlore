@@ -94,7 +94,7 @@ remote() { # $@ = host mode and args; ships host/ + this script, runs it as root
   # shellcheck disable=SC2064 # expand now: the path is fixed
   trap "rm -rf '$payload'" EXIT
   cp "$here"/host/compose.yaml "$here"/host/app.caddy "$here"/host/*.sh "$here/deploy.sh" "$payload/"
-  b64=$(COPYFILE_DISABLE=1 tar -C "$payload" -cz . | base64 | tr -d '\n')
+  b64=$(COPYFILE_DISABLE=1 tar --no-xattrs -C "$payload" -cz . | base64 | tr -d '\n')
   iid=$(instance_id)
   params=$(jq -n --arg b64 "$b64" --arg args "$*" '{
     commands: [

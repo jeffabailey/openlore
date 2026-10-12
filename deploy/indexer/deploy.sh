@@ -123,7 +123,7 @@ remote() { # $@ = host mode and args; ships host/ + this script, runs it as root
   cp "$here"/host/compose.yaml "$here"/host/index.caddy "$here"/host/*.sh \
     "$here"/host/openlore-indexer-*.service "$here"/host/openlore-indexer-*.timer \
     "$here/deploy.sh" "$payload/"
-  b64=$(COPYFILE_DISABLE=1 tar -C "$payload" -cz . | base64 | tr -d '\n')
+  b64=$(COPYFILE_DISABLE=1 tar --no-xattrs -C "$payload" -cz . | base64 | tr -d '\n')
   iid=$(instance_id)
   params=$(jq -n --arg b64 "$b64" --arg args "$*" '{
     commands: [

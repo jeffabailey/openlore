@@ -2559,3 +2559,62 @@ fn the_first_review_app_deploy_on_a_fresh_host_succeeds() {
         "{releases}"
     );
 }
+
+/// XP-29 @go-live @infrastructure @real-io
+/// ```gherkin
+/// Scenario: The operator wrapper gives the deploy scripts the openlore account and anonymous GHCR reads
+///   Given a shell whose default AWS profile and region are someone else's
+///   When `deploy/ops.sh <app> deploy <digest>` runs
+///   Then the registry tools see AWS_PROFILE=jeff, AWS_REGION=us-east-1 and an empty DOCKER_CONFIG,
+///   And that DOCKER_CONFIG is gone once the wrapper exits, and an unknown app is refused (exit 2)
+/// ```
+/// Go-live 2026-10-11: crane read GHCR through the macOS keychain credential helper, which
+/// fails in a non-interactive session; the images are public, so anonymous reads are enough.
+#[cfg(unix)]
+#[test]
+fn the_operator_wrapper_gives_the_deploy_scripts_the_account_and_anonymous_registry_reads() {
+    let digest = format!("sha256:{}", "0".repeat(64));
+    // The review app runs from a shell that already exports a DOCKER_CONFIG, the indexer from
+    // one that has none, so the wrapper must both override and export it.
+    for (app, preset) in [("review-app", true), ("indexer", false)] {
+        let stubs = deploy_stubs("success", false);
+        let seen = stubs.dir.path().join("cosign.env");
+        stubs.add(
+            "cosign",
+            &format!(
+                "printf '%s\\n%s\\n%s\\n%s\\n' \"$AWS_PROFILE\" \"$AWS_REGION\" \"$DOCKER_CONFIG\" \"$(ls -A \"$DOCKER_CONFIG\" | wc -l | tr -d ' ')\" > '{}'\nexit 1",
+                seen.display()
+            ),
+        );
+        let mut env = vec![
+            ("PATH", stubs.path_env()),
+            ("HOME", stubs.dir.path().display().to_string()),
+            ("AWS_PROFILE", "default".to_string()),
+            ("AWS_REGION", "us-west-2".to_string()),
+        ];
+        if preset {
+            env.push(("DOCKER_CONFIG", "/nonexistent-keychain-config".to_string()));
+        }
+        let run = bash("deploy/ops.sh", &[app, "deploy", &digest], &env);
+        assert_ne!(
+            run.status, 0,
+            "{app}: the stubbed signature fails\n{}",
+            run.out
+        );
+        let seen = std::fs::read_to_string(&seen).expect("non-vacuity: cosign ran");
+        let lines: Vec<&str> = seen.lines().collect();
+        assert_eq!(lines[0], "jeff", "{app}: profile\n{seen}");
+        assert_eq!(lines[1], "us-east-1", "{app}: region\n{seen}");
+        assert!(
+            !lines[2].is_empty() && lines[2] != "/nonexistent-keychain-config",
+            "{app}: its own exported config\n{seen}"
+        );
+        assert_eq!(lines[3], "0", "{app}: the config dir is empty\n{seen}");
+        assert!(
+            !Path::new(lines[2]).exists(),
+            "{app}: the throwaway config is removed on exit"
+        );
+    }
+    let run = bash("deploy/ops.sh", &["pds", "status"], &[]);
+    assert_eq!(run.status, 2, "{}", run.out);
+}
