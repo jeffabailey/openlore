@@ -83,10 +83,15 @@ pub fn landing_page(mode: PermissionMode, failure: Option<SignInFailure>) -> Str
             }
             form method="post" action="/signin" {
                 label for="handle" { "Your Bluesky handle" }
-                input id="handle" name="handle" type="text" list="handle-suggestions"
-                    autocomplete="off" autocapitalize="none" spellcheck="false"
-                    placeholder="you.bsky.social" required;
-                datalist id="handle-suggestions" {}
+                div class="typeahead" {
+                    input id="handle" name="handle" type="text" role="combobox"
+                        aria-autocomplete="list" aria-expanded="false"
+                        aria-controls="handle-suggestions"
+                        autocomplete="off" autocapitalize="none" spellcheck="false"
+                        placeholder="you.bsky.social" required;
+                    ul id="handle-suggestions" class="typeahead-list" role="listbox"
+                        aria-label="Matching Bluesky accounts" hidden {}
+                }
                 button type="submit" { (SIGN_IN_LABEL) }
             }
             script src="/assets/handle.js" {}

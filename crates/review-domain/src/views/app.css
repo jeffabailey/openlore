@@ -1,0 +1,210 @@
+/* OpenLore review: the one stylesheet every page links.
+ *
+ * Pages are plain semantic HTML with no inline styles (the CSP allows none),
+ * so everything here is element- or role-based. Restyle the app by changing
+ * the tokens first; add classes to the views only where elements cannot say
+ * what something is.
+ */
+
+/* ---- Tokens ---------------------------------------------------------- */
+
+:root {
+  color-scheme: light dark;
+
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.75rem;
+  --leading: 1.55;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  --radius: 0.5rem;
+  --radius-pill: 999px;
+  --measure: 42rem;
+
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --text: #16181d;
+  --muted: #5b6372;
+  --border: #d9dde4;
+  --accent: #1667d9;
+  --accent-text: #ffffff;
+  --accent-soft: #e6effc;
+  --alert-bg: #fdecec;
+  --alert-text: #8a1c1c;
+  --status-bg: #e9f6ee;
+  --status-text: #1d5e36;
+  --focus: #1667d9;
+  --shadow: 0 6px 24px rgb(16 24 40 / 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111317;
+    --surface: #1a1d23;
+    --text: #e8eaee;
+    --muted: #9aa3b2;
+    --border: #2e333c;
+    --accent: #5b9dff;
+    --accent-text: #0b1220;
+    --accent-soft: #1d2b42;
+    --alert-bg: #3a1a1c;
+    --alert-text: #ffb4b4;
+    --status-bg: #16301f;
+    --status-text: #9ee0b4;
+    --focus: #5b9dff;
+    --shadow: 0 6px 24px rgb(0 0 0 / 0.5);
+  }
+}
+
+/* ---- Base ------------------------------------------------------------ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: var(--text-base) / var(--leading) var(--font-body);
+}
+
+header {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+header strong { font-size: var(--text-base); letter-spacing: 0.01em; }
+
+main {
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-4);
+}
+
+h1 { font-size: var(--text-xl); line-height: 1.2; margin: 0 0 var(--space-4); }
+h2 { font-size: var(--text-lg); margin: var(--space-8) 0 var(--space-3); }
+p, ul, dl { margin: 0 0 var(--space-4); }
+ul { padding-left: var(--space-6); }
+li + li { margin-top: var(--space-1); }
+
+a { color: var(--accent); text-underline-offset: 0.15em; }
+a:hover { text-decoration-thickness: 2px; }
+
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-1) var(--space-4); }
+dt { color: var(--muted); }
+dd { margin: 0; }
+
+/* ---- Notices --------------------------------------------------------- */
+
+[role="alert"], [role="status"] {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+}
+[role="alert"] { background: var(--alert-bg); color: var(--alert-text); }
+[role="status"] { background: var(--status-bg); color: var(--status-text); }
+
+/* ---- Cards (queue suggestions) --------------------------------------- */
+
+article {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  margin: 0 0 var(--space-4);
+}
+article:focus-within { border-color: var(--accent); }
+article form { display: inline-block; margin: var(--space-2) var(--space-2) 0 0; }
+
+/* ---- Forms ----------------------------------------------------------- */
+
+form { margin: 0 0 var(--space-4); }
+label { display: block; font-weight: 600; margin-bottom: var(--space-1); }
+
+input[type="text"], select, textarea {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+}
+textarea { resize: vertical; }
+input[type="text"]:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 0;
+}
+
+button {
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--accent-text);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  padding: var(--space-2) var(--space-4);
+}
+button:hover { filter: brightness(1.08); }
+form > button { margin-top: var(--space-3); }
+
+/* ---- Handle typeahead (landing page) ---------------------------------- */
+
+.typeahead { position: relative; }
+
+.typeahead-list {
+  position: absolute;
+  z-index: 10;
+  inset: calc(100% + var(--space-1)) 0 auto 0;
+  max-height: 22rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.typeahead-list[hidden] { display: none; }
+
+.typeahead-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-2);
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+}
+.typeahead-option:hover, .typeahead-option[aria-selected="true"] { background: var(--accent-soft); }
+
+.typeahead-avatar {
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  object-fit: cover;
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--border);
+}
+
+.typeahead-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.typeahead-name, .typeahead-handle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.typeahead-name { font-weight: 600; }
+.typeahead-handle { color: var(--muted); font-size: var(--text-sm); }

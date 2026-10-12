@@ -176,16 +176,19 @@ fn the_landing_page_explains_and_shows_the_sign_in_failure() {
 }
 
 /// The handle field offers Bluesky accounts as you type (the typeahead other
-/// Bluesky apps have), from the app's own script, with the browser's own
-/// username autofill off so it does not cover the suggestions.
+/// Bluesky apps have): a combobox listing avatar, name and handle, from the
+/// app's own script, with the browser's own username autofill off so it does
+/// not cover the suggestions.
 #[test]
 fn the_handle_field_offers_bluesky_accounts_as_you_type() {
     let html = landing_page(PermissionMode::Granular, None);
     for part in [
-        r#"list="handle-suggestions""#,
+        r#"role="combobox""#,
+        r#"aria-controls="handle-suggestions""#,
+        r#"aria-expanded="false""#,
         r#"autocomplete="off""#,
         r#"autocapitalize="none""#,
-        r#"<datalist id="handle-suggestions"></datalist>"#,
+        r#"<ul id="handle-suggestions" class="typeahead-list" role="listbox""#,
         r#"<script src="/assets/handle.js"></script>"#,
     ] {
         assert!(html.contains(part), "landing page lacks {part}\n{html}");
@@ -194,9 +197,13 @@ fn the_handle_field_offers_bluesky_accounts_as_you_type() {
         "https://public.api.bsky.app/xrpc/app.bsky.actor.searchActorsTypeahead?limit=8&q=",
         "encodeURIComponent(q)",
         "getElementById('handle-suggestions')",
-        "o.value = a.handle",
+        "input.value = actors[i].handle",
         "if (q !== latest) return;",
         "q.length < 2",
+        "a.avatar.indexOf(AVATAR) === 0",
+        "'https://cdn.bsky.app/img/avatar/plain/'",
+        "aria-activedescendant",
+        "event.key === 'Escape'",
     ] {
         assert!(HANDLE_SCRIPT.contains(part), "typeahead lacks {part}");
     }
@@ -204,6 +211,29 @@ fn the_handle_field_offers_bluesky_accounts_as_you_type() {
         !HANDLE_SCRIPT.contains("innerHTML"),
         "suggestions are text, never parsed as HTML"
     );
+}
+
+/// Every page links the one stylesheet, which styles the typeahead and keeps
+/// its design tokens on `:root` with a dark-mode set.
+#[test]
+fn every_page_links_the_one_stylesheet() {
+    for html in [
+        landing_page(PermissionMode::Granular, None),
+        not_found_page(),
+    ] {
+        assert!(
+            html.contains(r#"<link rel="stylesheet" href="/assets/app.css">"#),
+            "page lacks the stylesheet\n{html}"
+        );
+    }
+    for part in [
+        ":root {",
+        "@media (prefers-color-scheme: dark)",
+        ".typeahead-list[hidden] { display: none; }",
+        r#".typeahead-option[aria-selected="true"]"#,
+    ] {
+        assert!(APP_STYLESHEET.contains(part), "stylesheet lacks {part}");
+    }
 }
 
 // ------------------------------------------------------------ github

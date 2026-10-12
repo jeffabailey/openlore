@@ -35,7 +35,9 @@ use crate::routes::signin;
 /// sign-in form's `/signin` answers 303 to the person's own authorization
 /// server, which can be any HTTPS origin; with `'self'` alone browsers drop
 /// that redirect and signing in does nothing. `connect-src` lets the handle
-/// field's typeahead ask Bluesky's public AppView, straight from the browser.
+/// field's typeahead ask Bluesky's public AppView, straight from the browser,
+/// and `img-src` lets it show the matching accounts' avatars from Bluesky's
+/// image CDN. Styles fall back to `'self'`: the one linked stylesheet.
 pub(crate) const SECURITY_HEADERS: [(&str, &str); 4] = [
     (
         "strict-transport-security",
@@ -44,6 +46,7 @@ pub(crate) const SECURITY_HEADERS: [(&str, &str); 4] = [
     (
         "content-security-policy",
         "default-src 'self'; connect-src 'self' https://public.api.bsky.app; \
+         img-src 'self' https://cdn.bsky.app; \
          frame-ancestors 'none'; base-uri 'none'; form-action 'self' https:",
     ),
     ("x-content-type-options", "nosniff"),
@@ -95,6 +98,7 @@ pub(crate) enum Route {
     CopyScript,
     TriageScript,
     HandleScript,
+    Stylesheet,
     NotFound,
 }
 
@@ -112,6 +116,7 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
         "/assets/copy.js" => Route::CopyScript,
         "/assets/triage.js" => Route::TriageScript,
         "/assets/handle.js" => Route::HandleScript,
+        "/assets/app.css" => Route::Stylesheet,
         _ => Route::NotFound,
     }
 }
@@ -200,6 +205,11 @@ pub(crate) fn respond(surface: &Surface, route: Route) -> Response<Full<Bytes>> 
             StatusCode::OK,
             "text/javascript; charset=utf-8",
             review_domain::views::HANDLE_SCRIPT.to_string(),
+        ),
+        Route::Stylesheet => (
+            StatusCode::OK,
+            "text/css; charset=utf-8",
+            review_domain::views::APP_STYLESHEET.to_string(),
         ),
         Route::NotFound => (StatusCode::NOT_FOUND, text, "not found".to_string()),
     };
@@ -437,13 +447,22 @@ mod tests {
         assert_eq!(csp_directive("form-action"), vec!["'self'", "https:"]);
     }
 
-    /// The handle typeahead may call Bluesky's public AppView and nothing
-    /// else off-origin; scripts stay the app's own.
+    /// The handle typeahead may call Bluesky's public AppView and show
+    /// avatars from Bluesky's image CDN, and nothing else off-origin;
+    /// scripts and styles stay the app's own.
     #[test]
     fn pages_may_only_connect_to_the_app_and_the_public_bluesky_appview() {
         assert_eq!(
             csp_directive("connect-src"),
             vec!["'self'", "https://public.api.bsky.app"]
+        );
+        assert_eq!(
+            csp_directive("img-src"),
+            vec!["'self'", "https://cdn.bsky.app"]
+        );
+        assert!(
+            csp_directive("style-src").is_empty(),
+            "styles fall back to 'self'"
         );
         assert_eq!(csp_directive("default-src"), vec!["'self'"]);
         assert!(
@@ -466,6 +485,18 @@ mod tests {
         assert_eq!(
             response.headers().get(CONTENT_TYPE).unwrap(),
             "text/javascript; charset=utf-8"
+        );
+    }
+
+    #[test]
+    fn the_stylesheet_is_served_as_css() {
+        assert_eq!(route(&Method::GET, "/assets/app.css"), Route::Stylesheet);
+        assert_eq!(route(&Method::POST, "/assets/app.css"), Route::NotFound);
+        let response = respond(&surface(), Route::Stylesheet);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "text/css; charset=utf-8"
         );
     }
 
