@@ -52,6 +52,8 @@ fn page(title: &str, body: Markup) -> String {
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (title) " · " (APP_NAME) }
                 link rel="stylesheet" href="/assets/app.css";
+                meta name="htmx-config" content="includeIndicatorCSS:false";
+                script src="/assets/htmx.js" defer {}
             }
             body {
                 header { strong { (APP_NAME) } }
@@ -163,6 +165,12 @@ pub const COPY_SCRIPT: &str = "document.querySelectorAll('[data-copy]').forEach(
 /// `cdn.bsky.app` avatars are shown, a stale answer is dropped, and any
 /// failure leaves a plain text field.
 pub const HANDLE_SCRIPT: &str = include_str!("handle.js");
+
+/// htmx 4.0.0 (0BSD), vendored from unpkg.com/htmx.org@4.0.0/dist/htmx.min.js
+/// and served by the app itself at `/assets/htmx.js`; its SHA-256 is pinned
+/// in the review app's tests. Pages use only attributes, never `hx-on` or
+/// `js:` values, which would need `eval` the CSP refuses.
+pub const HTMX_SCRIPT: &str = include_str!("htmx.min.js");
 
 /// The one stylesheet every page links (`/assets/app.css`). Design tokens
 /// are custom properties on `:root`, with a dark-mode set.

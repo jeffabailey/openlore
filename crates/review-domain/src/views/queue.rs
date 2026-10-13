@@ -118,20 +118,33 @@ fn scan_action(latest: Option<ScanRun>) -> Option<&'static str> {
     }
 }
 
-/// How often the queue reloads itself while a scan runs.
-const SCAN_RELOAD_SECONDS: u8 = 3;
+/// The queue region: the target htmx swaps when a scan starts and while it
+/// runs.
+const QUEUE_REGION: &str = "#queue";
 
-/// Whether the latest scan is still running, so the page should reload
-/// itself to show what it found.
+/// While a scan runs the queue region re-fetches itself this often.
+const SCAN_POLL_TRIGGER: &str = "every 2s";
+
+/// Whether the latest scan is still running, so the queue region should keep
+/// re-fetching itself to show what it finds.
 fn scan_running(latest: Option<ScanRun>) -> bool {
     latest.is_some_and(|run| run.status == ScanStatus::Running)
+}
+
+/// "Scanning your repos…", with what has landed so far once anything has.
+fn scanning_notice(found: usize) -> String {
+    match found {
+        0 => "Scanning your repos…".to_string(),
+        1 => "Scanning your repos… 1 suggestion so far".to_string(),
+        n => format!("Scanning your repos… {n} suggestions so far"),
+    }
 }
 
 /// What the latest scan says above the cards, if anything.
 fn scan_notice(latest: Option<ScanRun>, pending: &[Suggestion], tally: &Tally) -> Option<String> {
     let run = latest?;
     match run.status {
-        ScanStatus::Running => Some("Scanning your repos…".to_string()),
+        ScanStatus::Running => Some(scanning_notice(pending.len())),
         ScanStatus::Completed if pending.is_empty() && tally.all_reviewed() => {
             Some(all_reviewed_notice(tally))
         }
@@ -311,35 +324,39 @@ fn verified_queue(login: &str, view: &QueueView<'_>) -> Markup {
         p { "GitHub: github.com/" (login) " (verified)" }
         h1 { "Your suggestions" }
         p { strong { (PRIVATE_NOTICE) } }
-        @match view.notice {
-            Some(QueueNotice::ScanRefused(refused)) => {
-                p role="alert" { (scan_refused_message(refused)) }
+        @let polling = scan_running(view.latest_scan);
+        div id="queue" hx-get=[polling.then_some("/review")]
+            hx-trigger=[polling.then_some(SCAN_POLL_TRIGGER)]
+            hx-select=[polling.then_some(QUEUE_REGION)]
+            hx-swap=[polling.then_some("outerMorph")] {
+            @match view.notice {
+                Some(QueueNotice::ScanRefused(refused)) => {
+                    p role="alert" { (scan_refused_message(refused)) }
+                }
+                Some(QueueNotice::Declined(key)) => {
+                    (declined_notice(key, view.csrf_token))
+                }
+                None => {}
             }
-            Some(QueueNotice::Declined(key)) => {
-                (declined_notice(key, view.csrf_token))
+            @if let Some(summary) = completed_summary(view.latest_scan) {
+                p role="status" { (summary) }
             }
-            None => {}
-        }
-        @if let Some(summary) = completed_summary(view.latest_scan) {
-            p role="status" { (summary) }
-        }
-        @if let Some(notice) = scan_notice(view.latest_scan, view.pending, &view.tally) {
-            p role="status" { (notice) }
-        }
-        @if scan_running(view.latest_scan) {
-            meta http-equiv="refresh" content=(SCAN_RELOAD_SECONDS);
-        }
-        @if view.tally.published > 0 {
-            p { (view.pending.len()) " pending · " (view.tally.published) " published" }
-        }
-        @if let Some(label) = scan_action(view.latest_scan) {
-            form method="post" action="/scan" {
-                (csrf_field(view.csrf_token))
-                button type="submit" { (label) }
+            @if let Some(notice) = scan_notice(view.latest_scan, view.pending, &view.tally) {
+                p role="status" { (notice) }
             }
-        }
-        @for suggestion in view.pending {
-            (suggestion_card(suggestion, view.csrf_token))
+            @if view.tally.published > 0 {
+                p { (view.pending.len()) " pending · " (view.tally.published) " published" }
+            }
+            @if let Some(label) = scan_action(view.latest_scan) {
+                form method="post" action="/scan" hx-post="/scan" hx-target=(QUEUE_REGION)
+                    hx-select=(QUEUE_REGION) hx-swap="outerMorph" {
+                    (csrf_field(view.csrf_token))
+                    button type="submit" { (label) }
+                }
+            }
+            @for suggestion in view.pending {
+                (suggestion_card(suggestion, view.csrf_token))
+            }
         }
         p data-triage-keys="a e n j k" {
             "Keyboard: A approve · E edit · N not me · J/K next/previous suggestion"

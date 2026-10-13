@@ -601,13 +601,28 @@ fn only_a_completed_scan_shows_its_summary() {
 
 /// Live 2026-10-12: the scan finished in 20 s but the queue kept saying
 /// "Scanning your repos…" until the person reloaded. While a scan runs the
-/// page reloads itself (no script, so the CSP is untouched); once it has
-/// stopped, for whatever reason, it stays put.
+/// queue region re-fetches itself with htmx and morphs in place (cards appear
+/// as each repo lands, focus survives); the page itself never reloads. Once
+/// the scan has stopped, for whatever reason, the region stops polling.
 #[test]
-fn the_queue_reloads_itself_only_while_a_scan_runs() {
-    const RELOAD: &str = r#"<meta http-equiv="refresh" content="3">"#;
-    let running = verified_queue(Some(run(ScanStatus::Running)), &[], Tally::default(), None);
-    assert!(running.contains(RELOAD), "{running}");
+fn while_a_scan_runs_the_queue_polls_itself_in_place() {
+    const POLLING: &str = r##"<div id="queue" hx-get="/review" hx-trigger="every 2s" hx-select="#queue" hx-swap="outerMorph">"##;
+    let pending = [suggestion()];
+    let running = verified_queue(
+        Some(run(ScanStatus::Running)),
+        &pending,
+        Tally::default(),
+        None,
+    );
+    assert!(running.contains(POLLING), "{running}");
+    assert!(
+        running.contains("Scanning your repos… 1 suggestion so far"),
+        "{running}"
+    );
+    assert!(
+        !running.contains("http-equiv"),
+        "no full-page reload: {running}"
+    );
     for latest in [
         None,
         Some(run(ScanStatus::Completed)),
@@ -615,11 +630,38 @@ fn the_queue_reloads_itself_only_while_a_scan_runs() {
         Some(run(ScanStatus::Interrupted)),
         Some(run(ScanStatus::OwnershipFailed)),
     ] {
+        let html = verified_queue(latest, &[], Tally::default(), None);
+        assert!(html.contains(r#"<div id="queue">"#), "{latest:?}: {html}");
+        assert!(!html.contains("hx-trigger"), "{latest:?}: {html}");
+    }
+}
+
+/// Pressing Scan swaps the queue region in place instead of loading a new
+/// page; without JavaScript the same form still posts and redirects.
+#[test]
+fn the_scan_button_swaps_the_queue_in_place() {
+    let html = verified_queue(None, &[], Tally::default(), None);
+    assert!(
+        html.contains(r##"<form method="post" action="/scan" hx-post="/scan" hx-target="#queue" hx-select="#queue" hx-swap="outerMorph">"##),
+        "{html}"
+    );
+}
+
+/// Every page loads the vendored htmx 4 from the app itself, after parsing,
+/// with htmx's own indicator CSS off (the CSP allows only the app's sheet).
+#[test]
+fn every_page_loads_htmx_from_the_app_with_its_css_off() {
+    for html in [
+        landing_page(PermissionMode::Granular, None),
+        not_found_page(),
+    ] {
         assert!(
-            !verified_queue(latest, &[], Tally::default(), None).contains(RELOAD),
-            "{latest:?}"
+            html.contains(r#"<meta name="htmx-config" content="includeIndicatorCSS:false">"#)
+                && html.contains(r#"<script src="/assets/htmx.js" defer></script>"#),
+            "{html}"
         );
     }
+    assert!(HTMX_SCRIPT.contains(r#"this.version="4.0.0""#));
 }
 
 #[test]

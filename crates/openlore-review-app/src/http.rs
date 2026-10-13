@@ -99,6 +99,7 @@ pub(crate) enum Route {
     TriageScript,
     HandleScript,
     Stylesheet,
+    HtmxScript,
     NotFound,
 }
 
@@ -117,6 +118,7 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
         "/assets/triage.js" => Route::TriageScript,
         "/assets/handle.js" => Route::HandleScript,
         "/assets/app.css" => Route::Stylesheet,
+        "/assets/htmx.js" => Route::HtmxScript,
         _ => Route::NotFound,
     }
 }
@@ -205,6 +207,11 @@ pub(crate) fn respond(surface: &Surface, route: Route) -> Response<Full<Bytes>> 
             StatusCode::OK,
             "text/javascript; charset=utf-8",
             review_domain::views::HANDLE_SCRIPT.to_string(),
+        ),
+        Route::HtmxScript => (
+            StatusCode::OK,
+            "text/javascript; charset=utf-8",
+            review_domain::views::HTMX_SCRIPT.to_string(),
         ),
         Route::Stylesheet => (
             StatusCode::OK,
@@ -481,6 +488,26 @@ mod tests {
         );
         assert_eq!(route(&Method::POST, "/assets/handle.js"), Route::NotFound);
         let response = respond(&surface(), Route::HandleScript);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "text/javascript; charset=utf-8"
+        );
+    }
+
+    /// The vendored htmx is exactly htmx 4.0.0's `dist/htmx.min.js`
+    /// (unpkg.com/htmx.org@4.0.0): a changed byte fails here, not in a browser.
+    #[test]
+    fn htmx_is_the_pinned_4_0_0_build_served_as_javascript() {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(review_domain::views::HTMX_SCRIPT.as_bytes());
+        let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(
+            hex,
+            "e484d9171a9db30a39c8f16e3d709d4137f3211c659f8e6125816635033d593f"
+        );
+        assert_eq!(route(&Method::GET, "/assets/htmx.js"), Route::HtmxScript);
+        let response = respond(&surface(), Route::HtmxScript);
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers().get(CONTENT_TYPE).unwrap(),
