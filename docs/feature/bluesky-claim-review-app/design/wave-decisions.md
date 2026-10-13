@@ -31,6 +31,7 @@
 | **SPIKE-3** | Are granular scopes (`repo:org.openlore.claim?action=create`, `repo:app.bsky.feed.post?action=create`) accepted by both PDSes, and are writes outside them refused? | Both accept, and a write outside the scope is refused. Otherwise use `transition:generic` plus disclosure. | NFR-BRA-3 |
 | **SPIKE-4** | Does Caddy accept an `import` glob that matches no files? What is the app's RSS during a 10-repo scan next to the PDS on t4g.micro? | Caddy starts with an empty `sites/`; app RSS under 150 MB and no OOM. Otherwise move to t4g.small. | DEVOPS rollout |
 | SPIKE-5 (later) | Commit-proof verification (`atrium-repo` + `atrium-crypto` + a proof walker) | Verifies a `sync.getRecord` CAR against the `#atproto` key | Only if relay/firehose ingest is adopted (ADR-071 trigger) |
+| SPIKE-6 (logged 2026-10-13) | Can OpenLore run with no PDS of its own, so hosting drops to near $0 at rest? Every user (including the operator account) brings an existing PDS (bsky.social or self-hosted), and the review app and indexer run scale-to-zero (e.g. Lambda + a scheduled trigger, private state in S3/DynamoDB instead of local DuckDB). | The full walkthrough works with only bsky.social accounts: sign in, verify GitHub, scan, approve, publish, and the indexer finds the claim. Cold-start sign-in and scan stay usable. Projected cost at rest is about $0 and under $2/month at current traffic. The private-state guarantees of ADR-074 still hold. | A hosting decision. Reverses ADR-075 (co-located on the PDS host) and changes ADR-074 (DuckDB state); touches ADR-066 and ADR-023. Today's floor is about $12/month (t4g.micro, public IPv4, EBS). |
 
 ### Spike results (2026-10-04)
 
@@ -45,6 +46,7 @@ Throwaway programs (scratchpad only, not in the repo) ran against `canzantest.bs
 | SPIKE-3 (bsky.social) | **Pass** | Granted scope `atproto repo:org.openlore.claim?action=create repo:app.bsky.feed.post?action=create`. A create in another collection was refused with 403 `ScopeMissingError`, and so was a `deleteRecord` on `org.openlore.claim` (needs `action=delete`). The `transition:generic` fallback is not needed on bsky.social. Not yet run on the OpenLore PDS. |
 | SPIKE-4a (Caddy) | **Pass** | An `import /etc/caddy/sites/*.caddy` that matches no files validates on `caddy:2`, `2-alpine` and `2.6.1`. Adding a site file later is picked up. |
 | SPIKE-4b (RSS) | **Pass (proxy)** | `openlore scrape person jeffabailey --repos 10`: peak RSS 71 MB in 19 s, giving 20 repo candidates (macOS arm64). Re-measure on t4g.micro during DEVOPS. |
+| SPIKE-6 (bring-your-own PDS, scale-to-zero) | Not run | Logged 2026-10-13 after the go-live memory gate. Run with `/nw-spike`. If it passes, SPIKE-1 and SPIKE-3 on the OpenLore PDS become moot, since both pass on bsky.social. |
 
 Findings the design must absorb (input to DEVOPS and DELIVER):
 
