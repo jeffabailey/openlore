@@ -15,7 +15,7 @@
 variable "review_app_alarms_enabled" {
   description = "Whether the review app's alarms notify. False until rollout step R-6 (monitoring-alerting.md)."
   type        = bool
-  default     = false
+  default     = true
 }
 
 locals {
