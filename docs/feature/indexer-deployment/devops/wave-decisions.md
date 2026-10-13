@@ -112,3 +112,8 @@ now stated in the docs. The remaining items are documentation fixes or are defer
 ## User decisions after the DELIVER review (2026-10-07)
 - The full-model review found 3 high and 3 medium findings; ALL are fixed in this delivery, and the low findings beyond L1/L2 go to the backlog.
 - **H3:** fix the CLI near-match sweep (skip it on an empty index; cap the probes) AND add a per-IP rate limit. This reverses the earlier "no per-IP rate limit" decision (ADR-083). Stock Caddy has no rate_limit module (it would need a custom build, i.e. a shared-module change), so the limit is enforced in the indexer binary, keyed on X-Forwarded-For from the trusted proxy only: 10 req/s, burst 50, 429 + Retry-After.
+
+## Go-live results and decisions (2026-10-12/13)
+- **Rollback drills (step 11), N = b2ef9cf, N+1 = a3f70ca:** review app rolled back in 14 s (`/readyz` 200 at 15 s); indexer in 14 s (`/healthz` 200 at 14 s, the next pass exited 0, search still answers).
+- **Memory gate (step 12), three runs:** indexer peak 47.0 / 47.4 / 48.3 MB (limit 100 MB); MemAvailable never below 370 MB; PDS 120/120; search 100/100, p95 0.248 / 0.268 s. Swap-ins grew every run (+2, +1, then +1306 pages with 1235 in one burst at 01:08:32 UTC that no journal event explains). No review-app scan has run inside a window yet, so its peak is unmeasured.
+- **Decision:** `vm.swappiness` 60 → 10 (user, 2026-10-13). Set on the live host by hand (`/etc/sysctl.d/90-pds-swappiness.conf` + `sysctl --system`, no restart) and added to tofu-aws-pds as input `swappiness` (unreleased, 4451296) so a replacement host keeps it. t4g.small (about +$6/month) is the fallback if swap still grows. Next: rerun the gate with a scan in the window.
