@@ -65,15 +65,28 @@ pub fn ownership_message(
     }
 }
 
+/// How a verify outcome is announced: a success is a status, a refusal an
+/// alert, so a refusal never reads as if it worked.
+fn outcome_role(outcome: OwnershipOutcome<'_>) -> &'static str {
+    match outcome {
+        OwnershipOutcome::Verified => "status",
+        OwnershipOutcome::Refused(_) => "alert",
+    }
+}
+
 /// The GitHub step: the exact DID to copy, where to put it, and the form
-/// that checks it. `message` explains the last attempt.
-pub fn github_page(session_did: &str, csrf_token: &str, message: Option<&str>) -> String {
+/// that checks it. `notice` is the last attempt's outcome and its message.
+pub fn github_page(
+    session_did: &str,
+    csrf_token: &str,
+    notice: Option<(OwnershipOutcome<'_>, &str)>,
+) -> String {
     page(
         "Prove your GitHub account",
         html! {
             h1 { "Prove your GitHub account is yours" }
-            @if let Some(message) = message {
-                p role="status" { (message) }
+            @if let Some((outcome, message)) = notice {
+                p role=(outcome_role(outcome)) { (message) }
             }
             p { "Your DID:" }
             p { code id="your-did" { (session_did) } " " a href="#your-did" data-copy=(session_did) { "Copy" } }

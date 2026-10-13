@@ -238,10 +238,47 @@ fn every_page_links_the_one_stylesheet() {
 
 // ------------------------------------------------------------ github
 
+/// Live 2026-10-12: "already verified for another Bluesky account" showed in
+/// the same green status box as a success, so a refusal read as if it had
+/// worked. A refusal is an alert; only a verified account is a status.
+#[test]
+fn a_refused_verify_is_an_alert_and_only_success_is_a_status() {
+    let verified = github_page(OWNER, CSRF, Some((OwnershipOutcome::Verified, "Verified")));
+    assert!(
+        verified.contains(r#"<p role="status">Verified</p>"#),
+        "{verified}"
+    );
+    assert!(!verified.contains(r#"role="alert""#), "{verified}");
+    for refusal in [
+        OwnershipRefusal::LinkedToAnotherAccount,
+        OwnershipRefusal::DidMissing,
+        OwnershipRefusal::RateLimited,
+    ] {
+        let refused = github_page(
+            OWNER,
+            CSRF,
+            Some((OwnershipOutcome::Refused(&refusal), "No")),
+        );
+        assert!(
+            refused.contains(r#"<p role="alert">No</p>"#),
+            "{refusal:?}: {refused}"
+        );
+        assert!(
+            !refused.contains(r#"role="status""#),
+            "{refusal:?}: {refused}"
+        );
+    }
+    assert!(!github_page(OWNER, CSRF, None).contains("role="));
+}
+
 #[test]
 fn the_github_page_shows_the_did_the_token_and_the_message() {
     assert_page(
-        &github_page(OWNER, CSRF, Some("Verified: yes")),
+        &github_page(
+            OWNER,
+            CSRF,
+            Some((OwnershipOutcome::Verified, "Verified: yes")),
+        ),
         "<h1>Prove your GitHub account is yours</h1>",
         &[
             OWNER,

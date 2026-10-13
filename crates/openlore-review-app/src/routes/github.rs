@@ -86,7 +86,7 @@ pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
         }
     };
     let message = views::ownership_message(shown, &login, &session.owner_did, &session.handle);
-    github_page(&session, &cookie_value, Some(&message))
+    github_page(&session, &cookie_value, Some((shown, &message)))
 }
 
 /// Read the profile, prove ownership and record the link. Returns the login
@@ -165,9 +165,13 @@ pub(crate) fn refusal_of(error: &GithubError) -> OwnershipRefusal {
     }
 }
 
-fn github_page(session: &WebSession, cookie_value: &str, message: Option<&str>) -> Reply {
+fn github_page(
+    session: &WebSession,
+    cookie_value: &str,
+    notice: Option<(OwnershipOutcome<'_>, &str)>,
+) -> Reply {
     Reply::page(
         StatusCode::OK,
-        views::github_page(&session.owner_did, &csrf_token_for(cookie_value), message),
+        views::github_page(&session.owner_did, &csrf_token_for(cookie_value), notice),
     )
 }
