@@ -21,6 +21,10 @@ use review_domain::plans::{
 };
 use review_domain::published::{live_published_claim, profile_subject, ProfileSubject};
 use review_domain::reconcile::Reconciled;
+use review_domain::selection::{
+    chosen_suggestions, selection_key, selection_value, tally_batch, BatchTally, PlanResult,
+    MAX_SELECTED,
+};
 use review_domain::share::{compose_post, share_post_plan, ShareRefusal, MAX_POST_GRAPHEMES};
 use review_domain::signin::SignInFailure;
 
@@ -392,4 +396,105 @@ fn every_share_refusal_explains_itself_distinctly() {
     assert!(messages[0].contains("publish a claim first"));
     assert!(messages[1].contains("Nothing was posted"));
     assert!(messages[2].contains("412"));
+}
+
+// ---------------------------------------------------------------- selection
+
+fn pending_suggestion(n: usize) -> Suggestion {
+    Suggestion {
+        key: SuggestionKey {
+            subject: format!("github:priyaraman/repo-{n}"),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: MEMORY_SAFETY.to_string(),
+        },
+        confidence_bp: 2500,
+        evidence: vec![],
+        why: vec![],
+        source_repo: format!("priyaraman/repo-{n}"),
+    }
+}
+
+proptest! {
+    /// Every key a card can carry comes back from the value it submits.
+    #[test]
+    fn a_selection_value_names_exactly_its_key(
+        subject in "github:[a-z0-9-]{1,12}/[a-z0-9._-]{1,12}",
+        object in "org\\.openlore\\.philosophy\\.[a-z-]{1,16}",
+    ) {
+        let key = SuggestionKey { subject, predicate: "embodiesPhilosophy".to_string(), object };
+        prop_assert_eq!(selection_key(&selection_value(&key)), Some(key));
+    }
+}
+
+#[test]
+fn a_malformed_selection_names_nothing() {
+    for value in ["", "a b", "a b c d", "a  c", " b c", "a b "] {
+        assert_eq!(selection_key(value), None, "{value:?}");
+    }
+}
+
+/// Only the owner's own pending suggestions are chosen, in queue order,
+/// each once, however the values were forged or repeated.
+#[test]
+fn a_selection_chooses_only_the_owners_pending_suggestions_once_each() {
+    let pending: Vec<Suggestion> = (0..4).map(pending_suggestion).collect();
+    let values = vec![
+        selection_value(&pending[2].key),
+        selection_value(&pending[0].key),
+        selection_value(&pending[2].key),
+        "github:someone/else embodiesPhilosophy org.openlore.philosophy.memory-safety".to_string(),
+        "garbage".to_string(),
+    ];
+    let chosen = chosen_suggestions(pending.clone(), &values);
+    assert_eq!(chosen, vec![pending[0].clone(), pending[2].clone()]);
+    assert!(chosen_suggestions(pending, &[]).is_empty());
+}
+
+#[test]
+fn a_selection_is_capped() {
+    let pending: Vec<Suggestion> = (0..MAX_SELECTED + 5).map(pending_suggestion).collect();
+    let values: Vec<String> = pending.iter().map(|s| selection_value(&s.key)).collect();
+    assert_eq!(chosen_suggestions(pending, &values).len(), MAX_SELECTED);
+}
+
+/// A batch result counts every outcome: what landed in order, each failure
+/// with its kept plan for Retry, the expired previews, and whether any write
+/// needs a fresh sign-in.
+#[test]
+fn a_batch_tally_counts_every_outcome() {
+    let failed = |reason: &str, needs_sign_in, kept: Option<&str>| PlanResult::Failed {
+        reason: reason.to_string(),
+        needs_sign_in,
+        kept_plan: kept.map(str::to_string),
+    };
+    let tally = tally_batch(vec![
+        PlanResult::Published("at://a".to_string()),
+        PlanResult::Expired,
+        failed("down", false, Some("plan-b")),
+        PlanResult::Skipped,
+        PlanResult::Expired,
+        failed("gone", false, None),
+        PlanResult::Published("at://c".to_string()),
+    ]);
+    assert_eq!(
+        tally,
+        BatchTally {
+            published: vec!["at://a".to_string(), "at://c".to_string()],
+            failures: vec!["down".to_string(), "gone".to_string()],
+            retry_plan_ids: vec!["plan-b".to_string()],
+            expired: 2,
+            needs_sign_in: false,
+        }
+    );
+    let signed_out = tally_batch(vec![
+        failed("session", true, Some("p")),
+        failed("down", false, Some("q")),
+    ]);
+    assert!(signed_out.needs_sign_in);
+    assert!(!tally_batch(vec![failed("down", false, None)]).needs_sign_in);
+    assert!(
+        tally_batch(vec![failed("a", true, None), failed("b", true, None)]).needs_sign_in,
+        "two ended sessions still need a sign-in"
+    );
+    assert_eq!(tally_batch(vec![]), BatchTally::default());
 }

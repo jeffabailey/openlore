@@ -40,17 +40,34 @@ pub(crate) fn take_confirmed_plan(
 ) -> Result<ConfirmedPlan, Reply> {
     let (_, session) = signed_in_post(app, request)?;
     let plan_id = field(&request.form, "plan").ok_or_else(not_found)?;
+    take_owned_plan(
+        app,
+        &session.owner_did,
+        plan_id,
+        kind,
+        csrf_token_of(request),
+    )
+    .ok_or_else(not_found)
+}
+
+/// Take the owner's `kind` plan `plan_id` exactly once, if it is there.
+pub(crate) fn take_owned_plan(
+    app: &App,
+    owner_did: &str,
+    plan_id: String,
+    kind: PlanKind,
+    csrf_token: String,
+) -> Option<ConfirmedPlan> {
     let TakenPublishPlan { plan, expires_at } = app
         .plans
-        .take_publish_plan(&session.owner_did, &plan_id, kind)
+        .take_publish_plan(owner_did, &plan_id, kind)
         .ok()
-        .flatten()
-        .ok_or_else(not_found)?;
-    Ok(ConfirmedPlan {
-        owner_did: session.owner_did,
+        .flatten()?;
+    Some(ConfirmedPlan {
+        owner_did: owner_did.to_string(),
         plan_id,
         stored: plan,
         expires_at,
-        csrf_token: csrf_token_of(request),
+        csrf_token,
     })
 }

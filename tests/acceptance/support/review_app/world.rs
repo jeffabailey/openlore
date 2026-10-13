@@ -337,6 +337,17 @@ pub fn when_previews_approval(browser: &mut Browser, s: Suggestion) -> &Page {
     browser.press_in_card(&[p[0].as_str(), p[1].as_str()], "Approve")
 }
 
+/// WHEN the owner ticks the card of each suggestion and presses
+/// "Approve selected" (the batch preview).
+pub fn when_previews_selected<'b>(browser: &'b mut Browser, selected: &[Suggestion]) -> &'b Page {
+    browser.open("/review");
+    for s in selected {
+        let p = parts(s);
+        browser.tick_in_card(&[p[0].as_str(), p[1].as_str()]);
+    }
+    browser.press("Approve selected")
+}
+
 /// WHEN the owner confirms "Publish to my repo" on the preview.
 pub fn when_confirms_publish(browser: &mut Browser) -> &Page {
     browser.press("Publish to my repo")

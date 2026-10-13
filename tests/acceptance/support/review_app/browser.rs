@@ -180,6 +180,24 @@ impl Browser {
         &self.page
     }
 
+    /// Tick the checkbox inside the `<article>` card whose text contains all
+    /// `parts`, as a click would (the next form read sees it checked).
+    pub fn tick_in_card(&mut self, parts: &[&str]) -> &mut Self {
+        let html = self.page.html.clone();
+        let card = html::cards_containing(&html, parts)
+            .first()
+            .unwrap_or_else(|| panic!("no card containing {parts:?}:\n{}", self.page.text()))
+            .to_string();
+        assert!(
+            card.contains(r#"type="checkbox""#),
+            "the card {parts:?} has no checkbox:\n{}",
+            html::visible_text(&card)
+        );
+        let ticked = card.replacen(r#"type="checkbox""#, r#"type="checkbox" checked"#, 1);
+        self.page.html = html.replacen(&card, &ticked, 1);
+        self
+    }
+
     /// The forms on the current page (for adversarial replays).
     pub fn forms(&self) -> Vec<Form> {
         html::forms(&self.page.html)

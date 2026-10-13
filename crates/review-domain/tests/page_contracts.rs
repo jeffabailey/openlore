@@ -529,7 +529,7 @@ fn a_pending_suggestion_is_a_card_with_its_evidence_and_three_actions() {
         "Why: Cargo.lock pins every dependency",
         r#"<input type="hidden" name="subject" value="github:priyaraman/tidepool">"#,
         r#"<input type="hidden" name="object" value="org.openlore.philosophy.memory-safety">"#,
-        r#"<form method="post" action="/review/approve">"#,
+        r#"<form method="post" action="/review/approve" hx-post="/review/approve" hx-target="closest article" hx-select=".outcome" hx-swap="innerHTML">"#,
         r#"<button type="submit" data-key="a">Approve</button>"#,
         r#"<button type="submit" data-key="e">Edit</button>"#,
         r#"<button type="submit" data-key="n">Not me</button>"#,
@@ -538,8 +538,38 @@ fn a_pending_suggestion_is_a_card_with_its_evidence_and_three_actions() {
     }
     assert_eq!(
         html.matches(&csrf_input()).count(),
-        5,
-        "three card forms, scan, sign out"
+        6,
+        "three card forms, scan, approve selected, sign out"
+    );
+}
+
+/// Each card can be ticked for "Approve selected": its box names the card's
+/// key, belongs to that one form, and says which suggestion it selects.
+#[test]
+fn each_card_can_be_ticked_for_approve_selected() {
+    let pending = [suggestion()];
+    let html = verified_queue(
+        Some(run(ScanStatus::Completed)),
+        &pending,
+        Tally::default(),
+        None,
+    );
+    for part in [
+        r#"<form id="approve-selected" method="post" action="/review/approve-selected">"#,
+        &button(APPROVE_SELECTED_LABEL),
+        r#"<input type="checkbox" name="selected" value="github:priyaraman/tidepool embodiesPhilosophy org.openlore.philosophy.memory-safety" form="approve-selected" aria-label="Select priyaraman/tidepool embodies memory-safety">"#,
+    ] {
+        assert!(html.contains(part), "missing {part}: {html}");
+    }
+    let empty = verified_queue(
+        Some(run(ScanStatus::Completed)),
+        &[],
+        Tally::default(),
+        None,
+    );
+    assert!(
+        !empty.contains("approve-selected"),
+        "no selection form without cards"
     );
 }
 
@@ -764,4 +794,85 @@ fn the_edit_page_offers_each_philosophy_by_slug_and_shows_the_guidance() {
             &button(PREVIEW_LABEL),
         ],
     );
+}
+
+// ------------------------------------------------------------ inline + batch
+
+/// Every publish outcome is one `.outcome` region, so an inline Approve can
+/// show the preview inside its card and Publish can swap it in place.
+#[test]
+fn every_publish_outcome_is_one_swappable_region() {
+    let preview = approval_preview_page(&plan(), CSRF);
+    assert!(
+        preview.contains(r#"<form method="post" action="/review/publish" hx-post="/review/publish" hx-target="closest .outcome" hx-select=".outcome" hx-swap="outerHTML">"#),
+        "{preview}"
+    );
+    for html in [
+        preview,
+        published_page("at://did:plc:owner/org.openlore.claim/x"),
+        publish_failed_page("PDS down.", PublishNextStep::BackToQueue),
+        plan_expired_page(),
+        not_found_page(),
+    ] {
+        assert_eq!(
+            html.matches(r#"<section class="outcome">"#).count(),
+            1,
+            "{html}"
+        );
+    }
+}
+
+/// The batch preview shows the exact record of every plan, and its one
+/// confirm names each plan; nothing else is offered.
+#[test]
+fn the_batch_preview_shows_every_record_and_confirms_them_all() {
+    let first = plan();
+    let html = batch_preview_page(&[first.clone(), first.clone()], CSRF);
+    assert!(
+        html.contains("<h1>Preview 2 claims before publishing</h1>"),
+        "{html}"
+    );
+    assert_eq!(html.matches("<dt>subject</dt>").count(), 2, "{html}");
+    assert_eq!(html.matches(&plan_input(first.rkey())).count(), 2, "{html}");
+    assert!(html.contains(r#"<form method="post" action="/review/publish-selected">"#));
+    assert!(html.contains(&button("Publish 2 to my repo")));
+    assert!(html.contains(NOT_AS_TRUTH_NOTICE));
+}
+
+/// The batch result names each landed record; a failure is an alert with
+/// the suggestion still pending, and Retry re-submits only the kept plans.
+#[test]
+fn the_batch_result_names_what_landed_and_offers_retry_for_the_rest() {
+    let published = ["at://did:plc:owner/org.openlore.claim/a".to_string()];
+    let failures = ["Your PDS could not be reached.".to_string()];
+    let retry = ["plan-b".to_string()];
+    let html = batch_published_page(&BatchOutcome {
+        published: &published,
+        failures: &failures,
+        retry_plan_ids: &retry,
+        expired: 1,
+        needs_sign_in: false,
+        csrf_token: CSRF,
+    });
+    for part in [
+        "<h1>Published 1 to your repo</h1>",
+        "<code>at://did:plc:owner/org.openlore.claim/a</code>",
+        r#"<p role="alert">Not published: Your PDS could not be reached. That suggestion is still pending.</p>"#,
+        "1 of these previews had expired",
+        &plan_input("plan-b"),
+        &button(RETRY_LABEL),
+    ] {
+        assert!(html.contains(part), "missing {part}: {html}");
+    }
+    let signed_out = batch_published_page(&BatchOutcome {
+        published: &[],
+        failures: &failures,
+        retry_plan_ids: &retry,
+        expired: 0,
+        needs_sign_in: true,
+        csrf_token: CSRF,
+    });
+    assert!(!signed_out.contains(RETRY_LABEL) && signed_out.contains(SIGN_IN_LABEL));
+    assert!(!signed_out.contains("To retract one"));
+    assert!(!signed_out.contains("had expired"));
 }

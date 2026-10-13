@@ -15,40 +15,152 @@ pub const PUBLISH_LABEL: &str = "Publish to my repo";
 pub const NOT_AS_TRUTH_NOTICE: &str =
     "Publishing records this as your own claim, signed by your repo: your view, not as truth.";
 
+/// Where a whole batch of previewed plans is confirmed.
+const PUBLISH_SELECTED_ACTION: &str = "/review/publish-selected";
+
+/// The exact record a plan writes: the destination and every field,
+/// confidence as shown and as stored, provenance "self-attested".
+fn record_details(plan: &PublishPlan) -> Markup {
+    let claim = plan.claim();
+    let basis_points = u16::try_from(claim.confidence.basis_points()).unwrap_or(u16::MAX);
+    html! {
+        p { "Destination: your repo " (plan.owner_did()) " on your own PDS, at " (plan.at_uri()) }
+        dl {
+            dt { "subject" } dd { (claim.subject) }
+            dt { "predicate" } dd { (claim.predicate) }
+            dt { "object" } dd { (claim.object) }
+            dt { "evidence" }
+            dd {
+                @for url in &claim.evidence {
+                    a href=(url) { (url) } " "
+                }
+            }
+            dt { "confidence" }
+            dd {
+                (confidence_with_bucket(basis_points)) " — stored as " (basis_points)
+            }
+            dt { "author" } dd { (claim.author_did.0) }
+            dt { "composedAt" } dd { (claim.composed_at) }
+            dt { "provenance" } dd { "self-attested (no app signature; your repo attests it)" }
+        }
+    }
+}
+
 /// The exact-record preview opened by Approve (AC-004.4): the destination and
 /// every field to be written, confidence as shown and as stored, provenance
 /// "self-attested". Nothing is written here; only the confirm form writes.
+/// It is one outcome region: an inline Approve swaps it into the card, and
+/// its Publish swaps the outcome in place.
 pub fn approval_preview_page(plan: &PublishPlan, csrf_token: &str) -> String {
-    let claim = plan.claim();
-    let basis_points = u16::try_from(claim.confidence.basis_points()).unwrap_or(u16::MAX);
     page(
         "Preview before publishing",
         html! {
-            h1 { "Preview before publishing" }
-            p { (suggestion_headline(plan.key())) }
-            p { "Destination: your repo " (plan.owner_did()) " on your own PDS, at " (plan.at_uri()) }
-            dl {
-                dt { "subject" } dd { (claim.subject) }
-                dt { "predicate" } dd { (claim.predicate) }
-                dt { "object" } dd { (claim.object) }
-                dt { "evidence" }
-                dd {
-                    @for url in &claim.evidence {
-                        a href=(url) { (url) } " "
+            section class="outcome" {
+                h1 { "Preview before publishing" }
+                p { (suggestion_headline(plan.key())) }
+                (record_details(plan))
+                p { strong { (NOT_AS_TRUTH_NOTICE) } }
+                p { "Nothing has been published yet." }
+                form method="post" action=(PUBLISH_ACTION) hx-post=(PUBLISH_ACTION)
+                    hx-target="closest .outcome" hx-select=(OUTCOME_REGION) hx-swap="outerHTML" {
+                    (csrf_field(csrf_token))
+                    input type="hidden" name="plan" value=(plan.rkey());
+                    button type="submit" { (PUBLISH_LABEL) }
+                }
+                p { a href="/review" { "Back" } }
+            }
+        },
+    )
+}
+
+/// "Publish N to my repo", the batch preview's confirm button.
+pub fn publish_selected_label(count: usize) -> String {
+    format!("Publish {count} to my repo")
+}
+
+/// The batch preview opened by "Approve selected": the exact record of every
+/// chosen suggestion, then one confirm naming each kept plan. Nothing is
+/// written here.
+pub fn batch_preview_page(plans: &[PublishPlan], csrf_token: &str) -> String {
+    let count = plans.len();
+    page(
+        "Preview before publishing",
+        html! {
+            section class="outcome" {
+                h1 { "Preview " (count) " claims before publishing" }
+                @for plan in plans {
+                    h2 { (suggestion_headline(plan.key())) }
+                    (record_details(plan))
+                }
+                p { strong { (NOT_AS_TRUTH_NOTICE) } }
+                p { "Nothing has been published yet." }
+                form method="post" action=(PUBLISH_SELECTED_ACTION) {
+                    (csrf_field(csrf_token))
+                    @for plan in plans {
+                        input type="hidden" name="plan" value=(plan.rkey());
+                    }
+                    button type="submit" { (publish_selected_label(count)) }
+                }
+                p { a href="/review" { "Back" } }
+            }
+        },
+    )
+}
+
+/// What a confirmed batch did: the records that landed, the ones that did
+/// not (still pending, kept for Retry when possible), and the previews that
+/// had expired.
+pub struct BatchOutcome<'a> {
+    pub published: &'a [String],
+    pub failures: &'a [String],
+    /// The plans put back after a failed write: Retry publishes them.
+    pub retry_plan_ids: &'a [String],
+    pub expired: usize,
+    pub needs_sign_in: bool,
+    pub csrf_token: &'a str,
+}
+
+/// The result of "Publish N to my repo" (AC-004.5/.6 for each record).
+pub fn batch_published_page(outcome: &BatchOutcome<'_>) -> String {
+    let landed = outcome.published.len();
+    page(
+        "Published",
+        html! {
+            section class="outcome" {
+                h1 { "Published " (landed) " to your repo" }
+                @if landed > 0 {
+                    ul {
+                        @for at_uri in outcome.published {
+                            li { code { (at_uri) } }
+                        }
+                    }
+                    p {
+                        "To retract one, open your profile and press Retract: a retraction is \
+                         a new record in your repo that points at it."
                     }
                 }
-                dt { "confidence" }
-                dd {
-                    (confidence_with_bucket(basis_points)) " — stored as " (basis_points)
+                @for reason in outcome.failures {
+                    p role="alert" { "Not published: " (reason) " That suggestion is still pending." }
                 }
-                dt { "author" } dd { (claim.author_did.0) }
-                dt { "composedAt" } dd { (claim.composed_at) }
-                dt { "provenance" } dd { "self-attested (no app signature; your repo attests it)" }
+                @if outcome.expired > 0 {
+                    p role="alert" {
+                        (outcome.expired) " of these previews had expired, so they were not \
+                         published. Select them again to see a fresh preview."
+                    }
+                }
+                @if outcome.needs_sign_in {
+                    p { a href="/" { (SIGN_IN_LABEL) } }
+                } @else if !outcome.retry_plan_ids.is_empty() {
+                    form method="post" action=(PUBLISH_SELECTED_ACTION) {
+                        (csrf_field(outcome.csrf_token))
+                        @for plan_id in outcome.retry_plan_ids {
+                            input type="hidden" name="plan" value=(plan_id);
+                        }
+                        button type="submit" { (RETRY_LABEL) }
+                    }
+                }
+                (back_to_queue())
             }
-            p { strong { (NOT_AS_TRUTH_NOTICE) } }
-            p { "Nothing has been published yet." }
-            (plan_form(PUBLISH_ACTION, plan.rkey(), csrf_token, PUBLISH_LABEL))
-            p { a href="/review" { "Back" } }
         },
     )
 }
@@ -59,13 +171,15 @@ pub fn published_page(at_uri: &str) -> String {
     page(
         "Published",
         html! {
-            h1 { "Published to your repo" }
-            p { "Your claim is in your own repo at " code { (at_uri) } }
-            p {
-                "To retract it, open your profile and press Retract: a retraction is a \
-                 new record in your repo that points at this one."
+            section class="outcome" {
+                h1 { "Published to your repo" }
+                p { "Your claim is in your own repo at " code { (at_uri) } }
+                p {
+                    "To retract it, open your profile and press Retract: a retraction is a \
+                     new record in your repo that points at this one."
+                }
+                (back_to_queue())
             }
-            (back_to_queue())
         },
     )
 }
@@ -111,6 +225,7 @@ pub fn publish_failed_page(reason: &str, next_step: PublishNextStep<'_>) -> Stri
     page(
         "Nothing was published",
         html! {
+            section class="outcome" {
             h1 { "Nothing was published" }
             p role="alert" { (reason) }
             p { "Your suggestion is still pending." }
@@ -124,6 +239,7 @@ pub fn publish_failed_page(reason: &str, next_step: PublishNextStep<'_>) -> Stri
                 PublishNextStep::BackToQueue => {}
             }
             (back_to_queue())
+            }
         },
     )
 }
@@ -134,12 +250,14 @@ pub fn plan_expired_page() -> String {
     page(
         "This preview has expired",
         html! {
+            section class="outcome" {
             h1 { "This preview has expired" }
             p role="alert" {
                 "Previews can be published for 30 minutes. Nothing was published; \
                  your suggestion is still pending. Press Approve again to see a fresh preview."
             }
             (back_to_queue())
+            }
         },
     )
 }

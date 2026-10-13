@@ -12,13 +12,14 @@ use review_domain::plans::{
     plan_expires_at, publish_edited_plan, publish_plan, rfc3339_utc, ClaimDraft, PlanError,
     PublishPlan,
 };
+use review_domain::selection::{chosen_suggestions, SELECTION_FIELD};
 use review_domain::views::{self, EditView, QueueNotice, QueueView};
 
 use crate::http::{App, PageRequest, Reply};
 use crate::limiter::unix_now_secs;
 use crate::routes::github::github_step_of;
 use crate::routes::signin::{
-    csrf_token_for, csrf_token_of, current_session, field, signed_in_post, to_landing,
+    csrf_token_for, csrf_token_of, current_session, field, fields, signed_in_post, to_landing,
 };
 use crate::wiring::{observe, LogEvent};
 
@@ -81,6 +82,53 @@ pub(crate) fn approve(app: &App, request: &PageRequest) -> Reply {
         let plan = publish_plan(&session.owner_did, &draft, &composed_now());
         keep_and_preview(app, request, session, plan)
     })
+}
+
+/// `POST /review/approve-selected`: the batch preview of every ticked card
+/// that names one of the owner's visible pending suggestions (at most
+/// `MAX_SELECTED`). One plan is built and kept per suggestion, exactly as a
+/// single Approve keeps one; nothing is written to any repo. A selection
+/// naming nothing of the owner's goes back to the queue.
+pub(crate) fn approve_selected(app: &App, request: &PageRequest) -> Reply {
+    let (_, session) = match signed_in_post(app, request) {
+        Ok(signed_in) => signed_in,
+        Err(refused) => return refused,
+    };
+    let visible = visible_and_approvable(
+        SuggestionState::Pending,
+        link_verified(app, &session.owner_did),
+    );
+    let pending = visible
+        .then(|| app.review_read.pending_suggestions(&session.owner_did).ok())
+        .flatten()
+        .unwrap_or_default();
+    let values = fields(&request.form, SELECTION_FIELD);
+    let composed_at = composed_now();
+    let kept: Vec<PublishPlan> = chosen_suggestions(pending, &values)
+        .into_iter()
+        .filter_map(|suggestion| {
+            publish_plan(&session.owner_did, &draft_of(suggestion), &composed_at).ok()
+        })
+        .filter(|plan| keep_plan(app, &session, plan))
+        .collect();
+    if kept.is_empty() {
+        return Reply::redirect("/review");
+    }
+    Reply::page(
+        StatusCode::OK,
+        views::batch_preview_page(&kept, &csrf_token_of(request)),
+    )
+}
+
+/// Keep `plan` until its preview deadline; false if it could not be kept.
+fn keep_plan(app: &App, session: &WebSession, plan: &PublishPlan) -> bool {
+    app.plans
+        .put_publish_plan(
+            &session.owner_did,
+            &plan.stored(),
+            plan_expires_at(unix_now_secs()),
+        )
+        .is_ok()
 }
 
 /// `POST /review/edit`: the edit form of one of the owner's visible pending
@@ -171,15 +219,7 @@ fn keep_and_preview(
     session: &WebSession,
     plan: Result<PublishPlan, PlanError>,
 ) -> Reply {
-    let kept = plan.ok().filter(|plan| {
-        app.plans
-            .put_publish_plan(
-                &session.owner_did,
-                &plan.stored(),
-                plan_expires_at(unix_now_secs()),
-            )
-            .is_ok()
-    });
+    let kept = plan.ok().filter(|plan| keep_plan(app, session, plan));
     match kept {
         Some(plan) => Reply::page(
             StatusCode::OK,

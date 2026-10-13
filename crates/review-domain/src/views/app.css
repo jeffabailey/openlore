@@ -208,3 +208,18 @@ form > button { margin-top: var(--space-3); }
 .typeahead-name, .typeahead-handle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .typeahead-name { font-weight: 600; }
 .typeahead-handle { color: var(--muted); font-size: var(--text-sm); }
+
+/* ---- Queue selection and in-card outcomes ------------------------------ */
+
+label.select {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 400;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+label.select input { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
+
+article .outcome h1 { font-size: var(--text-lg); margin-bottom: var(--space-3); }
+article .outcome dl { font-size: var(--text-sm); }

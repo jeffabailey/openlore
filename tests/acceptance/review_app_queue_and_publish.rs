@@ -603,3 +603,180 @@ fn two_people_scanning_at_the_same_time_each_get_only_their_own_suggestions() {
         phrases(&[dmitri::FERRITE_DEPENDENCY_PINNING])
     );
 }
+
+// =============================================================================
+// Approving several suggestions at once (2026-10-13, user request)
+// =============================================================================
+
+/// QP-B1
+/// ```gherkin
+/// @US-BRA-004 @AC-004.4 @BR-4 @contract-shape:bounded-change
+/// Scenario: Approving several at once previews every record, then publishes them together
+///   Given Priya has 5 pending suggestions
+///   When she ticks 3 of them and presses "Approve selected"
+///   Then one preview shows the exact record of each of the 3, and nothing is written yet
+///   When she presses "Publish 3 to my repo"
+///   Then her PDS holds those 3 claims, the confirmation names each record,
+///        and her queue shows the 2 remaining and 3 published
+/// ```
+#[test]
+fn approving_several_at_once_previews_every_record_then_publishes_them_together() {
+    let world = ReviewWorld::new();
+    let mut browser = given_pending_suggestions(&world, Persona::Priya);
+    let chosen = [
+        priya::TIDEPOOL_DEPENDENCY_PINNING,
+        priya::TIDEPOOL_TEST_DRIVEN,
+        priya::QUILL_DOCS_DOCUMENTATION_FIRST,
+    ];
+    let before = capture(&world, &mut browser, Persona::Priya);
+    let preview = when_previews_selected(&mut browser, &chosen).text();
+    for s in &chosen {
+        assert!(
+            preview.contains(&s.phrase()),
+            "previews {}:\n{preview}",
+            s.phrase()
+        );
+    }
+    for expected in [
+        Persona::Priya.did(),
+        "embodiesPhilosophy",
+        "2500",
+        "self-attested",
+        "not as truth",
+    ] {
+        assert!(
+            preview.contains(expected),
+            "preview shows {expected:?}:\n{preview}"
+        );
+    }
+    let confirm = browser
+        .forms()
+        .into_iter()
+        .find(|f| {
+            f.buttons
+                .iter()
+                .any(|(l, _, _)| html::label_matches(l, "Publish 3 to my repo"))
+        })
+        .expect("the batch confirm form");
+    let previewed = capture(&world, &mut browser, Persona::Priya);
+    assert_state_delta(&before, &previewed, &universe(), &Delta::new());
+
+    let confirmation = browser
+        .submit(&confirm, Some("Publish 3 to my repo"))
+        .text();
+    let records = claims_in_pds(&world, Persona::Priya);
+    assert_eq!(records.len(), 3, "{confirmation}");
+    for record in &records {
+        assert!(
+            confirmation.contains(&record.uri()),
+            "names {}:\n{confirmation}",
+            record.uri()
+        );
+    }
+    let remaining = pending_on_queue(&mut browser);
+    assert_eq!(remaining.len(), 2);
+    for s in &chosen {
+        assert!(!remaining.contains(&s.phrase()));
+    }
+    assert!(browser.page.shows("3 published"), "{}", browser.page.text());
+}
+
+/// QP-B2
+/// ```gherkin
+/// @US-BRA-004 @I-BRA-3 @adversarial @contract-shape:unbounded-preservation
+/// Scenario: A selection can only approve the owner's own visible suggestions
+///   Given Priya is signed in with pending suggestions
+///   When "Approve selected" arrives naming a suggestion she does not have
+///   Then nothing is previewed or written
+/// ```
+#[test]
+fn a_selection_can_only_approve_the_owners_own_suggestions() {
+    let world = ReviewWorld::new();
+    let mut browser = given_pending_suggestions(&world, Persona::Priya);
+    browser.open("/review");
+    let form = browser
+        .forms()
+        .into_iter()
+        .find(|f| f.action == "/review/approve-selected")
+        .expect("the Approve selected form");
+    let forged = Browser::with_field(
+        &form,
+        "selected",
+        "github:someone/else embodiesPhilosophy org.openlore.philosophy.memory-safety",
+    );
+    let before = capture(&world, &mut browser, Persona::Priya);
+    let page = browser.submit(&forged, Some("Approve selected")).text();
+    assert!(!page.contains("Publish"), "nothing to publish:\n{page}");
+    let after = capture(&world, &mut browser, Persona::Priya);
+    assert_state_delta(&before, &after, &universe(), &Delta::new());
+}
+
+/// QP-B3
+/// ```gherkin
+/// @US-BRA-004 @AC-004.4 @contract-shape:bounded-change
+/// Scenario: Confirming the same batch twice writes each record once
+///   Given Priya previewed 2 selected suggestions
+///   When the confirmation arrives twice
+///   Then her PDS holds exactly 2 claims
+/// ```
+#[test]
+fn confirming_the_same_batch_twice_writes_each_record_once() {
+    let world = ReviewWorld::new();
+    let mut browser = given_pending_suggestions(&world, Persona::Priya);
+    when_previews_selected(
+        &mut browser,
+        &[
+            priya::TIDEPOOL_MEMORY_SAFETY,
+            priya::TIDEPOOL_SEMANTIC_VERSIONING,
+        ],
+    );
+    let confirm = browser
+        .forms()
+        .into_iter()
+        .find(|f| {
+            f.buttons
+                .iter()
+                .any(|(l, _, _)| html::label_matches(l, "Publish 2 to my repo"))
+        })
+        .expect("the batch confirm form");
+    browser.press("Publish 2 to my repo");
+    browser.submit(&confirm, Some("Publish 2 to my repo"));
+    assert_eq!(claims_in_pds(&world, Persona::Priya).len(), 2);
+}
+
+/// QP-B4
+/// ```gherkin
+/// @US-BRA-004 @AC-004.6 @contract-shape:unbounded-preservation
+/// Scenario: A batch that meets an ended PDS session writes nothing and asks to sign in again
+///   Given Priya previewed 2 selected suggestions
+///   And her PDS session has ended
+///   When she presses "Publish 2 to my repo"
+///   Then nothing is written, both stay pending, and she is asked to sign in again
+/// ```
+#[test]
+fn a_batch_that_meets_an_ended_session_writes_nothing_and_asks_to_sign_in() {
+    let world = ReviewWorld::new();
+    let mut browser = given_pending_suggestions(&world, Persona::Priya);
+    let chosen = [priya::TIDEPOOL_MEMORY_SAFETY, priya::TIDEPOOL_TEST_DRIVEN];
+    when_previews_selected(&mut browser, &chosen);
+    world
+        .atproto
+        .set_write_posture(Persona::Priya.did(), WritePosture::ExpiredSession);
+    browser.press("Publish 2 to my repo");
+    assert!(
+        browser.page.shows("Sign in again"),
+        "{}",
+        browser.page.text()
+    );
+    assert!(
+        browser.page.offers("Sign in with Bluesky"),
+        "{}",
+        browser.page.text()
+    );
+    assert!(!browser.page.offers("Retry"), "{}", browser.page.text());
+    assert!(claims_in_pds(&world, Persona::Priya).is_empty());
+    let pending = pending_on_queue(&mut browser);
+    for s in &chosen {
+        assert!(pending.contains(&s.phrase()));
+    }
+}

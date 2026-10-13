@@ -191,6 +191,19 @@ pub fn forms(html: &str) -> Vec<Form> {
                     (visible_text(b), attr(open_b, "name"), attr(open_b, "value"))
                 })
                 .collect();
+            // Controls outside the form that name it with `form="<id>"` belong
+            // to it, as in a browser (the queue's selection checkboxes).
+            if let Some(id) = attr(open, "id") {
+                for (_, input) in opening_tags(html, "input") {
+                    let owned = attr(input, "form").is_some_and(|form| form == id);
+                    let kind = attr(input, "type").unwrap_or_default().to_ascii_lowercase();
+                    let unticked =
+                        (kind == "checkbox" || kind == "radio") && attr(input, "checked").is_none();
+                    if let (true, false, Some(name)) = (owned, unticked, attr(input, "name")) {
+                        fields.push((name, attr(input, "value").unwrap_or_default()));
+                    }
+                }
+            }
             Form {
                 action: attr(open, "action").unwrap_or_default(),
                 method: attr(open, "method")

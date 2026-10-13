@@ -29,6 +29,12 @@ pub use retract::*;
 pub use settings::*;
 pub use share::*;
 
+pub use crate::selection::{selection_value, MAX_SELECTED, SELECTION_FIELD};
+
+/// The region a page's outcome lives in: htmx swaps it into a card (an
+/// inline Approve) or in place (Publish on an inline preview).
+const OUTCOME_REGION: &str = ".outcome";
+
 pub use crate::published::{
     live_published_claim, profile_subject, published_claims, ProfileSubject, PublishedClaim,
 };
@@ -144,8 +150,10 @@ pub fn not_found_page() -> String {
     page(
         "Not found",
         html! {
-            h1 { "Not found" }
-            (back_to_queue())
+            section class="outcome" {
+                h1 { "Not found" }
+                (back_to_queue())
+            }
         },
     )
 }

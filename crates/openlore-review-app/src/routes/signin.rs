@@ -42,6 +42,8 @@ pub(crate) enum PageRoute {
     DeclineSuggestion,
     UndoDecline,
     ConfirmPublish,
+    ApproveSelected,
+    ConfirmPublishSelected,
     Profile,
     SharePreview,
     ConfirmShare,
@@ -69,6 +71,8 @@ pub(crate) fn page_route(method: &Method, path: &str) -> Option<PageRoute> {
         ("POST", "/review/decline") => Some(PageRoute::DeclineSuggestion),
         ("POST", "/review/undo") => Some(PageRoute::UndoDecline),
         ("POST", "/review/publish") => Some(PageRoute::ConfirmPublish),
+        ("POST", "/review/approve-selected") => Some(PageRoute::ApproveSelected),
+        ("POST", "/review/publish-selected") => Some(PageRoute::ConfirmPublishSelected),
         ("GET", "/share") => Some(PageRoute::SharePreview),
         ("POST", "/share") => Some(PageRoute::ConfirmShare),
         ("GET", "/retract") => Some(PageRoute::RetractPreview),
@@ -94,6 +98,10 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         PageRoute::DeclineSuggestion if same_origin => review::decline_suggestion(app, request),
         PageRoute::UndoDecline if same_origin => review::undo_decline(app, request),
         PageRoute::ConfirmPublish if same_origin => publish::confirm_publish(app, request).await,
+        PageRoute::ApproveSelected if same_origin => review::approve_selected(app, request),
+        PageRoute::ConfirmPublishSelected if same_origin => {
+            publish::confirm_publish_selected(app, request).await
+        }
         PageRoute::ConfirmShare if same_origin => share::confirm_share(app, request).await,
         PageRoute::ConfirmRetract if same_origin => retract::confirm_retract(app, request).await,
         PageRoute::ConfirmForgetMe if same_origin => {
@@ -109,6 +117,8 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         | PageRoute::DeclineSuggestion
         | PageRoute::UndoDecline
         | PageRoute::ConfirmPublish
+        | PageRoute::ApproveSelected
+        | PageRoute::ConfirmPublishSelected
         | PageRoute::ConfirmShare
         | PageRoute::ConfirmRetract
         | PageRoute::ConfirmForgetMe => forbidden(),
@@ -294,6 +304,15 @@ pub(crate) fn field(pairs: &[(String, String)], name: &str) -> Option<String> {
         .iter()
         .find(|(key, _)| key == name)
         .map(|(_, value)| value.clone())
+}
+
+/// Every value of a repeated field, in submitted order.
+pub(crate) fn fields(pairs: &[(String, String)], name: &str) -> Vec<String> {
+    pairs
+        .iter()
+        .filter(|(key, _)| key == name)
+        .map(|(_, value)| value.clone())
+        .collect()
 }
 
 /// 256 random bits, hex.

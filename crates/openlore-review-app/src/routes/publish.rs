@@ -10,12 +10,14 @@ use hyper::StatusCode;
 use ports::{PlanKind, SuggestionState};
 use review_domain::kpi::approval_was_edited;
 use review_domain::plans::{restore_plan, PublishPlan};
-use review_domain::views::{self, PublishNextStep, PublishRetry};
+use review_domain::selection::{tally_batch, PlanResult, MAX_SELECTED};
+use review_domain::views::{self, BatchOutcome, PublishNextStep, PublishRetry};
 
-use crate::executor::execute_publish;
+use crate::executor::{execute_publish, PublishFailure};
 use crate::http::{App, PageRequest, Reply};
-use crate::routes::confirm::{take_confirmed_plan, ConfirmedPlan};
+use crate::routes::confirm::{take_confirmed_plan, take_owned_plan, ConfirmedPlan};
 use crate::routes::review::{not_found, owner_can_publish};
+use crate::routes::signin::{csrf_token_of, fields, signed_in_post};
 use crate::wiring::{observe, LogEvent};
 
 /// Confirm "Publish to my repo" (or "Retry").
@@ -38,17 +40,9 @@ pub(crate) async fn confirm_publish(app: &App, request: &PageRequest) -> Reply {
 }
 
 async fn publish(app: &App, plan: &PublishPlan, confirmed: &ConfirmedPlan) -> Reply {
-    match execute_publish(app.repo_write.as_ref(), app.repo_read.as_ref(), plan).await {
-        Ok(at_uri) => {
-            mark_published(app, plan);
-            Reply::page(StatusCode::OK, views::published_page(&at_uri))
-        }
-        Err(failure) => {
-            // Nothing changes state; the plan goes back, same deadline.
-            let kept = app
-                .plans
-                .put_publish_plan(plan.owner_did(), &plan.stored(), confirmed.expires_at)
-                .is_ok();
+    match write_plan(app, plan, confirmed).await {
+        Ok(at_uri) => Reply::page(StatusCode::OK, views::published_page(&at_uri)),
+        Err(NotWritten { failure, kept }) => {
             let retry = kept.then_some(PublishRetry {
                 plan_id: plan.rkey(),
                 csrf_token: &confirmed.csrf_token,
@@ -59,6 +53,106 @@ async fn publish(app: &App, plan: &PublishPlan, confirmed: &ConfirmedPlan) -> Re
                 views::publish_failed_page(failure.message(), next_step),
             )
         }
+    }
+}
+
+/// A write that did not land, and whether its plan was put back for Retry.
+struct NotWritten {
+    failure: PublishFailure,
+    kept: bool,
+}
+
+/// Write one confirmed plan; on success the suggestion moves to published,
+/// on failure nothing changes state and the plan goes back, same deadline.
+async fn write_plan(
+    app: &App,
+    plan: &PublishPlan,
+    confirmed: &ConfirmedPlan,
+) -> Result<String, NotWritten> {
+    match execute_publish(app.repo_write.as_ref(), app.repo_read.as_ref(), plan).await {
+        Ok(at_uri) => {
+            mark_published(app, plan);
+            Ok(at_uri)
+        }
+        Err(failure) => {
+            let kept = app
+                .plans
+                .put_publish_plan(plan.owner_did(), &plan.stored(), confirmed.expires_at)
+                .is_ok();
+            Err(NotWritten { failure, kept })
+        }
+    }
+}
+
+/// Confirm "Publish N to my repo" (or its Retry): each named plan is taken
+/// from the owner's store exactly once and published in turn, as a single
+/// confirm would. A replayed confirm finds its plans already taken and
+/// writes nothing; a confirm naming none of the owner's plans is not found.
+pub(crate) async fn confirm_publish_selected(app: &App, request: &PageRequest) -> Reply {
+    let (_, session) = match signed_in_post(app, request) {
+        Ok(signed_in) => signed_in,
+        Err(refused) => return refused,
+    };
+    let csrf_token = csrf_token_of(request);
+    let mut plan_ids = fields(&request.form, "plan");
+    plan_ids.dedup();
+    let taken: Vec<ConfirmedPlan> = plan_ids
+        .into_iter()
+        .take(MAX_SELECTED)
+        .filter_map(|plan_id| {
+            take_owned_plan(
+                app,
+                &session.owner_did,
+                plan_id,
+                PlanKind::Publish,
+                csrf_token.clone(),
+            )
+        })
+        .collect();
+    if taken.is_empty() {
+        return not_found();
+    }
+    let mut results = Vec::with_capacity(taken.len());
+    for confirmed in &taken {
+        results.push(confirm_one(app, confirmed).await);
+    }
+    let tally = tally_batch(results);
+    let status = if tally.failures.is_empty() {
+        StatusCode::OK
+    } else {
+        StatusCode::BAD_GATEWAY
+    };
+    Reply::page(
+        status,
+        views::batch_published_page(&BatchOutcome {
+            published: &tally.published,
+            failures: &tally.failures,
+            retry_plan_ids: &tally.retry_plan_ids,
+            expired: tally.expired,
+            needs_sign_in: tally.needs_sign_in,
+            csrf_token: &csrf_token,
+        }),
+    )
+}
+
+/// Confirm one taken plan of a batch, exactly as a single confirm would.
+async fn confirm_one(app: &App, confirmed: &ConfirmedPlan) -> PlanResult {
+    if confirmed.expired() {
+        return PlanResult::Expired;
+    }
+    let restored = restore_plan(&confirmed.owner_did, &confirmed.stored)
+        .ok()
+        .filter(|plan| owner_can_publish(app, &confirmed.owner_did, plan.key()));
+    let Some(plan) = restored else {
+        return PlanResult::Skipped;
+    };
+    match write_plan(app, &plan, confirmed).await {
+        Ok(at_uri) => PlanResult::Published(at_uri),
+        Err(NotWritten { failure, kept }) => PlanResult::Failed {
+            reason: failure.message().to_string(),
+            needs_sign_in: failure.needs_sign_in(),
+            kept_plan: kept.then(|| plan.rkey().to_string()),
+        },
     }
 }
 

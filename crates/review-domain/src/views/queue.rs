@@ -201,6 +201,46 @@ fn key_fields(key: &SuggestionKey) -> Markup {
     }
 }
 
+/// The form that previews every ticked card at once.
+const APPROVE_SELECTED_FORM: &str = "approve-selected";
+
+/// The button that previews every ticked card at once.
+pub const APPROVE_SELECTED_LABEL: &str = "Approve selected";
+
+/// The card's tick box, submitted by the "Approve selected" form.
+fn selection_box(key: &SuggestionKey) -> Markup {
+    let label = format!(
+        "Select {} embodies {}",
+        repo_path(&key.subject),
+        philosophy_slug(&key.object)
+    );
+    html! {
+        label class="select" {
+            input type="checkbox" name=(SELECTION_FIELD) value=(selection_value(key))
+                form=(APPROVE_SELECTED_FORM) aria-label=(label);
+            " Select"
+        }
+    }
+}
+
+/// "Approve selected": the ticked cards' boxes belong to this form.
+fn approve_selected_form(csrf_token: &str) -> Markup {
+    html! {
+        form id=(APPROVE_SELECTED_FORM) method="post" action="/review/approve-selected" {
+            (csrf_field(csrf_token))
+            button type="submit" { (APPROVE_SELECTED_LABEL) }
+        }
+    }
+}
+
+/// How a card action is sent: Approve opens its preview inside the card
+/// with htmx (a plain post without JavaScript); the others load a page.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CardSwap {
+    InCard,
+    Page,
+}
+
 /// One action of a card: a form naming the suggestion, its button bound to
 /// the triage key `triage_key`.
 fn card_action(
@@ -209,9 +249,14 @@ fn card_action(
     label: &str,
     key: &SuggestionKey,
     csrf_token: &str,
+    swap: CardSwap,
 ) -> Markup {
+    let in_card = swap == CardSwap::InCard;
     html! {
-        form method="post" action=(action) {
+        form method="post" action=(action) hx-post=[in_card.then_some(action)]
+            hx-target=[in_card.then_some("closest article")]
+            hx-select=[in_card.then_some(OUTCOME_REGION)]
+            hx-swap=[in_card.then_some("innerHTML")] {
             (csrf_field(csrf_token))
             (key_fields(key))
             button type="submit" data-key=(triage_key) { (label) }
@@ -223,6 +268,7 @@ fn card_action(
 fn suggestion_card(suggestion: &Suggestion, csrf_token: &str) -> Markup {
     html! {
         article {
+            (selection_box(&suggestion.key))
             h2 { (suggestion_headline(&suggestion.key)) }
             p {
                 "Confidence " (confidence_with_bucket(suggestion.confidence_bp))
@@ -234,9 +280,9 @@ fn suggestion_card(suggestion: &Suggestion, csrf_token: &str) -> Markup {
                     a href=(url) { (url) } " "
                 }
             }
-            (card_action("/review/approve", "a", APPROVE_LABEL, &suggestion.key, csrf_token))
-            (card_action("/review/edit", "e", EDIT_LABEL, &suggestion.key, csrf_token))
-            (card_action("/review/decline", "n", DECLINE_LABEL, &suggestion.key, csrf_token))
+            (card_action("/review/approve", "a", APPROVE_LABEL, &suggestion.key, csrf_token, CardSwap::InCard))
+            (card_action("/review/edit", "e", EDIT_LABEL, &suggestion.key, csrf_token, CardSwap::Page))
+            (card_action("/review/decline", "n", DECLINE_LABEL, &suggestion.key, csrf_token, CardSwap::Page))
         }
     }
 }
@@ -353,6 +399,9 @@ fn verified_queue(login: &str, view: &QueueView<'_>) -> Markup {
                     (csrf_field(view.csrf_token))
                     button type="submit" { (label) }
                 }
+            }
+            @if !view.pending.is_empty() {
+                (approve_selected_form(view.csrf_token))
             }
             @for suggestion in view.pending {
                 (suggestion_card(suggestion, view.csrf_token))
