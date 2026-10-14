@@ -254,11 +254,30 @@ fn reading_a_person_asks_github_only_for_their_profile_once() {
         "{}\n{}",
         scrape.outcome.stdout, scrape.outcome.stderr
     );
-    assert_eq!(
-        scrape.seen_paths,
-        vec!["/users/BurntSushi".to_string()],
-        "exactly one GitHub request, for the public profile only"
+    assert_target_record_read_once(&scrape.seen_paths, "BurntSushi");
+}
+
+/// SP-5b (guardrail; the repo half of the double-read fix): scraping a repo
+/// reads its `/repos/{owner}/{repo}` record EXACTLY ONCE — `resolve_target`
+/// reads it, and the harvest reuses that body.
+///
+/// @driving_port @real-io @d-6 @guardrail
+#[test]
+fn scraping_a_repo_reads_its_repo_record_once() {
+    let env = TestEnv::initialized();
+    let scrape = scrape_github(
+        &env,
+        &["BurntSushi/ripgrep"],
+        FakeGithub::for_public_repo("BurntSushi/ripgrep"),
+        None,
+        "",
     );
+    assert_eq!(
+        scrape.outcome.status, 0,
+        "{}\n{}",
+        scrape.outcome.stdout, scrape.outcome.stderr
+    );
+    assert_target_record_read_once(&scrape.seen_paths, "BurntSushi/ripgrep");
 }
 
 /// SP-6 (edge, Q-CPI-D7): two logins sharing one GitHub user id (a rename)

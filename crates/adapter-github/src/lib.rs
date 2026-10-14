@@ -136,6 +136,9 @@ pub struct GithubAdapter {
     /// The rate budget GitHub reported on the most recent response (ADR-076
     /// §2). Interior mutability only for this observation.
     last_rate_budget: std::sync::Mutex<Option<RateBudget>>,
+    /// The `/repos/{owner}/{repo}` body `resolve_target` just read, taken once
+    /// by the `harvest_repo` of the same repo so a repo scrape reads it once.
+    resolved_repo: std::sync::Mutex<Option<(String, serde_json::Value)>>,
 }
 
 impl GithubAdapter {
@@ -147,6 +150,7 @@ impl GithubAdapter {
             api_base: client::resolve_api_base(),
             auth: client::read_auth_mode(),
             last_rate_budget: std::sync::Mutex::new(None),
+            resolved_repo: std::sync::Mutex::new(None),
         }
     }
 
@@ -159,6 +163,7 @@ impl GithubAdapter {
             api_base: client::strip_trailing_slashes(api_base.into()),
             auth: client::read_auth_mode(),
             last_rate_budget: std::sync::Mutex::new(None),
+            resolved_repo: std::sync::Mutex::new(None),
         }
     }
 
@@ -172,6 +177,7 @@ impl GithubAdapter {
                 token: token.into(),
             },
             last_rate_budget: std::sync::Mutex::new(None),
+            resolved_repo: std::sync::Mutex::new(None),
         }
     }
 
@@ -257,7 +263,10 @@ impl GithubPort for GithubAdapter {
         match split_target(target) {
             ResolvedTarget::Repo { owner, repo } => {
                 let path = format!("/repos/{owner}/{repo}");
-                self.get_public(&path, target).await?;
+                let body = self.get_public(&path, target).await?;
+                if let Ok(mut resolved) = self.resolved_repo.lock() {
+                    *resolved = Some((path, body));
+                }
                 Ok(TargetKind::Repo { owner, repo })
             }
             ResolvedTarget::User { user } => {
@@ -281,7 +290,10 @@ impl GithubPort for GithubAdapter {
     async fn harvest_repo(&self, owner: &str, repo: &str) -> Result<Vec<Signal>, GithubError> {
         let target = format!("{owner}/{repo}");
         let path = format!("/repos/{owner}/{repo}");
-        let body = self.get_public(&path, &target).await?;
+        let body = match self.take_resolved_repo(&path) {
+            Some(body) => body,
+            None => self.get_public(&path, &target).await?,
+        };
         // Surface the observed auth/rate-budget posture (ADR-019 §5) through
         // the effect-shell side channel so the verb can report it. The token
         // is NEVER recorded — an AuthReport carries only the budget numbers.
@@ -404,6 +416,19 @@ impl GithubAdapter {
     ///
     /// `path` is always on the public allowlist (`/repos/...` or
     /// `/users/...`); there is no private surface (WD-51 / I-SCR-2).
+    /// The body `resolve_target` read for `path`, if it was the last repo it
+    /// resolved; taken, so it serves one harvest only.
+    fn take_resolved_repo(&self, path: &str) -> Option<serde_json::Value> {
+        let mut resolved = self.resolved_repo.lock().ok()?;
+        match resolved.take() {
+            Some((resolved_path, body)) if resolved_path == path => Some(body),
+            other => {
+                *resolved = other;
+                None
+            }
+        }
+    }
+
     async fn get_public(&self, path: &str, target: &str) -> Result<serde_json::Value, GithubError> {
         let url = format!("{}{}", self.api_base, path);
         let response = self.send_get(&url).await?;

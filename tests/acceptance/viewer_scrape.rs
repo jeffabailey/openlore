@@ -231,6 +231,21 @@ fn network_failure_clarifies_the_store_view_still_works_offline() {
     }
 }
 
+/// V-S5b (guardrail; the repo half of the double-read fix): a repo target on
+/// the Live Scrape view reads its `/repos/{owner}/{repo}` record EXACTLY ONCE.
+///
+/// @driving_port @real-io @guardrail
+#[test]
+fn a_viewer_repo_scrape_reads_the_repo_record_once() {
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo("BurntSushi/ripgrep"));
+    let fake = github.fake().clone();
+    let viewer = ViewerServer::start_with_github(&env, github);
+    let page = viewer.post_form("/scrape", &[("target", "BurntSushi/ripgrep")]);
+    assert_eq!(page.status, 200, "{}", page.body);
+    assert_target_record_read_once(&fake.seen_paths(), "BurntSushi/ripgrep");
+}
+
 /// V-S5 (US-CPI-005 guardrail; regression for the viewer double `/users` read):
 /// a person target on the Live Scrape view asks GitHub for the public profile
 /// EXACTLY ONCE. `resolve_target` already reads `/users/{user}`; a person scrape
@@ -264,9 +279,5 @@ fn a_viewer_user_scrape_asks_github_only_for_the_profile_once() {
         page.body
     );
     // ... and GitHub was asked only for the public profile, once.
-    assert_eq!(
-        fake.seen_paths(),
-        vec!["/users/BurntSushi".to_string()],
-        "exactly one GitHub request, for the public profile only"
-    );
+    assert_target_record_read_once(&fake.seen_paths(), "BurntSushi");
 }

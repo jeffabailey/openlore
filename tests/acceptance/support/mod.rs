@@ -54,6 +54,26 @@ pub mod state_delta;
 // / infer_people_evidence_grows / scrape_person.
 pub mod people;
 
+/// The GitHub request budget of a scrape, shared by every driving port (the
+/// CLI and the viewer), so a port cannot drift from it: a person target
+/// (`user`) reads its public profile once and nothing else; a repo target
+/// (`owner/repo`) reads its repo record once (resolve and harvest share it).
+#[allow(dead_code)]
+pub fn assert_target_record_read_once(seen_paths: &[String], target: &str) {
+    match target.split_once('/') {
+        None => assert_eq!(
+            seen_paths,
+            [format!("/users/{target}")],
+            "a person scrape asks GitHub only for the public profile, once"
+        ),
+        Some(_) => {
+            let record = format!("/repos/{target}");
+            let reads = seen_paths.iter().filter(|path| **path == record).count();
+            assert_eq!(reads, 1, "{record} is read once: {seen_paths:?}");
+        }
+    }
+}
+
 use openlore_test_support::fake_pds::FakePdsHttpHandle;
 use openlore_test_support::{FakeIdentity as SharedFakeIdentity, FakePds as SharedFakePds};
 use ports::IdentityPort;
