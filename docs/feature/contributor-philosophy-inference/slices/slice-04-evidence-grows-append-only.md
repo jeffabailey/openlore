@@ -2,6 +2,7 @@
 
 > Story: US-CPI-004 (J-004 / J-004d, J-004e) · Persona: P-001 (Maria) · Depends on: slice-03
 > Estimate: ~1 day
+> Status: **shipped** (finalized 2026-09-28; see docs/evolution/contributor-philosophy-inference-evolution.md)
 
 ## Goal
 

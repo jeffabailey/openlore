@@ -18,7 +18,7 @@
 #   notes:                  caveats, deferrals, links
 
 schema_version: 1
-last_updated: 2026-07-15  # serverless-philosophy-federation DEVOPS: +KPI-SF-1..5 (KPI-SF-1 = round-trip CID integrity North Star, CI contract test; telemetry-free per sovereignty). slice-08 realized KPI-AV-1/2/3/4/5 + KPI-VIEW-2 + KPI-HX-G1/2/3 on /search (no new KPI)
+last_updated: 2026-10-13  # +KPI-CPI-1..5, +KPI-HB-1..3 (registered after finalize). Earlier: serverless-philosophy-federation DEVOPS: +KPI-SF-1..5 (KPI-SF-1 = round-trip CID integrity North Star, CI contract test; telemetry-free per sovereignty). slice-08 realized KPI-AV-1/2/3/4/5 + KPI-VIEW-2 + KPI-HX-G1/2/3 on /search (no new KPI)
 
 kpis:
   - id: KPI-1
@@ -594,6 +594,90 @@ kpis:
   # browser surface + the KPI-FED-3 read-side strengthening. The slice-11 invariants
   # I-CT-1..7 carry the I-VIEW-* / I-HX-* / AV-* / FED-* / ADR-015 shown-never-applied
   # contracts forward (see docs/feature/viewer-counter-claim-threads/discuss/feature-delta.md).
+
+  # --- contributor-philosophy-inference, registered 2026-10-13 (DoD item 9) ---
+  # Source: docs/feature/contributor-philosophy-inference/feature-delta.md (KPI table).
+  - id: KPI-CPI-1
+    name: "Inferred adherence signed in contributor-overlap sessions"
+    type: north-star
+    feature_origin: contributor-philosophy-inference
+    persona: P-001
+    target: ">= 80% of dogfood sessions with 2+ scraped+signed repos sharing a contributor sign >= 1 inferred adherence claim"
+    measurement_method: "dogfood session log (not automatable; the walking skeleton demonstrates the path)"
+    baseline_at_ga: "0 (feature new)"
+    notes: "North Star. Leading signal: overlap >= 1 person on the real pair ripgrep/regex (slice-01)."
+
+  - id: KPI-CPI-2
+    name: "Complete provenance on inferred candidates and signed inferred claims"
+    type: guardrail
+    feature_origin: contributor-philosophy-inference
+    persona: P-001
+    target: "100% carry supporting claim CIDs + authors + contributors source"
+    measurement_method: "CI property test (IP-10) and signed-payload inspection"
+    baseline_at_ga: "100% in CI at finalize"
+    notes: "Guardrail (trust). Release-blocking."
+
+  - id: KPI-CPI-3
+    name: "Inference reads only signed, non-retracted claims; writes nothing without --sign"
+    type: guardrail
+    feature_origin: contributor-philosophy-inference
+    persona: P-001
+    target: "0 violations"
+    measurement_method: "CI fixtures with unsigned and retracted inputs (IP-2/3/5/6/7/12, IS-3/4)"
+    baseline_at_ga: "0 violations in CI at finalize"
+    notes: "Guardrail (human gate). Release-blocking."
+
+  - id: KPI-CPI-4
+    name: "Signed claims stay byte-identical as evidence grows"
+    type: guardrail
+    feature_origin: contributor-philosophy-inference
+    persona: P-001
+    target: "0 signed claims mutated; 100% of evidence growth surfaced as NEW/STRONGER"
+    measurement_method: "CI before/after byte-compare (EG-1..6)"
+    baseline_at_ga: "0 mutations in CI at finalize"
+    notes: "Guardrail (append-only). Release-blocking."
+
+  - id: KPI-CPI-5
+    name: "Contributor recording is cheap and bot-free"
+    type: guardrail
+    feature_origin: contributor-philosophy-inference
+    persona: P-001
+    target: "<= 1 extra GitHub request per repo scrape (0 at N=0); 100% bot exclusion on the fixture"
+    measurement_method: "CI request-count assertion + fixture (CL-1/3/4/13/14)"
+    baseline_at_ga: "met in CI at finalize"
+    notes: "Guardrail (cost / noise)."
+
+  # --- homebrew-binary-distribution, registered 2026-10-13 ---
+  # Source: docs/feature/homebrew-binary-distribution/feature-delta.md (KPI table).
+  - id: KPI-HB-1
+    name: "Verified one-command install success"
+    type: north-star
+    feature_origin: homebrew-binary-distribution
+    persona: P-001
+    target: ">= 95% brew install success; measured on macos-14 (aarch64-apple-darwin) only"
+    measurement_method: "formula-smoke.yml: brew tap -> trust -> style/audit -> install -> openlore --version"
+    baseline_at_ga: "0 before the tap; slice-01 dogfood passed on Apple Silicon"
+    notes: "The design target was all 4 triples; ADR-061 D-6 amendment (2026-09-27) narrowed the smoke test to macOS by user choice. Linux and Intel-mac installs are unmeasured."
+
+  - id: KPI-HB-2
+    name: "Time from brew install to openlore on PATH"
+    type: leading
+    feature_origin: homebrew-binary-distribution
+    persona: P-001
+    target: "median < 60 s on a warm brew (vs ~5-10 min cargo install)"
+    measurement_method: "dogfood + formula-smoke job timing"
+    baseline_at_ga: "~5-10 min (cargo install)"
+    notes: "Leading (secondary)."
+
+  - id: KPI-HB-3
+    name: "Formula freshness"
+    type: leading
+    feature_origin: homebrew-binary-distribution
+    persona: P-001
+    target: "formula version == latest v* tag within the same release, for 100% of GA releases"
+    measurement_method: "release.yml bump-formula autobump + formula-smoke dispatch"
+    baseline_at_ga: "unverified until the next GA tag (bump-formula -> formula-smoke dispatch, 402ce9a)"
+    notes: "Leading. Keeps brew upgrade working with no manual formula edits."
 
 # Guardrail policy:
 #   KPI-4 and KPI-5 are guardrails. A release that lowers either is blocked,

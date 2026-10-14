@@ -2,6 +2,7 @@
 
 > Story: US-CPI-001 (J-004 / J-004d) · Persona: P-001 (Maria, contributor-evaluator hat)
 > Depends on: shipped scraper (ADR-017..019) · Estimate: ~1 day
+> Status: **shipped** (finalized 2026-09-28; see docs/evolution/contributor-philosophy-inference-evolution.md)
 
 ## Goal
 
