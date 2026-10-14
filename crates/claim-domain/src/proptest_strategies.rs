@@ -58,11 +58,8 @@ fn arb_url() -> impl Strategy<Value = String> {
 /// so NaN MUST be excluded (two NaN payloads have different bits and
 /// would break the property for the wrong reason).
 fn arb_confidence_value() -> impl Strategy<Value = f64> {
-    // `0.0..=1.0_f64` excludes NaN and ±inf by construction. We do
-    // NOT route through `Confidence::try_new` (still a RED-scaffold
-    // panic at step 02-04 — the wrapper's smart constructor lands in
-    // a later step). Building the wrapper directly is legitimate
-    // here: the crate owns the invariant being asserted.
+    // `0.0..=1.0_f64` excludes NaN and ±inf by construction; every
+    // value it yields is one `Confidence::try_new` accepts.
     0.0_f64..=1.0_f64
 }
 

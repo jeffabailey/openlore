@@ -141,9 +141,14 @@ impl Confidence {
         }
     }
 
-    /// Smart constructor: returns `Err(OutOfRangeConfidence)` outside `[0.0, 1.0]`.
-    pub fn try_new(_value: f64) -> Result<Self, ClaimError> {
-        panic!("Not yet implemented -- RED scaffold");
+    /// Smart constructor: returns `Err(OutOfRangeConfidence)` outside
+    /// `[0.0, 1.0]` (NaN included).
+    pub fn try_new(value: f64) -> Result<Self, ClaimError> {
+        if (0.0..=1.0).contains(&value) {
+            Ok(Confidence(value))
+        } else {
+            Err(ClaimError::OutOfRangeConfidence { value })
+        }
     }
 
     /// Inner value accessor (read-only — domain remains immutable).
@@ -345,6 +350,49 @@ mod confidence_wire_tests {
             let c = confidence(value);
             prop_assert_eq!(Confidence::from_basis_points(c.basis_points()), c);
             prop_assert_eq!(confidence(c.value()), c, "the grid is idempotent");
+        }
+    }
+}
+
+#[cfg(test)]
+mod confidence_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Universe: every f64 (NaN and infinities included). A confidence is
+        /// made exactly from [0.0, 1.0], keeping its value; anything else is
+        /// refused with the value it was given.
+        #[test]
+        fn a_confidence_is_made_only_from_zero_to_one(value in any::<f64>()) {
+            match Confidence::try_new(value) {
+                Ok(confidence) => {
+                    prop_assert!((0.0..=1.0).contains(&value));
+                    prop_assert_eq!(confidence.value().to_bits(), value.to_bits());
+                }
+                Err(ClaimError::OutOfRangeConfidence { value: refused }) => {
+                    prop_assert!(!(0.0..=1.0).contains(&value));
+                    prop_assert_eq!(refused.to_bits(), value.to_bits());
+                }
+                Err(other) => prop_assert!(false, "unexpected {other:?}"),
+            }
+        }
+    }
+
+    /// bypass: the boundaries and the non-finite values, as literals.
+    #[test]
+    fn the_bounds_are_inclusive_and_non_finite_values_are_refused() {
+        for accepted in [0.0, 1.0, 0.5, -0.0] {
+            assert!(Confidence::try_new(accepted).is_ok(), "{accepted}");
+        }
+        for refused in [
+            -0.000_1,
+            1.000_1,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            assert!(Confidence::try_new(refused).is_err(), "{refused}");
         }
     }
 }

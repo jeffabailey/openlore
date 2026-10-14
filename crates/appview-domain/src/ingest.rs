@@ -140,7 +140,7 @@ fn indexed_claim_of(unsigned: &UnsignedClaim, author_did: Did) -> IndexedClaim {
         subject: unsigned.subject.clone(),
         predicate: unsigned.predicate.clone(),
         object: unsigned.object.clone(),
-        confidence: confidence_value(&unsigned.confidence),
+        confidence: unsigned.confidence.value(),
         composed_at: parse_composed_at(&unsigned.composed_at),
         verified_against: KeyId(String::new()),
         evidence: unsigned.evidence.clone(),
@@ -164,19 +164,6 @@ fn build_indexed_claim(record: &RawRecord) -> IndexedClaim {
         // Author DERIVED byte-equal from the signed payload (anti-merging, WD-103).
         ..indexed_claim_of(unsigned, unsigned.author_did.clone())
     }
-}
-
-/// Read the numeric `[0.0, 1.0]` confidence out of the domain `Confidence`
-/// wrapper. The wrapper's `value()` accessor is still a RED scaffold (lands in a
-/// later step), and its inner field is private to `claim-domain`; the
-/// transparent serde representation (a plain JSON number) is the available pure
-/// read path — the inverse of the `serde_json::from_value(json!(x))` construction
-/// the fixtures use. Pure; no I/O.
-fn confidence_value(confidence: &claim_domain::Confidence) -> f64 {
-    serde_json::to_value(confidence)
-        .ok()
-        .and_then(|v| v.as_f64())
-        .expect("Confidence serializes transparently as a JSON number")
 }
 
 /// Derive the never-empty verified-marker key id (WD-104). Uses the signature's

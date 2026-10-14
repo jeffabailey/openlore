@@ -263,18 +263,12 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
 /// Lift a `ComposedClaim` (CLI-flag shape) into a `claim_domain::UnsignedClaim`
 /// (canonical-CBOR-ready shape). Pure transformation — no I/O.
 ///
-/// Confidence routing: the CLI accepts an `f64` and the range check at
-/// the top of `run` has already rejected anything outside `[0.0, 1.0]`.
-/// We construct `claim_domain::Confidence` via serde because its inner
-/// `f64` field is crate-private to `claim_domain` and the smart
-/// constructor `Confidence::try_new` is still a RED-scaffold panic at
-/// this slice (the wrapper exists for type-safety, not value validation
-/// at this slice — phase 03 hardens that). Mirrors the same trick used
-/// in `test-support::fixtures::confidence`.
+/// Confidence routing: the CLI accepts an `f64`; the range check at the
+/// top of `run` has already rejected anything outside `[0.0, 1.0]`, and
+/// `Confidence::try_new` checks it again.
 pub(crate) fn build_unsigned_claim(composed: &ComposedClaim) -> Result<UnsignedClaim> {
-    let confidence: claim_domain::Confidence =
-        serde_json::from_value(serde_json::json!(composed.confidence))
-            .map_err(|e| anyhow!("encoding confidence {}: {e}", composed.confidence))?;
+    let confidence = claim_domain::Confidence::try_new(composed.confidence)
+        .map_err(|e| anyhow!("encoding confidence {}: {e}", composed.confidence))?;
 
     Ok(UnsignedClaim {
         subject: composed.subject.clone(),

@@ -396,12 +396,7 @@ impl StoragePort for DuckDbStorageAdapter {
                 message: err,
             }
         })?;
-        let confidence_f64 = confidence_to_f64(&signed.unsigned.confidence).map_err(|_| {
-            StorageError::WriteFailed {
-                cid: cid.clone(),
-                message: "confidence value extraction failed".to_string(),
-            }
-        })?;
+        let confidence_f64 = signed.unsigned.confidence.value();
 
         tx.execute(
             "INSERT INTO claims (cid, subject, predicate, object, confidence, \
@@ -896,19 +891,6 @@ fn reference_type_from_sql(s: &str) -> Result<ReferenceType, String> {
         "supersedes" => Ok(ReferenceType::Supersedes),
         other => Err(format!("unknown ref_type in DB: {other:?}")),
     }
-}
-
-/// Extract the inner `f64` from a `Confidence` wrapper. We route
-/// through serde because the wrapper's `value()` accessor is still a
-/// RED-scaffold panic at this slice; serde access goes through the
-/// derived `Serialize` impl (`#[derive(Serialize)]` on a tuple struct
-/// emits the inner primitive directly). Mirrors the pattern used in
-/// `test_support::fixtures::confidence`.
-fn confidence_to_f64(c: &claim_domain::Confidence) -> Result<f64, String> {
-    serde_json::to_value(c)
-        .ok()
-        .and_then(|v| v.as_f64())
-        .ok_or_else(|| "confidence serde returned non-number".to_string())
 }
 
 /// Parse the RFC3339 `composedAt` string into a `NaiveDateTime` (UTC)

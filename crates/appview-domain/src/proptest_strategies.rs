@@ -89,9 +89,8 @@ fn keypair_for(did: &str) -> (SigningKey, VerificationKey) {
     )
 }
 
-/// Build an `UnsignedClaim` from generated components. `Confidence` is built via
-/// serde (its smart constructor is still a RED scaffold — the same trick
-/// `fixtures_ingest.rs` uses); the value is in `[0.0, 1.0]` by construction.
+/// Build an `UnsignedClaim` from generated components; the confidence is in
+/// `[0.0, 1.0]` by construction.
 fn unsigned_claim(
     author_did: &str,
     subject: &str,
@@ -99,8 +98,8 @@ fn unsigned_claim(
     confidence: f64,
     composed_at: &str,
 ) -> UnsignedClaim {
-    let confidence: Confidence = serde_json::from_value(serde_json::json!(confidence))
-        .expect("generated confidence value is a well-formed JSON number in [0.0, 1.0]");
+    let confidence =
+        Confidence::try_new(confidence).expect("generated confidence value is in [0.0, 1.0]");
     UnsignedClaim {
         subject: subject.to_string(),
         predicate: "embodiesPhilosophy".to_string(),

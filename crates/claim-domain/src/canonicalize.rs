@@ -47,11 +47,7 @@ pub fn canonicalize(claim: &UnsignedClaim) -> Result<Vec<u8>, ClaimError> {
                     .collect(),
             ),
         ),
-        // Read the inner `f64` directly (crate-private field). We do
-        // NOT call `Confidence::value()` because that smart-accessor
-        // is still a RED-scaffold panic at step 02-03 — canonicalize
-        // is responsible for `f64 → CBOR float`, not for the wrapper's
-        // ergonomics. When `value()` lands later this stays byte-stable.
+        // The inner `f64`, unchanged: canonicalize maps `f64 → CBOR float`.
         ("confidence", Value::Float(claim.confidence.0)),
         ("author", Value::Text(claim.author_did.0.clone())),
         ("composedAt", Value::Text(claim.composed_at.clone())),
@@ -128,11 +124,7 @@ mod tests {
     use crate::{ClaimReference, Confidence, Did, ReferenceType};
 
     fn sample_claim() -> UnsignedClaim {
-        // NOTE: `Confidence`'s inner `f64` is private to the crate; we
-        // construct directly here rather than via `try_new` (still a
-        // RED-scaffold panic at step 02-03). Tests inside the crate
-        // legitimately bypass the smart constructor because they own
-        // the invariant being constructed.
+        // In-crate test: builds the wrapper directly (it owns the invariant).
         UnsignedClaim {
             subject: "github:openlore/openlore".into(),
             predicate: "embodiesPhilosophy".into(),
