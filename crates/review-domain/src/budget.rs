@@ -26,6 +26,22 @@ pub const SCANS_PER_DAY: usize = 6;
 /// One day, in seconds.
 pub const DAY_SECS: u64 = 24 * HOUR_SECS;
 
+/// Share posts allowed per DID per day (OD-BRA-12).
+pub const SHARES_PER_DAY: usize = 5;
+
+/// Spend one share post for a DID that posted at `posted_at` (Unix seconds)
+/// before, at `now`: the posts still inside the day, plus `now` when the
+/// budget allows it (`None` when it does not).
+pub fn spend_share(posted_at: &[u64], now: u64) -> Option<Vec<u64>> {
+    let recent: Vec<u64> = posted_at
+        .iter()
+        .copied()
+        .filter(|at| now.saturating_sub(*at) < DAY_SECS)
+        .collect();
+    let ages: Vec<u64> = recent.iter().map(|at| now.saturating_sub(*at)).collect();
+    budget_allows(&ages, SHARES_PER_DAY, DAY_SECS).then(|| [recent, vec![now]].concat())
+}
+
 /// Scans that may run at once, across everyone, unless the operator sets
 /// another limit (the review app's `OPENLORE_REVIEW_SCAN_CONCURRENCY`).
 pub const DEFAULT_CONCURRENT_SCANS: usize = 2;
@@ -169,6 +185,37 @@ mod tests {
 
         fn finish(&mut self, did: usize) {
             self.running.remove(&did);
+        }
+    }
+
+    /// A post exactly one day old no longer counts, and is dropped.
+    #[test]
+    fn a_share_exactly_a_day_old_has_expired() {
+        let now = 1_000_000;
+        let posted = [now - 86_400, now - 1, now - 2, now - 3, now - 4];
+        assert_eq!(
+            spend_share(&posted, now),
+            Some(vec![now - 1, now - 2, now - 3, now - 4, now])
+        );
+    }
+
+    proptest! {
+        /// Universe: when a DID posted before, and now. A share is spent iff
+        /// fewer than 5 of those posts are under 86 400 s old; the spent list
+        /// keeps exactly those posts and adds now (literal model).
+        #[test]
+        fn a_share_is_spent_only_within_five_a_day(
+            ages in prop::collection::vec(0u64..200_000, 0..9),
+            now in 200_000u64..400_000,
+        ) {
+            let posted: Vec<u64> = ages.iter().map(|age| now - age).collect();
+            let within: Vec<u64> = posted.iter().copied().filter(|at| now - at < 86_400).collect();
+            let spent = spend_share(&posted, now);
+            if within.len() < 5 {
+                prop_assert_eq!(spent, Some([within, vec![now]].concat()));
+            } else {
+                prop_assert_eq!(spent, None);
+            }
         }
     }
 

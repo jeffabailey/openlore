@@ -14,6 +14,10 @@ pub const POST_LABEL: &str = "Post to Bluesky";
 /// Leaving the preview without posting.
 pub const DONT_POST_LABEL: &str = "Don't post";
 
+/// What a share past the day's allowance is told (ADR-076 §2: 5 a day).
+pub const SHARE_LIMIT_NOTICE: &str = "You have shared 5 times today, the most a day allows. \
+     Nothing was posted; please come back tomorrow.";
+
 /// The share preview: the editable text, the profile link it carries, and
 /// the one button that posts. `notice` explains why an earlier press did
 /// not post (too long, refused by the PDS); the owner's text is kept.

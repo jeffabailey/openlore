@@ -24,7 +24,7 @@ use scraper_domain::SignalPredicateMapping;
 use tokio::net::TcpListener;
 
 use crate::admin;
-use crate::limiter::ScanLimiter;
+use crate::limiter::{ScanLimiter, ShareAllowance};
 use crate::routes::github::VerifyAttempts;
 use crate::routes::signin;
 
@@ -85,6 +85,7 @@ pub(crate) struct App {
     pub(crate) mapping: SignalPredicateMapping,
     pub(crate) verify_attempts: VerifyAttempts,
     pub(crate) scan_limiter: ScanLimiter,
+    pub(crate) share_allowance: ShareAllowance,
 }
 
 /// The static public routes.

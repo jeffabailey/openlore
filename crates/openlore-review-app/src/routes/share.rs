@@ -5,6 +5,8 @@
 //! Bluesky" posts, exactly the confirmed text, once. "Don't post" or
 //! leaving simply lets the plan expire. The post text is never logged.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use hyper::StatusCode;
 use ports::{PlanKind, ResolvedIdentity};
 use review_domain::plans::{plan_expires_at, rfc3339_utc};
@@ -33,6 +35,9 @@ pub(crate) async fn share_preview(app: &App, request: &PageRequest) -> Reply {
     let Some((cookie, session)) = current_session(app, request) else {
         return to_landing();
     };
+    if !app.share_allowance.allows(&session.owner_did) {
+        return unavailable(StatusCode::TOO_MANY_REQUESTS, views::SHARE_LIMIT_NOTICE);
+    }
     let Ok(identity) = app.identity.resolve_did(&session.owner_did).await else {
         return unavailable(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -84,13 +89,21 @@ pub(crate) async fn confirm_share(app: &App, request: &PageRequest) -> Reply {
     let Ok(plan) = restore_share_plan(&confirmed.owner_did, &confirmed.stored) else {
         return not_found();
     };
+    let Some(spent_at) = app.share_allowance.try_spend(&confirmed.owner_did) else {
+        return unavailable(StatusCode::TOO_MANY_REQUESTS, views::SHARE_LIMIT_NOTICE);
+    };
     let share = Share {
         app,
         plan: &plan,
         confirmed: &confirmed,
         text: &field(&request.form, "text").unwrap_or_default(),
+        posted: AtomicBool::new(false),
     };
-    share.post().await
+    let reply = share.post().await;
+    if !share.posted() {
+        app.share_allowance.refund(&confirmed.owner_did, spent_at);
+    }
+    reply
 }
 
 /// A taken, fresh share plan with the owner's confirmed text.
@@ -99,9 +112,15 @@ struct Share<'a> {
     plan: &'a SharePostPlan,
     confirmed: &'a ConfirmedPlan,
     text: &'a str,
+    /// Did the post land? (A share that did not is refunded.)
+    posted: AtomicBool,
 }
 
 impl Share<'_> {
+    fn posted(&self) -> bool {
+        self.posted.load(Ordering::Relaxed)
+    }
+
     async fn post(&self) -> Reply {
         let post = match compose_post(self.text, self.plan.profile_url()) {
             Ok(post) => post,
@@ -111,6 +130,7 @@ impl Share<'_> {
         let owner_did = &self.confirmed.owner_did;
         match execute_share(self.app.repo_write.as_ref(), owner_did, &post, &created_at).await {
             Ok(created) => {
+                self.posted.store(true, Ordering::Relaxed);
                 observe(self.app, LogEvent::SharePosted);
                 Reply::page(
                     StatusCode::OK,

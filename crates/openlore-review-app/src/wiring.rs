@@ -37,7 +37,7 @@ use crate::config::{
     GithubToken, RawSecrets, DEFAULT_OAUTH_SCOPES,
 };
 use crate::http::{self, App, Surface};
-use crate::limiter::ScanLimiter;
+use crate::limiter::{ScanLimiter, ShareAllowance};
 use crate::routes::github::VerifyAttempts;
 
 /// Exit code when the app refuses to start.
@@ -616,6 +616,7 @@ fn app(wired: Wired) -> App {
         review_write: wired.store,
         mapping: wired.mapping,
         verify_attempts: VerifyAttempts::default(),
+        share_allowance: ShareAllowance::default(),
         scan_limiter,
     }
 }

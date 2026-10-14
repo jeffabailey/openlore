@@ -606,3 +606,45 @@ fn a_post_longer_than_bluesky_allows_is_caught_before_anything_is_sent() {
     );
     assert!(posts_in_pds(&world, Persona::Priya).is_empty());
 }
+
+/// SH-7
+/// ```gherkin
+/// @US-BRA-008 @ADR-076 @OD-BRA-12 @error @contract-shape:unbounded-preservation
+/// Scenario: The sixth share in a day is politely refused
+///   Given Priya has posted 5 shares today
+///   When she opens "Share on Bluesky…" again
+///   Then she is told to come back tomorrow, and nothing more is posted
+///   And a post her PDS refused does not use up a share
+/// ```
+#[test]
+fn the_sixth_share_in_a_day_is_politely_refused() {
+    let world = ReviewWorld::new();
+    let mut browser = given_published(&world, Persona::Priya, &[priya::TIDEPOOL_MEMORY_SAFETY]);
+    world.atproto.set_write_posture(
+        Persona::Priya.did(),
+        WritePosture::RefuseCollection(openlore_test_support::POST_COLLECTION.to_string()),
+    );
+    when_opens_share_preview(&mut browser, Persona::Priya);
+    browser.press("Post to Bluesky");
+    assert!(posts_in_pds(&world, Persona::Priya).is_empty());
+    world
+        .atproto
+        .set_write_posture(Persona::Priya.did(), WritePosture::Accept);
+    for _ in 0..5 {
+        when_opens_share_preview(&mut browser, Persona::Priya);
+        browser.press("Post to Bluesky");
+    }
+    assert_eq!(posts_in_pds(&world, Persona::Priya).len(), 5);
+    when_opens_share_preview(&mut browser, Persona::Priya);
+    assert!(
+        browser.page.shows("come back tomorrow"),
+        "{}",
+        browser.page.text()
+    );
+    assert!(
+        !browser.page.offers("Post to Bluesky"),
+        "{}",
+        browser.page.text()
+    );
+    assert_eq!(posts_in_pds(&world, Persona::Priya).len(), 5);
+}

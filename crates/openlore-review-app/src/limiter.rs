@@ -4,7 +4,9 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use review_domain::budget::{admit_scan, release_scan, ScanAdmission, ScanBudget};
+use std::collections::HashMap;
+
+use review_domain::budget::{admit_scan, release_scan, spend_share, ScanAdmission, ScanBudget};
 
 /// How far ahead the clock runs: set once at startup from the config, which
 /// only a development build lets be non-zero (the expiry test seam).
@@ -27,6 +29,45 @@ pub(crate) fn unix_now() -> u64 {
 /// Unix seconds now, signed as the pure core's clocks are.
 pub(crate) fn unix_now_secs() -> i64 {
     i64::try_from(unix_now()).unwrap_or_default()
+}
+
+/// When each DID posted its recent shares (ADR-076 §2: 5 a day). In memory,
+/// so it resets on restart, like the scan budget.
+#[derive(Default)]
+pub(crate) struct ShareAllowance(Mutex<HashMap<String, Vec<u64>>>);
+
+impl ShareAllowance {
+    /// May `owner_did` post a share now? (Nothing is spent.)
+    pub(crate) fn allows(&self, owner_did: &str) -> bool {
+        let Ok(posted) = self.0.lock() else {
+            return false;
+        };
+        let recent = posted.get(owner_did).map_or(&[][..], Vec::as_slice);
+        spend_share(recent, unix_now()).is_some()
+    }
+
+    /// Spend one share for `owner_did`; the time it was spent at, for a
+    /// [`ShareAllowance::refund`] when the post does not land, or `None`
+    /// when the day's shares are used up.
+    pub(crate) fn try_spend(&self, owner_did: &str) -> Option<u64> {
+        let mut posted = self.0.lock().ok()?;
+        let now = unix_now();
+        let recent = posted.get(owner_did).map_or(&[][..], Vec::as_slice);
+        let spent = spend_share(recent, now)?;
+        posted.insert(owner_did.to_string(), spent);
+        Some(now)
+    }
+
+    /// Give back the share spent at `at`: its post did not land.
+    pub(crate) fn refund(&self, owner_did: &str, at: u64) {
+        if let Ok(mut posted) = self.0.lock() {
+            if let Some(recent) = posted.get_mut(owner_did) {
+                if let Some(index) = recent.iter().rposition(|t| *t == at) {
+                    recent.remove(index);
+                }
+            }
+        }
+    }
 }
 
 /// Who is scanning and who scanned recently, and how many scans may run at
