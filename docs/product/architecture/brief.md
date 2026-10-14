@@ -243,6 +243,44 @@ Shipped slice extensions:
     `docs/feature/github-did-identity-link/design/` (wave-decisions.md, architecture-design.md,
     upstream-changes.md).
 
+- **owner-only-signing: DESIGN 2026-10-14 (PROPOSED — awaiting user; depends on
+  github-did-identity-link; DISTILL gated on OOS-D2/D4/D5/D9 and GDL-D1..D5) — IN-PLACE EXTENSION,
+  ZERO new crates, ZERO Lexicon change, one migration (v8).** Anyone may import (scrape/infer)
+  unsigned candidates about any public `github:` subject; only a DID with **authority** may sign:
+  for `github:<login>` the DID with a `verified` ADR-084 link to that account; for
+  `github:<owner>/<repo>` the linked owner of a user-owned repo (`owner.id`) or a DID listed in the
+  repo's `.github/openlore-authority` file (the only public route for org repos). Retractions,
+  counters and identity links need no authority and are never weighted. Readers derive `owner /
+  repo-listed / third-party / authority not checked` per `github:` assertion from local,
+  insert-only checks; nothing on the wire changes and already-published claims are judged by the
+  same rule. Proposes an exception to I-9 (see the invariants table).
+  - **`crates/claim-domain` (PURE, EXTEND)**: new `authority` module — `requirement`, `classify`,
+    `may_sign` → private-constructor `SigningPermit`.
+  - **`crates/scoring` (PURE, EXTEND)**: `score_attested` (unbounded preservation; weights only
+    assertions that are non-`github:` or attested; counters/retractions/links never weighted; the
+    feed gains reference types; `--include-unattested` shown separately per author).
+  - **`crates/ports` (EXTEND)**: `GithubPort::read_repo_authority`; NEW `RepoAuthorityCheckReadPort`
+    / `WritePort` (insert only).
+  - **`crates/adapter-github` (EXTEND)**: one same-host redirect on `/repos`; contents of
+    `.github/openlore-authority` (public, WD-51 kept).
+  - **`crates/adapter-duckdb` (EXTEND)**: `schema_v8` `repo_authority_checks` (insert-only); slice 5
+    optional `imported_candidates`.
+  - **`crates/cli` (EXTEND)**: NEW `authority verify`; NEW `sign_permitted` helper replaces the
+    inline signs in `claim add`, `claim counter`, `claim retract` and the sign batch (`scrape
+    github/person --sign`, `infer people --sign`); `publish_signed_claim` takes a permit (covers
+    `claim publish`); labels in `graph query`, scrape/infer views, viewer, `search` ("authority
+    not checked here"); offline signing from checks ≤ 7 days; `adapter-github` same-host redirect
+    policy.
+  - **`crates/openlore-review-app` (EXTEND)**: publish re-checks bio + repo authority in the request
+    (extends `owner_can_publish`); share draft quotes attested claims only.
+  - **`openlore-indexer`: UNCHANGED** (no GitHub capability).
+  - **`xtask` (EXTEND)**: `sign_only_with_permit`, `authority_evidence_only_from_adapters`,
+    `repo_authority_checks_insert_only`,
+    `authority_readers_hold_no_write_handle`, `scoring_callers_use_score_attested`.
+  - **ADR-086** (authority model, enforcement, existing claims) + **ADR-087** (proofs), both Proposed
+    and conditional. Changes needed in the GDL design: `docs/feature/owner-only-signing/design/
+    upstream-changes.md` (UC-1..UC-8).
+
 - **serverless-philosophy-federation: DESIGN 2026-07-15 — ADDITIVE. +2 Rust production crates
   (`publish-domain` pure + `adapter-publish-http` effect; workspace 21 → 23 prod / 25 members, or 24
   if `publish-domain` folds into `cli`) + a NEW non-workspace `atproto/` TypeScript/Cloudflare-Workers
@@ -749,6 +787,43 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
   preview states public + retraction-does-not-erase and keeps I-7; publish message names the
   retract command (I-8).
 
+### owner-only-signing (DESIGN 2026-10-14, proposed — conditional on OOS-D2/D4/D5/D9 and GDL-D1..D5; do not start DISTILL before)
+
+- **Driving ports**: `openlore claim add`, `claim counter`, `claim retract`, `claim publish <cid>`,
+  `scrape github <owner/repo> [--sign]`, `scrape person <user> [--sign]`, `infer people [--sign]`,
+  `openlore authority verify [--subject|--mine]`, `graph query [--weighted]
+  [--include-unattested]`, `search`, the viewer subject/`/score` pages, review-app publish confirm;
+  `candidates list` (slice 5 only).
+- **Pure seams**: `claim_domain::authority::{kind, requirement, classify, may_sign}` against the
+  ADR-087 rule table (incl. spoofed kinds and observation order); `score_attested` weight
+  invariant under added non-weight kinds and unattested `github:` assertions.
+- **Doubles**: `FakeGithub` (repo owner user/org, rename redirect, transfer, authority file
+  present/absent/invalid/symlink/oversize/non-default-branch, 403, 404) + GDL fixtures; `FakePds`,
+  `FakeKeychain`, `FakeClock`, `TempXdg`; real DuckDB for check ports.
+- **Must-cover behaviors**: non-owner can scrape/infer any subject and sees candidates + hand-off
+  (who can sign, exact command), nothing signed; every composer refuses a non-attested `github:`
+  claim (person and repo), incl. `claim publish` of a pre-feature unpublished local claim; owner of a
+  user-owned repo with a verified link signs; org repo signs only for a DID in
+  `.github/openlore-authority` (default branch only; exact token; prefix-colliding/uppercase DID
+  refused; invalid file grants nothing); person claim signable only by the linked owner; contested
+  id (bio names two DIDs) lets each verified DID sign; offline sign with a check ≤ 7 days succeeds
+  (network disabled, I-9) and with an older or missing check is refused with the verify command;
+  counter by a non-owner and retract by a former owner always succeed; repo transferred → former
+  owner's claims read `third-party` after `authority verify`, nothing retracted; renamed repo
+  resolves via redirect; rate limit/outage records nothing; weighted view counts only attested +
+  exempt, names skipped claims, `--include-unattested` shows them per author, CLI and viewer agree;
+  index rows read "authority not checked here"; review-app publish refused when the repo was
+  transferred after the scan; pre-feature third-party claims read `third-party` (no cutoff);
+  a foreign-client assertion with a spoofed `counters` reference is shown as a dispute and never
+  weighted; counters/retractions never weighted (and confirm whether they are today, A-13);
+  owner verifies → listed DID verifies → owner verifies again leaves the listed DID `repo-listed`;
+  a cross-host redirect is refused; budget exhaustion mid-scrape lists candidates and refuses
+  `--sign` for unobserved repos with the reset time; share draft quotes attested claims only;
+  after a GitHub rename, claims about the old login read `third-party` (G-2); `scrape --sign`
+  refreshes the signer's own link check before gating.
+  Existing ATs that sign `github:` subjects migrate to seeded-check fixtures (list: ADR-086
+  Consequences).
+
 ## For Software Crafter
 
 ### github-did-identity-link (DESIGN 2026-10-14, proposed)
@@ -788,6 +863,43 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
   `adapter-github` in `openlore-indexer`.
 - Paradigm: functional (ADR-007) — use @nw-functional-software-crafter.
 
+### owner-only-signing (DESIGN 2026-10-14, proposed)
+
+- Prerequisite: GDL slice 1 (`identity_link` module, v7 checks). Authority rules: ADR-087 §1-3;
+  model and exemptions: ADR-086 §1-2.
+- `claim-domain::authority` is pure: `kind` (Assertion | Retraction | Counter | IdentityLink),
+  `requirement`, `classify` (takes the provenance-verified claim, link view, repo observation),
+  `may_sign` → `SigningPermit`; `Attested` and `SigningPermit` have private fields; observation
+  values are constructed only in adapters/test-support. Window default 7 days as one named
+  constant; the older of the checks used must be inside it.
+- NEW `sign_permitted` replaces the inline `IdentityPort::sign` in `claim_add.rs`,
+  `claim_counter.rs`, `claim_retract.rs`, `sign_batch.rs` (`philosophy_add.rs` untouched,
+  allowlisted). `publish_signed_claim` and `review-domain` `PublishPlan` execution take a permit;
+  counter/retract get exempt permits from the same function. `claim publish <cid>` gates claims
+  with `published_at IS NULL`. No override flag.
+- Online verbs refresh the observation in the same invocation before gating; offline verbs never
+  call GitHub and refuse with `openlore authority verify --subject <s>`.
+- `GithubPort::read_repo_authority`: `GET /repos/{o}/{r}` (`full_name`, `owner.id`, `owner.type`
+  from the final body) and **always** the contents of `.github/openlore-authority` (observation is
+  signer-independent); refuse non-`file` types and > 4 KiB; DIDs via the hoisted exact-token
+  matcher. NEW redirect policy in `build_client()`: ≤ 1 redirect, same host only. Rate
+  limit/outage → nothing recorded; budget reported through `AuthReport` / `last_rate_budget`.
+- v8 `repo_authority_checks`: forward-only idempotent migration (v5/v6 pattern), insert-only,
+  `check_id` sequence PK, latest via read query, live probe (insert twice, read latest, roll back).
+- `scoring::score_attested` is the only scoring entry for the CLI and viewer callers; the scoring
+  feed (`AttributedClaim`, `graph_query.rs`) gains reference types; weight-eligible = `kind =
+  Assertion` ∧ (subject not `github:` ∨ attested); `sameAs` never weighted (GDL).
+- One label spelling: `owner`, `repo-listed`, `third-party`, `authority not checked` (+ `here`
+  on index rows), always with check age.
+- Review app: fresh bio read + `read_repo_authority` inside the publish request (extend
+  `routes/review.rs::owner_can_publish`); share draft quotes attested claims only; aggregate
+  counter `claim.publish.refused.authority` only.
+- `xtask check-arch`: `sign_only_with_permit`, `authority_evidence_only_from_adapters`,
+  `repo_authority_checks_insert_only`,
+  `authority_readers_hold_no_write_handle`, `scoring_callers_use_score_attested`; indexer still
+  forbids `adapter-github`. Slice 5 adds `imported_candidates_not_in_scoring_or_inference`.
+- Paradigm: functional (ADR-007) — use @nw-functional-software-crafter.
+
 ## CLI surface (cumulative)
 
 | Verb | Shipped in | Spec'd by |
@@ -814,6 +926,9 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
 | **`openlore identity verify [--did <did> \| --github <login>]`** (NEW; re-checks links' GitHub side, records local checks) | github-did-identity-link (DESIGN, proposed) | **ADR-085** |
 | **`openlore identity list [--did <did>]`** (NEW; offline linked-identity view) | github-did-identity-link (DESIGN, proposed) | **ADR-085** |
 | **`openlore identity forget --did <did>`** (NEW; deletes that DID's local proof checks only) | github-did-identity-link (DESIGN, proposed) | **ADR-085** |
+| **`openlore authority verify [--subject <github:…> \| --mine]`** (NEW; re-checks subject authority of local claims, records local checks, never signs) | owner-only-signing (DESIGN, proposed) | **ADR-087** |
+| **`openlore graph query --include-unattested`** (flag; shows non-attested claims as a separate per-author section) | owner-only-signing (DESIGN, proposed) | **ADR-086** |
+| **`openlore candidates list [--subject <s>]`** (NEW, slice 5 optional; offline list of imported unsigned candidates) | owner-only-signing (DESIGN, proposed) | **ADR-086** |
 
 ## C4 reference
 
@@ -844,7 +959,7 @@ build-fail.
 | I-6 | The signed-claim payload MUST contain only the locked numeric `confidence` (`[0.0, 1.0]`); display buckets MUST NEVER be serialized | `tests/lexicon_conformance.rs` (DISTILL gate)  |
 | I-7 | The compose preview MUST contain the literal text "not as truth"        | `tests/walking_skeleton.rs::WS-1`              |
 | I-8 | The publish success message MUST mention the retract command            | `tests/walking_skeleton.rs::WS-8`              |
-| I-9 | Compose and sign MUST succeed with network disabled (KPI-5)             | `tests/walking_skeleton.rs::WS-10`             |
+| I-9 | Compose and sign MUST succeed with network disabled (KPI-5). *Proposed exception (ADR-086 §5, owner-only-signing, not yet accepted): a `github:` assertion without a local authority check ≤ 7 days old is refused offline; signing itself never uses the network.* | `tests/walking_skeleton.rs::WS-10`             |
 | I-10 | Graph query output MUST match compose-preview field-for-field (KPI-4)   | `tests/walking_skeleton.rs::WS-12` + `tests/federation_roundtrip.rs` |
 | I-11 | Workspace dependencies MUST pass cargo-deny advisories, bans, sources, and licenses | `cargo deny check` (CI gate)                   |
 | I-12 | Every git commit on a roadmap step MUST carry a `Step-ID: NN-NN` trailer matching the roadmap | `des-verify-integrity` (Phase 6 gate)          |
@@ -1044,3 +1159,5 @@ C4Container
 - PDS hosting (shared module): `docs/feature/shared-pds-module/feature-delta.md`; ADR-066..069
 - GitHub ↔ DID identity link (DESIGN, proposed): `docs/feature/github-did-identity-link/design/`;
   ADR-084, ADR-085
+- Owner-only signing (DESIGN, proposed): `docs/feature/owner-only-signing/design/`; ADR-086,
+  ADR-087
