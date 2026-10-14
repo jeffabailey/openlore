@@ -1,14 +1,14 @@
 # OpenLore — Resume Context
 
 ## Current Task
-Nothing in flight. Seven deliveries done (latest `fix-pass-failure-precedence`, 2026-10-11: first failure ends the pass and outranks the deadline override; pushed, CI green on 1825503), none deployed; history in `docs/evolution/`. CI: `nightly.yml` weekly (Mon 08:00 UTC), claim-domain mutation kill rate 98.6%.
+Go-live checklist (`deploy/README.md`) done through step 16 (all pushed, origin/main 204da73); review app live at 61b237a (htmx 4 in-place scan status, batch + in-card approve). Step 17 (announce) is the user's; A-8 token-expiring OK email still due (1-day period).
 
 ## Key Decisions
-- One go-live checklist for both apps in `deploy/README.md`; both `deploy.sh` fail closed; `go_live_runbook_drift` keeps runbooks honest.
-- CI: acceptance job frees runner disk + slims dep debuginfo (CI-only); mutants step runs under `ulimit -v` 6 GiB so runaway-loop mutants abort, not kill the runner.
-- Live smoke reads protected-resource metadata from the test account's PDS (bsky.social 404s it). 2 surviving mutants (`base64url_decode` `|`→`^`, `arb_nfc_equivalent_pair`) left by choice.
+- `vm.swappiness` 10 (live host by hand); memory gate passed with scans (indexer 63 MB/100, review app 27 MB/192), so no t4g.small.
+- Pre-announce, AWS/infra updates need no per-step OK (user, 2026-10-13); ask again after step 17. Push only when told, over SSH (`git push git@github.com:jeffabailey/openlore.git HEAD:main`).
+- Auto-mode classifier blocks the agent stopping apps or editing SSM; hand those commands to the user.
 
 ## Next Steps
-- Operator go-live: follow the `deploy/README.md` checklist (tofu-aws-pds v1.7.0 is released and both roots pin it, 403d819).
-- Batched live `canzantest` sign-in walkthrough.
-- Backlog: check-arch rule for event fields, clippy `double_must_use`.
+- tofu-aws-pds 4451296 (`swappiness` input) is pushed but unreleased: release it, then set `swappiness = 10` in openlore's prod root.
+- Live-check htmx scan polling and Approve selected as canzantest (user drives sign-in/publish).
+- Backlog in memory `openlore-follow-up-backlog.md`: `scan.refused` event (unanswered), SPIKE-6, htmx 4 for local viewer, TRUSTED_PROXIES, serde-saphyr.
