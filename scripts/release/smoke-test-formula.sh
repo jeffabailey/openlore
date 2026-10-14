@@ -6,6 +6,7 @@
 # failure modes that shipped undocumented:
 #   - the in-repo tap needs an explicit URL (Homebrew shorthand → homebrew-openlore)
 #   - Homebrew 6.0.0+ ignores untrusted custom-remote taps until `brew trust <tap>`
+# and runs `brew style` + `brew audit` on the tapped formula before installing it.
 #
 # Runs locally and in CI (.github/workflows/formula-smoke.yml). Idempotent: untaps +
 # uninstalls first and on exit, so re-runs are clean.
@@ -30,7 +31,9 @@ brew tap "$TAP" "$TAP_URL"
 echo "==> 2/4 trust (Homebrew 6.0.0+ requires it for custom-remote taps; no-op on older)"
 brew trust "$TAP" 2>/dev/null || echo "    (brew trust unavailable — older Homebrew, no trust needed)"
 
-echo "==> 3/4 install"
+echo "==> 3/4 style + audit, then install"
+brew style "$FORMULA"
+brew audit --formula "$FORMULA"
 brew install "$FORMULA"
 
 echo "==> 4/4 assert 'openlore --version' reports a semver"

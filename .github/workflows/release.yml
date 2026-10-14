@@ -222,7 +222,8 @@ jobs:
       - name: Install cargo-cyclonedx
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-cyclonedx
+          # Pinned: an unpinned upgrade broke rc5's SBOM step. Bump on purpose.
+          tool: cargo-cyclonedx@0.5.9
       - name: Generate CycloneDX SBOM
         shell: bash
         run: |
@@ -261,14 +262,25 @@ jobs:
         with:
           subject-path: 'dist/openlore-*.tar.gz'
 
+      # --- stage: release notes (tag message, verify steps, change list) ---
+      - name: Write the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          bash scripts/release/release-notes.sh "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" > release-notes.md
+          cat release-notes.md
+
       # --- stage: publish to GitHub Releases ---
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Release notes come from the annotated tag message (no CHANGELOG.md
-          # exists yet — environments.yaml changelog_source). generate_release_notes
-          # appends the commit list; the tag message body leads.
-          generate_release_notes: true
+          # The annotated tag message leads, then the verify steps, then GitHub's
+          # change list against the previous release tag that still exists
+          # (scripts/release/release-notes.sh; environments.yaml changelog_source).
+          body_path: release-notes.md
           fail_on_unmatched_files: true
           # Auto-mark any tag carrying a pre-release suffix (e.g. v0.1.0-rc1) as
           # a GitHub pre-release so RC validation runs never look like a GA cut.
@@ -279,25 +291,6 @@ jobs:
             dist/openlore-*.tar.gz.sig
             dist/openlore-*.tar.gz.cert
             dist/sbom.cdx.json
-          body: |
-            OpenLore `${{ github.ref_name }}` — prebuilt `openlore` CLI binaries.
-
-            ## Verify a download (optional, recommended)
-            ```sh
-            # 1. checksum
-            shasum -a 256 -c openlore-*-<triple>.tar.gz.sha256
-
-            # 2. cosign keyless signature (anchored to this workflow's OIDC identity)
-            cosign verify-blob \
-              --certificate openlore-*-<triple>.tar.gz.cert \
-              --signature   openlore-*-<triple>.tar.gz.sig \
-              --certificate-identity-regexp 'https://github.com/${{ github.repository }}/.github/workflows/release.yml@.*' \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-              openlore-*-<triple>.tar.gz
-
-            # 3. review the dependency SBOM
-            #    cyclonedx analyze --input-file sbom.cdx.json
-            ```
             Supply-chain policy: ADR-012. Release matrix: ADR-011.
 
   # ---------------------------------------------------------------------------
