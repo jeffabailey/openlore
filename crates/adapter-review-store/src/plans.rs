@@ -116,7 +116,7 @@ mod tests {
     }
 
     fn store() -> ReviewStore {
-        ReviewStore::open_in_memory(DataKey::from_bytes([3u8; 32])).expect("store")
+        ReviewStore::open_in_memory(DataKey::new("k1", [3u8; 32]).expect("a key")).expect("store")
     }
 
     proptest! {

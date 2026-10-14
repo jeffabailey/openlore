@@ -523,13 +523,10 @@ fn warn_if_token_expiring(headers: &reqwest::header::HeaderMap) {
     }
 }
 
-/// The store key of a configured data key (a legacy key has no kid).
+/// The store key of a configured data key.
 fn data_key(material: DataKeyMaterial) -> Result<DataKey, Refusal> {
-    match material.kid {
-        Some(kid) => DataKey::new(&kid, material.key)
-            .ok_or_else(|| refusal(Probe::Secrets)("data-key: unusable key id".into())),
-        None => Ok(DataKey::from_bytes(material.key)),
-    }
+    DataKey::new(&material.kid, material.key)
+        .ok_or_else(|| refusal(Probe::Secrets)("data-key: unusable key id".into()))
 }
 
 /// One optional secrets file; absent or empty is `None`.

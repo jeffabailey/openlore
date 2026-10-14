@@ -35,7 +35,8 @@ pub const OAUTH_SCOPES: &str =
     "atproto repo:org.openlore.claim?action=create repo:app.bsky.feed.post?action=create";
 
 /// A fixed 32-byte data key (hex) — test only.
-const DATA_KEY_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+/// The documented `{"kid","key"}` data key (base64 of bytes 0..=31).
+const DATA_KEY_JSON: &str = r#"{"kid":"t1","key":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="}"#;
 const LOG_SALT: &str = "review-app-acceptance-log-salt";
 
 /// Where the app's upstreams live and how it is configured.
@@ -362,7 +363,7 @@ fn write_secrets(bin: &Path, dir: &Path, settings: &AppSettings) {
         fs::write(&jwk_path, &out.stdout).expect("write client-jwk");
     }
     let files = [
-        ("data-key", DATA_KEY_HEX.to_string()),
+        ("data-key", DATA_KEY_JSON.to_string()),
         ("github-token", settings.github_token.clone()),
         ("log-salt", LOG_SALT.to_string()),
     ];

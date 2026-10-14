@@ -347,7 +347,7 @@ pub(crate) fn parse_secrets(raw: RawSecrets) -> Result<Secrets, ConfigError> {
 /// A data key as configured: its key id and its 32 bytes (never printed).
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct DataKeyMaterial {
-    pub(crate) kid: Option<String>,
+    pub(crate) kid: String,
     pub(crate) key: [u8; 32],
 }
 
@@ -357,12 +357,11 @@ impl std::fmt::Debug for DataKeyMaterial {
     }
 }
 
-const DATA_KEY_SHAPE: &str =
-    "must be JSON {\"kid\":\"<id>\",\"key\":\"<base64 of 32 bytes>\"} (or legacy 64 hex characters)";
+const DATA_KEY_SHAPE: &str = "must be JSON {\"kid\":\"<id>\",\"key\":\"<base64 of 32 bytes>\"}";
 
 /// Parse the `data-key` / `data-key-previous` secret (pure): the documented
-/// `{"kid","key"}` JSON (infrastructure-integration §5), or the legacy bare
-/// 64-hex key, which has no kid. Anything else refuses startup.
+/// `{"kid","key"}` JSON (infrastructure-integration §5). Anything else,
+/// including the retired bare 64-hex form, refuses startup.
 pub(crate) fn parse_data_key(
     name: &'static str,
     text: &str,
@@ -371,13 +370,8 @@ pub(crate) fn parse_data_key(
         name,
         reason: DATA_KEY_SHAPE,
     };
-    let text = text.trim();
-    if !text.starts_with('{') {
-        return parse_hex_key(text)
-            .map(|key| DataKeyMaterial { kid: None, key })
-            .ok_or(invalid);
-    }
-    let value: serde_json::Value = serde_json::from_str(text).map_err(|_| invalid.clone())?;
+    let value: serde_json::Value =
+        serde_json::from_str(text.trim()).map_err(|_| invalid.clone())?;
     let kid = value["kid"].as_str().filter(|kid| {
         !kid.is_empty() && kid.len() <= 32 && kid.bytes().all(|b| b.is_ascii_graphic())
     });
@@ -390,22 +384,11 @@ pub(crate) fn parse_data_key(
     });
     match (kid, key) {
         (Some(kid), Some(key)) => Ok(DataKeyMaterial {
-            kid: Some(kid.to_string()),
+            kid: kid.to_string(),
             key,
         }),
         _ => Err(invalid),
     }
-}
-
-fn parse_hex_key(hex: &str) -> Option<[u8; 32]> {
-    if hex.len() != 64 || !hex.is_ascii() {
-        return None;
-    }
-    let mut key = [0u8; 32];
-    for (byte, pair) in key.iter_mut().zip(hex.as_bytes().chunks(2)) {
-        *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
-    }
-    Some(key)
 }
 
 #[cfg(test)]
@@ -548,8 +531,8 @@ mod tests {
         }
 
         /// Universe: data-key texts — the documented JSON with any kid and
-        /// key length, legacy hex, and noise. Exactly a printable kid with a
-        /// 32-byte base64 key (or 64 hex) is accepted, with its kid.
+        /// key length, the retired 64-hex form, and noise. Exactly a printable
+        /// kid with a 32-byte base64 key is accepted, with its kid.
         #[test]
         fn a_data_key_parses_only_in_its_documented_shape(
             kid in "[ -~]{0,40}", len in 0usize..48, byte in any::<u8>(), noise in ".{0,40}"
@@ -561,12 +544,12 @@ mod tests {
             let parsed = parse_data_key("data-key", &json);
             prop_assert_eq!(parsed.is_ok(), good_kid && len == 32);
             if let Ok(material) = parsed {
-                prop_assert_eq!(material.kid, Some(kid));
+                prop_assert_eq!(material.kid, kid);
                 prop_assert_eq!(material.key, [byte; 32]);
             }
             let hex: String = std::iter::repeat_n(format!("{byte:02x}"), 32).collect();
-            prop_assert_eq!(parse_data_key("data-key", &hex).map(|m| (m.kid, m.key)), Ok((None, [byte; 32])));
-            prop_assume!(!noise.trim().starts_with('{') && noise.trim().len() != 64);
+            prop_assert!(parse_data_key("data-key", &hex).is_err(), "the 64-hex form is retired");
+            prop_assume!(!noise.trim().starts_with('{'));
             prop_assert!(parse_data_key("data-key", &noise).is_err());
         }
 
@@ -621,7 +604,7 @@ mod tests {
         ) {
             let raw = RawSecrets {
                 client_jwk: jwk.then(|| "{}".to_string()),
-                data_key: key.then(|| "ab".repeat(32)),
+                data_key: key.then(|| r#"{"kid":"d1","key":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="}"#.to_string()),
                 github_token: token.then(|| "ghp_x".to_string()),
                 log_salt: salt.then(|| "salt".to_string()),
             };

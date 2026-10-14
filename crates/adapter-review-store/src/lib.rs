@@ -42,9 +42,6 @@ pub struct DataKey {
     key: [u8; 32],
 }
 
-/// The kid of a key given without one (legacy hex format).
-pub const LEGACY_KID: &str = "legacy";
-
 /// Key ids are short printable labels (they prefix every sealed blob).
 const MAX_KID_LEN: usize = 32;
 
@@ -57,15 +54,6 @@ impl DataKey {
             kid: kid.to_string(),
             key,
         })
-    }
-
-    /// A key without an operator kid (the legacy bare 64-hex `data-key`),
-    /// tagged `legacy` so a rotation can move its rows to a named key.
-    pub fn from_bytes(key: [u8; 32]) -> Self {
-        Self {
-            kid: LEGACY_KID.to_string(),
-            key,
-        }
     }
 
     /// A throwaway key (the image self-test).
