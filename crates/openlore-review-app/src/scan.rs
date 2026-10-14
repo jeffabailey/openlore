@@ -10,17 +10,20 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ports::{GithubError, GithubLink, OwnedRepo, ScanCounts, ScanStatus};
-use review_domain::budget::github_budget_allows;
+use review_domain::budget::{auto_resume_wait, github_budget_allows, ScanAdmission};
 use review_domain::lifecycle::suggestion_from_candidate;
 use review_domain::ownership::{prove_ownership, OwnershipRefusal, VerifiedOwnership};
 use review_domain::reconcile::{add_counts, reconcile};
+use review_domain::views::ScanRefused;
 use scraper_domain::{derive_candidates, select_person_repos, DEFAULT_PERSON_REPO_COUNT};
 
 use crate::http::App;
 use crate::limiter::unix_now_secs;
 use crate::routes::github::{account_of, refusal_of};
+use crate::routes::signin::random_token;
 use crate::wiring::{emit, Counted, LogEvent};
 
 /// How long a paused scan waits when GitHub named no reset time.
@@ -50,8 +53,79 @@ impl Ended {
     }
 }
 
+/// What asking to start a scan did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScanStart {
+    Started,
+    /// No verified GitHub link: verify first.
+    NotVerified,
+    AlreadyScanning,
+    /// The budget said no (logged as `scan.refused`).
+    Refused(ScanRefused),
+    /// The run could not be recorded (logged as `scan.refused` busy).
+    Unavailable,
+}
+
+/// Start a scan for `owner_did` if their link is verified and the budget
+/// admits it; it then runs in the background. The one way any scan starts,
+/// whether the owner pressed Scan or a paused scan resumes on its own.
+pub(crate) fn begin_scan(app: &Arc<App>, owner_did: &str) -> ScanStart {
+    let link = app.links.github_link(owner_did).ok().flatten();
+    let Some(link) = link.filter(|link| link.verified) else {
+        return ScanStart::NotVerified;
+    };
+    let refused = match app.scan_limiter.admit(owner_did) {
+        ScanAdmission::Admitted => None,
+        ScanAdmission::AlreadyScanning => return ScanStart::AlreadyScanning,
+        ScanAdmission::DailyLimitReached => Some(ScanRefused::DailyLimitReached),
+        ScanAdmission::AppBusy => Some(ScanRefused::AppBusy),
+    };
+    if let Some(refused) = refused {
+        emit(LogEvent::ScanRefused(refused));
+        return ScanStart::Refused(refused);
+    }
+    let run_id = random_token();
+    if app.scans.start_scan(owner_did, &run_id).is_err() {
+        app.scan_limiter.release(owner_did);
+        emit(LogEvent::ScanRefused(ScanRefused::AppBusy));
+        return ScanStart::Unavailable;
+    }
+    tokio::spawn(run_scan(app.clone(), owner_did.to_string(), run_id, link));
+    ScanStart::Started
+}
+
+/// Resume `owner_did`'s unfinished scan on its own when
+/// [`auto_resume_wait`] says to, if it is still the latest run then (the
+/// owner may have resumed it already). A resume goes through the budget
+/// like any scan, so it counts toward the day's scans.
+pub(crate) fn resume_on_its_own(app: Arc<App>, owner_did: String, interrupted_by_restart: bool) {
+    let Some(run) = app.scans.latest_scan(&owner_did).ok().flatten() else {
+        return;
+    };
+    let Some(wait) = auto_resume_wait(
+        run.status,
+        run.resume_after,
+        unix_now_secs(),
+        interrupted_by_restart,
+    ) else {
+        return;
+    };
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(wait)).await;
+        let still_unfinished = app
+            .scans
+            .latest_scan(&owner_did)
+            .ok()
+            .flatten()
+            .is_some_and(|latest| latest == run);
+        if still_unfinished {
+            let _ = begin_scan(&app, &owner_did);
+        }
+    });
+}
+
 /// Run one admitted scan for `owner_did` to its end, then free its slot and
-/// record how it ended.
+/// record how it ended; a scan paused for GitHub's budget resumes on its own.
 pub(crate) async fn run_scan(app: Arc<App>, owner_did: String, run_id: String, link: GithubLink) {
     let ended = match reverify(&app, &owner_did, &link).await {
         Ok(ownership) => scan_owned_repos(&app, &ownership).await,
@@ -73,6 +147,9 @@ pub(crate) async fn run_scan(app: Arc<App>, owner_did: String, run_id: String, l
         ended.counts,
         counted.tally(),
     );
+    if ended.status == ScanStatus::RateLimited {
+        resume_on_its_own(app, owner_did, false);
+    }
 }
 
 /// Read the linked profile now and prove ownership again, pinned to the

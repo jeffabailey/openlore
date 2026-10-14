@@ -471,14 +471,14 @@ fn the_operator_reads_aggregate_counts_that_identify_no_one() {
 /// OP-7
 /// ```gherkin
 /// @DEVOPS @ADR-076 @C7b @interruption @contract-shape:bounded-change
-/// Scenario: A scan interrupted by a restart is offered for resume
+/// Scenario: A scan interrupted by a restart resumes on its own
 ///   Given Priya's scan is still running when the app restarts
 ///   When she opens her queue after the restart
-///   Then the interrupted scan is offered for resume, the suggestions persisted so far are kept,
-///        and resuming completes it without duplicates
+///   Then the interrupted scan finishes without her pressing anything, the suggestions
+///        persisted so far are kept, and nothing is duplicated
 /// ```
 #[test]
-fn a_scan_interrupted_by_a_restart_is_offered_for_resume() {
+fn a_scan_interrupted_by_a_restart_resumes_on_its_own() {
     let world = ReviewWorld::new();
     let mut b = given_github_verified(&world, Persona::Priya);
     world.github.set_remaining(4_990);
@@ -486,14 +486,9 @@ fn a_scan_interrupted_by_a_restart_is_offered_for_resume() {
     b.press("Scan my repos");
     let world = world.restart_app();
     let mut b = given_signed_in(&world, Persona::Priya);
-    let page = b.open("/review").clone();
-    assert!(
-        page.offers("Resume scan") || page.scan_status().as_deref() == Some("completed"),
-        "an interrupted scan is offered for resume:\n{}",
-        page.text()
+    assert_eq!(
+        then_scan_reaches_on_its_own(&mut b, "completed", 30),
+        "completed"
     );
-    if page.offers("Resume scan") {
-        assert_eq!(when_scan_finishes(&mut b), "completed");
-    }
     assert_eq!(b.page.pending_cards(), phrases(&priya::FIRST_SCAN));
 }

@@ -174,6 +174,8 @@ struct GhState {
     accounts: Mutex<BTreeMap<String, GithubAccount>>,
     rate_limited_until: Mutex<Option<u64>>,
     remaining: AtomicU64,
+    /// Seconds from now until the reported budget resets.
+    reset_in: AtomicU64,
     token_rejected: AtomicBool,
     token_expiration: Mutex<Option<String>>,
     offline: AtomicBool,
@@ -210,6 +212,7 @@ impl FakeGithubAccounts {
         let runtime = test_runtime("fake-gh-accounts-rt");
         let state = Arc::new(GhState::default());
         state.remaining.store(4_990, Ordering::SeqCst);
+        state.reset_in.store(3_600, Ordering::SeqCst);
         *state.accounts.lock().unwrap() = accounts
             .into_iter()
             .map(|a| (a.login.to_ascii_lowercase(), a))
@@ -296,6 +299,12 @@ impl FakeGithubAccounts {
     /// The rate-limit window has passed.
     pub fn clear_rate_limit(&self) {
         *self.state.rate_limited_until.lock().unwrap() = None;
+    }
+
+    /// Every response reports the budget resetting `secs` from now
+    /// (`x-ratelimit-reset`; 3600 unless set).
+    pub fn set_reset_in(&self, secs: u64) {
+        self.state.reset_in.store(secs, Ordering::SeqCst);
     }
 
     /// The `x-ratelimit-remaining` value every response reports.
@@ -405,7 +414,10 @@ fn route(state: &GhState, req: HttpRequest) -> HttpResponse {
     let mut headers: Vec<(&str, String)> = vec![
         ("x-ratelimit-limit", "5000".to_string()),
         ("x-ratelimit-remaining", remaining.to_string()),
-        ("x-ratelimit-reset", (now_secs() + 3600).to_string()),
+        (
+            "x-ratelimit-reset",
+            (now_secs() + state.reset_in.load(Ordering::SeqCst)).to_string(),
+        ),
     ];
     if let Some(exp) = state.token_expiration.lock().unwrap().clone() {
         headers.push(("github-authentication-token-expiration", exp));

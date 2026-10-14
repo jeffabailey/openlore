@@ -343,13 +343,21 @@ pub(crate) async fn serve(env: &BTreeMap<String, String>) -> u8 {
         Ok(pair) => pair,
         Err(r) => return refuse(&r),
     };
-    // Nothing survives a restart still running (data-models `scan_runs`).
-    let _ = wired.store.interrupt_running_scans();
+    // Nothing survives a restart still running (data-models `scan_runs`);
+    // those scans, and any paused for GitHub's budget, resume on their own.
+    let interrupted = wired.store.interrupt_running_scans().unwrap_or_default();
+    let paused = wired.store.owners_with_paused_scans().unwrap_or_default();
     let token_check = (
         wired.config.github_api_base.clone(),
         wired.github_token.clone(),
     );
     let app = Arc::new(app(wired));
+    for owner_did in interrupted {
+        crate::scan::resume_on_its_own(app.clone(), owner_did, true);
+    }
+    for owner_did in paused {
+        crate::scan::resume_on_its_own(app.clone(), owner_did, false);
+    }
     tokio::spawn(daily_signals(app.clone(), token_check));
     emit(LogEvent::AppReady);
     match http::serve(public, admin, app).await {

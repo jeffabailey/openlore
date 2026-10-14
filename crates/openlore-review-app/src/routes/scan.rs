@@ -6,14 +6,12 @@ use std::sync::Arc;
 
 use hyper::StatusCode;
 use ports::ScanStatus;
-use review_domain::budget::ScanAdmission;
 use review_domain::views::{self, QueueNotice, ScanRefused};
 
 use crate::http::{App, PageRequest, Reply};
 use crate::routes::review::queue_page;
-use crate::routes::signin::{current_session, random_token, signed_in_post, to_landing};
-use crate::scan::run_scan;
-use crate::wiring::{emit, LogEvent};
+use crate::routes::signin::{current_session, signed_in_post, to_landing};
+use crate::scan::{begin_scan, ScanStart};
 
 /// `POST /scan`: refused (sent to the GitHub step) unless a verified link
 /// exists; refused with the reason when the budget says no; otherwise the
@@ -23,45 +21,21 @@ pub(crate) async fn start_scan(app: &Arc<App>, request: &PageRequest) -> Reply {
         Ok(signed_in) => signed_in,
         Err(refused) => return refused,
     };
-    let link = app.links.github_link(&session.owner_did).ok().flatten();
-    let Some(link) = link.filter(|link| link.verified) else {
-        return Reply::redirect("/github");
-    };
-    let refused = match app.scan_limiter.admit(&session.owner_did) {
-        ScanAdmission::Admitted => None,
-        ScanAdmission::AlreadyScanning => return Reply::redirect("/review"),
-        ScanAdmission::DailyLimitReached => Some(ScanRefused::DailyLimitReached),
-        ScanAdmission::AppBusy => Some(ScanRefused::AppBusy),
-    };
-    if let Some(refused) = refused {
-        emit(LogEvent::ScanRefused(refused));
-        return queue_page(
+    let refused = |status, refused| {
+        queue_page(
             app,
             &cookie_value,
             &session,
-            StatusCode::TOO_MANY_REQUESTS,
+            status,
             Some(QueueNotice::ScanRefused(refused)),
-        );
+        )
+    };
+    match begin_scan(app, &session.owner_did) {
+        ScanStart::Started | ScanStart::AlreadyScanning => Reply::redirect("/review"),
+        ScanStart::NotVerified => Reply::redirect("/github"),
+        ScanStart::Refused(why) => refused(StatusCode::TOO_MANY_REQUESTS, why),
+        ScanStart::Unavailable => refused(StatusCode::SERVICE_UNAVAILABLE, ScanRefused::AppBusy),
     }
-    let run_id = random_token();
-    if app.scans.start_scan(&session.owner_did, &run_id).is_err() {
-        app.scan_limiter.release(&session.owner_did);
-        emit(LogEvent::ScanRefused(ScanRefused::AppBusy));
-        return queue_page(
-            app,
-            &cookie_value,
-            &session,
-            StatusCode::SERVICE_UNAVAILABLE,
-            Some(QueueNotice::ScanRefused(ScanRefused::AppBusy)),
-        );
-    }
-    tokio::spawn(run_scan(
-        app.clone(),
-        session.owner_did.clone(),
-        run_id,
-        link,
-    ));
-    Reply::redirect("/review")
 }
 
 /// `GET /scan/status`: the status of the person's latest scan.

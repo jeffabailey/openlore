@@ -5,7 +5,7 @@ use duckdb::{params, OptionalExt};
 use ports::{KpiTally, ReviewStoreError, ScanCounts, ScanRun, ScanRunPort, ScanStatus};
 
 use crate::secrets::port_error;
-use crate::{db_error, ReviewStore};
+use crate::{db_error, ReviewStore, StoreError};
 
 const START_SCAN: &str = "INSERT INTO scan_runs
     (owner_did, run_id, status, started_at) VALUES (?, ?, 'running', now())";
@@ -18,6 +18,8 @@ const FINISH_SCAN: &str = "UPDATE scan_runs
 // Restart sweep, one owner at a time (every statement owner-scoped).
 const OWNERS_WITH_RUNNING_SCANS: &str =
     "SELECT DISTINCT owner_did FROM scan_runs WHERE status = 'running'";
+const OWNERS_WITH_PAUSED_SCANS: &str =
+    "SELECT DISTINCT owner_did FROM scan_runs WHERE status = 'rate_limited' ORDER BY owner_did";
 const INTERRUPT_OWNERS_RUNNING_SCANS: &str = "UPDATE scan_runs
     SET status = ?, finished_at = now()
     WHERE owner_did = ? AND status = 'running'";
@@ -27,6 +29,17 @@ const INTERRUPT_OWNERS_RUNNING_SCANS: &str = "UPDATE scan_runs
 const LATEST_SCAN: &str = "SELECT status, resume_after, new_count, published_count, declined_count
     FROM scan_runs WHERE owner_did = ?
     ORDER BY started_at DESC, rowid DESC LIMIT 1";
+
+/// The owners a `SELECT DISTINCT owner_did …` names.
+fn owners_where(conn: &duckdb::Connection, sql: &str) -> Result<Vec<String>, StoreError> {
+    conn.prepare(sql)
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect()
+        })
+        .map_err(db_error)
+}
 
 /// Unix seconds of a stored timestamp (`NULL` → `None`).
 pub(crate) fn unix_secs_of(stored: &Value) -> Option<i64> {
@@ -94,27 +107,27 @@ impl ScanRunPort for ReviewStore {
         .map_err(port_error)
     }
 
-    fn interrupt_running_scans(&self) -> Result<usize, ReviewStoreError> {
+    fn interrupt_running_scans(&self) -> Result<Vec<String>, ReviewStoreError> {
         let after_restart = ScanStatus::Running.after_restart().as_str();
         self.with_connection(|conn| {
-            let owners: Vec<String> = conn
-                .prepare(OWNERS_WITH_RUNNING_SCANS)
-                .and_then(|mut statement| {
-                    statement
-                        .query_map([], |row| row.get::<_, String>(0))?
-                        .collect()
-                })
-                .map_err(db_error)?;
-            owners.iter().try_fold(0usize, |changed, owner_did| {
+            let mut owners = owners_where(conn, OWNERS_WITH_RUNNING_SCANS)?;
+            owners.sort();
+            owners.iter().try_for_each(|owner_did| {
                 conn.execute(
                     INTERRUPT_OWNERS_RUNNING_SCANS,
                     params![after_restart, owner_did],
                 )
-                .map(|rows| changed + rows)
+                .map(drop)
                 .map_err(db_error)
-            })
+            })?;
+            Ok(owners)
         })
         .map_err(port_error)
+    }
+
+    fn owners_with_paused_scans(&self) -> Result<Vec<String>, ReviewStoreError> {
+        self.with_connection(|conn| owners_where(conn, OWNERS_WITH_PAUSED_SCANS))
+            .map_err(port_error)
     }
 
     fn latest_scan(&self, owner_did: &str) -> Result<Option<ScanRun>, ReviewStoreError> {
@@ -222,7 +235,15 @@ mod tests {
                     store.finish_scan(&did(i), "run", *status, None, NONE_FOUND, KpiTally::NONE).unwrap();
                 }
             }
-            let running = latest.iter().filter(|s| **s == ScanStatus::Running).count();
+            let running: Vec<String> = (0..latest.len())
+                .filter(|i| latest[*i] == ScanStatus::Running)
+                .map(did)
+                .collect();
+            let paused: Vec<String> = (0..latest.len())
+                .filter(|i| latest[*i] == ScanStatus::RateLimited)
+                .map(did)
+                .collect();
+            prop_assert_eq!(store.owners_with_paused_scans().unwrap(), paused);
             prop_assert_eq!(store.interrupt_running_scans().unwrap(), running);
             for (i, status) in latest.iter().enumerate() {
                 prop_assert_eq!(
@@ -230,7 +251,7 @@ mod tests {
                     Some(status.after_restart())
                 );
             }
-            prop_assert_eq!(store.interrupt_running_scans().unwrap(), 0, "a second sweep changes nothing");
+            prop_assert_eq!(store.interrupt_running_scans().unwrap(), Vec::<String>::new(), "a second sweep changes nothing");
         }
     }
 }

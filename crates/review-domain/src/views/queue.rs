@@ -150,8 +150,8 @@ fn scan_notice(latest: Option<ScanRun>, pending: &[Suggestion], tally: &Tally) -
         }
         ScanStatus::Completed if pending.is_empty() => Some(EMPTY_SCAN_NOTICE.to_string()),
         ScanStatus::RateLimited => Some(format!(
-            "GitHub is busy, resuming at {} UTC. The suggestions found so far are kept; \
-             press Resume scan then.",
+            "GitHub is busy, resuming at {} UTC. The suggestions found so far are kept, \
+             and the scan picks up again on its own then.",
             run.resume_after
                 .map_or_else(|| "a later time".to_string(), utc_clock)
         )),

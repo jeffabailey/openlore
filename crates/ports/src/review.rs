@@ -360,9 +360,13 @@ pub trait ScanRunPort: Send + Sync {
 
     /// At startup: every run left `running` by a crash or restart becomes
     /// what [`ScanStatus::after_restart`] says (`interrupted`), so the
-    /// one-running-scan-per-owner limit cannot wedge anyone. Returns how
-    /// many runs changed.
-    fn interrupt_running_scans(&self) -> Result<usize, ReviewStoreError>;
+    /// one-running-scan-per-owner limit cannot wedge anyone. Returns the
+    /// owners whose runs changed (sorted), so their scans can resume.
+    fn interrupt_running_scans(&self) -> Result<Vec<String>, ReviewStoreError>;
+
+    /// The owners with a run paused for GitHub's budget (`rate_limited`),
+    /// sorted: at startup their scans are scheduled to resume.
+    fn owners_with_paused_scans(&self) -> Result<Vec<String>, ReviewStoreError>;
 }
 
 /// A suggestion's identity (BR-1): one per (subject, predicate, object).

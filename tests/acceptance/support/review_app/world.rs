@@ -312,6 +312,22 @@ pub fn when_scan_finishes(browser: &mut Browser) -> String {
     status
 }
 
+/// THEN, without pressing anything, the latest scan reaches `status` within
+/// `secs` seconds; the status it ended on is returned.
+pub fn then_scan_reaches_on_its_own(browser: &mut Browser, status: &str, secs: u64) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let reached = loop {
+        let page = browser.open("/scan/status");
+        let now = page.scan_status().unwrap_or_else(|| "missing".into());
+        if now == status || std::time::Instant::now() > deadline {
+            break now;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    };
+    browser.open("/review");
+    reached
+}
+
 /// GIVEN `persona` has pending suggestions from a finished scan (WS-3's Given + When).
 pub fn given_pending_suggestions(world: &ReviewWorld, persona: Persona) -> Browser {
     let mut browser = given_github_verified(world, persona);

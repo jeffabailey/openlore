@@ -4,6 +4,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ports::ScanStatus;
+
 /// Verify attempts allowed per DID per hour.
 pub const VERIFY_ATTEMPTS_PER_HOUR: usize = 20;
 
@@ -45,6 +47,27 @@ pub fn spend_share(posted_at: &[u64], now: u64) -> Option<Vec<u64>> {
 /// Scans that may run at once, across everyone, unless the operator sets
 /// another limit (the review app's `OPENLORE_REVIEW_SCAN_CONCURRENCY`).
 pub const DEFAULT_CONCURRENT_SCANS: usize = 2;
+
+/// How long a scan that stopped with `status` waits before resuming on its
+/// own, in seconds, or `None` when only its owner resumes it: a scan paused
+/// for GitHub's budget waits for `resume_after` (at once when that has
+/// passed), and one the app's restart interrupted resumes at once. A scan a
+/// GitHub fault interrupted waits for its owner, so a lasting fault cannot
+/// spend her day's scans.
+pub fn auto_resume_wait(
+    status: ScanStatus,
+    resume_after: Option<i64>,
+    now: i64,
+    interrupted_by_restart: bool,
+) -> Option<u64> {
+    match status {
+        ScanStatus::RateLimited => {
+            Some(resume_after.map_or(0, |at| u64::try_from(at.saturating_sub(now)).unwrap_or(0)))
+        }
+        ScanStatus::Interrupted if interrupted_by_restart => Some(0),
+        _ => None,
+    }
+}
 
 /// Below this many remaining GitHub requests a scan pauses before its next repo.
 pub const GITHUB_REMAINING_FLOOR: u64 = 300;
@@ -185,6 +208,32 @@ mod tests {
 
         fn finish(&mut self, did: usize) {
             self.running.remove(&did);
+        }
+    }
+
+    /// bypass: literal oracle table; a generator would have to mirror the
+    /// code under test. Paused waits for its reset (at once once past),
+    /// restart-interrupted resumes at once, everything else waits for its
+    /// owner.
+    #[test]
+    fn a_scan_resumes_on_its_own_only_when_paused_or_restarted() {
+        let now = 1_000;
+        for (status, resume_after, restarted, wait) in [
+            (ScanStatus::RateLimited, Some(1_090), false, Some(90)),
+            (ScanStatus::RateLimited, Some(1_000), false, Some(0)),
+            (ScanStatus::RateLimited, Some(400), false, Some(0)),
+            (ScanStatus::RateLimited, None, true, Some(0)),
+            (ScanStatus::Interrupted, None, true, Some(0)),
+            (ScanStatus::Interrupted, None, false, None),
+            (ScanStatus::Completed, None, true, None),
+            (ScanStatus::Running, None, true, None),
+            (ScanStatus::OwnershipFailed, Some(1_090), true, None),
+        ] {
+            assert_eq!(
+                auto_resume_wait(status, resume_after, now, restarted),
+                wait,
+                "{status:?} {resume_after:?} restarted={restarted}"
+            );
         }
     }
 

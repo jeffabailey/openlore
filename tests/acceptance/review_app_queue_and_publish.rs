@@ -147,6 +147,80 @@ fn when_github_is_busy_partial_results_are_kept_and_the_scan_resumes() {
     );
 }
 
+/// QP-4b
+/// ```gherkin
+/// @US-BRA-003 @AC-003.7 @ADR-076 @contract-shape:bounded-change
+/// Scenario: A scan paused for GitHub's budget picks up again on its own
+///   Given Priya's scan paused because GitHub's budget ran low, resetting in 2 seconds
+///   When the budget has recovered by then
+///   Then the scan finishes without her pressing anything, with every suggestion once
+/// ```
+#[test]
+fn a_paused_scan_picks_up_again_on_its_own() {
+    let world = ReviewWorld::new();
+    let mut browser = given_github_verified(&world, Persona::Priya);
+    world.github.set_remaining(120);
+    world.github.set_reset_in(2);
+    assert_eq!(when_scan_finishes(&mut browser), "rate_limited");
+    assert!(
+        browser.page.shows("picks up again on its own"),
+        "{}",
+        browser.page.text()
+    );
+    world.github.set_remaining(4_990);
+    assert_eq!(
+        then_scan_reaches_on_its_own(&mut browser, "completed", 30),
+        "completed"
+    );
+    assert_eq!(browser.page.pending_cards(), phrases(&priya::FIRST_SCAN));
+}
+
+/// QP-4c
+/// ```gherkin
+/// @US-BRA-003 @AC-003.7 @ADR-076 @contract-shape:bounded-change
+/// Scenario: A paused scan whose reset passed while the app was down resumes at startup
+///   Given Priya's scan paused because GitHub's budget ran low, resetting in an hour
+///   And the app restarts after the reset has passed
+///   Then the scan finishes without her pressing anything
+/// ```
+#[test]
+fn a_paused_scan_resumes_when_the_app_comes_back_after_its_reset() {
+    let world = ReviewWorld::new();
+    let mut browser = given_github_verified(&world, Persona::Priya);
+    world.github.set_remaining(120);
+    assert_eq!(when_scan_finishes(&mut browser), "rate_limited");
+    world.github.set_remaining(4_990);
+    let _world = world.restart_app_later(3_700);
+    assert_eq!(
+        then_scan_reaches_on_its_own(&mut browser, "completed", 30),
+        "completed"
+    );
+    assert_eq!(browser.page.pending_cards(), phrases(&priya::FIRST_SCAN));
+}
+
+/// QP-4d
+/// ```gherkin
+/// @US-BRA-003 @ADR-076 @infrastructure-failure @contract-shape:unbounded-preservation
+/// Scenario: GitHub being unreachable interrupts a scan without doubting ownership
+///   Given Priya has verified github.com/priyaraman
+///   And GitHub cannot be reached when her scan re-checks ownership
+///   Then the scan stops as interrupted, and her link stays verified
+/// ```
+#[test]
+fn github_being_unreachable_interrupts_a_scan_without_doubting_ownership() {
+    let world = ReviewWorld::new();
+    let mut browser = given_github_verified(&world, Persona::Priya);
+    world.github.set_offline(true);
+    assert_eq!(when_scan_finishes(&mut browser), "interrupted");
+    world.github.set_offline(false);
+    browser.open("/review");
+    assert!(
+        browser.page.offers("Resume scan"),
+        "the link stays verified, so the scan can resume:\n{}",
+        browser.page.text()
+    );
+}
+
 /// QP-5
 /// ```gherkin
 /// @US-BRA-003 @AC-003.8 @NFR-BRA-6 @accessibility @contract-shape:pure-function
