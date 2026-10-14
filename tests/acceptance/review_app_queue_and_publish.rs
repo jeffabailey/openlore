@@ -560,6 +560,7 @@ fn her_queue_survives_signing_out_and_the_app_restarting() {
 ///   Given Priya has scanned 6 times today
 ///   When she starts another scan
 ///   Then she is told to come back tomorrow, and no repo is read
+///   And the operator's log records one refused scan with its reason and nothing about her
 /// ```
 #[test]
 fn the_seventh_scan_in_a_day_is_politely_refused() {
@@ -573,6 +574,23 @@ fn the_seventh_scan_in_a_day_is_politely_refused() {
     let _ = browser.try_press("Scan again");
     assert!(browser.page.shows("tomorrow"), "{}", browser.page.text());
     assert_eq!(world.github.scrape_reads_of("priyaraman"), reads);
+
+    let logs = world.app.logs();
+    let refused: Vec<serde_json::Value> = logs
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|line| line["event"] == "scan.refused")
+        .collect();
+    assert_eq!(refused.len(), 1, "one scan.refused line:\n{logs}");
+    let line = refused[0].as_object().expect("a JSON object");
+    assert_eq!(line["reason"], "daily_limit", "{line:?}");
+    let mut keys: Vec<&str> = line.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        ["event", "level", "reason", "ts"],
+        "nothing about her"
+    );
 }
 
 /// QP-18

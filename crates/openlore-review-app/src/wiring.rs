@@ -28,6 +28,7 @@ use review_domain::kpi::{
     utc_day, KpiEvent,
 };
 use review_domain::signin::{permission_mode, SignInFailure};
+use review_domain::views::ScanRefused;
 use scraper_domain::{load_mapping, SignalPredicateMapping, EMBEDDED_MAPPING_YAML};
 use serde_json::{json, Map, Value};
 
@@ -92,6 +93,8 @@ pub(crate) enum LogEvent<'a> {
     /// A GitHub ownership check did not pass (the refusal's label only).
     GithubVerifyRefused(&'static str),
     ScanFinished(ScanStatus),
+    /// A scan was refused before it started (the reason only; never whose).
+    ScanRefused(ScanRefused),
     /// The server GitHub token expires within the warning window (A-8).
     GithubTokenExpiring(i64),
     /// An owner declined a suggestion (KPI count; never which one or whose).
@@ -160,6 +163,15 @@ fn refusal_reason(failure: SignInFailure) -> &'static str {
     }
 }
 
+/// The operator-facing name of why a scan was refused.
+fn scan_refusal_reason(refused: ScanRefused) -> &'static str {
+    match refused {
+        ScanRefused::AlreadyScanning => "already_scanning",
+        ScanRefused::DailyLimitReached => "daily_limit",
+        ScanRefused::AppBusy => "busy",
+    }
+}
+
 /// How loud an event is.
 #[derive(Debug, Clone, Copy)]
 enum Level {
@@ -220,6 +232,11 @@ fn describe(event: LogEvent<'_>) -> (Level, &'static str, Vec<(&'static str, Val
             Info,
             "scan.finished",
             vec![("status", json!(status.as_str()))],
+        ),
+        LogEvent::ScanRefused(refused) => (
+            Info,
+            "scan.refused",
+            vec![("reason", json!(scan_refusal_reason(refused)))],
         ),
         LogEvent::GithubTokenExpiring(days_left) => (
             Warn,
@@ -616,5 +633,21 @@ mod tests {
         assert_eq!(default.admit("did:plc:first"), ScanAdmission::Admitted);
         assert_eq!(default.admit("did:plc:second"), ScanAdmission::Admitted);
         assert_eq!(default.admit("did:plc:third"), ScanAdmission::AppBusy);
+    }
+
+    #[test]
+    fn a_refused_scan_logs_its_reason_and_nothing_else() {
+        for (refused, reason) in [
+            (ScanRefused::AlreadyScanning, "already_scanning"),
+            (ScanRefused::DailyLimitReached, "daily_limit"),
+            (ScanRefused::AppBusy, "busy"),
+        ] {
+            let line = event_line(7, LogEvent::ScanRefused(refused));
+            assert_eq!(
+                line,
+                json!({"ts": 7, "level": "info", "event": "scan.refused", "reason": reason})
+            );
+            assert!(counters_of(&LogEvent::ScanRefused(refused)).is_empty());
+        }
     }
 }

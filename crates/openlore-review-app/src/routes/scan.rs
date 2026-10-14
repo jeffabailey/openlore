@@ -13,6 +13,7 @@ use crate::http::{App, PageRequest, Reply};
 use crate::routes::review::queue_page;
 use crate::routes::signin::{current_session, random_token, signed_in_post, to_landing};
 use crate::scan::run_scan;
+use crate::wiring::{emit, LogEvent};
 
 /// `POST /scan`: refused (sent to the GitHub step) unless a verified link
 /// exists; refused with the reason when the budget says no; otherwise the
@@ -33,6 +34,7 @@ pub(crate) async fn start_scan(app: &Arc<App>, request: &PageRequest) -> Reply {
         ScanAdmission::AppBusy => Some(ScanRefused::AppBusy),
     };
     if let Some(refused) = refused {
+        emit(LogEvent::ScanRefused(refused));
         return queue_page(
             app,
             &cookie_value,
@@ -44,6 +46,7 @@ pub(crate) async fn start_scan(app: &Arc<App>, request: &PageRequest) -> Reply {
     let run_id = random_token();
     if app.scans.start_scan(&session.owner_did, &run_id).is_err() {
         app.scan_limiter.release(&session.owner_did);
+        emit(LogEvent::ScanRefused(ScanRefused::AppBusy));
         return queue_page(
             app,
             &cookie_value,
