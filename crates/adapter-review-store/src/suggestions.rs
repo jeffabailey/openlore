@@ -4,7 +4,8 @@
 
 use duckdb::params;
 use ports::{
-    ReviewStateRead, ReviewStateWrite, ReviewStoreError, Suggestion, SuggestionKey, SuggestionState,
+    KpiTally, ReviewStateRead, ReviewStateWrite, ReviewStoreError, Suggestion, SuggestionKey,
+    SuggestionState,
 };
 
 use crate::secrets::port_error;
@@ -123,22 +124,27 @@ impl ReviewStateWrite for ReviewStore {
         key: &SuggestionKey,
         from: SuggestionState,
         to: SuggestionState,
+        tally: KpiTally<'_>,
     ) -> Result<bool, ReviewStoreError> {
-        self.with_connection(|conn| {
-            conn.execute(
-                CHANGE_STATE,
-                params![
-                    to.as_str(),
-                    owner_did,
-                    key.subject,
-                    key.predicate,
-                    key.object,
-                    from.as_str()
-                ],
-            )
-            .map(|changed| changed == 1)
-            .map_err(db_error)
-        })
+        self.with_tally(
+            tally,
+            |moved| *moved,
+            |conn| {
+                conn.execute(
+                    CHANGE_STATE,
+                    params![
+                        to.as_str(),
+                        owner_did,
+                        key.subject,
+                        key.predicate,
+                        key.object,
+                        from.as_str()
+                    ],
+                )
+                .map(|changed| changed == 1)
+                .map_err(db_error)
+            },
+        )
         .map_err(port_error)
     }
 }
@@ -203,8 +209,8 @@ mod tests {
             }
             let other_before = store.pending_suggestions(OWNERS[1]).unwrap();
             if let Some(key) = expected[0].keys().nth(decline_pick.index(expected[0].len().max(1))).cloned() {
-                prop_assert!(store.change_state(OWNERS[0], &key, SuggestionState::Pending, SuggestionState::Declined).unwrap());
-                prop_assert!(!store.change_state(OWNERS[0], &key, SuggestionState::Pending, SuggestionState::Declined).unwrap());
+                prop_assert!(store.change_state(OWNERS[0], &key, SuggestionState::Pending, SuggestionState::Declined, KpiTally::NONE).unwrap());
+                prop_assert!(!store.change_state(OWNERS[0], &key, SuggestionState::Pending, SuggestionState::Declined, KpiTally::NONE).unwrap());
                 let pending: BTreeSet<SuggestionKey> = store
                     .pending_suggestions(OWNERS[0]).unwrap().into_iter().map(|s| s.key).collect();
                 let mut remaining: BTreeSet<SuggestionKey> = expected[0].keys().cloned().collect();
@@ -213,7 +219,7 @@ mod tests {
                 let states: BTreeMap<SuggestionKey, SuggestionState> =
                     store.suggestion_states(OWNERS[0]).unwrap().into_iter().collect();
                 prop_assert_eq!(states.get(&key), Some(&SuggestionState::Declined));
-                prop_assert!(store.change_state(OWNERS[0], &key, SuggestionState::Declined, SuggestionState::Pending).unwrap());
+                prop_assert!(store.change_state(OWNERS[0], &key, SuggestionState::Declined, SuggestionState::Pending, KpiTally::NONE).unwrap());
                 let restored: BTreeSet<SuggestionKey> = store
                     .pending_suggestions(OWNERS[0]).unwrap().into_iter().map(|s| s.key).collect();
                 prop_assert_eq!(restored, expected[0].keys().cloned().collect::<BTreeSet<_>>());

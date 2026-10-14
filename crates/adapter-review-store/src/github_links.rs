@@ -2,7 +2,7 @@
 //! A verified GitHub id belongs to one DID only.
 
 use duckdb::{params, OptionalExt};
-use ports::{GithubLink, GithubLinkPort, LinkRecorded, ReviewStoreError};
+use ports::{GithubLink, GithubLinkPort, KpiTally, LinkRecorded, ReviewStoreError};
 
 use crate::secrets::port_error;
 use crate::{db_error, ReviewStore, StoreError};
@@ -53,8 +53,10 @@ impl GithubLinkPort for ReviewStore {
         owner_did: &str,
         github_login: &str,
         github_user_id: u64,
+        tally: KpiTally<'_>,
     ) -> Result<LinkRecorded, ReviewStoreError> {
-        self.with_connection(|conn| {
+        let linked = |recorded: &LinkRecorded| *recorded == LinkRecorded::Linked;
+        self.with_tally(tally, linked, |conn| {
             let id = to_db_id(github_user_id)?;
             let held_elsewhere: i64 = conn
                 .query_row(
@@ -104,14 +106,14 @@ mod tests {
             let (priya, sam) = ("did:plc:priya", "did:plc:sam");
             let link = |verified| Some(GithubLink { github_login: login.clone(), github_user_id: id, verified });
 
-            prop_assert_eq!(store.record_verified_link(priya, &login, id).unwrap(), LinkRecorded::Linked);
-            prop_assert_eq!(store.record_verified_link(sam, &login, id).unwrap(), LinkRecorded::HeldByAnotherOwner);
+            prop_assert_eq!(store.record_verified_link(priya, &login, id, KpiTally::NONE).unwrap(), LinkRecorded::Linked);
+            prop_assert_eq!(store.record_verified_link(sam, &login, id, KpiTally::NONE).unwrap(), LinkRecorded::HeldByAnotherOwner);
             prop_assert_eq!(store.github_link(priya).unwrap(), link(true));
             prop_assert_eq!(store.github_link(sam).unwrap(), None);
 
             store.mark_link_unverified(priya, "did_missing").unwrap();
             prop_assert_eq!(store.github_link(priya).unwrap(), link(false));
-            prop_assert_eq!(store.record_verified_link(sam, &login, id).unwrap(), LinkRecorded::Linked);
+            prop_assert_eq!(store.record_verified_link(sam, &login, id, KpiTally::NONE).unwrap(), LinkRecorded::Linked);
             prop_assert_eq!(store.github_link(sam).unwrap(), link(true));
             prop_assert_eq!(store.github_link(priya).unwrap(), link(false));
         }

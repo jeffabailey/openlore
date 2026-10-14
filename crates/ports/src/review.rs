@@ -159,9 +159,29 @@ pub trait SecretStorePort: Send + Sync {
 
 /// Forget a person (US-BRA-012, ADR-074): delete every row the app holds
 /// about `owner_did`, in one transaction, and nothing else. Anonymous
-/// `kpi_counters` are not hers and stay.
+/// `kpi_counters` are not hers and stay; `tally` is added in the same
+/// transaction.
 pub trait ForgetPort: Send + Sync {
-    fn purge_owner(&self, owner_did: &str) -> Result<(), ReviewStoreError>;
+    fn purge_owner(&self, owner_did: &str, tally: KpiTally<'_>) -> Result<(), ReviewStoreError>;
+}
+
+/// The anonymous counters a state change adds in its own transaction
+/// (OD-BRA-11), so a crash can never keep the change and lose the count, or
+/// the reverse. Added only when the change takes effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct KpiTally<'a> {
+    /// `YYYY-MM-DD`, UTC.
+    pub day: &'a str,
+    /// Names from the closed catalogue, one count each.
+    pub events: &'a [&'static str],
+}
+
+impl KpiTally<'_> {
+    /// Count nothing.
+    pub const NONE: KpiTally<'static> = KpiTally {
+        day: "",
+        events: &[],
+    };
 }
 
 /// One stored counter row: `(day YYYY-MM-DD, event, count)`. No owner.
@@ -206,7 +226,11 @@ pub struct WebSession {
 
 /// Browser sessions (create, resolve, end).
 pub trait SessionPort: Send + Sync {
-    fn start_session(&self, session: &NewWebSession) -> Result<(), ReviewStoreError>;
+    fn start_session(
+        &self,
+        session: &NewWebSession,
+        tally: KpiTally<'_>,
+    ) -> Result<(), ReviewStoreError>;
 
     /// The live session whose cookie hashes to `session_hash`.
     fn resolve_session(&self, session_hash: &str) -> Result<Option<WebSession>, ReviewStoreError>;
@@ -238,12 +262,14 @@ pub trait GithubLinkPort: Send + Sync {
     fn github_link(&self, owner_did: &str) -> Result<Option<GithubLink>, ReviewStoreError>;
 
     /// Record (or replace) the verified link of `owner_did`, unless another
-    /// DID holds a verified link to the same GitHub id.
+    /// DID holds a verified link to the same GitHub id; `tally` is added only
+    /// when it is [`LinkRecorded::Linked`].
     fn record_verified_link(
         &self,
         owner_did: &str,
         github_login: &str,
         github_user_id: u64,
+        tally: KpiTally<'_>,
     ) -> Result<LinkRecorded, ReviewStoreError>;
 
     /// A re-check failed: the link stays, marked unverified, with why.
@@ -318,7 +344,7 @@ pub trait ScanRunPort: Send + Sync {
     /// Record that a run started (`running`).
     fn start_scan(&self, owner_did: &str, run_id: &str) -> Result<(), ReviewStoreError>;
 
-    /// Record how a started run ended and what it found.
+    /// Record how a started run ended and what it found, with `tally`.
     fn finish_scan(
         &self,
         owner_did: &str,
@@ -326,6 +352,7 @@ pub trait ScanRunPort: Send + Sync {
         status: ScanStatus,
         resume_after: Option<i64>,
         counts: ScanCounts,
+        tally: KpiTally<'_>,
     ) -> Result<(), ReviewStoreError>;
 
     /// The owner's most recent run, if any.
@@ -411,12 +438,14 @@ pub trait ReviewStateWrite: Send + Sync {
     ) -> Result<(), ReviewStoreError>;
 
     /// Move `key` from `from` to `to`; `false` when it was not in `from`.
+    /// `tally` is added only when it moved.
     fn change_state(
         &self,
         owner_did: &str,
         key: &SuggestionKey,
         from: SuggestionState,
         to: SuggestionState,
+        tally: KpiTally<'_>,
     ) -> Result<bool, ReviewStoreError>;
 }
 

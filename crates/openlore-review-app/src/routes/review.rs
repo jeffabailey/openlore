@@ -3,7 +3,7 @@
 //! suggestion named by anyone else's form is simply not found.
 
 use hyper::StatusCode;
-use ports::{Suggestion, SuggestionKey, SuggestionState, WebSession};
+use ports::{KpiTally, Suggestion, SuggestionKey, SuggestionState, WebSession};
 use review_domain::edits::{edit_claim, philosophy_choices};
 use review_domain::lifecycle::{
     owner_step, tally, visible_and_approvable, LifecycleEvent, OwnerStep,
@@ -21,7 +21,7 @@ use crate::routes::github::github_step_of;
 use crate::routes::signin::{
     csrf_token_for, csrf_token_of, current_session, field, fields, signed_in_post, to_landing,
 };
-use crate::wiring::{observe, LogEvent};
+use crate::wiring::{emit, Counted, LogEvent};
 
 /// `GET /review`: the signed-in queue.
 pub(crate) fn review(app: &App, request: &PageRequest) -> Reply {
@@ -251,10 +251,7 @@ pub(crate) fn decline_suggestion(app: &App, request: &PageRequest) -> Reply {
         app,
         request,
         LifecycleEvent::Decline,
-        |cookie_value, session, key, moved| {
-            if moved {
-                observe(app, LogEvent::SuggestionDeclined);
-            }
+        |cookie_value, session, key, _| {
             queue_page(
                 app,
                 cookie_value,
@@ -276,6 +273,7 @@ pub(crate) fn undo_decline(app: &App, request: &PageRequest) -> Reply {
 /// Take the owner's `event` on the suggestion the form names, if it is the
 /// signed-in owner's and their GitHub link is verified; `done` gets whether
 /// the suggestion moved (`false`: it already stood where `event` leaves it).
+/// A decline that moves is logged and counted in the move's transaction.
 /// A refused event, or anyone else's suggestion, is not found.
 fn with_own_step(
     app: &App,
@@ -297,14 +295,20 @@ fn with_own_step(
         .ok()
         .and_then(|states| states.into_iter().find(|(k, _)| *k == key))
         .map(|(_, state)| state);
+    let logged = (event == LifecycleEvent::Decline).then_some(LogEvent::SuggestionDeclined);
+    let counted = logged.as_ref().map(Counted::of);
+    let tally = counted.as_ref().map_or(KpiTally::NONE, Counted::tally);
     let moved = match current.and_then(|state| owner_step(state, event)) {
         Some(OwnerStep::Move { from, to }) => app
             .review_write
-            .change_state(&session.owner_did, &key, from, to)
+            .change_state(&session.owner_did, &key, from, to, tally)
             .ok(),
         Some(OwnerStep::AlreadyDone) => Some(false),
         None => None,
     };
+    if let (Some(true), Some(event)) = (moved, logged) {
+        emit(event);
+    }
     match moved {
         Some(moved) => done(&cookie_value, &session, &key, moved),
         None => not_found(),

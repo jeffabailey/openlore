@@ -14,7 +14,7 @@ use crate::http::{App, PageRequest, Reply};
 use crate::routes::signin::{
     csrf_token_for, current_session, signed_in_post, signed_out, to_landing,
 };
-use crate::wiring::{observe, LogEvent};
+use crate::wiring::{emit, Counted, LogEvent};
 
 /// `GET /settings`.
 pub(crate) fn settings(app: &App, request: &PageRequest) -> Reply {
@@ -51,8 +51,9 @@ pub(crate) async fn confirm_forget_me(app: &App, request: &PageRequest) -> Reply
 /// Shared by her own confirm and the operator's purge on request.
 pub(crate) async fn forget(app: &App, owner_did: &str) -> Result<RevokeOutcome, ReviewStoreError> {
     let revoked = app.oauth.revoke_grant(owner_did).await;
-    app.forget.purge_owner(owner_did)?;
-    observe(app, LogEvent::Disconnect(revoked));
+    let counted = Counted::of(&LogEvent::Disconnect(revoked));
+    app.forget.purge_owner(owner_did, counted.tally())?;
+    emit(LogEvent::Disconnect(revoked));
     Ok(revoked)
 }
 

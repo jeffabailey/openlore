@@ -1,13 +1,14 @@
 //! Forget a person (US-BRA-012, ADR-074 operator forget-by-DID): the only
 //! multi-table DELETE (check-arch `review_store_owner_scoped_sql`). Every
 //! statement is bounded by the one owner, all run in ONE transaction, and
-//! `kpi_counters` (anonymous, nobody's) is never touched.
+//! `kpi_counters` (anonymous, nobody's) is never deleted from; the forget's
+//! own tally is added in the same transaction.
 
 use duckdb::Connection;
-use ports::{ForgetPort, ReviewStoreError};
+use ports::{ForgetPort, KpiTally, ReviewStoreError};
 
 use crate::secrets::port_error;
-use crate::{db_error, ReviewStore, StoreError};
+use crate::{db_error, in_transaction, kpi, ReviewStore, StoreError};
 
 /// Every row the app holds about one owner, children before the account.
 const PURGE_OWNER: [&str; 8] = [
@@ -21,23 +22,23 @@ const PURGE_OWNER: [&str; 8] = [
     "DELETE FROM accounts WHERE owner_did = ?",
 ];
 
-fn purge_in_transaction(conn: &Connection, owner_did: &str) -> Result<(), StoreError> {
-    conn.execute_batch("BEGIN TRANSACTION").map_err(db_error)?;
-    let purged = PURGE_OWNER
-        .iter()
-        .try_for_each(|sql| conn.execute(sql, [owner_did]).map(drop));
-    match purged {
-        Ok(()) => conn.execute_batch("COMMIT").map_err(db_error),
-        Err(e) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            Err(db_error(e))
-        }
-    }
+fn purge_in_transaction(
+    conn: &Connection,
+    owner_did: &str,
+    tally: KpiTally<'_>,
+) -> Result<(), StoreError> {
+    in_transaction(conn, |conn| {
+        PURGE_OWNER
+            .iter()
+            .try_for_each(|sql| conn.execute(sql, [owner_did]).map(drop))
+            .map_err(db_error)?;
+        kpi::add_tally(conn, tally)
+    })
 }
 
 impl ForgetPort for ReviewStore {
-    fn purge_owner(&self, owner_did: &str) -> Result<(), ReviewStoreError> {
-        self.with_connection(|conn| purge_in_transaction(conn, owner_did))
+    fn purge_owner(&self, owner_did: &str, tally: KpiTally<'_>) -> Result<(), ReviewStoreError> {
+        self.with_connection(|conn| purge_in_transaction(conn, owner_did, tally))
             .map_err(port_error)
     }
 }
@@ -102,13 +103,16 @@ mod tests {
 
     fn seed(store: &ReviewStore, owner: &str, github_id: u64, n: usize) {
         store
-            .start_session(&NewWebSession {
-                session_hash: format!("hash-{owner}"),
-                csrf_hash: "csrf".into(),
-                owner_did: owner.into(),
-                handle: format!("{}.test", &owner[8..]),
-                pds_endpoint: "https://pds.test".into(),
-            })
+            .start_session(
+                &NewWebSession {
+                    session_hash: format!("hash-{owner}"),
+                    csrf_hash: "csrf".into(),
+                    owner_did: owner.into(),
+                    handle: format!("{}.test", &owner[8..]),
+                    pds_endpoint: "https://pds.test".into(),
+                },
+                KpiTally::NONE,
+            )
             .unwrap();
         store
             .put_oauth_session(owner, "https://pds.test", "atproto", b"tokens")
@@ -117,7 +121,12 @@ mod tests {
             .put_auth_request(&format!("state-{owner}"), "iss", Some(owner), b"req")
             .unwrap();
         store
-            .record_verified_link(owner, &format!("gh-{}", &owner[8..]), github_id)
+            .record_verified_link(
+                owner,
+                &format!("gh-{}", &owner[8..]),
+                github_id,
+                KpiTally::NONE,
+            )
             .unwrap();
         let suggestions: Vec<Suggestion> = (0..n)
             .map(|i| Suggestion {
@@ -147,7 +156,7 @@ mod tests {
             seed(&store, a, 1, a_count);
             seed(&store, b, 2, b_count);
             let before = snapshot(&store);
-            store.purge_owner(a).unwrap();
+            store.purge_owner(a, KpiTally::NONE).unwrap();
             let after = snapshot(&store);
             prop_assert_eq!(rows_naming(&after, a), 0, "nothing about A remains");
             let without_a = |s: &[(String, Vec<String>)]| -> Vec<(String, Vec<String>)> {

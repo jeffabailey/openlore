@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 
 use crate::http::{App, PageRequest, Reply};
 use crate::routes::{github, profile, publish, retract, review, scan, settings, share};
-use crate::wiring::{emit, observe, LogEvent};
+use crate::wiring::{emit, observe, Counted, LogEvent};
 
 /// The browser-session cookie (data-models §3.2): host-only by its prefix.
 pub(crate) const SESSION_COOKIE: &str = "__Host-ol_session";
@@ -215,9 +215,10 @@ fn start_session(app: &App, identity: &ports::ResolvedIdentity) -> Reply {
         handle: identity.verified_handle.clone(),
         pds_endpoint: identity.pds_endpoint.clone(),
     };
-    match app.sessions.start_session(&session) {
+    let counted = Counted::of(&LogEvent::SignInCompleted);
+    match app.sessions.start_session(&session, counted.tally()) {
         Ok(()) => {
-            observe(app, LogEvent::SignInCompleted);
+            emit(LogEvent::SignInCompleted);
             Reply::Redirect {
                 location: "/review".to_string(),
                 set_cookie: Some(session_cookie(&cookie_value)),

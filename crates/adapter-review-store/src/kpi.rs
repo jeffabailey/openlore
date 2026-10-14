@@ -2,11 +2,11 @@
 //! `(day, event)`, no owner column and no owner in any statement (check-arch
 //! rule 6). Event names are `&'static str` from the closed catalogue.
 
-use duckdb::params;
-use ports::{KpiCounterPort, KpiCounterRow, ReviewStoreError};
+use duckdb::{params, Connection};
+use ports::{KpiCounterPort, KpiCounterRow, KpiTally, ReviewStoreError};
 
 use crate::secrets::port_error;
-use crate::{db_error, ReviewStore};
+use crate::{db_error, ReviewStore, StoreError};
 
 const COUNT_EVENT: &str = "INSERT INTO kpi_counters (day, event, count)
     VALUES (CAST(? AS DATE), ?, 1)
@@ -16,12 +16,26 @@ const COUNTERS_BETWEEN: &str = "SELECT CAST(day AS VARCHAR), event, count FROM k
     WHERE day BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
     ORDER BY day, event";
 
+/// Add one to each of `tally`'s events on its day, on `conn` (inside the
+/// caller's transaction).
+pub(crate) fn add_tally(conn: &Connection, tally: KpiTally<'_>) -> Result<(), StoreError> {
+    tally.events.iter().try_for_each(|event| {
+        conn.execute(COUNT_EVENT, params![tally.day, event])
+            .map(drop)
+            .map_err(db_error)
+    })
+}
+
 impl KpiCounterPort for ReviewStore {
     fn count(&self, day: &str, event: &'static str) -> Result<(), ReviewStoreError> {
         self.with_connection(|conn| {
-            conn.execute(COUNT_EVENT, params![day, event])
-                .map(drop)
-                .map_err(db_error)
+            add_tally(
+                conn,
+                KpiTally {
+                    day,
+                    events: &[event],
+                },
+            )
         })
         .map_err(port_error)
     }
@@ -52,6 +66,11 @@ impl KpiCounterPort for ReviewStore {
 mod tests {
     use super::*;
     use crate::DataKey;
+    use ports::{
+        ForgetPort, GithubLinkPort, LinkRecorded, NewWebSession, ReviewStateRead, ReviewStateWrite,
+        ScanCounts, ScanRunPort, ScanStatus, SessionPort, Suggestion, SuggestionKey,
+        SuggestionState,
+    };
     use proptest::prelude::*;
 
     const EVENTS: [&str; 3] = ["signin.completed", "scan.completed", "share.posted"];
@@ -74,5 +93,139 @@ mod tests {
             prop_assert_eq!(total, expected as i64);
             prop_assert!(window.iter().all(|r| r.day.as_str() >= "2026-10-02" && r.day.as_str() <= "2026-10-03"));
         }
+
+        /// Universe: one suggestion's state and the kpi_counters rows. A
+        /// state change adds its tally exactly when it moves, so the count
+        /// equals the moves however the attempts interleave.
+        #[test]
+        fn a_state_change_counts_exactly_when_it_moves(
+            attempts in prop::collection::vec(any::<bool>(), 0..8)
+        ) {
+            let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
+            store.add_pending(PRIYA, &[suggestion()]).unwrap();
+            let mut moves = 0;
+            for decline in attempts {
+                let (from, to) = if decline {
+                    (SuggestionState::Pending, SuggestionState::Declined)
+                } else {
+                    (SuggestionState::Declined, SuggestionState::Pending)
+                };
+                let tally = KpiTally { day: DAY, events: &["suggestion.declined"] };
+                if store.change_state(PRIYA, &suggestion().key, from, to, tally).unwrap() {
+                    moves += 1;
+                }
+            }
+            prop_assert_eq!(count_of(&store, "suggestion.declined"), moves);
+        }
+    }
+
+    const PRIYA: &str = "did:plc:priya";
+    const DAY: &str = "2026-10-13";
+
+    fn suggestion() -> Suggestion {
+        Suggestion {
+            key: SuggestionKey {
+                subject: "github:priyaraman/tidepool".into(),
+                predicate: "embodiesPhilosophy".into(),
+                object: "org.openlore.philosophy.memory-safety".into(),
+            },
+            confidence_bp: 2500,
+            evidence: vec![],
+            why: vec![],
+            source_repo: "priyaraman/tidepool".into(),
+        }
+    }
+
+    fn count_of(store: &ReviewStore, event: &str) -> i64 {
+        store
+            .counters_between(DAY, DAY)
+            .unwrap()
+            .iter()
+            .filter(|row| row.event == event)
+            .map(|row| row.count)
+            .sum()
+    }
+
+    /// A tally that cannot be stored takes its state change down with it:
+    /// the suggestion stays pending and nothing is counted.
+    #[test]
+    fn a_failed_tally_rolls_back_its_state_change() {
+        let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
+        store.add_pending(PRIYA, &[suggestion()]).unwrap();
+        let unstorable = KpiTally {
+            day: "not-a-day",
+            events: &["suggestion.declined"],
+        };
+        let declined = store.change_state(
+            PRIYA,
+            &suggestion().key,
+            SuggestionState::Pending,
+            SuggestionState::Declined,
+            unstorable,
+        );
+        assert!(declined.is_err());
+        assert_eq!(
+            store.pending_suggestions(PRIYA).unwrap(),
+            vec![suggestion()]
+        );
+        assert!(store
+            .counters_between("2000-01-01", "2100-01-01")
+            .unwrap()
+            .is_empty());
+    }
+
+    /// Each counted write adds its tally only when it takes effect: a link
+    /// held by another owner, and a session, scan and forget that land.
+    #[test]
+    fn each_counted_write_adds_its_tally_when_it_lands() {
+        let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
+        let tally = |events| KpiTally { day: DAY, events };
+        store
+            .start_session(
+                &NewWebSession {
+                    session_hash: "hash".into(),
+                    csrf_hash: "csrf".into(),
+                    owner_did: PRIYA.into(),
+                    handle: "priya.test".into(),
+                    pds_endpoint: "https://pds.test".into(),
+                },
+                tally(&["signin.completed"]),
+            )
+            .unwrap();
+        let linked = store
+            .record_verified_link(PRIYA, "priyaraman", 7, tally(&["github.verify.ok"]))
+            .unwrap();
+        let held = store
+            .record_verified_link("did:plc:sam", "priyaraman", 7, tally(&["github.verify.ok"]))
+            .unwrap();
+        assert_eq!(
+            (linked, held),
+            (LinkRecorded::Linked, LinkRecorded::HeldByAnotherOwner)
+        );
+        store.start_scan(PRIYA, "run").unwrap();
+        store
+            .finish_scan(
+                PRIYA,
+                "run",
+                ScanStatus::Completed,
+                None,
+                ScanCounts {
+                    new: 0,
+                    already_published: 0,
+                    declined_hidden: 0,
+                },
+                tally(&["scan.completed"]),
+            )
+            .unwrap();
+        store.purge_owner(PRIYA, tally(&["disconnect"])).unwrap();
+        for (event, expected) in [
+            ("signin.completed", 1),
+            ("github.verify.ok", 1),
+            ("scan.completed", 1),
+            ("disconnect", 1),
+        ] {
+            assert_eq!(count_of(&store, event), expected, "{event}");
+        }
+        assert_eq!(store.github_link(PRIYA).unwrap(), None, "the forget landed");
     }
 }

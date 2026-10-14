@@ -17,7 +17,7 @@ use review_domain::views::{self, GithubStep, OwnershipOutcome};
 
 use crate::http::{App, PageRequest, Reply};
 use crate::routes::signin::{csrf_token_for, current_session, field, signed_in_post, to_landing};
-use crate::wiring::{observe, LogEvent};
+use crate::wiring::{emit, observe, Counted, LogEvent};
 
 /// Recent verify attempts per DID (in memory; resets on restart, ADR-076 §2).
 #[derive(Default)]
@@ -77,7 +77,7 @@ pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
     let (login, outcome) = check_bio(app, &session, typed).await;
     let shown = match &outcome {
         Ok(()) => {
-            observe(app, LogEvent::GithubVerified);
+            emit(LogEvent::GithubVerified);
             OwnershipOutcome::Verified
         }
         Err(refusal) => {
@@ -117,11 +117,14 @@ async fn check_bio(
     (profile.login, outcome)
 }
 
+/// Record the proven link; its verification is counted with it.
 fn record_link(app: &App, ownership: &VerifiedOwnership) -> Result<(), OwnershipRefusal> {
+    let counted = Counted::of(&LogEvent::GithubVerified);
     match app.links.record_verified_link(
         ownership.owner_did(),
         ownership.github_login(),
         ownership.github_user_id(),
+        counted.tally(),
     ) {
         Ok(LinkRecorded::Linked) => Ok(()),
         Ok(LinkRecorded::HeldByAnotherOwner) => Err(OwnershipRefusal::LinkedToAnotherAccount),

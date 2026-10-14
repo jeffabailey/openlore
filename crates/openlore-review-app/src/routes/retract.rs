@@ -8,7 +8,7 @@
 
 use hyper::StatusCode;
 use ports::claim_domain::{RecordOrigin, UnsignedClaim};
-use ports::{PlanKind, ResolvedIdentity, SuggestionState};
+use ports::{KpiTally, PlanKind, ResolvedIdentity, SuggestionState};
 use review_domain::lifecycle::{retraction_step, OwnerStep};
 use review_domain::plans::{
     plan_expires_at, restore_retract_plan, retract_plan, rfc3339_utc, RetractPlan,
@@ -121,6 +121,9 @@ impl Retraction<'_> {
                     &self.plan.key(),
                     SuggestionState::Published,
                     SuggestionState::Retracted,
+                    // The retraction already landed at the PDS and was
+                    // counted; this only mirrors it in the queue.
+                    KpiTally::NONE,
                 );
                 Reply::page(
                     StatusCode::OK,

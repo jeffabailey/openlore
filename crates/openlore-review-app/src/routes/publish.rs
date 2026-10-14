@@ -18,7 +18,7 @@ use crate::http::{App, PageRequest, Reply};
 use crate::routes::confirm::{take_confirmed_plan, take_owned_plan, ConfirmedPlan};
 use crate::routes::review::{not_found, owner_can_publish};
 use crate::routes::signin::{csrf_token_of, fields, signed_in_post};
-use crate::wiring::{observe, LogEvent};
+use crate::wiring::{emit, Counted, LogEvent};
 
 /// Confirm "Publish to my repo" (or "Retry").
 pub(crate) async fn confirm_publish(app: &App, request: &PageRequest) -> Reply {
@@ -166,13 +166,15 @@ fn mark_published(app: &App, plan: &PublishPlan) {
         .into_iter()
         .find(|suggestion| &suggestion.key == plan.key());
     let edited = approval_was_edited(plan.claim(), offered.as_ref());
+    let counted = Counted::of(&LogEvent::SuggestionApproved { edited });
     let moved = app.review_write.change_state(
         plan.owner_did(),
         plan.key(),
         SuggestionState::Pending,
         SuggestionState::Published,
+        counted.tally(),
     );
     if matches!(moved, Ok(true)) {
-        observe(app, LogEvent::SuggestionApproved { edited });
+        emit(LogEvent::SuggestionApproved { edited });
     }
 }

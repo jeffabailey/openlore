@@ -37,7 +37,7 @@ pub use probe::{ProbeOutcome, ProbeRefusalReason, ProbeRefused};
 pub mod review;
 pub use review::{
     AuthenticatedIdentity, BeginAuthorizationError, CompleteAuthorizationError, CreatedRecord,
-    ForgetPort, GithubLink, GithubLinkPort, KpiCounterPort, KpiCounterRow, LinkRecorded,
+    ForgetPort, GithubLink, GithubLinkPort, KpiCounterPort, KpiCounterRow, KpiTally, LinkRecorded,
     NewWebSession, OAuthPort, PdsCallback, PlanKind, PublishPlanPort, RepoWriteError,
     ReviewStateRead, ReviewStateWrite, ReviewStoreError, ReviewStorePort, RevokeOutcome,
     ScanCounts, ScanRun, ScanRunPort, ScanStatus, SecretStorePort, SessionPort, StoredPublishPlan,

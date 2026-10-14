@@ -336,6 +336,45 @@ impl ReviewStore {
             .map_err(|_| StoreError::Database("connection lock poisoned".into()))?;
         work(&conn)
     }
+
+    /// Run `work` and, when `counts` says its result took effect, add
+    /// `tally`, all in ONE transaction (OD-BRA-11: a state change and its
+    /// counters land together or not at all).
+    pub(crate) fn with_tally<T>(
+        &self,
+        tally: ports::KpiTally<'_>,
+        counts: impl FnOnce(&T) -> bool,
+        work: impl FnOnce(&Connection) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        self.with_connection(|conn| {
+            in_transaction(conn, |conn| {
+                let done = work(conn)?;
+                if counts(&done) {
+                    kpi::add_tally(conn, tally)?;
+                }
+                Ok(done)
+            })
+        })
+    }
+}
+
+/// `work` in one transaction: committed when it succeeds, rolled back when
+/// it fails.
+pub(crate) fn in_transaction<T>(
+    conn: &Connection,
+    work: impl FnOnce(&Connection) -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    conn.execute_batch("BEGIN TRANSACTION").map_err(db_error)?;
+    match work(conn) {
+        Ok(done) => conn
+            .execute_batch("COMMIT")
+            .map_err(db_error)
+            .map(|()| done),
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
 }
 
 impl ReviewStorePort for ReviewStore {

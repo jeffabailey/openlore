@@ -2,7 +2,7 @@
 
 use duckdb::types::{TimeUnit, Value};
 use duckdb::{params, OptionalExt};
-use ports::{ReviewStoreError, ScanCounts, ScanRun, ScanRunPort, ScanStatus};
+use ports::{KpiTally, ReviewStoreError, ScanCounts, ScanRun, ScanRunPort, ScanStatus};
 
 use crate::secrets::port_error;
 use crate::{db_error, ReviewStore};
@@ -69,23 +69,28 @@ impl ScanRunPort for ReviewStore {
         status: ScanStatus,
         resume_after: Option<i64>,
         counts: ScanCounts,
+        tally: KpiTally<'_>,
     ) -> Result<(), ReviewStoreError> {
-        self.with_connection(|conn| {
-            conn.execute(
-                FINISH_SCAN,
-                params![
-                    status.as_str(),
-                    resume_after,
-                    stored_count(counts.new),
-                    stored_count(counts.already_published),
-                    stored_count(counts.declined_hidden),
-                    owner_did,
-                    run_id
-                ],
-            )
-            .map(drop)
-            .map_err(db_error)
-        })
+        self.with_tally(
+            tally,
+            |_| true,
+            |conn| {
+                conn.execute(
+                    FINISH_SCAN,
+                    params![
+                        status.as_str(),
+                        resume_after,
+                        stored_count(counts.new),
+                        stored_count(counts.already_published),
+                        stored_count(counts.declined_hidden),
+                        owner_did,
+                        run_id
+                    ],
+                )
+                .map(drop)
+                .map_err(db_error)
+            },
+        )
         .map_err(port_error)
     }
 
@@ -183,15 +188,15 @@ mod tests {
             let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
             prop_assert_eq!(store.latest_scan("did:plc:priya").unwrap(), None);
             store.start_scan("did:plc:priya", "run-1").unwrap();
-            store.finish_scan("did:plc:priya", "run-1", first, None, found).unwrap();
+            store.finish_scan("did:plc:priya", "run-1", first, None, found, KpiTally::NONE).unwrap();
             store.start_scan("did:plc:priya", "run-2").unwrap();
             prop_assert_eq!(
                 store.latest_scan("did:plc:priya").unwrap().map(|r| (r.status, r.counts)),
                 Some((ScanStatus::Running, NONE_FOUND))
             );
             store.start_scan("did:plc:sam", "run-3").unwrap();
-            store.finish_scan("did:plc:sam", "run-3", other, None, other_found).unwrap();
-            store.finish_scan("did:plc:priya", "run-2", last, resume_after, found).unwrap();
+            store.finish_scan("did:plc:sam", "run-3", other, None, other_found, KpiTally::NONE).unwrap();
+            store.finish_scan("did:plc:priya", "run-2", last, resume_after, found, KpiTally::NONE).unwrap();
             prop_assert_eq!(
                 store.latest_scan("did:plc:priya").unwrap(),
                 Some(ScanRun { status: last, resume_after, counts: found })
@@ -214,7 +219,7 @@ mod tests {
             for (i, status) in latest.iter().enumerate() {
                 store.start_scan(&did(i), "run").unwrap();
                 if *status != ScanStatus::Running {
-                    store.finish_scan(&did(i), "run", *status, None, NONE_FOUND).unwrap();
+                    store.finish_scan(&did(i), "run", *status, None, NONE_FOUND, KpiTally::NONE).unwrap();
                 }
             }
             let running = latest.iter().filter(|s| **s == ScanStatus::Running).count();

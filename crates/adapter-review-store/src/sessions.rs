@@ -2,7 +2,7 @@
 //! cookie value and the CSRF token are stored; a session lives 30 days.
 
 use duckdb::{params, OptionalExt};
-use ports::{NewWebSession, ReviewStoreError, SessionPort, WebSession};
+use ports::{KpiTally, NewWebSession, ReviewStoreError, SessionPort, WebSession};
 
 use crate::secrets::port_error;
 use crate::{db_error, expiry, ReviewStore};
@@ -23,20 +23,28 @@ const RESOLVE_WEB_SESSION: &str = "SELECT w.owner_did, a.handle_last_seen, w.csr
     WHERE w.session_hash = ? AND w.expires_at > now()";
 
 impl SessionPort for ReviewStore {
-    fn start_session(&self, session: &NewWebSession) -> Result<(), ReviewStoreError> {
-        self.with_connection(|conn| {
-            conn.execute(
-                UPSERT_ACCOUNT,
-                params![session.owner_did, session.handle, session.pds_endpoint],
-            )
-            .map_err(db_error)?;
-            conn.execute(
-                START_WEB_SESSION,
-                params![session.session_hash, session.owner_did, session.csrf_hash],
-            )
-            .map(drop)
-            .map_err(db_error)
-        })
+    fn start_session(
+        &self,
+        session: &NewWebSession,
+        tally: KpiTally<'_>,
+    ) -> Result<(), ReviewStoreError> {
+        self.with_tally(
+            tally,
+            |_| true,
+            |conn| {
+                conn.execute(
+                    UPSERT_ACCOUNT,
+                    params![session.owner_did, session.handle, session.pds_endpoint],
+                )
+                .map_err(db_error)?;
+                conn.execute(
+                    START_WEB_SESSION,
+                    params![session.session_hash, session.owner_did, session.csrf_hash],
+                )
+                .map(drop)
+                .map_err(db_error)
+            },
+        )
         .map_err(port_error)
     }
 
@@ -81,8 +89,8 @@ mod tests {
                 handle: "priya.example".to_string(),
                 pds_endpoint: "https://pds.example".to_string(),
             };
-            store.start_session(&start(&hash, "did:plc:a")).unwrap();
-            store.start_session(&start(&other, "did:plc:b")).unwrap();
+            store.start_session(&start(&hash, "did:plc:a"), KpiTally::NONE).unwrap();
+            store.start_session(&start(&other, "did:plc:b"), KpiTally::NONE).unwrap();
             let live = store.resolve_session(&hash).unwrap().map(|s| (s.owner_did, s.handle));
             prop_assert_eq!(live, Some(("did:plc:a".to_string(), "priya.example".to_string())));
             store.end_session(&hash, "did:plc:a").unwrap();

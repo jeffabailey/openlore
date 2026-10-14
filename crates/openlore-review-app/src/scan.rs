@@ -21,7 +21,7 @@ use scraper_domain::{derive_candidates, select_person_repos, DEFAULT_PERSON_REPO
 use crate::http::App;
 use crate::limiter::unix_now_secs;
 use crate::routes::github::{account_of, refusal_of};
-use crate::wiring::{observe, LogEvent};
+use crate::wiring::{emit, Counted, LogEvent};
 
 /// How long a paused scan waits when GitHub named no reset time.
 const DEFAULT_PAUSE_SECS: i64 = 15 * 60;
@@ -63,13 +63,15 @@ pub(crate) async fn run_scan(app: Arc<App>, owner_did: String, run_id: String, l
         Err(_) => Ended::with_status(ScanStatus::Interrupted),
     };
     app.scan_limiter.release(&owner_did);
-    observe(&app, LogEvent::ScanFinished(ended.status));
+    let counted = Counted::of(&LogEvent::ScanFinished(ended.status));
+    emit(LogEvent::ScanFinished(ended.status));
     let _ = app.scans.finish_scan(
         &owner_did,
         &run_id,
         ended.status,
         ended.resume_after,
         ended.counts,
+        counted.tally(),
     );
 }
 

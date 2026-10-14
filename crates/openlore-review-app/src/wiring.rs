@@ -20,7 +20,7 @@ use adapter_github::client::{
 use adapter_github::GithubAdapter;
 use adapter_review_store::{DataKey, DuckDbCaps, ReviewStore};
 use ports::{
-    OAuthPort, ProbeOutcome, ReviewStorePort, RevokeOutcome, ScanRunPort, ScanStatus,
+    KpiTally, OAuthPort, ProbeOutcome, ReviewStorePort, RevokeOutcome, ScanRunPort, ScanStatus,
     SecretStorePort,
 };
 use review_domain::kpi::{
@@ -140,8 +140,33 @@ fn counters_of(event: &LogEvent<'_>) -> Vec<KpiEvent> {
     }
 }
 
-/// Log `event` and add its anonymous counters for today (UTC). A counter
-/// that cannot be stored never fails the request it describes.
+/// The anonymous counters an event adds, for today (UTC), handed to the
+/// store write the event describes so both land in one transaction.
+pub(crate) struct Counted {
+    day: String,
+    events: Vec<&'static str>,
+}
+
+impl Counted {
+    pub(crate) fn of(event: &LogEvent<'_>) -> Self {
+        Self {
+            day: utc_day(crate::limiter::unix_now_secs()),
+            events: counters_of(event).iter().map(|c| c.name()).collect(),
+        }
+    }
+
+    pub(crate) fn tally(&self) -> KpiTally<'_> {
+        KpiTally {
+            day: &self.day,
+            events: &self.events,
+        }
+    }
+}
+
+/// Log `event` and add its anonymous counters for today (UTC), for an event
+/// with no state change of its own (a state change hands [`Counted`] to its
+/// store write instead). A counter that cannot be stored never fails the
+/// request it describes.
 pub(crate) fn observe(app: &App, event: LogEvent<'_>) {
     let counted = counters_of(&event);
     emit(event);
