@@ -30,6 +30,9 @@ git tag --list --format='%(contents)' "$tag" | sed '/^-----BEGIN PGP SIGNATURE--
 
 sed "s|@REPO@|$repo|g" <<'EOF'
 
+The `x86_64-apple-darwin` (Intel Mac) binary is cross-compiled on Apple Silicon; the other three
+are built natively (ADR-011).
+
 ## Verify a download (optional, recommended)
 ```sh
 # 1. checksum
