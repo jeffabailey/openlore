@@ -23,7 +23,7 @@ path = "src/lib.rs"
 ports = { path = "../ports" }
 net-guard = { path = "../net-guard" }
 claim-domain = { path = "../claim-domain" }
-async-trait = "0.1"
+async-trait = "0.1.92"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 # `net`: the guarded DNS resolver (DD-IPF-5) looks hosts up itself.

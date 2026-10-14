@@ -40,7 +40,7 @@ path = "src/lib.rs"
 #   the conflict-management rationale.
 [dependencies]
 ports = { path = "../ports" }
-async-trait = "0.1"
+async-trait = "0.1.92"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

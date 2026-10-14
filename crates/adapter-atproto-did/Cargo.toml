@@ -37,7 +37,7 @@ serde_json = { workspace = true }
 # Slice-05 (ADR-026): the verify-only `IdentityResolvePort` is ASYNC (network
 # PLC DID-document resolution), so `#[async_trait]` is needed for that impl
 # exactly as `ports` uses it for the trait declaration (ADR-004).
-async-trait = "0.1"
+async-trait = "0.1.92"
 # `apple-native` is the real macOS Keychain. keyring 3 has NO backend by
 # default and silently falls back to an in-memory mock, so without it a
 # stored key never outlived the process.

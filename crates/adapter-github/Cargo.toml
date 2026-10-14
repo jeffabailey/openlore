@@ -40,7 +40,7 @@ ports = { path = "../ports" }
 # on `adapter-*` (only cli/openlore-indexer) — it does NOT restrict an adapter
 # depending inward on a pure domain crate.
 scraper-domain = { path = "../scraper-domain" }
-async-trait = "0.1"
+async-trait = "0.1.92"
 # Reads GitHub's `github-authentication-token-expiration` header (A-8).
 chrono = { workspace = true }
 serde_json = { workspace = true }

@@ -21,7 +21,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
-async-trait = "0.1"
+# 0.1.92+: older async-trait marks the boxed futures #[must_use], which clippy
+# 1.99 reports as double_must_use on every #[async_trait] trait.
+async-trait = "0.1.92"
 url = { workspace = true }
 claim-domain = { path = "../claim-domain" }
 lexicon = { path = "../lexicon" }
