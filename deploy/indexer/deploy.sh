@@ -11,6 +11,12 @@
 #   deploy.sh trigger                    run one pass now and print the unit result
 #   deploy.sh status                     freshness, exit codes, skips, last health line (Logs only)
 #   deploy.sh host-status                container, timers, unit results, logs, releases (over SSM)
+#   deploy.sh measure <minutes>          memory gate: sample both apps' cgroup peaks, MemAvailable
+#                                        and swap-ins for 1-30 min, then PASS/FAIL (§9.6, over SSM)
+#   deploy.sh kpi [days]                 KPI-IXD-3 freshness and KPI-IXD-5 alarm reconciliation
+#                                        over the last 1-30 days (default 7; Logs + alarm history)
+#   deploy.sh test-alarm a1|a2|a3        test-fire one alarm end to end and wait for ALARM, then OK
+#                                        (go-live step 15; a2 always restores the DID list)
 #
 # DIGEST ONLY. <git-sha> must be the full 40-hex commit; it is resolved to the digest CI pushed
 # for it, and from then on only `image@sha256:...` is used. A `sha256:<64 hex>` digest is also
@@ -35,6 +41,10 @@ INDEX_HOST=index.openlore.jeffbailey.us
 PDS_URL=https://openlore.jeffbailey.us
 APP_URL=https://app.openlore.jeffbailey.us
 LOG_GROUP=/openlore/prod/indexer
+DID_LIST_PARAM=/openlore/prod/indexer/repo-dids
+ALARM_A1=openlore-indexer-total-outage
+ALARM_A2=openlore-indexer-pass-failed
+ALARM_A3=openlore-indexer-not-live
 SEARCH_PATH=/xrpc/org.openlore.appview.searchClaims
 CERT_IDENTITY_RE='^https://github.com/jeffabailey/openlore/.github/workflows/ci.yml@refs/heads/main$'
 OIDC_ISSUER=https://token.actions.githubusercontent.com
@@ -329,6 +339,152 @@ laptop_status() {
   if [ -n "$health" ]; then jq -r '."@message"' <<<"$health"; else echo "(none in the last hour: A3 treats this as not live)"; fi
 }
 
+# KPI-IXD-3 (pure): of the hour boundaries in (start, end], how many had an exit-0 pass in the
+# 30 min before them. $1 = window start, $2 = window end (Unix s); stdin = exit-0 pass times.
+freshness_ratio() {
+  jq -sr --argjson start "$1" --argjson end "$2" '
+    sort as $ts
+    | [range((($start / 3600) | floor + 1) * 3600; $end + 1; 3600)] as $hours
+    | [$hours[] as $h | ([$ts[] | select(. <= $h)] | max) as $last
+        | ($last != null and $h - $last <= 1800)] as $fresh
+    | ($fresh | map(select(.)) | length) as $good
+    | "KPI-IXD-3 freshness: \($good)/\($hours | length) hourly checks had an exit-0 pass in the 30 min before (target >= 98%)"'
+}
+
+# KPI-IXD-5 (pure): exit-2 passes with no A2 ALARM transition from 60 min before to 15 min after
+# (A2 stays in ALARM across consecutive failures). $1 = exit-2 pass times, $2 = A2 ALARM times,
+# both JSON arrays of Unix s.
+unalerted_failures() {
+  jq -nr --argjson fails "$1" --argjson alarms "$2" '
+    [$fails[] as $f | select([$alarms[] | select(. >= $f - 3600 and . <= $f + 900)] | length == 0)]
+    | "KPI-IXD-5 exit-2 passes without an A2 alarm: \(length) of \($fails | length) (target 0)"'
+}
+
+# Unix seconds of a Logs Insights @timestamp ("2026-10-07 07:03:41.000", UTC).
+insights_epoch() {
+  jq -r '."@timestamp" | sub("\\.[0-9]+$"; "") | strptime("%Y-%m-%d %H:%M:%S") | mktime'
+}
+
+# The Unix seconds of every ALARM transition of alarm $1 since $2 (Unix s).
+alarm_transitions() {
+  aws cloudwatch describe-alarm-history --region "$REGION" --alarm-name "$1" \
+    --history-item-type StateUpdate --start-date "$(date -u -r "$2" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null ||
+      date -u -d "@$2" +%Y-%m-%dT%H:%M:%SZ)" --output json |
+    jq -c '[.AlarmHistoryItems[] | select(.HistorySummary | test("to ALARM"))
+            | .Timestamp | sub("\\.[0-9]+"; "") | sub("(\\+00:00|Z)$"; "Z") | fromdateiso8601]'
+}
+
+laptop_kpi() { # $1 = days (1-30)
+  need aws jq
+  local days="${1:-7}" now start q_ok q_fail ok_times fail_times a1 a2 a3
+  [[ "$days" =~ ^[0-9]+$ ]] && [ "$days" -ge 1 ] && [ "$days" -le 30 ] ||
+    die "usage: deploy.sh kpi [days 1-30]"
+  now=$(date +%s)
+  start=$((now - days * 86400))
+  local summary='filter event = "indexer.ingest.pass_summary"'
+  q_ok=$(insights_start "$((days * 86400))" "$summary and exit_code = 0 and pass_id not like /^TEST/ | fields @timestamp | limit 10000")
+  q_fail=$(insights_start "$((days * 86400))" "$summary and exit_code = 2 | fields @timestamp | limit 10000")
+  ok_times=$(insights_wait "$q_ok" | insights_epoch)
+  fail_times=$(insights_wait "$q_fail" | insights_epoch | jq -sc .)
+  a1=$(alarm_transitions "$ALARM_A1" "$start")
+  a2=$(alarm_transitions "$ALARM_A2" "$start")
+  a3=$(alarm_transitions "$ALARM_A3" "$start")
+  echo "--- KPIs over the last $days day(s)"
+  freshness_ratio "$start" "$now" <<<"$ok_times"
+  unalerted_failures "$fail_times" "$a2"
+  echo "KPI-IXD-5 ALARM transitions: A1 $(jq length <<<"$a1"), A2 $(jq length <<<"$a2"), A3 $(jq length <<<"$a3") (steady state <= 2 emails a week)"
+}
+
+# Poll alarm $1 until it reads $2 (ALARM or OK), up to $3 seconds; prints each change.
+# INDEXER_ALARM_POLL_S / INDEXER_ALARM_WAIT_S shorten the poll and the budget (tests).
+await_alarm() {
+  local alarm="$1" want="$2" poll="${INDEXER_ALARM_POLL_S:-30}"
+  local budget="${INDEXER_ALARM_WAIT_S:-$3}" state="" last="" try tries
+  tries=$((budget / poll + 1))
+  for ((try = 0; try < tries; try++)); do
+    state=$(aws cloudwatch describe-alarms --region "$REGION" --alarm-names "$alarm" \
+      --query 'MetricAlarms[0].StateValue' --output text)
+    if [ "$state" != "$last" ]; then echo "$(date -u +%H:%M:%S) $alarm $state"; fi
+    last=$state
+    [ "$state" = "$want" ] && return 0
+    sleep "$poll"
+  done
+  echo "deploy.sh: $alarm did not reach $want within ${budget}s (still $state)" >&2
+  return 1
+}
+
+# One pass_summary line on the test-fire stream (the metric filters read the whole group).
+fire_test_line() { # $1 = exit code, $2 = pass id
+  aws logs create-log-stream --region "$REGION" --log-group-name "$LOG_GROUP" \
+    --log-stream-name test-fire 2>/dev/null || true
+  aws logs put-log-events --region "$REGION" --log-group-name "$LOG_GROUP" \
+    --log-stream-name test-fire --log-events "$(jq -cn --argjson t "$(date +%s)000" \
+      --arg m "{\"event\":\"indexer.ingest.pass_summary\",\"exit_code\":$1,\"pass_id\":\"$2\"}" \
+      '[{timestamp: $t, message: $m}]')" >/dev/null
+  echo "$(date -u +%H:%M:%S) fired exit $1 ($2)"
+}
+
+# Sleep until a minute into the next quarter hour (A1 counts exit-3 passes per quarter).
+next_quarter() {
+  local now
+  now=$(date +%s)
+  sleep "$((900 - now % 900 + 60))"
+}
+
+test_alarm_a3() { # stop the indexer; not-live fires; start it; OK follows
+  "$0" stop
+  await_alarm "$ALARM_A3" ALARM 1200 || { "$0" start; return 1; }
+  "$0" start
+  await_alarm "$ALARM_A3" OK 1800
+}
+
+test_alarm_a2() { # a malformed DID list: the pass refuses it (exit 2, nothing purged)
+  local original
+  original=$(aws ssm get-parameter --region "$REGION" --name "$DID_LIST_PARAM" \
+    --with-decryption --query Parameter.Value --output text)
+  # Whatever happens next, the list goes back exactly as it was.
+  restore_did_list() {
+    aws ssm put-parameter --region "$REGION" --name "$DID_LIST_PARAM" --overwrite \
+      --value "$original" --query Version --output text >/dev/null &&
+      echo "$(date -u +%H:%M:%S) DID list restored"
+  }
+  trap 'restore_did_list; cleanup' EXIT
+  aws ssm put-parameter --region "$REGION" --name "$DID_LIST_PARAM" --overwrite \
+    --value "$original,not-a-did" --query Version --output text >/dev/null
+  "$0" trigger || true
+  local fired=0
+  await_alarm "$ALARM_A2" ALARM 1200 || fired=1
+  restore_did_list
+  trap cleanup EXIT
+  "$0" trigger
+  [ "$fired" = 0 ] && await_alarm "$ALARM_A2" OK 1800
+}
+
+test_alarm_a1() { # four synthetic quarters (3, 0, 3, 3) fire total-outage; a 0 clears it
+  "$0" host-timer stop
+  trap '"$0" host-timer start; cleanup' EXIT
+  fire_test_line 3 TEST-a1-1
+  next_quarter && fire_test_line 0 TEST-a1-2
+  next_quarter && fire_test_line 3 TEST-a1-3
+  next_quarter && fire_test_line 3 TEST-a1-4
+  local fired=0
+  await_alarm "$ALARM_A1" ALARM 900 || fired=1
+  next_quarter && fire_test_line 0 TEST-a1-5
+  "$0" host-timer start
+  trap cleanup EXIT
+  [ "$fired" = 0 ] && await_alarm "$ALARM_A1" OK 1200
+}
+
+laptop_test_alarm() { # $1 = a1 | a2 | a3
+  need aws jq
+  case "${1:-}" in
+    a1) test_alarm_a1 ;;
+    a2) test_alarm_a2 ;;
+    a3) test_alarm_a3 ;;
+    *) die "usage: deploy.sh test-alarm a1|a2|a3" ;;
+  esac
+}
+
 # --------------------------------------------------------------------------------------------
 # Host side (root, via SSM). Paths per infrastructure-integration.md §1.
 # --------------------------------------------------------------------------------------------
@@ -591,6 +747,59 @@ host_status() {
   journalctl -u openlore-indexer-health -n 1 -o cat --no-pager 2>/dev/null || true
 }
 
+# The memory gate's verdict (pure): stdin = sample lines `ix <bytes>`, `ra <bytes>` (cgroup
+# memory.peak of the indexer and the review app), `avail <kB>` (MemAvailable) and
+# `pswpin <pages>`. PASS needs indexer <= 100 MiB, review app <= 128 MiB and MemAvailable above
+# 128 MiB throughout (platform-architecture §6); swap-ins are reported, not judged.
+measure_verdict() {
+  awk '
+    $1 == "ix" { n++; if ($2 > ix) ix = $2 }
+    $1 == "ra" { seen_ra = 1; if ($2 > ra) ra = $2 }
+    $1 == "avail" { if (min == "" || $2 < min) min = $2 }
+    $1 == "pswpin" { if (first == "") first = $2; last = $2 }
+    END {
+      mib = 1048576
+      if (n == 0) { print "measure: FAIL: no samples"; exit 1 }
+      printf "measure: indexer peak %.1f MiB (limit 100)\n", ix / mib
+      if (seen_ra) printf "measure: review app peak %.1f MiB (limit 128)\n", ra / mib
+      printf "measure: MemAvailable min %.0f MiB (floor 128)\n", min / 1024
+      printf "measure: swap-ins %d pages\n", last - first
+      fail = ""
+      if (ix > 100 * mib) fail = fail " indexer"
+      if (ra > 128 * mib) fail = fail " review-app"
+      if (min == "" || min <= 128 * 1024) fail = fail " MemAvailable"
+      if (fail == "") { print "measure: PASS"; exit 0 }
+      print "measure: FAIL:" fail
+      exit 1
+    }'
+}
+
+host_measure() { # $1 = minutes (1-30)
+  local minutes="${1:-}" interval="${INDEXER_MEASURE_INTERVAL_S:-5}"
+  local cgroups="${INDEXER_CGROUP_ROOT:-/sys/fs/cgroup/system.slice}" proc="${INDEXER_PROC:-/proc}"
+  [[ "$minutes" =~ ^[0-9]+$ ]] && [ "$minutes" -ge 1 ] && [ "$minutes" -le 30 ] ||
+    die "usage: deploy.sh measure <minutes 1-30>"
+  local ix ra samples i
+  ix=$(docker inspect -f '{{.Id}}' openlore-indexer) || die "openlore-indexer is not running"
+  ra=$(docker inspect -f '{{.Id}}' review-app-review-app-1 2>/dev/null || true)
+  samples="${INDEXER_MEASURE_SAMPLES:-$((minutes * 60 / interval))}"
+  echo "measure: sampling every ${interval}s for ${minutes} min ($samples samples)"
+  for ((i = 0; i < samples; i++)); do
+    echo "ix $(cat "$cgroups/docker-$ix.scope/memory.peak")"
+    if [ -n "$ra" ]; then echo "ra $(cat "$cgroups/docker-$ra.scope/memory.peak")"; fi
+    echo "avail $(awk '/^MemAvailable:/ {print $2}' "$proc/meminfo")"
+    echo "pswpin $(awk '/^pswpin / {print $2}' "$proc/vmstat")"
+    sleep "$interval"
+  done | measure_verdict
+}
+
+host_timer() { # $1 = stop | start: the pass timer only (test-alarm a1 keeps the container up)
+  case "${1:-}" in
+    stop | start) systemctl "$1" openlore-indexer-pass.timer ;;
+    *) die "usage: deploy.sh host host-timer stop|start" ;;
+  esac
+}
+
 host_main() {
   local mode="${1:-}"
   shift || true
@@ -603,6 +812,9 @@ host_main() {
     start) host_start ;;
     trigger) host_trigger ;;
     host-status) host_status ;;
+    measure) host_measure "$@" ;;
+    measure-verdict) measure_verdict ;;
+    host-timer) host_timer "$@" ;;
     *) die "unknown host mode '$mode'" ;;
   esac
 }
@@ -619,9 +831,15 @@ case "$cmd" in
     remote rollback "$@"
     ;;
   status) laptop_status ;;
+  measure) remote measure "$@" ;;
+  host-timer) remote host-timer "$@" ;;
+  kpi) laptop_kpi "$@" ;;
+  test-alarm) laptop_test_alarm "$@" ;;
+  freshness-ratio) freshness_ratio "$@" ;;
+  unalerted-failures) unalerted_failures "$@" ;;
   host) host_main "$@" ;;
   *)
-    sed -n '2,15p' "$0" >&2
+    sed -n '2,20p' "$0" >&2
     exit 2
     ;;
 esac

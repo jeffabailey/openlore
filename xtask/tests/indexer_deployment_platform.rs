@@ -2618,3 +2618,218 @@ fn the_operator_wrapper_gives_the_deploy_scripts_the_account_and_anonymous_regis
     let run = bash("deploy/ops.sh", &["pds", "status"], &[]);
     assert_eq!(run.status, 2, "{}", run.out);
 }
+
+// =============================================================================
+// measure / kpi / test-alarm (infrastructure-integration §6.3, built 2026-10-13)
+// =============================================================================
+
+fn bash_with_stdin(script: &str, args: &[&str], env: &[(&str, String)], stdin: &str) -> Run {
+    use std::io::Write as _;
+    let mut cmd = Command::new("bash");
+    cmd.arg(root().join(script))
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().expect("run bash");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(stdin.as_bytes())
+        .expect("write stdin");
+    let output = child.wait_with_output().expect("wait");
+    Run {
+        status: output.status.code().unwrap_or(-1),
+        out: format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    }
+}
+
+/// XP-40 @NFR-IXD-3 @infrastructure @contract-shape:pure-function
+/// bypass: literal oracle table (platform-architecture §6 limits in bytes and kB).
+#[test]
+fn the_memory_gate_verdict_holds_each_app_to_its_limit() {
+    const MIB: u64 = 1_048_576;
+    let sample = |ix: u64, ra: Option<u64>, avail_kb: u64| -> String {
+        let ra = ra.map_or(String::new(), |ra| format!("ra {ra}\n"));
+        format!("ix {ix}\n{ra}avail {avail_kb}\npswpin 8729\n")
+    };
+    for (samples, status, verdict) in [
+        (
+            sample(63 * MIB, Some(27 * MIB), 370_000) + &sample(60 * MIB, Some(27 * MIB), 380_000),
+            0,
+            "measure: PASS",
+        ),
+        (sample(100 * MIB, None, 131_073), 0, "measure: PASS"),
+        (
+            sample(100 * MIB + 1, None, 400_000),
+            1,
+            "measure: FAIL: indexer",
+        ),
+        (
+            sample(10 * MIB, Some(128 * MIB + 1), 400_000),
+            1,
+            "measure: FAIL: review-app",
+        ),
+        (
+            sample(10 * MIB, None, 131_072),
+            1,
+            "measure: FAIL: MemAvailable",
+        ),
+        (String::new(), 1, "measure: FAIL: no samples"),
+    ] {
+        let run = bash_with_stdin(
+            "deploy/indexer/deploy.sh",
+            &["host", "measure-verdict"],
+            &[],
+            &samples,
+        );
+        assert_eq!(run.status, status, "{samples}\n{}", run.out);
+        assert!(
+            run.out.lines().any(|l| l == verdict),
+            "{verdict}:\n{}",
+            run.out
+        );
+    }
+    let run = bash_with_stdin(
+        "deploy/indexer/deploy.sh",
+        &["host", "measure-verdict"],
+        &[],
+        "ix 1\navail 400000\npswpin 10\nix 1\navail 400000\npswpin 14\n",
+    );
+    assert!(run.out.contains("measure: swap-ins 4 pages"), "{}", run.out);
+}
+
+/// XP-41 @NFR-IXD-3 @infrastructure: `measure` reads both containers' cgroup peaks, MemAvailable
+/// and pswpin from the host and judges them.
+#[cfg(unix)]
+#[test]
+fn measure_samples_both_apps_from_the_host_and_judges_them() {
+    let stubs = Stubs::new();
+    stubs.add(
+        "docker",
+        "case \"$*\" in\n  *openlore-indexer*) echo ixid ;;\n  *review-app-review-app-1*) echo raid ;;\nesac",
+    );
+    let host = tempfile::tempdir().expect("fake host");
+    let cgroups = host.path().join("cg");
+    for (id, peak) in [("ixid", 66_000_000u64), ("raid", 30_000_000)] {
+        let scope = cgroups.join(format!("docker-{id}.scope"));
+        std::fs::create_dir_all(&scope).expect("scope");
+        std::fs::write(scope.join("memory.peak"), format!("{peak}\n")).expect("peak");
+    }
+    let proc_dir = host.path().join("proc");
+    std::fs::create_dir_all(&proc_dir).expect("proc");
+    std::fs::write(
+        proc_dir.join("meminfo"),
+        "MemTotal: 900000 kB\nMemAvailable:     402936 kB\n",
+    )
+    .expect("meminfo");
+    std::fs::write(proc_dir.join("vmstat"), "pswpin 8729\npswpout 22609\n").expect("vmstat");
+    let run = bash(
+        "deploy/indexer/deploy.sh",
+        &["host", "measure", "20"],
+        &[
+            ("PATH", stubs.path_env()),
+            ("INDEXER_CGROUP_ROOT", cgroups.display().to_string()),
+            ("INDEXER_PROC", proc_dir.display().to_string()),
+            ("INDEXER_MEASURE_INTERVAL_S", "0".to_string()),
+            ("INDEXER_MEASURE_SAMPLES", "3".to_string()),
+        ],
+    );
+    assert_eq!(run.status, 0, "{}", run.out);
+    for line in [
+        "measure: indexer peak 62.9 MiB (limit 100)",
+        "measure: review app peak 28.6 MiB (limit 128)",
+        "measure: MemAvailable min 393 MiB (floor 128)",
+        "measure: swap-ins 0 pages",
+        "measure: PASS",
+    ] {
+        assert!(run.out.lines().any(|l| l == line), "{line}:\n{}", run.out);
+    }
+    for bad in ["0", "31", "x"] {
+        let run = bash(
+            "deploy/indexer/deploy.sh",
+            &["host", "measure", bad],
+            &[("PATH", stubs.path_env())],
+        );
+        assert_eq!(run.status, 2, "{bad} minutes is refused\n{}", run.out);
+    }
+}
+
+/// XP-42 @KPI-IXD-3 @KPI-IXD-5 @contract-shape:pure-function
+/// bypass: literal oracle table over hour boundaries and alarm windows.
+#[test]
+fn the_kpi_arithmetic_counts_fresh_hours_and_unalerted_failures() {
+    let h = |n: i64| n * 3600;
+    // Checks at h11..h14: fresh (pass 60 s before), stale (61 min), fresh (exactly 30 min),
+    // stale (90 min).
+    let passes = format!("{}\n{}\n", h(11) - 60, h(13) - 1800);
+    let run = bash_with_stdin(
+        "deploy/indexer/deploy.sh",
+        &["freshness-ratio", &h(10).to_string(), &h(14).to_string()],
+        &[],
+        &passes,
+    );
+    assert_eq!(run.status, 0, "{}", run.out);
+    assert!(
+        run.out.contains("KPI-IXD-3 freshness: 2/4 hourly checks"),
+        "{}",
+        run.out
+    );
+    // The failure at 1000 has an A2 transition 500 s later; the one at 10 000 has none from
+    // 60 min before to 15 min after.
+    let run = bash(
+        "deploy/indexer/deploy.sh",
+        &["unalerted-failures", "[1000,10000]", "[1500,20000]"],
+        &[],
+    );
+    assert!(
+        run.out.contains("without an A2 alarm: 1 of 2"),
+        "{}",
+        run.out
+    );
+}
+
+/// XP-43 @AC-003.2 @infrastructure: test-alarm a2 puts the DID list back exactly, even when the
+/// alarm never fires.
+#[cfg(unix)]
+#[test]
+fn test_alarm_a2_always_restores_the_did_list() {
+    let stubs = Stubs::new();
+    let puts = stubs.dir.path().join("puts.log");
+    stubs.add(
+        "aws",
+        &format!(
+            "case \"$*\" in\n  *'ssm get-parameter '*) echo 'did:plc:a,did:plc:b' ;;\n  *'ssm put-parameter'*) for a in \"$@\"; do [ \"$prev\" = --value ] && echo \"$a\" >> '{}'; prev=$a; done; echo 7 ;;\n  *'ssm send-command'*) echo cmd-1 ;;\n  *get-command-invocation*'--query Status'*) echo Success ;;\n  *get-command-invocation*) printf 'ok\\t\\n' ;;\n  *describe-alarms*) echo OK ;;\nesac",
+            puts.display()
+        ),
+    );
+    let run = bash(
+        "deploy/indexer/deploy.sh",
+        &["test-alarm", "a2"],
+        &[
+            ("PATH", stubs.path_env()),
+            ("INDEXER_INSTANCE_ID", "i-test".to_string()),
+            ("INDEXER_ALARM_POLL_S", "1".to_string()),
+            ("INDEXER_ALARM_WAIT_S", "1".to_string()),
+        ],
+    );
+    assert_ne!(run.status, 0, "the alarm never fired\n{}", run.out);
+    let written = std::fs::read_to_string(&puts).expect("non-vacuity: the list was edited");
+    let values: Vec<&str> = written.lines().collect();
+    assert_eq!(
+        values,
+        ["did:plc:a,did:plc:b,not-a-did", "did:plc:a,did:plc:b"],
+        "{}",
+        run.out
+    );
+    let run = bash("deploy/indexer/deploy.sh", &["test-alarm", "a4"], &[]);
+    assert_eq!(run.status, 2, "{}", run.out);
+}

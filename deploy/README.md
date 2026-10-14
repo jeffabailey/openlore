@@ -454,6 +454,11 @@ with DuckDB 48 MB / 1 thread, `OPENLORE_REVIEW_SCAN_CONCURRENCY` 2).
 A cgroup can never exceed its own cap, so "under the limit" proves nothing; these thresholds
 leave headroom under it.
 
+`deploy/ops.sh indexer measure 20` (since 2026-10-13) runs the sampling below over SSM and judges
+the three memory thresholds (PASS/FAIL, exit 0/1). It reports the `pswpin` growth without judging
+it, so read that line against the criterion above. The scan, the search load and the PDS polls
+stay the steps below.
+
 1. On the host (SSM session, as root), sample every 5 s for 20 minutes and print the values:
 
    ```sh

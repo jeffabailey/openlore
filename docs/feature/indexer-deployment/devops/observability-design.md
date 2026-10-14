@@ -77,7 +77,7 @@ stale-list and missing-heartbeat paths that are not test-fired live.
 | `indexer/freshness` | `filter event = "indexer.ingest.pass_summary" and pass_id not like /^TEST/ \| fields @timestamp, exit_code, configured, own_pds, fallback, skipped, purged_authors, duration_ms, pass_id \| sort @timestamp desc \| limit 8` | `deploy.sh status` (last 8 exit codes, age of last pass of any kind) |
 | (same, `and exit_code = 0 … limit 1`) | last successful pass time, age, counts | `deploy.sh status` |
 | `indexer/skips` | `filter event in ["indexer.ingest.source_skipped", "indexer.ingest.author_purged", "indexer.ingest.pass_refused"] and pass_id = "<id>" \| fields event, did, reason, cause, claims_removed` | `deploy.sh status`, purge audit |
-| `indexer/kpi-freshness` | `filter event = "indexer.ingest.pass_summary" and exit_code = 0 and pass_id not like /^TEST/ \| fields @timestamp \| sort @timestamp asc \| limit 10000` over the full 30 days (no small limit; ≤ 2,880 rows) | KPI-IXD-3 (hourly freshness worked out from the rows; the planned `kpi` mode was not built) |
+| `indexer/kpi-freshness` | `filter event = "indexer.ingest.pass_summary" and exit_code = 0 and pass_id not like /^TEST/ \| fields @timestamp \| sort @timestamp asc \| limit 10000` over the full 30 days (no small limit; ≤ 2,880 rows) | KPI-IXD-3 (hourly freshness worked out from the rows; `deploy.sh kpi` does this) |
 | `indexer/exit-codes` | `filter event = "indexer.ingest.pass_summary" and pass_id not like /^TEST/ \| stats count() by exit_code, bin(1d)` | KPI-IXD-5 |
 | (ad hoc) `indexer/host-health` | `filter event = "indexer.host.health" \| stats min(host_mem_available_mb), max(indexer_mem_mb), pct(search_ms, 95), avg(healthz_ok) by bin(1h)` | availability and latency SLIs, memory guardrail |
 
