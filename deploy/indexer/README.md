@@ -60,7 +60,8 @@ from those ranges. xtask XP-18 checks the value covers every default pool and no
 
 **Not narrowed, on purpose (decided 2026-10-13).** The indexer is attached to `pds_default`
 only and publishes no port, so every connection it accepts already comes from that one subnet
-(172.18.0.0/16 on the go-live host). Narrowing the list to that subnet would exclude no peer
+(172.18.0.0/16 on the go-live host; read it with
+`docker network inspect pds_default --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}'`). Narrowing the list to that subnet would exclude no peer
 that can reach it, and the subnet can change when the instance is replaced (the network is
 recreated), where a stale value would put every client in Caddy's one bucket. The default-pool
 value never needs updating. A bad entry makes the indexer refuse to start (exit 2, naming the
