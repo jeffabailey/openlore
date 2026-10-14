@@ -204,6 +204,45 @@ Shipped slice extensions:
     `at://<did>/org.openlore.claim/<cid>` + `https://github.com/<o>/<r>/commits?author=<login>`).
     C4 L1/L2/L3 in `docs/feature/contributor-philosophy-inference/feature-delta.md`.
 
+- **github-did-identity-link: DESIGN 2026-10-14 (PROPOSED — awaiting user; DISTILL gated on
+  confirming GDL-D1..D5) — IN-PLACE EXTENSION, ZERO new crates, ZERO Lexicon change, one migration
+  (v7).** Realizes the OD-CPI-1 deferral: a DID owner may publish an opt-in `org.openlore.claim`
+  `{subject: <own bare DID>, predicate: sameAs, object: github:<login>, evidence:
+  [https://github.com/<login>, https://api.github.com/user/<id>], confidence: 10000}`, app-signed
+  (CLI) or self-attested (review app). Only a provenance-verified claim with author == subject is a
+  link; a link is an ASSOCIATION only after this reader's own `verified` bio check (the ADR-076
+  exact-token matcher), keyed by numeric GitHub id. Unchecked/disproved links render as assertions.
+  No subject merging; the scorer drops `sameAs` claims.
+  - **`crates/claim-domain` (PURE, EXTEND)**: new `identity_link` module — DID-token matcher
+    hoisted from `review-domain`, `check_link`, `ProvenLink` → `LinkDraft` codec,
+    `project(&claim, &Provenance)`, `link_view` (Active/Retracted/Superseded ×
+    Verified/Disproved/NotChecked; Contested only when ≥ 2 DIDs are Verified for one id).
+  - **`crates/scoring` (PURE, EXTEND)**: `score` drops `sameAs` claims (unbounded preservation;
+    covers the CLI and viewer callers).
+  - **`crates/review-domain` (PURE, EXTEND)**: `prove_ownership` delegates (behavior-preserving);
+    `PlanKind::IdentityLink` publish/retract plans from a fresh in-request proof.
+  - **`crates/ports` (EXTEND)**: NEW sync `IdentityLinkCheckReadPort` / `WritePort` (insert only)
+    / `PurgePort`; `GithubPort::read_person_by_id`.
+  - **`crates/adapter-github` (EXTEND)**: `GET /user/{id}`.
+  - **`crates/adapter-duckdb` (EXTEND)**: `schema_v7` `identity_link_checks` (insert-only, PK
+    includes `checked_at`, latest = read query, never federated); DELETE only in the purge file;
+    live probe.
+  - **`crates/cli` (EXTEND)**: NEW `identity link github <login>` (plan-returning preview; writes
+    on confirm), `identity verify`, `identity list`, `identity forget --did`; linked-identity line
+    in `infer people` / `scrape github <user>` (offline: last local check); `scrape github <user>`
+    refreshes checks for published links at zero extra requests. Unlink = `claim retract`
+    (ADR-008). Narrowest port handle per verb (ADR-085 §7).
+  - **`crates/openlore-review-app` (EXTEND)**: "Publish this link" / "Retract this link" through
+    the create-only `UserRepoWritePort` (no new OAuth scope).
+  - **`openlore-indexer`: UNCHANGED** — links index as ordinary claims; no GitHub capability.
+  - **`xtask` (EXTEND)**: `identity_link_checks_insert_only`,
+    `identity_link_purge_only_in_forget_verb`, `identity_link_readers_hold_no_write_handle`,
+    `identity_link_compose_only_via_proven_link`.
+  - **ADR-084** (wire contract) + **ADR-085** (verification reuse, reader semantics, local checks),
+    both Proposed and conditional. Design, C4 L1/L2, assumptions A-1..A-10 and options per decision:
+    `docs/feature/github-did-identity-link/design/` (wave-decisions.md, architecture-design.md,
+    upstream-changes.md).
+
 - **serverless-philosophy-federation: DESIGN 2026-07-15 — ADDITIVE. +2 Rust production crates
   (`publish-domain` pure + `adapter-publish-http` effect; workspace 21 → 23 prod / 25 members, or 24
   if `publish-domain` folds into `cli`) + a NEW non-workspace `atproto/` TypeScript/Cloudflare-Workers
@@ -674,6 +713,81 @@ extends `viewer-domain` + `adapter-http-viewer` + `cli` + `xtask`, REUSING the
 slice-05 `IndexQueryPort` + `adapter-index-query` + `appview-domain`). Cumulative: 19
 production + 1 test-support + 1 xtask = 21 workspace members.**
 
+## For Acceptance Designer
+
+### github-did-identity-link (DESIGN 2026-10-14, proposed — conditional on user confirmation of GDL-D1..D5; do not start DISTILL before)
+
+- **Driving ports (test entry points)**: CLI `openlore identity link github <login> [--yes]`,
+  `openlore identity verify [--did|--github]`, `openlore identity list [--did]`,
+  `openlore identity forget --did <did>`, `openlore claim retract <cid>` (unlink),
+  `openlore infer people` and `openlore scrape github <user>` (linked-identity line),
+  `openlore graph query --weighted` and the viewer `/score` route (scoring exclusion); review app
+  GitHub step "Publish this link" / "Retract this link" (session + CSRF, existing harness).
+- **Pure seams for property tests**: `claim_domain::identity_link::{check_link, project,
+  link_view}`, the `LinkDraft` codec round-trip (ADR-084 Earned Trust), and
+  `scoring::score(F) == score(F \ sameAs)`.
+- **Doubles**: `FakeGithub` (profile by login and by id + lie catalogue; fixtures
+  `users_profile.json`, `user_by_id.json`), `FakePds`, `FakeKeychain`, `FakeClock`, `TempXdg`;
+  real DuckDB for the check ports.
+- **Must-cover behaviors**: link refused when the bio lacks the exact DID (missing, different,
+  prefix-colliding, uppercase, no bio); `identity link` without confirmation writes nothing; link
+  published app-signed (CLI) and self-attested (review app, fresh read in the request) and re-read
+  with CID == rkey; `claim add --predicate sameAs` (and the other generic composers) refused;
+  evidence login ≠ object login never projects; renamed login answered by a redirect resolves to
+  the new login; third-party `sameAs` (author ≠ subject) and a self-attested `sameAs` from a
+  non-author origin never project as links; **squatter**: an unchecked link naming a victim's id
+  renders as an assertion, not an association; a squatter's Disproved link beside a Verified one
+  leaves the Verified one associated; two Verified DIDs for one id → Contested, none associated;
+  renamed account (old login 404, id read finds new login, bio still names the DID) → verified
+  with the new login; re-registered login (different id) resolved through the id read; deleted
+  account → `account_not_found`; bio proof removed → Disproved on next check, link not retracted;
+  bio removed inside the ~60 s staleness window → link may publish, next check Disproved;
+  rate-limited/outage → no check recorded, state unchanged; retracted link → not Active; weighted
+  output identical with and without links (CLI and viewer); `infer people` with network disabled
+  shows the last check; `scrape github <user>` records a check only for already-published links
+  and never suggests a link from a bio DID; `identity forget` removes only that DID's checks;
+  preview states public + retraction-does-not-erase and keeps I-7; publish message names the
+  retract command (I-8).
+
+## For Software Crafter
+
+### github-did-identity-link (DESIGN 2026-10-14, proposed)
+
+- Hoist the DID-token matcher from `crates/review-domain/src/ownership.rs` into
+  `crates/claim-domain/src/identity_link.rs` verbatim; `prove_ownership` keeps its signature and
+  delegates. Existing review-domain proptests must stay green unchanged.
+- `ProvenLink` is constructible only from a passing `check_link` on a profile read in the same
+  invocation/request (no cache); `LinkDraft` only from `ProvenLink` (private fields). `project`
+  takes the claim and its ADR-071 `Provenance` and must reject: predicate ≠ `sameAs`, bare author
+  ≠ subject, invalid login (`is_github_login` rules), missing/duplicate id URI, profile-URL login
+  ≠ object login.
+- Every non-identity composer (`claim add`, `claim counter`, `scrape --sign`, `infer people
+  --sign`, review-app suggestion publish) refuses predicate `sameAs` through
+  `claim_domain::identity_link::is_reserved_predicate`, pointing to `openlore identity link`.
+- `adapter-github` follows at most one same-host redirect on `/users/{login}`; `login_seen` is the
+  final body's `login`. Rendered lines show check age.
+- Check algorithm per ADR-085 §4: login read, then `GithubPort::read_person_by_id` on 404 or id
+  mismatch; record only `verified|did_missing|different_did|no_bio|account_not_found`.
+- Key every projection by (subject DID, numeric id); logins are display-only and compared
+  case-insensitively. Association rule per ADR-085 §5.
+- Check store: three traits (read / insert-only write / purge); table insert-only with a
+  `check_id` sequence PK, latest via a read query; DELETE only in `identity_link_purge.rs`;
+  rate-limit and outage outcomes write nothing. Migration v7 forward-only and idempotent (v5/v6
+  pattern). Inject the narrowest handle per verb (ADR-085 §7 table).
+- `identity link` is plan-returning until confirmed; on confirm it writes one check and publishes.
+- Reuse the shared sign batch and the single publish path; do not add a second publish path. Unlink
+  is `claim retract`.
+- Scoring: `scoring::score` drops every `sameAs` claim before grouping (one choke point for the CLI
+  and viewer callers); property `score(F) == score(F \ sameAs)`.
+- Review app: new `PlanKind::IdentityLink` built from the publish request's own fresh proof (the
+  stored `github_links` row is never the proof); the existing per-DID publish budget applies; no
+  new OAuth scope; log aggregate counters only (no DIDs, no bios).
+- `xtask check-arch`: add `identity_link_checks_insert_only`,
+  `identity_link_purge_only_in_forget_verb`, `identity_link_readers_hold_no_write_handle`,
+  `identity_link_compose_only_via_proven_link`; the indexer capability boundary must still forbid
+  `adapter-github` in `openlore-indexer`.
+- Paradigm: functional (ADR-007) — use @nw-functional-software-crafter.
+
 ## CLI surface (cumulative)
 
 | Verb | Shipped in | Spec'd by |
@@ -696,6 +810,10 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
 | **`openlore scrape github <owner/repo> --contributors N`** (flag; records top-N human contributors as local links) | contributor-philosophy-inference (DESIGN) | **ADR-063** |
 | **`openlore infer people [--person github:<login>] [--min-repos N] [--sign N[,N,...]]`** (NEW verb; person→philosophy candidates from signed repo claims) | contributor-philosophy-inference (DESIGN) | **ADR-063 + ADR-064** |
 | **`openlore scrape github <user>`** (renders the person view from the local store) | contributor-philosophy-inference (DESIGN) | **ADR-063** |
+| **`openlore identity link github <login> [--yes]`** (NEW verb; bio proof → owner-signed `sameAs` link) | github-did-identity-link (DESIGN, proposed) | **ADR-084 + ADR-085** |
+| **`openlore identity verify [--did <did> \| --github <login>]`** (NEW; re-checks links' GitHub side, records local checks) | github-did-identity-link (DESIGN, proposed) | **ADR-085** |
+| **`openlore identity list [--did <did>]`** (NEW; offline linked-identity view) | github-did-identity-link (DESIGN, proposed) | **ADR-085** |
+| **`openlore identity forget --did <did>`** (NEW; deletes that DID's local proof checks only) | github-did-identity-link (DESIGN, proposed) | **ADR-085** |
 
 ## C4 reference
 
@@ -924,3 +1042,5 @@ C4Container
   `docs/feature/github-release-binaries/environments.yaml`; ADR-011, ADR-012
 - Supply-chain policy: `deny.toml`
 - PDS hosting (shared module): `docs/feature/shared-pds-module/feature-delta.md`; ADR-066..069
+- GitHub ↔ DID identity link (DESIGN, proposed): `docs/feature/github-did-identity-link/design/`;
+  ADR-084, ADR-085
