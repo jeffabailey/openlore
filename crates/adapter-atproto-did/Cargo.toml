@@ -30,6 +30,7 @@ path = "src/lib.rs"
 #   contract in `crates/ports/src/probe.rs`.
 [dependencies]
 ports = { path = "../ports" }
+net-guard = { path = "../net-guard" }
 claim-domain = { path = "../claim-domain" }
 thiserror = { workspace = true }
 serde_json = { workspace = true }

@@ -1,0 +1,21 @@
+[package]
+name = "net-guard"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore guarded DNS resolver (a shared effect library, not an adapter) for reqwest: connects only to addresses the ports::net_policy transport policy admits (ADR-077). Shared by the DID and ingest adapters."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ports = { path = "../ports" }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+reqwest = { version = "0.12", default-features = false }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

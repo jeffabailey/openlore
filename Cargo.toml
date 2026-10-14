@@ -28,6 +28,8 @@ members = [
     "crates/adapter-atproto-pds",
     "crates/adapter-github",
     "crates/adapter-system-clock",
+    # The guarded DNS resolver (ADR-077) shared by the DID and ingest adapters.
+    "crates/net-guard",
     # slice-05 (appview search) indexer effect adapters — step 01-03 scaffolds.
     "crates/adapter-atproto-ingest",
     "crates/adapter-index-store",

@@ -21,6 +21,7 @@ path = "src/lib.rs"
 # write dependency (I-AV-5); the adapter cannot author or mutate a claim.
 [dependencies]
 ports = { path = "../ports" }
+net-guard = { path = "../net-guard" }
 claim-domain = { path = "../claim-domain" }
 async-trait = "0.1"
 serde_json = { workspace = true }

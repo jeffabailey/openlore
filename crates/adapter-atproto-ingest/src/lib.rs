@@ -29,10 +29,11 @@
 
 use async_trait::async_trait;
 use claim_domain::{Cid, ClaimRecord, SignedClaim};
-use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
-use ports::net_policy::{admitted_addresses, url_admissible, TransportPolicy};
+use net_guard::{refused_by_policy, system_lookup};
+pub use net_guard::{AddressRefusedByPolicy, GuardedResolver, HostLookup};
+use ports::net_policy::{url_admissible, TransportPolicy};
 use ports::{
     IngestError, IngestSourcePort, ProbeOutcome, RawRecord, RepoListing, RepoListingPort,
     RepoRecord,
@@ -79,7 +80,7 @@ impl AtProtoIngestAdapter {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
-            .dns_resolver(Arc::new(GuardedResolver { policy, lookup }));
+            .dns_resolver(Arc::new(GuardedResolver::with_lookup(policy, lookup)));
         Self::with_client(client, source, Some(policy))
     }
 
@@ -104,67 +105,6 @@ impl AtProtoIngestAdapter {
 // -----------------------------------------------------------------------------
 // The SSRF guard: DNS answers filtered by the transport policy (DD-IPF-5)
 // -----------------------------------------------------------------------------
-
-/// A host's addresses as DNS returns them (the effect the guard wraps).
-pub type HostLookup = Arc<
-    dyn Fn(
-            String,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = std::io::Result<Vec<IpAddr>>> + Send>,
-        > + Send
-        + Sync,
->;
-
-/// The system resolver.
-fn system_lookup() -> HostLookup {
-    Arc::new(|host: String| {
-        Box::pin(async move {
-            tokio::net::lookup_host((host.as_str(), 0))
-                .await
-                .map(|addrs| addrs.map(|addr| addr.ip()).collect())
-        })
-    })
-}
-
-/// Every address `host` resolved to is refused by the transport policy.
-#[derive(Debug, thiserror::Error)]
-#[error("{host}: every resolved address is refused by the transport policy")]
-pub struct AddressRefusedByPolicy {
-    pub host: String,
-}
-
-/// The reqwest resolver of a guarded client: hands the connector only the
-/// admitted addresses, so the connection goes to an address that was checked
-/// (no second lookup, no rebinding window); none admitted = an error.
-pub struct GuardedResolver {
-    policy: TransportPolicy,
-    lookup: HostLookup,
-}
-
-impl reqwest::dns::Resolve for GuardedResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let host = name.as_str().to_string();
-        let lookup = (self.lookup)(host.clone());
-        let policy = self.policy;
-        Box::pin(async move {
-            let resolved = lookup.await?;
-            let admitted = admitted_addresses(
-                resolved.into_iter().map(|ip| SocketAddr::new(ip, 0)),
-                policy,
-            );
-            if admitted.is_empty() {
-                return Err(Box::new(AddressRefusedByPolicy { host }) as _);
-            }
-            Ok(Box::new(admitted.into_iter()) as reqwest::dns::Addrs)
-        })
-    }
-}
-
-/// Whether a request failed because the guard refused every address.
-fn refused_by_policy(error: &(dyn std::error::Error + 'static)) -> bool {
-    std::iter::successors(Some(error), |e| e.source())
-        .any(|e| e.downcast_ref::<AddressRefusedByPolicy>().is_some())
-}
 
 #[async_trait]
 impl IngestSourcePort for AtProtoIngestAdapter {

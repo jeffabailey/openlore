@@ -10,7 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use ports::net_policy::{admitted_addresses, url_admissible, TransportPolicy};
+use net_guard::GuardedResolver;
+use ports::net_policy::{url_admissible, TransportPolicy};
 use ports::{IdentityLookupError, IdentityLookupPort, ResolvedIdentity};
 use serde_json::Value;
 
@@ -49,7 +50,7 @@ impl IdentityLookup {
             .user_agent("openlore-indexer")
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
-            .dns_resolver(Arc::new(GuardedResolver { policy }))
+            .dns_resolver(Arc::new(GuardedResolver::new(policy)))
             .build()
             .unwrap_or_default();
         Self::with_client(client, handle_resolver_url, plc_url, Some(policy))
@@ -115,35 +116,6 @@ impl IdentityLookup {
             .await?
             .found()
             .ok_or(IdentityLookupError::NotFound)
-    }
-}
-
-/// The reqwest resolver of a guarded lookup: hands the connector only the
-/// addresses the transport policy admits, so the connection goes to an
-/// address that was checked (no second lookup, no rebinding window).
-struct GuardedResolver {
-    policy: TransportPolicy,
-}
-
-/// Every address a host resolved to is refused by the transport policy.
-#[derive(Debug, thiserror::Error)]
-#[error("{host}: every resolved address is refused by the transport policy")]
-struct AddressRefusedByPolicy {
-    host: String,
-}
-
-impl reqwest::dns::Resolve for GuardedResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let host = name.as_str().to_string();
-        let policy = self.policy;
-        Box::pin(async move {
-            let resolved = tokio::net::lookup_host((host.as_str(), 0)).await?;
-            let admitted = admitted_addresses(resolved, policy);
-            if admitted.is_empty() {
-                return Err(Box::new(AddressRefusedByPolicy { host }) as _);
-            }
-            Ok(Box::new(admitted.into_iter()) as reqwest::dns::Addrs)
-        })
     }
 }
 
