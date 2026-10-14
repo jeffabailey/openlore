@@ -49,7 +49,7 @@ services:
       # bucket. Caddy reaches us over pds_default, whose subnet Docker assigns from its default
       # local pools (172.17-31.0.0/16, 192.168.0.0/16), so trust those bridge ranges. No port is
       # published, so only containers on this host's Docker networks can connect from them.
-      # To narrow it to the real subnet, see deploy/indexer/README.md "Trusted proxies".
+      # Why it is not narrowed to the one subnet: deploy/indexer/README.md "Trusted proxies".
       OPENLORE_INDEXER_TRUSTED_PROXIES: "172.16.0.0/12,192.168.0.0/16"
     volumes:
       - /pds/indexer/data:/data

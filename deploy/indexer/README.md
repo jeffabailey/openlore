@@ -58,18 +58,13 @@ its default local address pools (172.17.0.0/16 to 172.31.0.0/16, then 192.168.0.
 The container publishes no port, so only containers on this host's Docker networks can connect
 from those ranges. xtask XP-18 checks the value covers every default pool and nothing else.
 
-To narrow it to the actual subnet, on the host:
-
-```sh
-docker network inspect pds_default --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}'
-```
-
-`deploy.sh install`/`redeploy` copy `host/compose.yaml` from the repo, so narrow it there: set
-that subnet (e.g. `172.18.0.0/16`) as the value, change XP-18's Docker-pool list in
-`xtask/tests/indexer_deployment_platform.rs` to the same subnet, commit, and run
-`deploy.sh redeploy`. The subnet can change when the instance is replaced (the network is
-recreated), so recheck it then; the default-pool value never needs this. A bad entry makes the
-indexer refuse to start (exit 2, naming the variable), so a typo shows at once.
+**Not narrowed, on purpose (decided 2026-10-13).** The indexer is attached to `pds_default`
+only and publishes no port, so every connection it accepts already comes from that one subnet
+(172.18.0.0/16 on the go-live host). Narrowing the list to that subnet would exclude no peer
+that can reach it, and the subnet can change when the instance is replaced (the network is
+recreated), where a stale value would put every client in Caddy's one bucket. The default-pool
+value never needs updating. A bad entry makes the indexer refuse to start (exit 2, naming the
+variable), so a typo shows at once.
 
 ## Pass exit codes
 

@@ -277,8 +277,6 @@ for the next. Nothing here runs from CI: every command is run by the operator fr
 - **I-0 separate vs folded:** apply the indexer's prod resources before the module bump, or let
   them ride the replacement plan (step 5).
 - **App go-live order:** either app may go live first (steps 9-10, 17).
-- **`OPENLORE_INDEXER_TRUSTED_PROXIES` narrowing** to the actual `pds_default` subnet
-  (`deploy/indexer/README.md`, *Trusted proxies*).
 - **DID list contents** (step 7).
 - **GitHub PAT expiry** for `github-token` (step 7).
 - **The downtime window** for the replacement (step 5).
