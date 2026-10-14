@@ -1,6 +1,12 @@
 # ADR-011: Release Matrix = 4-Platform Binary Set + crates.io; Windows Deferred
 
 - **Status**: Accepted (locked by user 2026-05-25)
+- **Amended 2026-10-13**: `x86_64-apple-darwin` is cross-compiled from the
+  Apple-Silicon `macos-14` runner (`--target x86_64-apple-darwin`), not built on
+  a native Intel runner. The Intel `macos-13` cell queued for about 11 hours
+  and blocked rc4, so `5cbc93f` moved it; v0.1.0 shipped that way. This is
+  the "runner deprecated" revisit trigger below, taken early. The other three
+  cells stay native.
 - **Date**: 2026-05-25
 - **Deciders**: Apex (nw-platform-architect)
 - **Feature**: openlore-foundation (slice-01 walking skeleton)
@@ -28,7 +34,9 @@ distributed, plus the explicit deferral list.
 | `x86_64-unknown-linux-gnu` | Linux | x86_64 | glibc | mainstream x86 Linux |
 | `aarch64-unknown-linux-gnu` | Linux | aarch64 | glibc | ARM Linux (RPi 4/5, Graviton) |
 
-Each binary is built on its native runner (no cross-compile in slice-01).
+Each binary is built on its native runner (no cross-compile in slice-01),
+except `x86_64-apple-darwin`, which is cross-compiled on `macos-14` (amended
+2026-10-13; see the status line).
 
 ### Channels
 
