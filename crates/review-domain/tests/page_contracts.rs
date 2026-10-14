@@ -533,6 +533,7 @@ fn a_pending_suggestion_is_a_card_with_its_evidence_and_three_actions() {
         r#"<button type="submit" data-key="a">Approve</button>"#,
         r#"<button type="submit" data-key="e">Edit</button>"#,
         r#"<button type="submit" data-key="n">Not me</button>"#,
+        r#"<article id="card-6d571eb846ce58c5" hx-morph-skip-children>"#,
     ] {
         assert!(html.contains(shown), "missing {shown}: {html}");
     }

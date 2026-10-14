@@ -22,8 +22,8 @@ use review_domain::plans::{
 use review_domain::published::{live_published_claim, profile_subject, ProfileSubject};
 use review_domain::reconcile::Reconciled;
 use review_domain::selection::{
-    chosen_suggestions, selection_key, selection_value, tally_batch, BatchTally, PlanResult,
-    MAX_SELECTED,
+    card_id, chosen_suggestions, selection_key, selection_value, tally_batch, BatchTally,
+    PlanResult, MAX_SELECTED,
 };
 use review_domain::share::{compose_post, share_post_plan, ShareRefusal, MAX_POST_GRAPHEMES};
 use review_domain::signin::SignInFailure;
@@ -424,6 +424,35 @@ proptest! {
         let key = SuggestionKey { subject, predicate: "embodiesPhilosophy".to_string(), object };
         prop_assert_eq!(selection_key(&selection_value(&key)), Some(key));
     }
+}
+
+proptest! {
+    /// A card's id names its key: one key always gets the same id, and two
+    /// different keys get different ids (the refresh matches cards by id).
+    #[test]
+    fn a_card_id_is_stable_and_names_one_key(
+        a in "github:[a-z0-9-]{1,12}/[a-z0-9._-]{1,12}",
+        b in "github:[a-z0-9-]{1,12}/[a-z0-9._-]{1,12}",
+        object in "org\\.openlore\\.philosophy\\.[a-z-]{1,16}",
+    ) {
+        let key = |subject: &str| SuggestionKey {
+            subject: subject.to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: object.clone(),
+        };
+        prop_assert_eq!(card_id(&key(&a)), card_id(&key(&a)));
+        prop_assert_eq!(a == b, card_id(&key(&a)) == card_id(&key(&b)));
+    }
+}
+
+#[test]
+fn a_card_id_is_fnv1a_of_the_selection_value_in_hex() {
+    let key = SuggestionKey {
+        subject: "github:priyaraman/tidepool".to_string(),
+        predicate: "embodiesPhilosophy".to_string(),
+        object: "org.openlore.philosophy.memory-safety".to_string(),
+    };
+    assert_eq!(card_id(&key), "card-6d571eb846ce58c5");
 }
 
 #[test]

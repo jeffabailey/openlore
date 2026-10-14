@@ -17,6 +17,18 @@ pub fn selection_value(key: &SuggestionKey) -> String {
     format!("{} {} {}", key.subject, key.predicate, key.object)
 }
 
+/// The card's element id: stable for one suggestion across renders, so the
+/// queue's in-place refresh matches each card to itself (FNV-1a 64 of
+/// [`selection_value`], in hex).
+pub fn card_id(key: &SuggestionKey) -> String {
+    let hash = selection_value(key)
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
+    format!("card-{hash:016x}")
+}
+
 /// The key a submitted value names, if it is exactly three non-empty parts.
 pub fn selection_key(value: &str) -> Option<SuggestionKey> {
     let mut parts = value.split(' ');

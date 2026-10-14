@@ -265,9 +265,12 @@ fn card_action(
 }
 
 /// One evidence-backed card (AC-003.2): confidence, why, evidence, actions.
+/// Its stable id and `hx-morph-skip-children` let the 2 s refresh during a
+/// scan add and remove cards without touching one's contents, so a preview
+/// opened inside a card stays open.
 fn suggestion_card(suggestion: &Suggestion, csrf_token: &str) -> Markup {
     html! {
-        article {
+        article id=(card_id(&suggestion.key)) hx-morph-skip-children {
             (selection_box(&suggestion.key))
             h2 { (suggestion_headline(&suggestion.key)) }
             p {

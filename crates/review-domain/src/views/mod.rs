@@ -29,7 +29,7 @@ pub use retract::*;
 pub use settings::*;
 pub use share::*;
 
-pub use crate::selection::{selection_value, MAX_SELECTED, SELECTION_FIELD};
+pub use crate::selection::{card_id, selection_value, MAX_SELECTED, SELECTION_FIELD};
 
 /// The region a page's outcome lives in: htmx swaps it into a card (an
 /// inline Approve) or in place (Publish on an inline preview).
