@@ -396,6 +396,7 @@ pub(crate) fn gen_client_jwk() -> u8 {
 fn wire(env: &BTreeMap<String, String>) -> Result<Wired, Refusal> {
     let config = parse_config(env, BuildProfile::of_this_build())
         .map_err(|e| refusal(Probe::Config)(e.to_string()))?;
+    crate::limiter::set_clock_skew(config.clock_skew_secs);
     let mapping = load_mapping(EMBEDDED_MAPPING_YAML)
         .map_err(|e| refusal(Probe::Config)(format!("signal mapping: {e}")))?;
     let secrets = parse_secrets(read_secrets(&config.secrets_dir))

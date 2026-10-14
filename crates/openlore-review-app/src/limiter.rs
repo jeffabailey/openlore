@@ -1,17 +1,27 @@
 //! The in-memory limiter state (ADR-076 §2): the root holds it, the pure
 //! `review_domain::budget` core decides. Resets on restart by design.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use review_domain::budget::{admit_scan, release_scan, ScanAdmission, ScanBudget};
 
-/// Unix seconds now (the shell's clock).
+/// How far ahead the clock runs: set once at startup from the config, which
+/// only a development build lets be non-zero (the expiry test seam).
+static CLOCK_SKEW_SECS: OnceLock<u64> = OnceLock::new();
+
+/// Run the clock `secs` ahead for the life of the process (first call wins).
+pub(crate) fn set_clock_skew(secs: u64) {
+    let _ = CLOCK_SKEW_SECS.set(secs);
+}
+
+/// Unix seconds now (the shell's clock, plus any test-seam skew).
 pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default()
+        .saturating_add(CLOCK_SKEW_SECS.get().copied().unwrap_or(0))
 }
 
 /// Unix seconds now, signed as the pure core's clocks are.

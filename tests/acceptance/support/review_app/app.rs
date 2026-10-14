@@ -219,6 +219,18 @@ impl ReviewApp {
         Err(None)
     }
 
+    /// Restart the same app with its clock `secs` ahead (the development
+    /// build's `REVIEW_APP_CLOCK_SKEW_SECS` seam), as if that much time passed.
+    pub fn restart_later(mut self, secs: u64) -> Self {
+        self.settings
+            .extra_env
+            .retain(|(name, _)| name != "REVIEW_APP_CLOCK_SKEW_SECS");
+        self.settings
+            .extra_env
+            .push(("REVIEW_APP_CLOCK_SKEW_SECS".to_string(), secs.to_string()));
+        self.restart()
+    }
+
     /// Stop and start the same app (same origin, database and secrets).
     pub fn restart(mut self) -> Self {
         let _ = self.child.kill();

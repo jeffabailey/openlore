@@ -28,6 +28,12 @@ const DB_THREADS_RANGE: RangeInclusive<u64> = 1..=4;
 /// Scans the app runs at once (fix-go-live-runbook-gaps S6): the memory
 /// gate's fail path lowers it to 1.
 pub(crate) const SCAN_CONCURRENCY_VAR: &str = "OPENLORE_REVIEW_SCAN_CONCURRENCY";
+
+/// The test seam that runs a development build's clock ahead, in seconds.
+pub(crate) const CLOCK_SKEW_VAR: &str = "REVIEW_APP_CLOCK_SKEW_SECS";
+
+/// How far ahead the clock seam may run: up to a week.
+const CLOCK_SKEW_RANGE: RangeInclusive<u64> = 0..=7 * 24 * 3600;
 const SCAN_CONCURRENCY_RANGE: RangeInclusive<u64> = 1..=4;
 /// The production sizes (architecture-design §3): 48 MiB, one thread.
 const DEFAULT_DB_MEMORY_LIMIT_MB: u64 = 48;
@@ -74,6 +80,8 @@ pub(crate) enum ConfigError {
     },
     /// `REVIEW_APP_ALLOW_LOOPBACK_HTTP` in a release build.
     LoopbackHttpInRelease,
+    /// `REVIEW_APP_CLOCK_SKEW_SECS` in a release build.
+    ClockSkewInRelease,
 }
 
 impl std::fmt::Display for ConfigError {
@@ -90,6 +98,10 @@ impl std::fmt::Display for ConfigError {
             Self::LoopbackHttpInRelease => write!(
                 f,
                 "REVIEW_APP_ALLOW_LOOPBACK_HTTP is a test seam; a release build refuses it"
+            ),
+            Self::ClockSkewInRelease => write!(
+                f,
+                "{CLOCK_SKEW_VAR} is a test seam; a release build refuses it"
             ),
         }
     }
@@ -110,6 +122,9 @@ pub(crate) struct AppConfig {
     pub(crate) db_threads: u64,
     /// Scans that may run at once (`OPENLORE_REVIEW_SCAN_CONCURRENCY`).
     pub(crate) scan_concurrency: usize,
+    /// Seconds a development build's clock runs ahead (the expiry test
+    /// seam); always 0 in a release build.
+    pub(crate) clock_skew_secs: u64,
     pub(crate) secrets_dir: PathBuf,
     pub(crate) oauth_scopes: String,
     pub(crate) github_api_base: String,
@@ -131,6 +146,11 @@ pub(crate) fn parse_config(
         (false, _) => TransportPolicy::HttpsOnly,
         (true, BuildProfile::Development) => TransportPolicy::HttpsOrLoopbackHttp,
         (true, BuildProfile::Release) => return Err(ConfigError::LoopbackHttpInRelease),
+    };
+    let clock_skew_secs = match (get(CLOCK_SKEW_VAR), profile) {
+        (None, _) => 0,
+        (Some(_), BuildProfile::Release) => return Err(ConfigError::ClockSkewInRelease),
+        (Some(value), BuildProfile::Development) => clock_skew(value)?,
     };
     if !matches!(get("LOG_FORMAT"), None | Some("json")) {
         return Err(ConfigError::Invalid {
@@ -170,6 +190,7 @@ pub(crate) fn parse_config(
             DEFAULT_DB_THREADS,
         )?,
         scan_concurrency: scan_concurrency(get(SCAN_CONCURRENCY_VAR))?,
+        clock_skew_secs,
         secrets_dir: PathBuf::from(get("SECRETS_DIR").unwrap_or("/run/secrets")),
         oauth_scopes: get("OAUTH_SCOPES")
             .unwrap_or(DEFAULT_OAUTH_SCOPES)
@@ -211,6 +232,19 @@ fn scan_concurrency(value: Option<&str>) -> Result<usize, ConfigError> {
                 range: SCAN_CONCURRENCY_RANGE,
             })
     })
+}
+
+/// The clock seam's offset: whole seconds up to a week (pure, total).
+fn clock_skew(value: &str) -> Result<u64, ConfigError> {
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|secs| CLOCK_SKEW_RANGE.contains(secs))
+        .ok_or_else(|| ConfigError::OutOfRange {
+            name: CLOCK_SKEW_VAR,
+            value: value.to_string(),
+            range: CLOCK_SKEW_RANGE,
+        })
 }
 
 fn socket_addr(name: &'static str, value: &str) -> Result<SocketAddr, ConfigError> {
@@ -550,6 +584,24 @@ mod tests {
                     let loopback_http = url.starts_with("http://127.") || url.starts_with("http://localhost");
                     prop_assert!(https || (opted_in && profile == BuildProfile::Development && loopback_http), "{url}");
                 }
+            }
+        }
+
+        /// A release build refuses the clock seam whatever else is set; a
+        /// development build runs ahead by exactly the seconds given, up to a
+        /// week.
+        #[test]
+        fn only_a_development_build_takes_the_clock_seam(mut env in env(), secs in 0u64..=8 * 24 * 3600) {
+            prop_assume!(env.get("REVIEW_APP_ALLOW_LOOPBACK_HTTP").map(|v| v.trim()) != Some("1"));
+            let unset = parse_config(&env, BuildProfile::Development).map(|c| c.clock_skew_secs);
+            prop_assert!(matches!(unset, Ok(0) | Err(_)));
+            env.insert(CLOCK_SKEW_VAR.into(), secs.to_string());
+            prop_assert_eq!(parse_config(&env, BuildProfile::Release), Err(ConfigError::ClockSkewInRelease));
+            if let Ok(dev) = parse_config(&env, BuildProfile::Development) {
+                prop_assert!(CLOCK_SKEW_RANGE.contains(&secs));
+                prop_assert_eq!(dev.clock_skew_secs, secs);
+            } else if unset.is_ok() {
+                prop_assert!(!CLOCK_SKEW_RANGE.contains(&secs));
             }
         }
 

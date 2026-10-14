@@ -125,6 +125,20 @@ impl ReviewWorld {
     }
 
     /// Stop and start the app on the same state.
+    /// Restart the app `secs` later by its own clock (previews may expire).
+    pub fn restart_app_later(self, secs: u64) -> Self {
+        let ReviewWorld {
+            github,
+            atproto,
+            app,
+        } = self;
+        Self {
+            github,
+            atproto,
+            app: app.restart_later(secs),
+        }
+    }
+
     pub fn restart_app(self) -> Self {
         let ReviewWorld {
             github,

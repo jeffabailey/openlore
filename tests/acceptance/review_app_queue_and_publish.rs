@@ -762,6 +762,65 @@ fn confirming_the_same_batch_twice_writes_each_record_once() {
     assert_eq!(claims_in_pds(&world, Persona::Priya).len(), 2);
 }
 
+/// QP-19
+/// ```gherkin
+/// @US-BRA-004 @ADR-074 @AC-004.6 @contract-shape:unbounded-preservation
+/// Scenario: A preview confirmed after it expired writes nothing
+///   Given Priya previewed one suggestion
+///   And 31 minutes pass (a preview is confirmable for 30)
+///   When she presses "Publish to my repo"
+///   Then she is told the preview expired, nothing is written, and it stays pending
+/// ```
+#[test]
+fn a_preview_confirmed_after_it_expired_writes_nothing() {
+    let world = ReviewWorld::new();
+    let mut browser = given_pending_suggestions(&world, Persona::Priya);
+    when_previews_approval(&mut browser, priya::TIDEPOOL_MEMORY_SAFETY);
+    let world = world.restart_app_later(31 * 60);
+    when_confirms_publish(&mut browser);
+    assert!(
+        browser.page.shows("This preview has expired"),
+        "{}",
+        browser.page.text()
+    );
+    assert!(claims_in_pds(&world, Persona::Priya).is_empty());
+    assert!(pending_on_queue(&mut browser).contains(&priya::TIDEPOOL_MEMORY_SAFETY.phrase()));
+}
+
+/// QP-B5
+/// ```gherkin
+/// @US-BRA-004 @ADR-074 @AC-004.6 @contract-shape:unbounded-preservation
+/// Scenario: A batch confirmed after its previews expired writes nothing
+///   Given Priya previewed 2 selected suggestions
+///   And 31 minutes pass (a preview is confirmable for 30)
+///   When she presses "Publish 2 to my repo"
+///   Then she is told both previews expired, nothing is written, and both stay pending
+/// ```
+#[test]
+fn a_batch_confirmed_after_its_previews_expired_writes_nothing() {
+    let world = ReviewWorld::new();
+    let mut browser = given_pending_suggestions(&world, Persona::Priya);
+    let chosen = [priya::TIDEPOOL_MEMORY_SAFETY, priya::TIDEPOOL_TEST_DRIVEN];
+    when_previews_selected(&mut browser, &chosen);
+    let world = world.restart_app_later(31 * 60);
+    browser.press("Publish 2 to my repo");
+    assert!(
+        browser.page.shows("2 of these previews had expired"),
+        "{}",
+        browser.page.text()
+    );
+    assert!(!browser.page.offers("Retry"), "{}", browser.page.text());
+    assert!(claims_in_pds(&world, Persona::Priya).is_empty());
+    let pending = pending_on_queue(&mut browser);
+    for s in &chosen {
+        assert!(
+            pending.contains(&s.phrase()),
+            "{} stays pending",
+            s.phrase()
+        );
+    }
+}
+
 /// QP-B4
 /// ```gherkin
 /// @US-BRA-004 @AC-004.6 @contract-shape:unbounded-preservation
