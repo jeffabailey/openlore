@@ -14,18 +14,18 @@
 //! (`StoragePort::query_by_contributor` + `read_signed_claim`) so pairs I
 //! already signed are shown, never re-proposed (DDD-8).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, Result};
 use claim_domain::{Cid, ClaimReference, ReferenceType};
 use ports::{ContributionLink, LinkFilter, PageRequest, StoreReadError};
 use scraper_domain::{
-    encode_provenance, infer_people_report, repo_subjects_to_read, CandidateStatus,
-    InferenceFilter, InferenceReport, NumberedCandidate, OwnClaim, PersonSubject, RepoClaim,
-    ADHERES_TO_PHILOSOPHY,
+    encode_provenance, infer_people_report, possible_renames, repo_subjects_to_read,
+    CandidateStatus, InferenceFilter, InferenceReport, NumberedCandidate, OwnClaim, PersonSubject,
+    RepoClaim, ADHERES_TO_PHILOSOPHY,
 };
 
-use crate::render::{render_inference_report, render_person_derived_from};
+use crate::render::{render_flagged_inference_report, render_person_derived_from};
 use crate::verbs::sign_batch::{self, SignableCandidate};
 use crate::wiring::Wiring;
 
@@ -57,12 +57,12 @@ pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome
             .transpose()?,
         min_repos: args.min_repos.unwrap_or(0),
     };
-    let report = read_inference_report(wiring, &filter)?;
+    let (report, links) = read_inference(wiring, &filter)?;
     let outcome = sign_batch::list_or_sign(
         wiring,
         &person_signables(&report),
         args.sign.as_deref(),
-        render_inference_report(&report),
+        render_flagged_inference_report(&report, &candidate_renames(&report, &links)),
     )?;
     Ok(InferPeopleOutcome {
         exit_code: outcome.exit_code,
@@ -79,18 +79,41 @@ pub(crate) fn read_inference_report(
     wiring: &Wiring,
     filter: &InferenceFilter,
 ) -> Result<InferenceReport> {
+    read_inference(wiring, filter).map(|(report, _)| report)
+}
+
+/// [`read_inference_report`], with the contribution links it read.
+fn read_inference(
+    wiring: &Wiring,
+    filter: &InferenceFilter,
+) -> Result<(InferenceReport, Vec<ContributionLink>)> {
     let links = wiring
         .contribution_links
         .list_links(&LinkFilter::All)
         .map_err(|e| anyhow!("reading contribution links: {e}"))?;
     let repo_claims = read_linked_repo_claims(wiring, &links)?;
     let own_claims = read_own_adherence_claims(wiring)?;
-    Ok(infer_people_report(
-        &links,
-        &repo_claims,
-        &own_claims,
-        filter,
-    ))
+    let report = infer_people_report(&links, &repo_claims, &own_claims, filter);
+    Ok((report, links))
+}
+
+/// Each candidate person's possible renames (other logins with the same
+/// GitHub user id), keyed by person subject; people with none are left out.
+/// Pure.
+fn candidate_renames(
+    report: &InferenceReport,
+    links: &[ContributionLink],
+) -> BTreeMap<String, Vec<String>> {
+    report
+        .candidates
+        .iter()
+        .map(|numbered| numbered.candidate.person_subject().to_string())
+        .map(|person| {
+            let others = possible_renames(&person, links);
+            (person, others)
+        })
+        .filter(|(_, others)| !others.is_empty())
+        .collect()
 }
 
 /// Every signed claim (own + peer) about each linked repo, in ANY letter case

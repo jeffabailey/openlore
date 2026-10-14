@@ -534,3 +534,38 @@ fn live_burntsushi_memory_safety_is_inferred_from_real_repos() {
         "{block}"
     );
 }
+
+/// IP-R (edge, Q-CPI-D7 / OD-CPI-1 in `infer people`): a candidate whose
+/// GitHub user id was also recorded under another login is flagged
+/// `possible rename` right under its block — flagged only, never merged.
+///
+/// @us-cpi-002 @driving_port @real-io @q-cpi-d7 @od-cpi-1 @edge
+#[test]
+fn a_candidate_sharing_a_github_id_with_another_login_is_flagged_never_merged() {
+    // GIVEN BurntSushi is a candidate, and an older login with his user id
+    // was recorded on a third repo.
+    let env = TestEnv::initialized();
+    given_burntsushi_builds_two_signed_memory_safe_repos(&env);
+    given_repo_scraped(
+        &env,
+        "acme/old",
+        vec![FakeContributor::human("burnt-old", BURNTSUSHI_ID, 10)],
+        None,
+    );
+
+    // WHEN Maria runs `openlore infer people`.
+    let out = infer_people(&env, &[]);
+
+    // THEN BurntSushi's block flags the other login, and nothing is merged.
+    assert_eq!(out.status, 0, "{}\n{}", out.stdout, out.stderr);
+    assert_candidate(&out, 1, "github:BurntSushi", MEMORY_SAFETY);
+    assert!(
+        out.stdout.contains(
+            "possible rename: github:burnt-old has the same GitHub user id \
+             (kept separate, never merged)"
+        ),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(numbered_count(&out.stdout), 1, "{}", out.stdout);
+}

@@ -2,6 +2,8 @@
 //! Q-CPI-D1 load-bearing substrings pinned by DISTILL). Pure: values in,
 //! strings out.
 
+use std::collections::BTreeMap;
+
 use ports::ContributionLink;
 
 use super::common::plural_suffix;
@@ -19,10 +21,21 @@ use scraper_domain::{
 /// WEAKENED line right under the line that shows it (DDD-8 / UC-5); one no
 /// line shows is listed on its own. Nothing is ever acted on (D-5).
 pub fn render_inference_report(report: &InferenceReport) -> String {
+    render_flagged_inference_report(report, &BTreeMap::new())
+}
+
+/// [`render_inference_report`] with each candidate's possible renames (other
+/// logins recorded with the same GitHub user id, keyed by the candidate's
+/// person subject) flagged under its headline: flagged only, never merged
+/// (Q-CPI-D7 / OD-CPI-1).
+pub fn render_flagged_inference_report(
+    report: &InferenceReport,
+    renames: &BTreeMap<String, Vec<String>>,
+) -> String {
     let mut out = if report.candidates.is_empty() && !report.already_signed.is_empty() {
         "No new inferred candidates (every inference here is already signed).\n".to_string()
     } else {
-        render_person_candidates(&report.candidates, &report.weakened)
+        render_person_candidates(&report.candidates, &report.weakened, renames)
     };
     for already in &report.already_signed {
         out.push_str(&render_already_signed(already));
@@ -55,6 +68,7 @@ pub fn render_inference_report(report: &InferenceReport) -> String {
 pub fn render_person_candidates(
     candidates: &[NumberedCandidate],
     weakened: &[WeakenedClaim],
+    renames: &BTreeMap<String, Vec<String>>,
 ) -> String {
     if candidates.is_empty() {
         return "No inferred candidates (no signed repo claims about recorded contributors).\n"
@@ -65,6 +79,10 @@ pub fn render_person_candidates(
     );
     for (index, candidate) in candidates.iter().enumerate() {
         out.push_str(&render_person_candidate(index + 1, candidate, weakened));
+        let others = renames.get(candidate.candidate.person_subject());
+        out.push_str(&render_candidate_renames(
+            others.map_or(&[][..], Vec::as_slice),
+        ));
     }
     out
 }
@@ -280,6 +298,19 @@ fn render_possible_renames(possible_renames: &[String]) -> String {
         .collect()
 }
 
+/// A candidate's `possible rename` lines, indented under its block.
+fn render_candidate_renames(others: &[String]) -> String {
+    others
+        .iter()
+        .map(|other| {
+            format!(
+                "        possible rename: {other} has the same GitHub user id \
+                 (kept separate, never merged)\n"
+            )
+        })
+        .collect()
+}
+
 /// Nothing inferred, signed or flagged for this person.
 fn has_no_inference(report: &InferenceReport) -> bool {
     report.candidates.is_empty() && report.already_signed.is_empty() && report.weakened.is_empty()
@@ -354,5 +385,131 @@ mod person_view_tests {
             prop_assert!(view.contains("openlore scrape github <owner>/<repo>"), "{view}");
             prop_assert!(!view.contains("[1]"), "{view}");
         }
+    }
+}
+
+#[cfg(test)]
+mod report_tests {
+    use super::*;
+    use scraper_domain::{CitedClaim, Hundredths, SupportingClaim, SupportingRepo};
+
+    const PHILOSOPHY: &str = "org.openlore.philosophy.memory-safety";
+
+    fn candidate(person: &str) -> PersonCandidate {
+        let support = vec![SupportingRepo {
+            repo_subject: "github:acme/one".into(),
+            rank: 1,
+            claims: vec![SupportingClaim {
+                cited: CitedClaim {
+                    author_did: "did:plc:maria".into(),
+                    cid: "bafy-support".into(),
+                },
+                confidence: Hundredths::floor_of(0.5),
+            }],
+        }];
+        PersonCandidate::new(person, PHILOSOPHY, support).expect("a candidate")
+    }
+
+    fn weakened(cid: &str, person: &str) -> WeakenedClaim {
+        WeakenedClaim {
+            cid: cid.into(),
+            person_subject: person.into(),
+            philosophy: PHILOSOPHY.into(),
+            cited: 1,
+            weakened: BTreeMap::from([(WeakenedSupport::Retracted, 1)]),
+        }
+    }
+
+    fn report(
+        candidates: Vec<NumberedCandidate>,
+        already_signed: Vec<AlreadySigned>,
+        weakened: Vec<WeakenedClaim>,
+        unused: &[&str],
+    ) -> InferenceReport {
+        InferenceReport {
+            candidates,
+            already_signed,
+            repos_without_signed_claims: unused.iter().map(|r| r.to_string()).collect(),
+            weakened,
+        }
+    }
+
+    /// bypass: literal reports. Only already-signed pairs: the "already
+    /// signed" headline; a weakened claim shown on its already-signed line is
+    /// not listed again, one shown nowhere gets its own line; the unused
+    /// repos are named.
+    #[test]
+    fn an_all_signed_report_shows_each_signed_claim_once() {
+        let already = AlreadySigned {
+            candidate: candidate("github:alice"),
+            cid: "bafy-mine".into(),
+        };
+        let shown = render_inference_report(&report(
+            Vec::new(),
+            vec![already],
+            vec![
+                weakened("bafy-mine", "github:alice"),
+                weakened("bafy-other", "github:bob"),
+            ],
+            &["github:acme/unsigned"],
+        ));
+        assert!(
+            shown.starts_with(
+                "No new inferred candidates (every inference here is already signed).\n"
+            ),
+            "{shown}"
+        );
+        assert_eq!(shown.matches("claim bafy-mine").count(), 1, "{shown}");
+        assert!(
+            shown.contains("  - github:bob adheres to memory-safety — signed (claim bafy-other)\n"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("Not used (no signed philosophy claims): github:acme/unsigned\n"),
+            "{shown}"
+        );
+    }
+
+    /// bypass: literal reports. Nothing at all is the no-candidates line,
+    /// with no "already signed" headline and no "Not used" line.
+    #[test]
+    fn an_empty_report_says_there_are_no_candidates() {
+        let shown = render_inference_report(&report(Vec::new(), Vec::new(), Vec::new(), &[]));
+        assert_eq!(
+            shown,
+            "No inferred candidates (no signed repo claims about recorded contributors).\n"
+        );
+    }
+
+    /// bypass: a literal rename map. Each candidate's other logins are
+    /// flagged under its block, and only under its own.
+    #[test]
+    fn a_candidates_possible_renames_are_flagged_under_it() {
+        let numbered = |person: &str| NumberedCandidate {
+            candidate: candidate(person),
+            status: CandidateStatus::New,
+        };
+        let renames = BTreeMap::from([(
+            "github:alice".to_string(),
+            vec!["github:alice-old".to_string()],
+        )]);
+        let shown = render_flagged_inference_report(
+            &report(
+                vec![numbered("github:alice"), numbered("github:bob")],
+                Vec::new(),
+                Vec::new(),
+                &[],
+            ),
+            &renames,
+        );
+        let flag = "        possible rename: github:alice-old has the same GitHub user id \
+                    (kept separate, never merged)\n";
+        assert_eq!(shown.matches(flag).count(), 1, "{shown}");
+        let alice = shown.find("github:alice adheres").expect("alice");
+        let bob = shown.find("github:bob adheres").expect("bob");
+        let at = shown.find(flag).expect("flag");
+        assert!(alice < at && at < bob, "{shown}");
+        assert!(shown.contains("  [1] NEW github:alice adheres to memory-safety\n"), "{shown}");
+        assert!(shown.contains("  [2] NEW github:bob adheres to memory-safety\n"), "{shown}");
     }
 }
