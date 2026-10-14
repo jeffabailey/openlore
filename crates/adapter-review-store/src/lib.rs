@@ -416,6 +416,54 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    /// bypass: literal blobs around the nonce length. A blob too short to
+    /// hold a nonce, or tagged with another key's id, is refused as `Seal`
+    /// (never a panic); one that was really sealed opens.
+    #[test]
+    fn a_truncated_or_foreign_blob_is_refused_not_a_panic() {
+        let key = DataKey::new("k1", [9; 32]).unwrap();
+        let sealed = seal_with(&key, b"aad", b"secret").unwrap();
+        assert_eq!(unseal_with(&key, b"aad", &sealed), Ok(b"secret".to_vec()));
+        let header = 1 + key.kid().len();
+        for cut in [0, 1, header, header + NONCE_LEN - 1] {
+            assert_eq!(
+                unseal_with(&key, b"aad", &sealed[..cut]),
+                Err(StoreError::Seal),
+                "{cut}"
+            );
+        }
+        let other = DataKey::new("k2", [9; 32]).unwrap();
+        assert_eq!(unseal_with(&other, b"aad", &sealed), Err(StoreError::Seal));
+    }
+
+    /// bypass: the operator-facing text of each error, as literals.
+    #[test]
+    fn each_store_error_says_what_went_wrong() {
+        for (error, text) in [
+            (
+                StoreError::Database("disk full".into()),
+                "review store database error: disk full",
+            ),
+            (
+                StoreError::SchemaTooNew {
+                    found: 3,
+                    supported: 2,
+                },
+                "review store schema version 3 is newer than this build supports (2)",
+            ),
+            (
+                StoreError::SchemaUnknown { found: 0 },
+                "review store schema version 0 is unknown",
+            ),
+            (
+                StoreError::Seal,
+                "review store could not seal or open a secret blob",
+            ),
+        ] {
+            assert_eq!(error.to_string(), text);
+        }
+    }
+
     fn report(memory_mb: u64, threads: u64) -> DuckDbSettings {
         DuckDbSettings {
             memory_limit: if memory_mb >= 1024 && memory_mb.is_multiple_of(1024) {

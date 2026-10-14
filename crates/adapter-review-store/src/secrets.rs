@@ -218,6 +218,52 @@ mod tests {
         ReviewStore::open_in_memory(DataKey::generate()).expect("in-memory store")
     }
 
+    /// A blob's associated data names its row: copied into another row it
+    /// does not open there, while the original still opens (both tables).
+    #[test]
+    fn a_sealed_blob_copied_to_another_row_does_not_open_there() {
+        let store = store();
+        store
+            .put_auth_request("state-a", "iss", None, b"request-a")
+            .unwrap();
+        store
+            .put_auth_request("state-b", "iss", None, b"request-b")
+            .unwrap();
+        store
+            .put_oauth_session("did:plc:a", "iss", "atproto", b"tokens-a")
+            .unwrap();
+        store
+            .put_oauth_session("did:plc:b", "iss", "atproto", b"tokens-b")
+            .unwrap();
+        store
+            .with_connection(|conn| {
+                conn.execute_batch(
+                    "UPDATE oauth_auth_requests SET enc_blob = (SELECT enc_blob FROM \
+                     oauth_auth_requests WHERE state = 'state-a') WHERE state = 'state-b';
+                     UPDATE oauth_sessions SET enc_blob = (SELECT enc_blob FROM oauth_sessions \
+                     WHERE owner_did = 'did:plc:a') WHERE owner_did = 'did:plc:b';",
+                )
+                .map_err(db_error)
+            })
+            .unwrap();
+        assert_eq!(
+            store.auth_request("state-a").unwrap(),
+            Some(b"request-a".to_vec())
+        );
+        assert!(
+            store.auth_request("state-b").is_err(),
+            "a moved request never opens"
+        );
+        assert_eq!(
+            store.oauth_session("did:plc:a").unwrap(),
+            Some(b"tokens-a".to_vec())
+        );
+        assert!(
+            store.oauth_session("did:plc:b").is_err(),
+            "a moved session never opens"
+        );
+    }
+
     proptest! {
         /// Universe: every sealed blob of a store file. After a rotation, each
         /// blob sealed under the previous key opens under the new one with

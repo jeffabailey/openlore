@@ -157,4 +157,18 @@ mod tests {
             prop_assert_eq!(admitted, v.is_none() || v == Some(SCHEMA_VERSION));
         }
     }
+
+    /// bypass: literal versions around the current one (1). An older
+    /// version is one this build never wrote (unknown), not "too new".
+    #[test]
+    fn an_older_version_is_unknown_and_a_newer_one_too_new() {
+        assert_eq!(schema_verdict(Some(0)), SchemaVerdict::Unknown { found: 0 });
+        assert_eq!(
+            schema_verdict(Some(-3)),
+            SchemaVerdict::Unknown { found: -3 }
+        );
+        assert_eq!(schema_verdict(Some(1)), SchemaVerdict::Current);
+        assert_eq!(schema_verdict(Some(2)), SchemaVerdict::TooNew { found: 2 });
+        assert_eq!(schema_verdict(None), SchemaVerdict::Fresh);
+    }
 }

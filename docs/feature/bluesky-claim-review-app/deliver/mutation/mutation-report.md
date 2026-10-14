@@ -105,6 +105,13 @@ Result: 144 caught, 13 missed, 29 unviable, so 91.7%. No tests were added becaus
 | lib.rs:149 `StoreError` `Display` → `Ok` (1) | accepted. Operator-facing log text that no test asserts. |
 | probe.rs:106 `canary_counts_rolled_back` → `Ok((1, 0))` (1) | accepted. The mutant returns exactly the "isolated" answer the probe expects, so the probe cannot fail against a correct store. Killing it would need a store that is broken on purpose. |
 
+**Hardening pass (2026-10-13).** Four tests now catch 10 of the 13 (secrets.rs: a blob copied to
+another row does not open, both tables; lib.rs: a truncated or foreign blob is refused, not a
+panic, and each error's text; schema.rs: an older version is unknown). Rerun over the same
+functions: 21 caught, 1 unviable, 2 missed, both the equivalent mutants named above
+(`schema.rs:138 >`→`>=`, unreachable behind the `==` arm; `lib.rs:113 <`→`<=`, where a blob of
+exactly the nonce length still fails decryption). The probe canary mutant stays accepted.
+
 ## Hygiene
 
 - cargo-mutants mutates a copied tree. After all runs, `git status --short` showed no changes to source files. Only the new test files and this report were added, each committed by explicit path.
