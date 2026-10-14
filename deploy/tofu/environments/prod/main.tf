@@ -40,7 +40,7 @@ provider "aws" {
 }
 
 module "pds" {
-  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.7.0"
+  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.8.0"
 
   name_prefix = "openlore"
   project     = "openlore"
@@ -56,6 +56,10 @@ module "pds" {
   ssh_ingress_cidr      = var.ssh_ingress_cidr
 
   swap_mb = 1024
+  # vm.swappiness 10 (v1.8.0): the go-live memory gate saw steady swap-ins at the kernel default
+  # of 60 with 400 MB free. Set on the live host by hand on 2026-10-13; this carries it to the
+  # next replacement. Changing it on a live host changes user_data (an in-place stop/start).
+  swappiness = 10
 
   # First boot creates jeff.openlore.jeffbailey.us and a CLI app password; the passwords land
   # in SSM /openlore/prod/{account-password,cli-app-password} (see outputs).
