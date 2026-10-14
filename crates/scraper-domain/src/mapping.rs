@@ -128,7 +128,7 @@ struct EntryDto {
 /// validation pipeline: deserialize the wire DTO, then resolve and validate each
 /// entry via [`parse_entry`].
 pub fn load_mapping(embedded_yaml: &str) -> Result<SignalPredicateMapping, MappingError> {
-    let dto: MappingDto = serde_yaml_ng::from_str(embedded_yaml)
+    let dto: MappingDto = serde_saphyr::from_str(embedded_yaml)
         .map_err(|e| MappingError::MalformedEntry(format!("yaml parse failed: {e}")))?;
 
     let entries = dto

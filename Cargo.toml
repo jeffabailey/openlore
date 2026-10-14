@@ -85,7 +85,7 @@ url = { version = "2", features = ["serde"] }
 # Pure compile-time HTML template macro (no I/O, no async runtime). Slice-06
 # (ADR-029): the read-only `openlore ui` viewer's server-rendered HTML. Used by
 # the PURE `viewer-domain` core; allowlisted in the `xtask check-arch` pure-core
-# arm (mirrors `serde_yaml_ng` for `scraper-domain`).
+# arm (mirrors `serde-saphyr` for `scraper-domain`).
 maud = "0.27"
 
 [profile.release]

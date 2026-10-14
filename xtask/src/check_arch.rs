@@ -75,15 +75,16 @@ const BANNED_IO_PREFIXES: &[&str] = &["atrium-"];
 ///
 /// - `unicode-normalization`: NFC normalization of `--reason` text
 ///   (`claim-domain::normalize_reason`); Servo's pure NFC crate.
-/// - `serde_yaml_ng`: pure YAML parse of the embedded `signal_predicate_mapping`
-///   SSOT snapshot in `scraper-domain` (WD-65 / Q-DELIVER-1). The maintained
-///   drop-in fork of the deprecated `serde_yaml`; no I/O, no async runtime.
+/// - `serde-saphyr`: pure YAML parse of the embedded `signal_predicate_mapping`
+///   SSOT snapshot in `scraper-domain` (WD-65 / Q-DELIVER-1). Safe Rust over a
+///   pure-Rust parser (replaced `serde_yaml_ng`, 2026-10-13); no I/O, no async
+///   runtime.
 /// - `maud` / `maud_macros`: pure compile-time HTML template macro used by the
 ///   slice-06 `viewer-domain` read-only viewer core (ADR-029). The macro expands
 ///   to string building at compile time — no I/O, no async runtime.
 const PURE_CORE_ALLOWED_CRATES: &[&str] = &[
     "unicode-normalization",
-    "serde_yaml_ng",
+    "serde-saphyr",
     "maud",
     "maud_macros",
 ];
@@ -2547,15 +2548,15 @@ mod tests {
     #[test]
     fn scraper_domain_with_pure_yaml_dep_is_allowed() {
         // WD-65 / Q-DELIVER-1: scraper-domain is PURE; its only non-ports dep is
-        // the pure `serde_yaml_ng` parser, which the pure-core allowlist permits.
+        // the pure `serde-saphyr` parser, which the pure-core allowlist permits.
         let w = ws(&[
-            ("scraper-domain", &["ports", "serde", "serde_yaml_ng"]),
+            ("scraper-domain", &["ports", "serde", "serde-saphyr"]),
             ("ports", &["async-trait", "claim-domain"]),
             ("claim-domain", &["serde"]),
         ]);
         assert!(
             check_workspace(&w).is_empty(),
-            "scraper-domain + serde_yaml_ng must be an allowed pure-core shape (WD-65), got: {:?}",
+            "scraper-domain + serde-saphyr must be an allowed pure-core shape (WD-65), got: {:?}",
             check_workspace(&w)
         );
     }

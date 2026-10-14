@@ -21,16 +21,15 @@ path = "src/lib.rs"
 # Forbidden (I-2; enforced by `cargo xtask check-arch`): tokio, reqwest,
 # duckdb, keyring, atrium-*, std::fs/net/process/env/SystemTime, any adapter-*.
 #
-# `serde_yaml_ng` is the Q-DELIVER-1 YAML-parser pin: the maintained drop-in
-# fork of the now-deprecated `serde_yaml` (dtolnay archived `serde_yaml` in
-# 2024). It is a PURE parser — no I/O, no async runtime — so it is added to the
-# `xtask check-arch` pure-core allowlist (WD-65). Pinned crate-locally (not at
-# the workspace root) because only this pure crate parses the embedded mapping;
-# a later workspace-cleanup step may hoist it if another pure crate adopts it.
+# `serde-saphyr` is the YAML parser (replaced `serde_yaml_ng` 2026-10-13): safe
+# Rust over a pure-Rust parser, so no unsafe-libyaml (RUSTSEC-2024-0449). It is a
+# PURE parser — no I/O, no async runtime — so it is on the `xtask check-arch`
+# pure-core allowlist (WD-65). Deserialize only. Pinned crate-locally because
+# only this pure crate parses the embedded mapping.
 [dependencies]
 ports = { path = "../ports" }
 serde = { workspace = true }
-serde_yaml_ng = "0.10"
+serde-saphyr = { version = "1.3", default-features = false, features = ["deserialize"] }
 # slice-28 (US-PV-007): resolve each mapping object against the real seeded
 # philosophy vocabulary (`lexicon::philosophy::find`) so `load_mapping` rejects
 # any object that is not a SEEDED philosophy (AC-007.2 / KPI-PV-6). `lexicon` is

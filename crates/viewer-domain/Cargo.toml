@@ -19,7 +19,7 @@ path = "src/lib.rs"
 # Depends ONLY on the pure `maud` compile-time HTML macro + `ports` (for the
 # boundary value types the view-model is projected from). `maud` is a pure
 # compile-time template crate — no I/O, no async runtime — allowlisted in the
-# `xtask check-arch` pure-core arm (mirrors slice-02's `serde_yaml_ng` for
+# `xtask check-arch` pure-core arm (mirrors slice-02's `serde-saphyr` for
 # `scraper-domain`).
 #
 # Forbidden (enforced by `cargo xtask check-arch` pure-core allowlist):
