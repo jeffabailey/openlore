@@ -509,7 +509,13 @@ mod report_tests {
         let bob = shown.find("github:bob adheres").expect("bob");
         let at = shown.find(flag).expect("flag");
         assert!(alice < at && at < bob, "{shown}");
-        assert!(shown.contains("  [1] NEW github:alice adheres to memory-safety\n"), "{shown}");
-        assert!(shown.contains("  [2] NEW github:bob adheres to memory-safety\n"), "{shown}");
+        assert!(
+            shown.contains("  [1] NEW github:alice adheres to memory-safety\n"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("  [2] NEW github:bob adheres to memory-safety\n"),
+            "{shown}"
+        );
     }
 }
