@@ -1,9 +1,9 @@
 # ADR-087: Subject Authority Proofs — Linked GitHub Owner (Person, User-Owned Repo) and an In-Repo Authority File (Any Repo), Re-Checkable by Any Reader from Public Data
 
-- **Status**: Proposed (2026-10-14; revised after review iteration 1). **Conditional** on user confirmation of OOS-D4, OOS-D5 and
-  OOS-D12/D13 (`docs/feature/owner-only-signing/design/wave-decisions.md`) and of ADR-084/085.
+- **Status**: Accepted (2026-10-14, user approved as proposed). Covers OOS-D4, OOS-D5 and
+  OOS-D12/D13 (`docs/feature/owner-only-signing/design/wave-decisions.md`).
 - **Date**: 2026-10-14
-- **Deciders**: Morgan (nw-solution-architect), propose mode; Jeff Bailey to confirm
+- **Deciders**: Morgan (nw-solution-architect), propose mode; Jeff Bailey (approved)
 - **Feature**: owner-only-signing (DESIGN)
 - **Companion**: ADR-086 (authority model and enforcement)
 - **References**: ADR-063 (`GithubPort`), ADR-076 (bio matcher, review-app budget), ADR-084/085
@@ -55,7 +55,7 @@ GitHub API options evaluated (concretely):
    is needed for this tier: the repo vouches for the DID, and the claim's ADR-071 provenance proves
    the DID side. **Semantics, stated plainly to the user: this tier means "listed in a file on the
    default branch", not "GitHub admin". Anyone with push access to the default branch can add their
-   own DID, with no identity proof (residual risk R-1, part of the A-3 confirmation). CODEOWNERS
+   own DID, with no identity proof (residual risk R-1, accepted with A-3). CODEOWNERS
    only requests review; it blocks a push only when branch protection requires code-owner review,
    and readers cannot see branch protection (not public). Maintainers who want "admins only" must
    set that protection themselves.**

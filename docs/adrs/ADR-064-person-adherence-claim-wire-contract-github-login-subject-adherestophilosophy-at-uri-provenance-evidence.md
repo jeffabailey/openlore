@@ -8,6 +8,10 @@
 - **Companion**: ADR-063 (internal component architecture).
 - **References**: ADR-005 (Lexicon), ADR-006 (CID), ADR-008 (reference types), ADR-059
   (philosophy vocabulary), ADR-018 (candidate model; WD-62 display-only `derived-from`).
+- **See also (2026-10-14)**: ADR-084 — the identity-link `sameAs` record is an exception to §1:
+  there the numeric GitHub user id IS signed (`evidence[]` `https://api.github.com/user/<id>`).
+  Adherence claims are unchanged. ADR-086/087: only the DID linked to `github:<login>` may sign
+  adherence claims about that person.
 
 ## Context
 

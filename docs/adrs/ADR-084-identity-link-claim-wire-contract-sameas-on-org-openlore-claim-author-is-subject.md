@@ -1,11 +1,11 @@
 # ADR-084: Identity-Link Claim Wire Contract — `sameAs` on `org.openlore.claim`, Author Is Subject, Numeric GitHub Id in `evidence[]`
 
-- **Status**: Proposed (2026-10-14; revised after review iteration 1). **Conditional**: the
-  Decision text describes the recommended options of GDL-D1..D5
-  (`docs/feature/github-did-identity-link/design/wave-decisions.md`) and binds only once the user
-  confirms them. DISTILL must not start before that confirmation.
+- **Status**: Accepted (2026-10-14, user approved as proposed). The Decision text is the
+  recommended options of GDL-D1..D5 (`docs/feature/github-did-identity-link/design/wave-decisions.md`).
+  Revised by ADR-086/087 (owner-only-signing): a link is also the proof of signing authority (see
+  ADR-085 §6).
 - **Date**: 2026-10-14
-- **Deciders**: Morgan (nw-solution-architect), propose mode; Jeff Bailey to confirm
+- **Deciders**: Morgan (nw-solution-architect), propose mode; Jeff Bailey (approved)
 - **Feature**: github-did-identity-link (DESIGN; no DISCUSS wave — requirements are assumptions A-1..A-9)
 - **Realizes**: OD-CPI-1 deferral ("DID linking = a later, opt-in, human-signed `sameAs`-style claim")
 - **References**: ADR-005 (Lexicon), ADR-006 (CID), ADR-008 (retraction), ADR-064 (person subject

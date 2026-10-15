@@ -18,7 +18,7 @@
 #   notes:                  caveats, deferrals, links
 
 schema_version: 1
-last_updated: 2026-10-13  # +KPI-CPI-1..5, +KPI-HB-1..3 (registered after finalize). Earlier: serverless-philosophy-federation DEVOPS: +KPI-SF-1..5 (KPI-SF-1 = round-trip CID integrity North Star, CI contract test; telemetry-free per sovereignty). slice-08 realized KPI-AV-1/2/3/4/5 + KPI-VIEW-2 + KPI-HX-G1/2/3 on /search (no new KPI)
+last_updated: 2026-10-14  # +KPI-GDL-1..4, +KPI-OOS-1..4 (registered at DESIGN acceptance). Earlier: +KPI-CPI-1..5, +KPI-HB-1..3 (registered after finalize). Earlier: serverless-philosophy-federation DEVOPS: +KPI-SF-1..5 (KPI-SF-1 = round-trip CID integrity North Star, CI contract test; telemetry-free per sovereignty). slice-08 realized KPI-AV-1/2/3/4/5 + KPI-VIEW-2 + KPI-HX-G1/2/3 on /search (no new KPI)
 
 kpis:
   - id: KPI-1
@@ -678,6 +678,90 @@ kpis:
     measurement_method: "release.yml bump-formula autobump + formula-smoke dispatch"
     baseline_at_ga: "unverified until the next GA tag (bump-formula -> formula-smoke dispatch, 402ce9a)"
     notes: "Leading. Keeps brew upgrade working with no manual formula edits."
+
+  # --- github-did-identity-link, registered 2026-10-14 (DESIGN accepted by the user) ---
+  # Source: docs/feature/github-did-identity-link/design/wave-decisions.md (KPIs section).
+  - id: KPI-GDL-1
+    name: "Identity links only from the DID owner with a passing bio check"
+    type: guardrail
+    feature_origin: github-did-identity-link
+    persona: P-001
+    target: "0 links projected where subject != author or evidence login != object login; 0 sameAs records produced by OpenLore composers without a passing check; 0 associations without this reader's Verified check"
+    measurement_method: "CI property tests on claim_domain::identity_link (project, link_view) + AT fixtures"
+    baseline_at_ga: "0 (feature not yet delivered)"
+    notes: "Guardrail (consent / anti-squatting). Release-blocking. ADR-084 §3-4, ADR-085 §5."
+
+  - id: KPI-GDL-2
+    name: "Weighted output unchanged by sameAs claims"
+    type: guardrail
+    feature_origin: github-did-identity-link
+    persona: P-001
+    target: "weighted output identical with and without sameAs claims in the feed (CLI and viewer)"
+    measurement_method: "CI property on the scoring choke point + ATs through graph query --weighted and the viewer /score route"
+    baseline_at_ga: "not yet measured (feature not yet delivered)"
+    notes: "Guardrail (anti-merging, ADR-022). Since owner-only-signing the drop is via authority::kind in score_attested; outcome unchanged."
+
+  - id: KPI-GDL-3
+    name: "Gone bio proof shows Disproved on the next check"
+    type: guardrail
+    feature_origin: github-did-identity-link
+    persona: P-001
+    target: "100% of links whose bio proof is gone show Disproved on the next check; 0 auto-retractions"
+    measurement_method: "AT fixture (FakeGithub bio removal)"
+    baseline_at_ga: "not yet measured (feature not yet delivered)"
+    notes: "Guardrail (honest reader state). ADR-085 §4-5."
+
+  - id: KPI-GDL-4
+    name: "Dogfood link verified by a second reader"
+    type: leading
+    feature_origin: github-did-identity-link
+    persona: P-001
+    target: ">= 1 dogfood link published and verified by a second reader"
+    measurement_method: "dogfood session log"
+    baseline_at_ga: "0 (feature new)"
+    notes: "Leading. Also the first prerequisite for owner-only-signing person/owner authority."
+
+  # --- owner-only-signing, registered 2026-10-14 (DESIGN accepted by the user) ---
+  # Source: docs/feature/owner-only-signing/design/wave-decisions.md (KPIs section).
+  - id: KPI-OOS-1
+    name: "No github: assertion signed or published without a signing permit"
+    type: guardrail
+    feature_origin: owner-only-signing
+    persona: P-001
+    target: "0 github: assertions signed/published by any OpenLore composer (claim add, scrape github/person --sign, infer people --sign, claim publish, review-app publish) without a SigningPermit from an Attested check <= 7 days old"
+    measurement_method: "CI property over claim_domain::authority (kind, requirement, classify, may_sign) + ATs over every sign/publish site + xtask sign_only_with_permit"
+    baseline_at_ga: "0 (feature not yet delivered)"
+    notes: "Guardrail (the user's owner-only rule). Release-blocking. ADR-086 §4-5, ADR-087."
+
+  - id: KPI-OOS-2
+    name: "Weight unchanged by non-weight kinds and unattested github: assertions"
+    type: guardrail
+    feature_origin: owner-only-signing
+    persona: P-001
+    target: "weighted output unchanged when counters, retractions, sameAs (incl. spoofed counters) or unattested github: assertions are added to a feed (CLI and viewer)"
+    measurement_method: "CI property over kind/classify feeding score_attested + CLI and viewer ATs"
+    baseline_at_ga: "not yet measured (feature not yet delivered); counters may be weighted today (A-13)"
+    notes: "Guardrail (rule means something to peers; ADR-015 shown-not-applied). Consistent with KPI-GDL-2."
+
+  - id: KPI-OOS-3
+    name: "Retractions and counters never refused for authority"
+    type: guardrail
+    feature_origin: owner-only-signing
+    persona: P-001
+    target: "0 retractions or counter-claims refused for lack of authority"
+    measurement_method: "ATs (non-owner counter, former-owner retract)"
+    baseline_at_ga: "0 (feature not yet delivered)"
+    notes: "Guardrail (dispute and withdrawal stay open). ADR-086 §9."
+
+  - id: KPI-OOS-4
+    name: "Owner and repo-listed authority confirmed by a second reader"
+    type: leading
+    feature_origin: owner-only-signing
+    persona: P-001
+    target: ">= 1 repo claim repo-listed via .github/openlore-authority in an org repo (signed from the CLI) and >= 1 owner claim, each confirmed by a second reader"
+    measurement_method: "dogfood session log"
+    baseline_at_ga: "0 (feature new)"
+    notes: "Leading. The review app cannot reach org repos in v1."
 
 # Guardrail policy:
 #   KPI-4 and KPI-5 are guardrails. A release that lowers either is blocked,

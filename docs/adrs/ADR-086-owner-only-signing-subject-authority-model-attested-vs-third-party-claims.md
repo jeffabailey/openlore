@@ -1,19 +1,17 @@
 # ADR-086: Owner-Only Signing — Subject Authority for `github:` Subjects, Attested vs Third-Party Claims Derived by Readers, Enforced at Every Composer
 
-- **Status**: Proposed (2026-10-14; revised after review iteration 1). **Conditional**: the
-  Decision text describes the recommended options of OOS-D1..D3, D6..D11
-  (`docs/feature/owner-only-signing/design/wave-decisions.md`) and binds only once the user
-  confirms them. It depends on ADR-084/085 (github-did-identity-link), also Proposed. DISTILL must
-  not start before both confirmations.
+- **Status**: Accepted (2026-10-14, user approved as proposed). The Decision text is the
+  recommended options of OOS-D1..D3, D6..D11 (`docs/feature/owner-only-signing/design/wave-decisions.md`).
+  Depends on ADR-084/085 (github-did-identity-link, Accepted).
 - **Date**: 2026-10-14
-- **Deciders**: Morgan (nw-solution-architect), propose mode; Jeff Bailey to confirm
+- **Deciders**: Morgan (nw-solution-architect), propose mode; Jeff Bailey (approved)
 - **Feature**: owner-only-signing (DESIGN; no DISCUSS wave; requirements are assumptions A-1..A-13)
 - **Companion**: ADR-087 (how authority is proven)
 - **Builds on / amends**: ADR-084, ADR-085 (identity link becomes a source of authority, not only a
   display association; see "Relationship to github-did-identity-link"), ADR-008 (retraction),
   ADR-015 (counter-claims: exempt from the gate, and now also excluded from scoring weight),
   ADR-022 (scoring default narrows), ADR-063/064 (`infer people --sign` narrows), ADR-017 (scraper
-  `--sign` gated), ADR-071/076 (review app). **Proposes an exception to cross-feature invariant
+  `--sign` gated), ADR-071/076 (review app). **Establishes an accepted exception to cross-feature invariant
   I-9** (§5).
 - **References**: ADR-007, ADR-009, ADR-023 (indexer capability boundary)
 
@@ -88,13 +86,13 @@ Facts that shape the decision:
    - The review app's `PublishPlan` execution takes a permit built in the publish request
      (extends `owner_can_publish`).
    - There is no override flag.
-5. **Offline signing, with a proposed exception to I-9.** The gate decides from the **latest local
+5. **Offline signing, with an accepted exception to I-9.** The gate decides from the **latest local
    authority checks**, which must be `Attested` and no older than the signing window (default
    7 days, A-6). Compose and sign stay network-free: no GitHub call happens at sign time. **But a
    `github:` assertion with a missing or stale check is refused offline**, which narrows I-9 ("compose
    and sign MUST succeed with network disabled") to: *succeeds offline for every claim kind and
    subject except `github:` assertions without a fresh local authority check*. This is recorded as a
-   proposed exception in the brief's I-9 row; WS-10 (`tests/walking_skeleton.rs`) keeps its scope
+   accepted exception in the brief's I-9 row; WS-10 (`tests/walking_skeleton.rs`) keeps its scope
    because its subject is not a `github:` assertion — DISTILL must confirm the fixture and add an
    offline-with-fresh-check AT. Online verbs (`scrape github … --sign`, `scrape person … --sign`,
    review-app publish) refresh the check in the same invocation or request before gating; offline
@@ -161,12 +159,12 @@ Facts that shape the decision:
   viewer suites that seed signed `github:` claims, and the review-app publish suites) need an
   authority fixture (seeded fresh checks) or a changed expectation; DISTILL owns the list.
 - **Risk**: users who sign today about others' repos lose that ability; dogfood data in the live
-  index will mostly read `third-party`. Flagged for explicit user confirmation.
+  index will mostly read `third-party`. Accepted by the user (2026-10-14).
 
 ## Relationship to github-did-identity-link (ADR-084/085)
 
-This ADR does **not** edit those ADRs. It needs these changes there, recorded in
-`docs/feature/owner-only-signing/design/upstream-changes.md` (UC-1..UC-8):
+These changes were applied to ADR-085 and the github-did-identity-link design on 2026-10-14
+(`docs/feature/owner-only-signing/design/upstream-changes.md` UC-1..UC-8):
 
 - ADR-085 §6 "display-only association" is extended: a `verified` link is also the source of
   person and user-owned-repo authority (no subject merging; anti-merging unchanged).

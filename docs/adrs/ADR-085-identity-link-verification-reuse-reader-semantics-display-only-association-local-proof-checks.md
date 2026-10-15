@@ -1,11 +1,10 @@
 # ADR-085: Identity-Link Verification Reuse and Reader Semantics — One Pure Proof in `claim-domain`, Association Only After Your Own Check, Local Never-Federated Proof Checks
 
-- **Status**: Proposed (2026-10-14; revised after review iteration 1). **Conditional**: the
-  Decision text describes the recommended options of GDL-D6..D14
-  (`docs/feature/github-did-identity-link/design/wave-decisions.md`). It binds only once the user
-  confirms them; DISTILL must not start before GDL-D1..D5 (ADR-084) are confirmed.
+- **Status**: Accepted (2026-10-14, user approved as proposed). The Decision text is the
+  recommended options of GDL-D6..D14 (`docs/feature/github-did-identity-link/design/wave-decisions.md`),
+  revised by ADR-086/087 (owner-only-signing) in §5, §6, §7 and §8.
 - **Date**: 2026-10-14
-- **Deciders**: Morgan (nw-solution-architect), propose mode; Jeff Bailey to confirm
+- **Deciders**: Morgan (nw-solution-architect), propose mode; Jeff Bailey (approved)
 - **Feature**: github-did-identity-link (DESIGN)
 - **Companion**: ADR-084 (wire contract)
 - **Amends (behavior-preserving)**: ADR-076 §4 (the pure bio matcher moves to `claim-domain`;
@@ -75,15 +74,24 @@ lives, and what every reader does with a link.
      not checked / proof gone"), never as associations, and they never make a verified link
      Contested. A squatter's link therefore cannot hijack or grief a genuine one.
    - One DID may hold several Active links; each is judged alone.
+   - **Authority (revised by ADR-086/087, owner-only-signing):** the association rule above governs
+     *display* only. For signing authority each DID whose own latest check is `Verified` counts,
+     even when the id is `Contested`: the account holder named every such DID in the bio.
    - Every rendered line shows the check age ("verified 12 days ago"). Age alone never
      downgrades the state; past 30 days the line adds "re-check with `openlore identity verify`".
-6. **Readers: display-only association.** `infer people` / `scrape github <user>` / `identity
+6. **Readers: association is display-only; a verified link is also the proof of signing
+   authority.** Revised by ADR-086/087 (owner-only-signing): a `Verified` link is the source of
+   authority over `github:<login>` (subject login = latest `login_seen`) and over repos whose owner
+   is that account (ADR-087 §1-2). It still never merges subjects or scores. `infer people` / `scrape github <user>` / `identity
    list` show the projection offline from the last local check. `graph query`, `search`, the
    indexer and the viewer show links as ordinary claims (a viewer linked-identity line is a later
    slice). **Scoring choke point: `scoring::score` itself drops every claim whose predicate is
    `sameAs`** before grouping (contract shape: *unbounded preservation* — for every feed `F`,
    `score(F) == score(F \ {rows with predicate sameAs})`, and no other row is altered). One rule
    inside the pure scorer covers all current and future callers (CLI and viewer).
+   Revised by ADR-086/087 (owner-only-signing): the drop is now expressed through
+   `claim_domain::authority::kind` (`sameAs` is a non-weight kind, like counters and retractions)
+   inside `scoring::score_attested`; the outcome for `sameAs` is unchanged (KPI-GDL-2 holds).
 7. **Local proof checks, never federated, read/write split.**
    - Table (migration **v7**) `identity_link_checks`: **insert-only**, primary key `check_id`
      (a DuckDB sequence, so equal timestamps never collide), indexed on (`subject_did`,
@@ -102,15 +110,29 @@ lives, and what every reader does with a link.
      | `identity link` | ✓ | ✓ (on confirm only) | — | ✓ (on confirm only) | ✓ |
      | `identity forget --did <did>` | — | — | ✓ | — | — |
      | review app publish/retract link | — (no CLI store) | — | — | create-only `UserRepoWritePort` | ✓ |
+     | `claim add`, `infer people --sign`, `claim publish` | ✓ | — | — | ✓ (with `SigningPermit`) | — |
+     | `scrape github <owner/repo>` / `scrape person` `--sign` | ✓ | ✓ (signer's own link only) | — | ✓ (with `SigningPermit`) | ✓ |
+     | `authority verify` | ✓ | ✓ | — | — | ✓ |
+     | `graph query`, viewer, `search`, `candidates list` | ✓ | — | — | — | — |
+
+     Rows below the review-app row: revised by ADR-086/087 (owner-only-signing); those verbs also
+     hold the repo-authority read port, and the scrape and `authority verify` verbs the
+     repo-authority write port (ADR-087 §5). `identity_link_readers_hold_no_write_handle` extends
+     to `authority_readers_hold_no_write_handle`.
    - `identity link` without confirmation is **plan-returning**: it reads GitHub, builds the plan
      and renders the preview, and writes nothing. On confirm it writes exactly {one check row, the
      signed claim via the single publish path}.
    - Retention: checks are a local cache of observations. `identity forget --did <did>` removes one
      DID's history; nothing else deletes.
+   - Migrations: this table is **v7**; owner-only-signing adds **v8** (`repo_authority_checks`,
+     `imported_candidates`). DELIVER may fold both into one migration if they ship together.
+     Revised by ADR-086/087 (owner-only-signing).
 8. **Federation**: links travel as ordinary claims through the unchanged peer-pull, indexer and
    self-attested paths. Each reader proves the GitHub side itself (`identity verify`). Checks are
    never published; a peer's check never counts for you. Index/search results label links "GitHub
-   side not checked here".
+   side not checked here". Revised by ADR-086/087 (owner-only-signing): every `github:` assertion
+   row from the index is labelled "authority not checked here"; the indexer stays unchanged with no
+   GitHub capability.
 
 ## Alternatives Considered
 

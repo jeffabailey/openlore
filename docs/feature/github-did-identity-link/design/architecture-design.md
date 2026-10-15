@@ -1,8 +1,11 @@
 # Architecture Design: github-did-identity-link
 
-DESIGN 2026-10-14 · Morgan · propose mode · ADR-084 + ADR-085 (Proposed, conditional on user
-confirmation). Decisions and options: `wave-decisions.md`. Paths are relative to
+DESIGN 2026-10-14 · Morgan · propose mode · ADR-084 + ADR-085 (Accepted 2026-10-14, user
+approved as proposed). Decisions and options: `wave-decisions.md`. Paths are relative to
 `/Users/jeffbailey/Projects/foss/leading/openlore/`.
+
+Revised by ADR-086/087 (owner-only-signing): a verified link is also the proof of signing
+authority over `github:` subjects; see the revision notes in the sections below.
 
 ## C4 — System Context (L1)
 
@@ -106,6 +109,11 @@ L3 is not drawn: the new pure module has fewer than 5 components; its functions 
 | `xtask check-arch` | `xtask/src/check_arch.rs` | EXTEND | `identity_link_checks_insert_only`, `identity_link_purge_only_in_forget_verb`, `identity_link_readers_hold_no_write_handle`, `identity_link_compose_only_via_proven_link` | — |
 | `FakeGithub` + fixtures | `crates/test-support` (`fixtures/github/users_profile.json`, `user_by_id.json`) | EXTEND | Id lookup + lie catalogue (ADR-085 Earned Trust) | Test-only |
 
+Revised by ADR-086/087 (owner-only-signing): `link_view` feeds the display association; a separate
+pure `claim-domain::authority` module uses each DID's own `Verified` check (even when the id is
+Contested) as the proof of signing authority over `github:<login>` and owned repos. The scorer
+row's `sameAs` drop moves into `score_attested` via `authority::kind` (same outcome).
+
 ## Driving ports
 
 - `openlore identity link github <login> [--yes]` — NEW. Fresh `GET /users/{login}`; refuses
@@ -122,6 +130,9 @@ L3 is not drawn: the new pure module has fewer than 5 components; its functions 
   `scrape github <user>`).
 - Review app `POST /github/link/publish`, `POST /github/link/retract` (names indicative) — behind
   the existing session, CSRF and per-DID publish budget (ADR-076).
+- Revised by ADR-086/087 (owner-only-signing): `openlore authority verify` (owner-only-signing)
+  re-checks links plus repo authority; `identity verify` is unchanged. Per-verb capabilities gain
+  rows for the gated composers (ADR-085 §7).
 
 ## Driven ports
 
@@ -141,6 +152,10 @@ L3 is not drawn: the new pure module has fewer than 5 components; its functions 
 `checked_at`, then max `check_id` (read query).
 Rate-limited / unavailable reads write no row. No `UPDATE`; `DELETE` only in
 `identity_link_purge.rs` (whole `subject_did`). Labels use the ADR-076 spelling.
+
+Revised by ADR-086/087 (owner-only-signing): owner-only-signing adds migration v8
+(`repo_authority_checks`, `imported_candidates`); DELIVER may fold v7 and v8 into one migration if
+they ship together.
 
 ## Reuse Analysis (HARD GATE)
 

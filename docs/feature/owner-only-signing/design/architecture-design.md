@@ -1,7 +1,7 @@
 # Architecture Design: owner-only-signing
 
-DESIGN 2026-10-14 · Morgan · propose mode · ADR-086 + ADR-087 (Proposed, conditional on user
-confirmation). Decisions and options: `wave-decisions.md`. Prior-wave changes: `upstream-changes.md`.
+DESIGN 2026-10-14 · Morgan · propose mode · ADR-086 + ADR-087 (Accepted 2026-10-14, user
+approved as proposed). Decisions and options: `wave-decisions.md`. Prior-wave changes: `upstream-changes.md`.
 Builds on github-did-identity-link (GDL, ADR-084/085). Paths are relative to
 `/Users/jeffbailey/Projects/foss/leading/openlore/`.
 
@@ -207,7 +207,7 @@ all challenged; the rest REUSE/EXTEND.
    or deleted (C-OOS-5).
 3. **Usability** — every refusal names who can sign and the next command; import never refused.
 4. **Reliability** — GitHub outage/rate limit records nothing and changes no state; offline signing
-   from fresh checks (I-9 with the proposed exception); signing gates fail closed on unknown state.
+   from fresh checks (I-9 with the accepted exception); signing gates fail closed on unknown state.
 5. **Performance / cost** — 0 requests at offline sign. Scrape: harvest baseline ≈ 8 GETs per repo
    (`adapter-github/src/lib.rs` `harvest_repo`) + 2 for authority ≈ 10, so anonymous 60/hour ≈ 6
    repos/hour (≈ 7 before); `GITHUB_TOKEN` (5000/hour) recommended and surfaced in the refusal

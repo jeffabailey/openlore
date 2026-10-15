@@ -1,7 +1,9 @@
 # Upstream Changes: github-did-identity-link (DESIGN, 2026-10-14)
 
 This feature has no DISCUSS wave. These are the prior-wave decisions and assumptions it changes or
-realizes. A later DISCUSS pass should confirm them.
+realizes. Accepted by the user with the design on 2026-10-14. Further revisions from
+owner-only-signing are listed in `docs/feature/owner-only-signing/design/upstream-changes.md`
+(UC-1..UC-8, applied 2026-10-14).
 
 | # | Prior decision / assumption | Source | Change | Impact |
 |---|---|---|---|---|

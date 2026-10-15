@@ -1,16 +1,17 @@
 # Wave Decisions: owner-only-signing (DESIGN)
 
-- **Mode**: propose (autonomous subagent; the user was not asked). Every decision lists 2-3 options
-  and a recommendation. The recommendation is the working default so the documents are complete.
-  **PROPOSED — awaiting user** = needs the user's confirmation.
+- **Mode**: propose (autonomous subagent). Every decision lists 2-3 options and a recommendation.
+  **The user approved every decision and assumption as proposed on 2026-10-14** (incl. A-11 =
+  persist imported candidates, the I-9 exception with the 7-day window, and the repo-file
+  definition of admin); each is marked ACCEPTED (user, 2026-10-14).
 - **Architect**: Morgan (nw-solution-architect). **Date**: 2026-10-14.
 - **Scope**: application. **Paradigm**: functional Rust (ADR-007). **Style**: unchanged — hexagonal
   modular monolith (ADR-009), three disjoint composition roots (ADR-023/072).
-- **Builds on** github-did-identity-link (GDL, ADR-084/085, all PROPOSED). This design needs some
-  GDL decisions changed; they are recorded in `upstream-changes.md` (UC-1..UC-8), not edited there.
+- **Builds on** github-did-identity-link (GDL, ADR-084/085, Accepted). The GDL changes this design
+  needs (`upstream-changes.md` UC-1..UC-8) were applied to the GDL design and ADR-085 on 2026-10-14.
 - **No DISCUSS wave.** Requirements derive from the user's statement; recorded as assumptions.
-- **ADRs**: ADR-086 (authority model + enforcement), ADR-087 (authority proofs). Both Proposed and
-  conditional. C4 and components: `architecture-design.md`.
+- **ADRs**: ADR-086 (authority model + enforcement), ADR-087 (authority proofs). Both Accepted
+  (2026-10-14). C4 and components: `architecture-design.md`.
 
 ## The requirement and its interpretation
 
@@ -19,7 +20,7 @@ being the owner of an account but only the owner of the account can sign those c
 also make it so only an owner or admin of a repo can sign claims about the repo but let anyone
 import a repo and generate unsigned claims."
 
-Interpretation used (confirm, A-1):
+Interpretation used (accepted, A-1):
 
 - **Import** = scrape/infer: anyone gets unsigned candidates about any public `github:` subject.
 - **Sign** = any OpenLore act that produces a record attributed to your DID for publication: CLI
@@ -55,18 +56,18 @@ repo) are persisted. "Import into the database" literally needs OOS-D12 option B
 | ⊘ | DISCUSS / DISCOVER artifacts for this feature | Do not exist |
 | ⊘ | `lexicons/org/openlore/philosophy.json` | Philosophy records are not `github:` subjects |
 
-## Assumptions (to confirm)
+## Assumptions (accepted by the user 2026-10-14)
 
 | ID | Assumption | If wrong |
 |---|---|---|
-| A-1 | Interpretation above (import vs sign; `github:` scope). **Confirm explicitly.** | Re-scope |
-| A-2 | Person authority = ADR-084 identity link + this reader's `verified` check; no one else may sign about a person, including the authors of claims today. **Confirm explicitly.** | OOS-D4 |
-| A-3 | For repos, "admin" may be approximated by "listed in `.github/openlore-authority` by someone with push access". **Residual risk R-1**: any collaborator with push access can list their own DID with no identity proof; CODEOWNERS blocks this only if branch protection requires code-owner review, which readers cannot see. Reader label is `repo-listed`, not "admin". **Confirm explicitly.** | OOS-D5 option B (OAuth) |
+| A-1 | Interpretation above (import vs sign; `github:` scope). Confirmed by the user 2026-10-14. | Re-scope |
+| A-2 | Person authority = ADR-084 identity link + this reader's `verified` check; no one else may sign about a person, including the authors of claims today. Confirmed by the user 2026-10-14. | OOS-D4 |
+| A-3 | For repos, "admin" may be approximated by "listed in `.github/openlore-authority` by someone with push access". **Residual risk R-1**: any collaborator with push access can list their own DID with no identity proof; CODEOWNERS blocks this only if branch protection requires code-owner review, which readers cannot see. Reader label is `repo-listed`, not "admin". Confirmed by the user 2026-10-14. | OOS-D5 option B (OAuth) |
 | A-4 | Third-party claims stay visible as labelled opinions; they are not deleted or hidden. | OOS-D2/D9 |
 | A-5 | Anyone may still counter any claim. | OOS-D11 |
 | A-6 | Signing freshness window = 7 days of the latest local authority check. | One constant |
-| A-7 | Existing dogfood claims in PDSes and the live index that are third-party reading as `third-party` is acceptable. **Confirm explicitly.** | OOS-D3 |
-| A-8 | Contributor-philosophy inference becomes candidates-only for anyone but the person themself. **Confirm explicitly.** | CPI D-1 stays; requirement not met for people |
+| A-7 | Existing dogfood claims in PDSes and the live index that are third-party reading as `third-party` is acceptable. Confirmed by the user 2026-10-14. | OOS-D3 |
+| A-8 | Contributor-philosophy inference becomes candidates-only for anyone but the person themself. Confirmed by the user 2026-10-14. | CPI D-1 stays; requirement not met for people |
 | A-9 | GitHub's collaborator-permission endpoint needs push access to the repo (documented for the collaborators endpoints; unverified for `/permission`). | Re-open OOS-D5 option C as signing-time only |
 | A-10 | `GET /repos/{o}/{r}` for a renamed/transferred repo answers a 301 to `/repositories/{id}`; the adapter follows one same-host redirect. Partly unverified. | Renames read `repo_not_found` until re-scraped under the new name |
 | A-11 | "Import into the database" means persisted (OOS-D12 B). | Drop slice 5 |
@@ -76,7 +77,7 @@ repo) are persisted. "Import into the database" literally needs OOS-D12 option B
 
 ## Key Decisions
 
-### OOS-D1 — Scope and exemptions — PROPOSED — awaiting user
+### OOS-D1 — Scope and exemptions — ACCEPTED (user, 2026-10-14)
 Recommended: authority applies to `github:<login>` and `github:<owner>/<repo>` assertions only.
 Non-weight kinds — `retracts` claims, `counters` claims, ADR-084 identity links — need no authority
 **and never count in scoring** (any subject, any author), so a spoofed `counters` reference cannot
@@ -87,7 +88,7 @@ buy weight (review C-1). `supersedes`/`corrects` need authority (they are new as
 | B. Also gate counters | Owners become indisputable; contradicts ADR-015. |
 | C. All subjects | No authority source exists for non-GitHub subjects. |
 
-### OOS-D2 — What happens to "any DID asserts anything" — PROPOSED — awaiting user
+### OOS-D2 — What happens to "any DID asserts anything" — ACCEPTED (user, 2026-10-14)
 | Option | Trade-off |
 |---|---|
 | **A. Keep the claim model; derive `Attested(Owner\|RepoListed) / Unattested / NotChecked` per claim in readers; OpenLore composers refuse to sign non-attested `github:` claims** (recommended) | No wire change; honest labels; peers decide; works for already-published data. Composer refusal only binds OpenLore tools (ATProto cannot stop other clients). |
@@ -95,21 +96,21 @@ buy weight (review C-1). `supersedes`/`corrects` need authority (they are new as
 | C. New wire field `kind: attestation\|opinion` | Self-declared, still needs a proof; Lexicon + CID + OAuth consent change. |
 Sources: ADR-008, ADR-015, ADR-022, ADR-071; ATProto repo model.
 
-### OOS-D3 — Already-published third-party claims (PDSes + live index) — PROPOSED — awaiting user
+### OOS-D3 — Already-published third-party claims (PDSes + live index) — ACCEPTED (user, 2026-10-14)
 | Option | Trade-off |
 |---|---|
 | **A. Same rule for old and new (grandfathered by label); no cutoff, no purge** (recommended) | Nothing lost or rewritten; a pre-feature claim by a real owner reads `Attested`. Dogfood third-party claims read `third-party`. |
 | B. Purge/hide in the index | Needs indexer GitHub capability or a rule it cannot evaluate; destroys data. |
 | C. Date cutoff on `composedAt` | Forgeable (author-asserted). |
 
-### OOS-D4 — Person authority proof — PROPOSED — awaiting user
+### OOS-D4 — Person authority proof — ACCEPTED (user, 2026-10-14)
 | Option | Trade-off |
 |---|---|
 | **A. Author's ADR-084 link to the account + this reader's `verified` check; subject login ∈ logins observed for that id** (recommended) | Consent (the DID owner published the link), numeric id pin, rename-safe, re-checkable by any reader. Requires GDL slice 1. |
 | B. Bio check alone (no link record) | No GDL dependency, but associates DID and account from a bio scan without published consent (contradicts GDL A-2). |
 | C. GitHub OAuth by the signer | Not re-checkable by readers; new OAuth app and token storage. |
 
-### OOS-D5 — Repo authority proof — PROPOSED — awaiting user
+### OOS-D5 — Repo authority proof — ACCEPTED (user, 2026-10-14)
 Concrete GitHub evaluation in ADR-087 §Context.
 | Option | Trade-off |
 |---|---|
@@ -121,17 +122,17 @@ File location sub-choice: **`.github/openlore-authority`** (recommended; `.githu
 repo-meta folder, CODEOWNERS can guard it) vs root `OPENLORE` (more visible, clutters root) vs
 `.well-known/openlore` (no meaning on GitHub).
 
-### OOS-D6 — Authority over time — PROPOSED — awaiting user
+### OOS-D6 — Authority over time — ACCEPTED (user, 2026-10-14)
 | Option | Trade-off |
 |---|---|
 | **A. Current authority, re-checked; former owners' claims read `Unattested (no longer owner)`; nothing auto-retracted** (recommended) | Honest about transfers and removed admins; append-only kept. |
 | B. Authority at signing time | Unprovable later (GitHub has no public history of ownership/permissions). |
 | C. Auto-retract on loss | System signs on the user's behalf (CPI D-5, C-GDL-6). |
 
-### OOS-D7 — Signing gate vs offline signing (I-9) — PROPOSED — awaiting user
+### OOS-D7 — Signing gate vs offline signing (I-9) — ACCEPTED (user, 2026-10-14)
 | Option | Trade-off |
 |---|---|
-| **A. Gate from the latest local authority check, `Attested` and ≤ 7 days old; online verbs refresh in-invocation; offline verbs refuse with the verify command** (recommended) | Sign itself stays network-free, but a `github:` assertion without a fresh check is refused offline: a **proposed exception to I-9**, recorded in ADR-086 §5 and the brief's I-9 row (review H-10). Staleness bounded to 7 days for the signer (readers re-check anyway). |
+| **A. Gate from the latest local authority check, `Attested` and ≤ 7 days old; online verbs refresh in-invocation; offline verbs refuse with the verify command** (recommended) | Sign itself stays network-free, but a `github:` assertion without a fresh check is refused offline: an **accepted exception to I-9**, recorded in ADR-086 §5 and the brief's I-9 row (review H-10). Staleness bounded to 7 days for the signer (readers re-check anyway). |
 | B. Live check at every sign | Freshest; breaks I-9 for `github:` claims; `infer people` turns online. |
 | C. No gate; reader-side only | Not what the user asked. |
 
@@ -146,27 +147,27 @@ publish <cid>`; for `claim publish`, "never published" = `claims.published_at IS
 draft quotes only `Attested` claims. One pure gate (`may_sign` → `SigningPermit`, evidence with
 private fields built only from adapter-decoded observations). No override flag.
 
-### OOS-D9 — Reader treatment and scoring — PROPOSED — awaiting user
+### OOS-D9 — Reader treatment and scoring — ACCEPTED (user, 2026-10-14)
 | Option | Trade-off |
 |---|---|
 | **A. Label everywhere; `score_attested` weights only assertions that are non-`github:` or Attested; non-weight kinds (counter, retract, sameAs) never weighted; names what it skipped; `--include-unattested` adds unattested assertions as a separate per-author section** (recommended) | The rule means something to peers; transparent; one pure choke point; also stops counters adding weight (A-13). Weighted views shrink until `authority verify` runs. |
 | B. Label only; count everything | No surprise; a foreign client bypasses the rule for every reader. |
 | C. Hide unattested claims | Loses the opinion layer and disputes. |
-Consequence to confirm: ADR-022's cross-author triangulation becomes mostly owner + listed admins.
+Consequence (accepted): ADR-022's cross-author triangulation becomes mostly owner + listed admins.
 
-### OOS-D10 — Indexer and network search — PROPOSED — awaiting user
+### OOS-D10 — Indexer and network search — ACCEPTED (user, 2026-10-14)
 | Option | Trade-off |
 |---|---|
 | **A. Indexer unchanged; CLI renders index rows "authority not checked here"; local check on demand** (recommended) | Keeps C-GDL-8 and ADR-023; no DTO change. |
 | B. Indexer verifies authority | GitHub capability + shared rate budget in the indexer root. |
 | C. Indexer classifies by shape only (author has an indexed `sameAs` to the subject login/owner) | Cheap hint, but squattable without the GitHub side; later optional slice. |
 
-### OOS-D11 — Counter-claims and retractions — PROPOSED — awaiting user
+### OOS-D11 — Counter-claims and retractions — ACCEPTED (user, 2026-10-14)
 Recommended: anyone may counter any claim (owner's included), shown-not-applied as today; only the
 author may retract (ADR-008), never refused for lack of authority. Alternative: owner-only counters
 (rejected: indisputable owners); counters counted in scoring (rejected: ADR-015 shown-not-applied).
 
-### OOS-D12 — Unsigned import and hand-off — PROPOSED — awaiting user
+### OOS-D12 — Unsigned import and hand-off — ACCEPTED (user, 2026-10-14)
 | Option | Trade-off |
 |---|---|
 | A. Keep today: candidates printed per run, contribution links stored; refusal message names who can sign and the exact command | Zero storage change; "import into the database" not literal. |
@@ -177,14 +178,14 @@ Hand-off (all options): the refusal and the candidate list print "can be signed 
 and the command the owner runs (`openlore scrape github <owner/repo> --sign N`). Candidates are
 deterministic from public data, so the owner re-derives them; no data transfer is needed.
 
-### OOS-D13 — Review app — PROPOSED — awaiting user
+### OOS-D13 — Review app — ACCEPTED (user, 2026-10-14)
 | Option | Trade-off |
 |---|---|
 | **A. Publish-time authority check in the request (fresh bio read + `read_repo_authority`); keep scanning owned repos only; prompt to publish the identity link so readers see claims as `owner`** (recommended) | Closes the transfer-after-scan gap at +1 request per publish request + 2 per repo (3 for one repo); no new OAuth scope. |
 | B. A + "import any public repo" into private suggestions, marked "not yours to publish" | Literal "anyone can import" in the app; more UI, more GitHub budget. Later slice if wanted. |
 | C. No change (scan-time ownership only) | Repo transferred after the scan still publishes. |
 
-### OOS-D14 — Where the logic lives — PROPOSED — awaiting user
+### OOS-D14 — Where the logic lives — ACCEPTED (user, 2026-10-14)
 | Option | Trade-off |
 |---|---|
 | **A. New pure module `claim-domain::authority` beside GDL's `identity_link`; `GithubPort::read_repo_authority`; v8 `repo_authority_checks` + split read/write ports in `adapter-duckdb`** (recommended) | No new crate; all readers already depend on `claim-domain`. |
@@ -244,13 +245,12 @@ returns raw bytes, but then a second metadata read is needed to refuse symlinks/
 - C-OOS-7: Unsigned import stays open to everyone; imported candidates are never federated and never
   feed inference or scoring.
 - C-OOS-8: The indexer gains no GitHub capability.
-- C-OOS-9: Signing never calls the network. Proposed I-9 exception: a `github:` assertion without
+- C-OOS-9: Signing never calls the network. Accepted I-9 exception: a `github:` assertion without
   a fresh (≤ 7 days) local authority check is refused offline (ADR-086 §5; brief I-9 row).
 
 ## Slices (indicative; DISTILL/DELIVER own the roadmap)
 
-**DISTILL cannot start until GDL-D1..D5 and OOS-D2/D4/D5/D7/D9 are confirmed.** No slice ships
-without GDL slice 1: from slice 1 on, every `github:` signing path is gated, so person and
+No slice ships without GDL slice 1: from slice 1 on, every `github:` signing path is gated, so person and
 personal-repo signing needs a published link. The only GDL-independent path is `RepoListed` (file
 listing), which arrives in slice 2.
 
@@ -263,7 +263,7 @@ listing), which arrives in slice 2.
 4. Review app: publish-time check, identity-link prompt.
 5. (If A-11 holds) `imported_candidates` + `candidates list`.
 
-## Proposed KPIs (not registered)
+## KPIs (registered in `docs/product/kpi-contracts.yaml` 2026-10-14)
 
 - KPI-OOS-1 (guardrail): 0 `github:` assertions signed/published by any OpenLore composer
   without a permit — CI property + ATs over all composers.

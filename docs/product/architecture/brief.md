@@ -204,8 +204,8 @@ Shipped slice extensions:
     `at://<did>/org.openlore.claim/<cid>` + `https://github.com/<o>/<r>/commits?author=<login>`).
     C4 L1/L2/L3 in `docs/feature/contributor-philosophy-inference/feature-delta.md`.
 
-- **github-did-identity-link: DESIGN 2026-10-14 (PROPOSED — awaiting user; DISTILL gated on
-  confirming GDL-D1..D5) — IN-PLACE EXTENSION, ZERO new crates, ZERO Lexicon change, one migration
+- **github-did-identity-link: DESIGN 2026-10-14 (ACCEPTED by the user 2026-10-14; revised by
+  owner-only-signing: a verified link is also the proof of signing authority) — IN-PLACE EXTENSION, ZERO new crates, ZERO Lexicon change, one migration
   (v7).** Realizes the OD-CPI-1 deferral: a DID owner may publish an opt-in `org.openlore.claim`
   `{subject: <own bare DID>, predicate: sameAs, object: github:<login>, evidence:
   [https://github.com/<login>, https://api.github.com/user/<id>], confidence: 10000}`, app-signed
@@ -239,12 +239,12 @@ Shipped slice extensions:
     `identity_link_purge_only_in_forget_verb`, `identity_link_readers_hold_no_write_handle`,
     `identity_link_compose_only_via_proven_link`.
   - **ADR-084** (wire contract) + **ADR-085** (verification reuse, reader semantics, local checks),
-    both Proposed and conditional. Design, C4 L1/L2, assumptions A-1..A-10 and options per decision:
+    both Accepted 2026-10-14. Design, C4 L1/L2, assumptions A-1..A-10 and options per decision:
     `docs/feature/github-did-identity-link/design/` (wave-decisions.md, architecture-design.md,
     upstream-changes.md).
 
-- **owner-only-signing: DESIGN 2026-10-14 (PROPOSED — awaiting user; depends on
-  github-did-identity-link; DISTILL gated on OOS-D2/D4/D5/D9 and GDL-D1..D5) — IN-PLACE EXTENSION,
+- **owner-only-signing: DESIGN 2026-10-14 (ACCEPTED by the user 2026-10-14; depends on
+  github-did-identity-link slice 1) — IN-PLACE EXTENSION,
   ZERO new crates, ZERO Lexicon change, one migration (v8).** Anyone may import (scrape/infer)
   unsigned candidates about any public `github:` subject; only a DID with **authority** may sign:
   for `github:<login>` the DID with a `verified` ADR-084 link to that account; for
@@ -253,7 +253,7 @@ Shipped slice extensions:
   counters and identity links need no authority and are never weighted. Readers derive `owner /
   repo-listed / third-party / authority not checked` per `github:` assertion from local,
   insert-only checks; nothing on the wire changes and already-published claims are judged by the
-  same rule. Proposes an exception to I-9 (see the invariants table).
+  same rule. Establishes an accepted exception to I-9 (see the invariants table).
   - **`crates/claim-domain` (PURE, EXTEND)**: new `authority` module — `requirement`, `classify`,
     `may_sign` → private-constructor `SigningPermit`.
   - **`crates/scoring` (PURE, EXTEND)**: `score_attested` (unbounded preservation; weights only
@@ -277,9 +277,9 @@ Shipped slice extensions:
   - **`xtask` (EXTEND)**: `sign_only_with_permit`, `authority_evidence_only_from_adapters`,
     `repo_authority_checks_insert_only`,
     `authority_readers_hold_no_write_handle`, `scoring_callers_use_score_attested`.
-  - **ADR-086** (authority model, enforcement, existing claims) + **ADR-087** (proofs), both Proposed
-    and conditional. Changes needed in the GDL design: `docs/feature/owner-only-signing/design/
-    upstream-changes.md` (UC-1..UC-8).
+  - **ADR-086** (authority model, enforcement, existing claims) + **ADR-087** (proofs), both
+    Accepted 2026-10-14. GDL changes (`docs/feature/owner-only-signing/design/upstream-changes.md`
+    UC-1..UC-8) applied to the GDL design and ADR-085 on 2026-10-14.
 
 - **serverless-philosophy-federation: DESIGN 2026-07-15 — ADDITIVE. +2 Rust production crates
   (`publish-domain` pure + `adapter-publish-http` effect; workspace 21 → 23 prod / 25 members, or 24
@@ -753,7 +753,7 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
 
 ## For Acceptance Designer
 
-### github-did-identity-link (DESIGN 2026-10-14, proposed — conditional on user confirmation of GDL-D1..D5; do not start DISTILL before)
+### github-did-identity-link (DESIGN 2026-10-14, accepted 2026-10-14)
 
 - **Driving ports (test entry points)**: CLI `openlore identity link github <login> [--yes]`,
   `openlore identity verify [--did|--github]`, `openlore identity list [--did]`,
@@ -787,7 +787,7 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
   preview states public + retraction-does-not-erase and keeps I-7; publish message names the
   retract command (I-8).
 
-### owner-only-signing (DESIGN 2026-10-14, proposed — conditional on OOS-D2/D4/D5/D9 and GDL-D1..D5; do not start DISTILL before)
+### owner-only-signing (DESIGN 2026-10-14, accepted 2026-10-14; needs GDL slice 1 first)
 
 - **Driving ports**: `openlore claim add`, `claim counter`, `claim retract`, `claim publish <cid>`,
   `scrape github <owner/repo> [--sign]`, `scrape person <user> [--sign]`, `infer people [--sign]`,
@@ -826,7 +826,7 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
 
 ## For Software Crafter
 
-### github-did-identity-link (DESIGN 2026-10-14, proposed)
+### github-did-identity-link (DESIGN 2026-10-14, accepted)
 
 - Hoist the DID-token matcher from `crates/review-domain/src/ownership.rs` into
   `crates/claim-domain/src/identity_link.rs` verbatim; `prove_ownership` keeps its signature and
@@ -863,7 +863,7 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
   `adapter-github` in `openlore-indexer`.
 - Paradigm: functional (ADR-007) — use @nw-functional-software-crafter.
 
-### owner-only-signing (DESIGN 2026-10-14, proposed)
+### owner-only-signing (DESIGN 2026-10-14, accepted)
 
 - Prerequisite: GDL slice 1 (`identity_link` module, v7 checks). Authority rules: ADR-087 §1-3;
   model and exemptions: ADR-086 §1-2.
@@ -922,13 +922,13 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
 | **`openlore scrape github <owner/repo> --contributors N`** (flag; records top-N human contributors as local links) | contributor-philosophy-inference (DESIGN) | **ADR-063** |
 | **`openlore infer people [--person github:<login>] [--min-repos N] [--sign N[,N,...]]`** (NEW verb; person→philosophy candidates from signed repo claims) | contributor-philosophy-inference (DESIGN) | **ADR-063 + ADR-064** |
 | **`openlore scrape github <user>`** (renders the person view from the local store) | contributor-philosophy-inference (DESIGN) | **ADR-063** |
-| **`openlore identity link github <login> [--yes]`** (NEW verb; bio proof → owner-signed `sameAs` link) | github-did-identity-link (DESIGN, proposed) | **ADR-084 + ADR-085** |
-| **`openlore identity verify [--did <did> \| --github <login>]`** (NEW; re-checks links' GitHub side, records local checks) | github-did-identity-link (DESIGN, proposed) | **ADR-085** |
-| **`openlore identity list [--did <did>]`** (NEW; offline linked-identity view) | github-did-identity-link (DESIGN, proposed) | **ADR-085** |
-| **`openlore identity forget --did <did>`** (NEW; deletes that DID's local proof checks only) | github-did-identity-link (DESIGN, proposed) | **ADR-085** |
-| **`openlore authority verify [--subject <github:…> \| --mine]`** (NEW; re-checks subject authority of local claims, records local checks, never signs) | owner-only-signing (DESIGN, proposed) | **ADR-087** |
-| **`openlore graph query --include-unattested`** (flag; shows non-attested claims as a separate per-author section) | owner-only-signing (DESIGN, proposed) | **ADR-086** |
-| **`openlore candidates list [--subject <s>]`** (NEW, slice 5 optional; offline list of imported unsigned candidates) | owner-only-signing (DESIGN, proposed) | **ADR-086** |
+| **`openlore identity link github <login> [--yes]`** (NEW verb; bio proof → owner-signed `sameAs` link) | github-did-identity-link (DESIGN, accepted) | **ADR-084 + ADR-085** |
+| **`openlore identity verify [--did <did> \| --github <login>]`** (NEW; re-checks links' GitHub side, records local checks) | github-did-identity-link (DESIGN, accepted) | **ADR-085** |
+| **`openlore identity list [--did <did>]`** (NEW; offline linked-identity view) | github-did-identity-link (DESIGN, accepted) | **ADR-085** |
+| **`openlore identity forget --did <did>`** (NEW; deletes that DID's local proof checks only) | github-did-identity-link (DESIGN, accepted) | **ADR-085** |
+| **`openlore authority verify [--subject <github:…> \| --mine]`** (NEW; re-checks subject authority of local claims, records local checks, never signs) | owner-only-signing (DESIGN, accepted) | **ADR-087** |
+| **`openlore graph query --include-unattested`** (flag; shows non-attested claims as a separate per-author section) | owner-only-signing (DESIGN, accepted) | **ADR-086** |
+| **`openlore candidates list [--subject <s>]`** (NEW, slice 5 — A-11 accepted; offline list of imported unsigned candidates) | owner-only-signing (DESIGN, accepted) | **ADR-086** |
 
 ## C4 reference
 
@@ -959,7 +959,7 @@ build-fail.
 | I-6 | The signed-claim payload MUST contain only the locked numeric `confidence` (`[0.0, 1.0]`); display buckets MUST NEVER be serialized | `tests/lexicon_conformance.rs` (DISTILL gate)  |
 | I-7 | The compose preview MUST contain the literal text "not as truth"        | `tests/walking_skeleton.rs::WS-1`              |
 | I-8 | The publish success message MUST mention the retract command            | `tests/walking_skeleton.rs::WS-8`              |
-| I-9 | Compose and sign MUST succeed with network disabled (KPI-5). *Proposed exception (ADR-086 §5, owner-only-signing, not yet accepted): a `github:` assertion without a local authority check ≤ 7 days old is refused offline; signing itself never uses the network.* | `tests/walking_skeleton.rs::WS-10`             |
+| I-9 | Compose and sign MUST succeed with network disabled (KPI-5). *Accepted exception (ADR-086 §5, owner-only-signing, 2026-10-14): a `github:` assertion without a local authority check ≤ 7 days old is refused offline; signing itself never uses the network.* | `tests/walking_skeleton.rs::WS-10`             |
 | I-10 | Graph query output MUST match compose-preview field-for-field (KPI-4)   | `tests/walking_skeleton.rs::WS-12` + `tests/federation_roundtrip.rs` |
 | I-11 | Workspace dependencies MUST pass cargo-deny advisories, bans, sources, and licenses | `cargo deny check` (CI gate)                   |
 | I-12 | Every git commit on a roadmap step MUST carry a `Step-ID: NN-NN` trailer matching the roadmap | `des-verify-integrity` (Phase 6 gate)          |
@@ -1157,7 +1157,7 @@ C4Container
   `docs/feature/github-release-binaries/environments.yaml`; ADR-011, ADR-012
 - Supply-chain policy: `deny.toml`
 - PDS hosting (shared module): `docs/feature/shared-pds-module/feature-delta.md`; ADR-066..069
-- GitHub ↔ DID identity link (DESIGN, proposed): `docs/feature/github-did-identity-link/design/`;
+- GitHub ↔ DID identity link (DESIGN, accepted): `docs/feature/github-did-identity-link/design/`;
   ADR-084, ADR-085
-- Owner-only signing (DESIGN, proposed): `docs/feature/owner-only-signing/design/`; ADR-086,
+- Owner-only signing (DESIGN, accepted): `docs/feature/owner-only-signing/design/`; ADR-086,
   ADR-087
