@@ -1,0 +1,13 @@
+Claims embodying org.openlore.philosophy.memory-safety (grouped by subject):
+
+subject: github:BurntSushi/ripgrep
+  author_did: did:plc:test-jeff (you)
+    confidence: 0.55 (weighted)
+    cid:        bafyreiaskxsxh27xm4rzydzzjhbsp6nh33jfkh64jfjak3oezvbri6dlgq
+
+subject: github:rust-lang/regex
+  author_did: did:plc:rachel-test (subscribed peer)
+    confidence: 0.6 (weighted)
+    cid:        bafyreifhte5wnxmjreqwmo5ufworyqljcimn3snpnifa5gvfzgw2ywtnz4
+
+2 subject(s), 2 author(s). Each claim is attributed to its author DID. No claims are merged.

@@ -61,10 +61,15 @@ Constraints that shape the wire contract:
 4. **The GitHub side is never proven by the record.** The record carries consent (DID side) and the
    pinned id; the GitHub side is proven only by a reader's own live bio check (ADR-085). The
    identity verbs refuse to build a link unless a bio check passes at compose time, and **every
-   other OpenLore composer** (`claim add`, `claim counter`, `scrape github --sign`,
-   `infer people --sign`, review-app suggestion publish) refuses predicate `sameAs` with a pointer
-   to `openlore identity link` — one pure guard in the shared compose path
-   (`claim_domain::identity_link::is_reserved_predicate`). A foreign client can still sign a
+   other OpenLore composer** (`claim add`, `scrape github --sign`, `infer people --sign`,
+   review-app suggestion publish) refuses predicate `sameAs` with a pointer to
+   `openlore identity link` — one pure guard in the shared compose path
+   (`claim_domain::identity_link::is_reserved_predicate`). **Exception: `claim counter`** may
+   counter a `sameAs` link (it mirrors the target's predicate). A counter's author is not the
+   subject DID, so readers never project it as a link (§3, GDL-D3); it needs no authority and
+   never counts in scoring.
+   *Amended 2026-10-14 (user, DISTILL): `claim counter` exempted from the `sameAs` refusal
+   (DISTILL decision D-b, scenario IL-8c).* A foreign client can still sign a
    well-shaped `sameAs` without a check; readers then show it as an unverified assertion (ADR-085
    §5), never an association.
 5. **Retraction** = the shipped ADR-008 `retracts` counter-claim by the same author (CLI

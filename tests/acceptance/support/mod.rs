@@ -54,6 +54,11 @@ pub mod state_delta;
 // / infer_people_evidence_grows / scrape_person.
 pub mod people;
 
+// github-did-identity-link (DISTILL 2026-10-14): the identity-link step
+// vocabulary shared by identity_link / identity_link_readers /
+// review_app_identity_link_readers.
+pub mod identity_links;
+
 /// The GitHub request budget of a scrape, shared by every driving port (the
 /// CLI and the viewer), so a port cannot drift from it: a person target
 /// (`user`) reads its public profile once and nothing else; a repo target

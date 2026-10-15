@@ -836,9 +836,11 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
   takes the claim and its ADR-071 `Provenance` and must reject: predicate ≠ `sameAs`, bare author
   ≠ subject, invalid login (`is_github_login` rules), missing/duplicate id URI, profile-URL login
   ≠ object login.
-- Every non-identity composer (`claim add`, `claim counter`, `scrape --sign`, `infer people
-  --sign`, review-app suggestion publish) refuses predicate `sameAs` through
+- Every non-identity composer (`claim add`, `scrape --sign`, `infer people --sign`, review-app
+  suggestion publish) refuses predicate `sameAs` through
   `claim_domain::identity_link::is_reserved_predicate`, pointing to `openlore identity link`.
+  `claim counter` is exempt (amended 2026-10-14, user, DISTILL D-b: a counter's author is not the
+  subject DID, so it is never projected as a link).
 - `adapter-github` follows at most one same-host redirect on `/users/{login}`; `login_seen` is the
   final body's `login`. Rendered lines show check age.
 - Check algorithm per ADR-085 §4: login read, then `GithubPort::read_person_by_id` on 404 or id

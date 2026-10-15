@@ -93,5 +93,13 @@ name = "review_app_resource_caps"
 path = "../../tests/acceptance/review_app_resource_caps.rs"
 harness = true
 
+# github-did-identity-link slice 3 (DISTILL 2026-10-14; GDL-D6, ADR-084/085):
+# "Publish this link" / "Retract this link" on the GitHub step. All `#[ignore]`d
+# at hand-off; DELIVER enables them one at a time.
+[[test]]
+name = "review_app_identity_link"
+path = "../../tests/acceptance/review_app_identity_link.rs"
+harness = true
+
 [lints]
 workspace = true

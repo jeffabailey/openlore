@@ -1,0 +1,2 @@
+cid,author_did,subject,predicate,object,confidence,composed_at,fetched_at,fetched_from_pds,signed_record_path,provenance
+bafyreifhte5wnxmjreqwmo5ufworyqljcimn3snpnifa5gvfzgw2ywtnz4,did:plc:rachel-test,github:rust-lang/regex,embodiesPhilosophy,org.openlore.philosophy.memory-safety,0.6,2026-09-02 10:00:00,2026-10-15 04:19:07.819863,http://127.0.0.1:63607/,peer_claims/did_plc_rachel-test/bafyreifhte5wnxmjreqwmo5ufworyqljcimn3snpnifa5gvfzgw2ywtnz4.json,app-signed

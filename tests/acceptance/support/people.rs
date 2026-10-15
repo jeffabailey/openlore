@@ -153,6 +153,8 @@ pub struct Invocation<'a> {
     /// Omit `OPENLORE_PDS_ENDPOINT` (the network-disabled composition).
     pub offline: bool,
     pub peers: Vec<PeerSeam<'a>>,
+    /// `GITHUB_TOKEN` for the child (github-did-identity-link token-rejected rows).
+    pub github_token: Option<&'a str>,
 }
 
 /// Run `openlore <args>` through the production composition root with the
@@ -174,6 +176,9 @@ pub fn openlore_with(env: &TestEnv, args: &[&str], inv: Invocation<'_>) -> CliOu
     }
     if let Some(now) = inv.now {
         cmd.env("OPENLORE_TEST_NOW", now);
+    }
+    if let Some(token) = inv.github_token {
+        cmd.env("GITHUB_TOKEN", token);
     }
     for peer in &inv.peers {
         cmd.env(peer_resolver_env_var(peer.peer_did), peer.peer_endpoint);

@@ -1,0 +1,6 @@
+version,applied_at,description
+1,2026-10-15 04:19:06.332173,"initial schema: claims, claim_evidence, claim_references"
+3,2026-10-15 04:19:06.349028,slice-03 peer storage
+4,2026-10-15 04:19:06.359455,slice-24 philosophy mint storage
+5,2026-10-15 04:19:06.364639,contributor-philosophy-inference contribution_links (append-only)
+6,2026-10-15 04:19:06.368866,bluesky-claim-review-app peer_claims.provenance (ADR-071)

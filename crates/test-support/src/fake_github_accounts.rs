@@ -15,6 +15,13 @@
 //! (component-boundaries §2: `PersonProfile.id`). Read-only: any non-GET is a
 //! 405. The token the app sends is recorded (never echoed) so a no-leak check
 //! can assert it never reaches logs.
+//!
+//! github-did-identity-link (DISTILL 2026-10-14) adds the ADR-085 lie
+//! catalogue for proof checks: `GET /user/{id}` (the id read), a rename whose
+//! old login 404s or redirects ([`OldLogin`]), a deleted account, a
+//! re-registered login (a different id), and a profile served ~60 s stale
+//! ([`FakeGithubAccounts::serve_stale_profile`] until
+//! [`FakeGithubAccounts::end_stale_profile`]).
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -169,6 +176,19 @@ impl GithubRequest {
     }
 }
 
+/// What GitHub answers on the OLD login after a rename (ADR-085 §4, A-10 —
+/// partly unverified, so both answers are modelled).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OldLogin {
+    /// `GET /users/{old}` → 404 (the check falls back to the id read).
+    NotFound,
+    /// `GET /users/{old}` → 301 to `/users/{new}` (same host).
+    Redirects,
+    /// `GET /users/{old}` → 301 to `http://elsewhere.invalid/users/{new}`
+    /// (another host — the adapter must refuse it, ADR-085 §4).
+    RedirectsToAnotherHost,
+}
+
 #[derive(Default)]
 struct GhState {
     accounts: Mutex<BTreeMap<String, GithubAccount>>,
@@ -182,6 +202,10 @@ struct GhState {
     requests: Mutex<Vec<GithubRequest>>,
     seen_tokens: Mutex<Vec<String>>,
     seq: AtomicU64,
+    /// Renamed logins that redirect: old (lowercase) → `Location` value.
+    redirects: Mutex<BTreeMap<String, String>>,
+    /// Accounts whose profile is served stale (lowercase login → stale bio).
+    stale_bio: Mutex<BTreeMap<String, Option<String>>>,
 }
 
 /// The multi-account GitHub double, served on loopback.
@@ -283,7 +307,9 @@ impl FakeGithubAccounts {
         account.repos.push(repo);
     }
 
-    /// Change a user's numeric id (a rename/re-registration → IdentityChanged).
+    /// Give the login a different numeric id IN PLACE (the review app reads
+    /// this as `IdentityChanged`). For an identity-link check, model a rename
+    /// with [`Self::rename`] and a re-registration with [`Self::register`].
     pub fn set_user_id(&self, login: &str, id: u64) {
         let mut accounts = self.state.accounts.lock().unwrap();
         if let Some(a) = accounts.get_mut(&login.to_ascii_lowercase()) {
@@ -327,11 +353,78 @@ impl FakeGithubAccounts {
         self.state.offline.store(offline, Ordering::SeqCst);
     }
 
+    /// The account `old` renames itself to `new` (same numeric id, same bio).
+    /// `GET /user/{id}` serves the new login; the old login 404s or redirects.
+    pub fn rename(&self, old: &str, new: &str, old_login: OldLogin) {
+        let mut accounts = self.state.accounts.lock().unwrap();
+        let mut account = accounts
+            .remove(&old.to_ascii_lowercase())
+            .unwrap_or_else(|| panic!("FakeGithubAccounts: unknown login {old}"));
+        account.login = new.to_string();
+        accounts.insert(new.to_ascii_lowercase(), account);
+        let location = match old_login {
+            OldLogin::NotFound => None,
+            OldLogin::Redirects => Some(format!("/users/{new}")),
+            OldLogin::RedirectsToAnotherHost => {
+                Some(format!("http://elsewhere.invalid/users/{new}"))
+            }
+        };
+        if let Some(location) = location {
+            self.state
+                .redirects
+                .lock()
+                .unwrap()
+                .insert(old.to_ascii_lowercase(), location);
+        }
+    }
+
+    /// The account is deleted: its login and its id both 404 from now on.
+    pub fn delete_account(&self, login: &str) {
+        self.state
+            .accounts
+            .lock()
+            .unwrap()
+            .remove(&login.to_ascii_lowercase());
+    }
+
+    /// A new account appears — e.g. someone re-registers a freed login under
+    /// a DIFFERENT numeric id. Takes precedence over any rename redirect.
+    pub fn register(&self, account: GithubAccount) {
+        let login = account.login.to_ascii_lowercase();
+        self.state.redirects.lock().unwrap().remove(&login);
+        self.state.accounts.lock().unwrap().insert(login, account);
+    }
+
+    /// GitHub's ~60 s profile cache (ADR-076 §6): every profile read of
+    /// `login` (by login or by id) serves `stale_bio` instead of the current
+    /// bio until [`Self::end_stale_profile`].
+    pub fn serve_stale_profile(&self, login: &str, stale_bio: Option<&str>) {
+        self.state
+            .stale_bio
+            .lock()
+            .unwrap()
+            .insert(login.to_ascii_lowercase(), stale_bio.map(str::to_string));
+    }
+
+    /// The cache window has passed: the current bio is served again.
+    pub fn end_stale_profile(&self, login: &str) {
+        self.state
+            .stale_bio
+            .lock()
+            .unwrap()
+            .remove(&login.to_ascii_lowercase());
+    }
+
     // ---------------------------------------------------------- observations
 
     /// Every request, in order.
     pub fn requests(&self) -> Vec<GithubRequest> {
         self.state.requests.lock().unwrap().clone()
+    }
+
+    /// Every requested path, in order (`/users/{login}`, `/user/{id}`, …).
+    pub fn request_paths(&self) -> Vec<String> {
+        self.requests().into_iter().map(|r| r.path).collect()
     }
 
     /// `true` iff the app sent exactly this token value.
@@ -460,7 +553,29 @@ fn route(state: &GhState, req: HttpRequest) -> HttpResponse {
         || json_with_headers(404, &serde_json::json!({"message": "Not Found"}), &headers);
     match segments.as_slice() {
         ["users", login] => match accounts.get(&login.to_ascii_lowercase()) {
-            Some(a) => json_with_headers(200, &profile_json(a), &headers),
+            Some(a) => json_with_headers(200, &served_profile(state, a), &headers),
+            None => match state
+                .redirects
+                .lock()
+                .unwrap()
+                .get(&login.to_ascii_lowercase())
+            {
+                Some(location) => {
+                    let mut moved = headers.clone();
+                    moved.push(("location", location.clone()));
+                    json_with_headers(
+                        301,
+                        &serde_json::json!({"message": "Moved Permanently"}),
+                        &moved,
+                    )
+                }
+                None => not_found(),
+            },
+        },
+        // The id read (ADR-085 §4): the current profile of the account with
+        // this numeric id, whatever its login is now; 404 once deleted.
+        ["user", id] => match accounts.values().find(|a| a.id.to_string() == *id) {
+            Some(a) => json_with_headers(200, &served_profile(state, a), &headers),
             None => not_found(),
         },
         ["users", login, "repos"] => match accounts.get(&login.to_ascii_lowercase()) {
@@ -486,6 +601,20 @@ fn route(state: &GhState, req: HttpRequest) -> HttpResponse {
             json_with_headers(status, &body, &headers)
         }
         _ => not_found(),
+    }
+}
+
+/// The profile as served now: the account, with its stale bio while a cache window is open.
+fn served_profile(state: &GhState, a: &GithubAccount) -> serde_json::Value {
+    let stale = state
+        .stale_bio
+        .lock()
+        .unwrap()
+        .get(&a.login.to_ascii_lowercase())
+        .cloned();
+    match stale {
+        Some(bio) => profile_json(&GithubAccount { bio, ..a.clone() }),
+        None => profile_json(a),
     }
 }
 
@@ -656,6 +785,54 @@ mod tests {
         assert_eq!(get(&gh, "/users/priyaraman").0, 403);
         gh.clear_rate_limit();
         assert_eq!(get(&gh, "/users/priyaraman").0, 200);
+    }
+
+    #[test]
+    fn the_id_read_follows_a_rename_and_the_old_login_404s() {
+        let gh = FakeGithubAccounts::start(vec![priya()]);
+        gh.rename("priyaraman", "priya-r", OldLogin::NotFound);
+        assert_eq!(get(&gh, "/users/priyaraman").0, 404);
+        let (status, body) = get(&gh, "/user/4210001");
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["login"], "priya-r");
+        assert_eq!(gh.request_paths(), ["/users/priyaraman", "/user/4210001"]);
+    }
+
+    #[test]
+    fn a_redirecting_rename_and_a_re_registration_are_distinguishable() {
+        let gh = FakeGithubAccounts::start(vec![priya()]);
+        gh.rename("priyaraman", "priya-r", OldLogin::Redirects);
+        assert_eq!(get(&gh, "/users/priyaraman").0, 301);
+        gh.register(GithubAccount::new("priyaraman", 9_000_001));
+        let (status, body) = get(&gh, "/users/priyaraman");
+        assert_eq!(status, 200);
+        assert!(body.contains("9000001"), "the new holder of the login");
+        gh.delete_account("priya-r");
+        assert_eq!(get(&gh, "/user/4210001").0, 404);
+    }
+
+    #[test]
+    fn chained_and_cross_host_redirects_are_served_as_301s() {
+        let gh = FakeGithubAccounts::start(vec![priya()]);
+        gh.rename("priyaraman", "priya-r", OldLogin::Redirects);
+        gh.rename("priya-r", "priya-z", OldLogin::Redirects);
+        assert_eq!(get(&gh, "/users/priyaraman").0, 301);
+        assert_eq!(get(&gh, "/users/priya-r").0, 301);
+        assert_eq!(get(&gh, "/users/priya-z").0, 200);
+        gh.rename("priya-z", "priya-x", OldLogin::RedirectsToAnotherHost);
+        assert_eq!(get(&gh, "/users/priya-z").0, 301);
+    }
+
+    #[test]
+    fn a_stale_profile_is_served_until_the_window_ends() {
+        let gh = FakeGithubAccounts::start(vec![priya()]);
+        gh.set_bio("priyaraman", Some("Rust, tide models."));
+        gh.serve_stale_profile("priyaraman", Some("did:plc:7x3kq2mzv5rj4w6hbn2tqclp"));
+        assert!(get(&gh, "/users/priyaraman").1.contains("did:plc:"));
+        assert!(get(&gh, "/user/4210001").1.contains("did:plc:"));
+        gh.end_stale_profile("priyaraman");
+        assert!(!get(&gh, "/users/priyaraman").1.contains("did:plc:"));
     }
 
     #[test]

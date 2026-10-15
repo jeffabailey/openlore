@@ -1483,3 +1483,35 @@ harness = true
 name = "indexer_deployment_core"
 path = "../../tests/acceptance/indexer_deployment_core.rs"
 harness = true
+
+# github-did-identity-link (DISTILL 2026-10-14; ADR-084/085). Layer-3/4 subprocess
+# suites drive the REAL `openlore` binary (`identity link/verify/list/forget`, the
+# readers, `graph query --weighted`, the viewer `/score`) against
+# `FakeGithubAccounts` (id read + the ADR-085 lie catalogue), `FakePds`,
+# `PeerPds`; shared vocabulary `tests/acceptance/support/identity_links.rs`.
+# `identity_link_core` holds the layer-2 proptest contracts of the pure
+# `claim_domain::identity_link` core (RED `sut_*` bindings) and the scoring
+# preservation property (bound to the REAL `scoring::score`). Only the walking
+# skeleton (`identity_link`) is un-ignored; DELIVER enables the rest one at a time.
+[[test]]
+name = "identity_link"
+path = "../../tests/acceptance/identity_link.rs"
+harness = true
+
+[[test]]
+name = "identity_link_readers"
+path = "../../tests/acceptance/identity_link_readers.rs"
+harness = true
+
+[[test]]
+name = "identity_link_core"
+path = "../../tests/acceptance/identity_link_core.rs"
+harness = true
+
+# github-did-identity-link slice 3 readers: drive BOTH the review app (from
+# target/debug, no dev-dependency — check-arch) and the `openlore` read path.
+# Build the app first: `cargo build -p openlore-review-app`.
+[[test]]
+name = "review_app_identity_link_readers"
+path = "../../tests/acceptance/review_app_identity_link_readers.rs"
+harness = true

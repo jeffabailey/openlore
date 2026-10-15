@@ -222,8 +222,10 @@ No new dependency. Reused: `reqwest` (MIT/Apache-2.0) in `adapter-github`; `duck
   claims never associate identities.
 - C-GDL-2: No OpenLore composer produces a link without a passing bio check of a fresh profile
   read: the identity verbs via `ProvenLink` (type-enforced); every other composer refuses
-  predicate `sameAs` (one pure guard in the shared compose path). Foreign-client `sameAs` records
-  render as unverified assertions only.
+  predicate `sameAs` (one pure guard in the shared compose path) **except `claim counter`**,
+  whose output (author ≠ subject DID) is never projected as a link. Foreign-client `sameAs`
+  records render as unverified assertions only.
+  *Amended 2026-10-14 (user, DISTILL): `claim counter` exempted (DISTILL decision D-b).*
 - C-GDL-3: Links are keyed by numeric GitHub id; logins are display-only.
 - C-GDL-4: Association is display-only and requires this reader's own `Verified` check; the scorer
   drops every `sameAs` claim; no subject merging anywhere. Revised by ADR-086/087

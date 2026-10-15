@@ -139,7 +139,7 @@ pub use fake_atproto::{
 };
 pub mod fake_github_accounts;
 pub use fake_github_accounts::{
-    FakeGithubAccounts, GithubAccount, GithubRepo, GithubRequest, RepoFacts,
+    FakeGithubAccounts, GithubAccount, GithubRepo, GithubRequest, OldLogin, RepoFacts,
 };
 
 pub mod fake_instance;

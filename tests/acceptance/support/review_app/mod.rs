@@ -20,6 +20,7 @@ pub mod app;
 pub mod browser;
 pub mod domain;
 pub mod html;
+pub mod identity_link;
 pub mod world;
 
 #[path = "../../../common/state_delta.rs"]
@@ -28,4 +29,5 @@ pub mod state_delta;
 pub use app::{AppSettings, ReviewApp, Startup};
 pub use browser::{Browser, Page};
 pub use domain::*;
+pub use identity_link::*;
 pub use world::*;

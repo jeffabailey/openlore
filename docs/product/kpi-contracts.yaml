@@ -686,10 +686,10 @@ kpis:
     type: guardrail
     feature_origin: github-did-identity-link
     persona: P-001
-    target: "0 links projected where subject != author or evidence login != object login; 0 sameAs records produced by OpenLore composers without a passing check; 0 associations without this reader's Verified check"
+    target: "0 links projected where subject != author or evidence login != object login; 0 sameAs records produced by OpenLore composers without a passing check (excluding claim counter records, whose author is a DID other than the subject and which are never projected as links); 0 associations without this reader's Verified check"
     measurement_method: "CI property tests on claim_domain::identity_link (project, link_view) + AT fixtures"
     baseline_at_ga: "0 (feature not yet delivered)"
-    notes: "Guardrail (consent / anti-squatting). Release-blocking. ADR-084 §3-4, ADR-085 §5."
+    notes: "Guardrail (consent / anti-squatting). Release-blocking. ADR-084 §3-4, ADR-085 §5. Amended 2026-10-14 (user, DISTILL): counters of a sameAs link by another DID are carved out (decision D-b, scenario IL-8c)."
 
   - id: KPI-GDL-2
     name: "Weighted output unchanged by sameAs claims"
