@@ -65,6 +65,7 @@ pub const SAME_DAY: &str = "2026-10-01T18:00:00Z";
 pub const TWELVE_DAYS_LATER: &str = "2026-10-13T09:00:00Z";
 pub const THIRTY_DAYS_LATER: &str = "2026-10-31T09:00:00Z";
 pub const THIRTY_ONE_DAYS_LATER: &str = "2026-11-01T09:00:00Z";
+pub const FORTY_TWO_DAYS_LATER: &str = "2026-11-12T09:00:00Z";
 pub const BEFORE_THE_CHECK: &str = "2026-09-20T09:00:00Z";
 
 /// A GitHub account: the login GitHub serves and its stable numeric id.
@@ -810,6 +811,18 @@ pub fn assert_link_preview(outcome: &CliOutcome, did: &str, account: Account) {
     }
 }
 
+/// THEN: declining at the confirmation says nothing was linked, published
+/// or recorded.
+pub fn assert_link_declined(outcome: &CliOutcome) {
+    assert!(
+        outcome
+            .stdout
+            .contains("Not linked; nothing published, nothing recorded."),
+        "declining must say `Not linked; nothing published, nothing recorded.`;{}",
+        context(outcome)
+    );
+}
+
 /// THEN: the link was published; returns the printed CID. The success message
 /// names the retract command (I-8).
 pub fn assert_link_published(outcome: &CliOutcome) -> String {
@@ -896,11 +909,12 @@ pub fn assert_no_link_on_pds(env: &TestEnv, row: &str) {
     }
 }
 
-/// THEN: `identity verify` reported `verdict` for `account`.
+/// THEN: `identity verify` reported `verdict` for `account`. A verified
+/// re-check never says the proof is gone.
 pub fn assert_verify_reported(outcome: &CliOutcome, account: Account, verdict: Verdict) {
     let object = account.subject();
     let reported = |l: &str| match verdict {
-        Verdict::Verified => says_verified(l),
+        Verdict::Verified => says_verified(l) && !l.contains("proof gone"),
         other => l.contains(other.token()),
     };
     assert!(

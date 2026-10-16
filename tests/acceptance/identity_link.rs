@@ -100,6 +100,7 @@ fn jeffs_github_account_is_publicly_linked_to_his_did_and_shows_as_verified() {
 ///   Given Jeff's GitHub bio names his DID
 ///   When Jeff starts linking github "jeffbailey" but does not confirm
 ///   Then he sees the exact record, that it is public, and that retracting withdraws it but does not erase it
+///   And he is told it is not linked, nothing was published and nothing was recorded
 ///   And his published repo and his linked identities are unchanged
 /// ```
 #[test]
@@ -111,6 +112,7 @@ fn jeff_sees_exactly_what_a_link_would_publish_before_anything_is_written() {
     let previewed = when_i_preview_a_link(&world, JEFF_GH);
 
     assert_link_preview(&previewed, MY_DID, JEFF_GH);
+    assert_link_declined(&previewed);
     assert!(world.env.pds.records().is_empty(), "nothing published");
     assert_shown(&when_i_list(&world, None), MY_DID, JEFF_GH, Shown::Nothing);
     assert_link_store_unchanged(&before, &world.env);
@@ -974,8 +976,11 @@ fn once_jeffs_bio_stops_naming_his_did_his_link_shows_the_proof_gone_and_stays_p
 ///   Given Jeff's link showed "proof gone" after a re-check twelve days after linking
 ///   And he put his DID back in his bio
 ///   When Jeff re-checks his links thirty days after linking
-///   Then GitHub was asked once
+///   Then he is told the bio names his DID, with no word of the proof being gone
+///   And GitHub was asked once
 ///   And his linked identities show him as github:jeffbailey, verified today
+///   And the next day they show him as verified 1 day ago
+///   And twelve days after the re-check they show him as verified 12 days ago
 /// ```
 #[test]
 fn when_jeffs_did_is_back_one_recheck_from_one_github_request_restores_the_link() {
@@ -999,6 +1004,10 @@ fn when_jeffs_did_is_back_one_recheck_from_one_github_request_restores_the_link(
     let listed = when_i_list(&world, Some(THIRTY_DAYS_LATER));
     assert_shown(&listed, MY_DID, JEFF_GH, Shown::Associated);
     assert_check_age(&listed, MY_DID, JEFF_GH, "today", false);
+    let next_day = when_i_list(&world, Some(THIRTY_ONE_DAYS_LATER));
+    assert_check_age(&next_day, MY_DID, JEFF_GH, "1 day ago", false);
+    let twelve_days_on = when_i_list(&world, Some(FORTY_TWO_DAYS_LATER));
+    assert_check_age(&twelve_days_on, MY_DID, JEFF_GH, "12 days ago", false);
     // GUARDRAIL: insert-only — the earlier observations are kept.
     assert_link_store_delta(
         &before,
