@@ -233,7 +233,6 @@ fn jeffs_did_proves_the_account_wherever_it_stands_in_his_bio() {
 ///   And nothing new is signed or published
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn linking_an_account_jeff_has_already_linked_is_refused_and_points_to_rechecking() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);
@@ -459,7 +458,6 @@ fn jeff_can_publicly_dispute_rachels_link_and_his_dispute_is_never_read_as_a_lin
 ///   And nothing is in his published repo
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn when_the_host_of_jeffs_published_repo_is_unreachable_his_link_is_kept_signed_and_verified_locally(
 ) {
     let mut world = LinkWorld::with(&[JEFF_GH]);
@@ -504,7 +502,6 @@ fn when_the_host_of_jeffs_published_repo_is_unreachable_his_link_is_kept_signed_
 ///   Then his published repo holds the link under that record ID
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_link_kept_locally_reaches_jeffs_published_repo_when_he_publishes_it_later() {
     let mut world = LinkWorld::with(&[JEFF_GH]);
     bio_names(&world, JEFF_GH, MY_DID);
@@ -541,7 +538,6 @@ fn a_link_kept_locally_reaches_jeffs_published_repo_when_he_publishes_it_later()
 ///   And his linked identities show him as github:jeffbailey and as github:jeff-at-work, both verified
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn jeff_links_a_second_github_account_and_both_show_as_his() {
     let world = LinkWorld::with(&[JEFF_GH, JEFF_WORK_GH]);
     given_i_linked(&world, JEFF_GH, None);
@@ -795,7 +791,6 @@ fn regenerate_the_frozen_pre_v7_store_fixture() {
 ///   And his linked identities show him as github:jeffbailey, verified
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn after_retracting_his_link_jeff_can_link_the_same_account_again() {
     let world = LinkWorld::with(&[JEFF_GH]);
     let first = given_i_linked(&world, JEFF_GH, Some(LINKED_AT));

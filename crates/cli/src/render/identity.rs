@@ -106,3 +106,19 @@ pub fn render_link_preview(claim: &UnsignedClaim) -> String {
 pub fn render_link_declined() -> String {
     "Not linked; nothing published, nothing recorded.\n".to_string()
 }
+
+/// `identity link` refused: the account is already actively linked (D-a).
+pub fn render_already_linked(login: &str) -> String {
+    format!(
+        "github:{login} is already linked to your DID; to re-check it run `openlore identity verify`. Nothing signed, published or recorded"
+    )
+}
+
+/// `identity link` signed and verified the link but its repo host could not
+/// be reached: the link and its check are kept locally (ADR-085 §7, Q-GDL-D1).
+pub fn render_link_kept_locally(login: &str, cid: &str, reason: &str) -> String {
+    format!(
+        "github:{login} is linked and verified locally, but your repo host could not be reached ({reason}); \
+         nothing published. The signed link is kept: retry with `openlore claim publish {cid}` once it is reachable"
+    )
+}

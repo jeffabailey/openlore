@@ -12,18 +12,20 @@ use std::io::Write;
 
 use anyhow::{anyhow, bail, Result};
 use claim_domain::identity_link::{
-    check_link, is_github_login, CheckVerdict, GithubObservation, LinkDraft, ProofCheck, ProvenLink,
+    active_links, check_link, is_already_linked, is_github_login, link_predicate, CheckVerdict,
+    ClaimFields, GithubObservation, LinkDraft, ProofCheck, ProvenLink, StoredClaim,
 };
-use claim_domain::{canonicalize, compute_cid, SignedClaim};
-use ports::{GithubError, LinkCheck, PersonProfile};
+use claim_domain::{canonicalize, compute_cid, Cid, ClaimLineage, SignedClaim};
+use ports::{GithubError, LinkCandidate, LinkCheck, PersonProfile};
 
 use crate::io::prompt_line;
 use crate::render::{
-    render_github_unreadable, render_link_declined, render_link_preview, render_link_refused,
-    render_not_a_github_login,
+    render_already_linked, render_github_unreadable, render_link_declined,
+    render_link_kept_locally, render_link_preview, render_link_refused, render_not_a_github_login,
 };
 use crate::verbs::claim_publish::{
     build_tokio_runtime, publish_signed_claim, render_publish_error, render_publish_success,
+    PublishError,
 };
 use crate::wiring::Wiring;
 
@@ -81,6 +83,67 @@ fn prove(wiring: &Wiring, login: &str) -> Result<ProvenLink> {
     }
 }
 
+/// The stored link candidates and every stored claim referencing one (the
+/// retraction / supersession markers its lineage is folded over).
+fn stored_lineage(wiring: &Wiring) -> Result<(Vec<LinkCandidate>, Vec<SignedClaim>)> {
+    let candidates = wiring.link_candidates.link_candidates(link_predicate())?;
+    let referrers = candidates
+        .iter()
+        .map(|candidate| referrers_of(wiring, &candidate.cid))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+    Ok((candidates, referrers))
+}
+
+/// The stored claims referencing `cid`.
+fn referrers_of(wiring: &Wiring, cid: &str) -> Result<Vec<SignedClaim>> {
+    let referencing = wiring.storage.query_referencing(&Cid(cid.to_string()))?;
+    let read = referencing
+        .iter()
+        .map(|(referrer, _)| wiring.storage.read_signed_claim(referrer))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(read.into_iter().flatten().collect())
+}
+
+fn stored_claim(candidate: &LinkCandidate) -> StoredClaim<'_> {
+    StoredClaim {
+        fields: ClaimFields {
+            author: &candidate.author_did,
+            subject: &candidate.subject,
+            predicate: &candidate.predicate,
+            object: &candidate.object,
+            evidence: &candidate.evidence,
+        },
+        lineage: ClaimLineage {
+            author_did: &candidate.author_did,
+            cid: &candidate.cid,
+            references: &[],
+        },
+    }
+}
+
+fn referrer_lineage(referrer: &SignedClaim) -> ClaimLineage<'_> {
+    ClaimLineage {
+        author_did: &referrer.unsigned.author_did.0,
+        cid: "",
+        references: &referrer.unsigned.references,
+    }
+}
+
+/// D-a: refuse, before anything is signed or recorded, a link the local
+/// store already holds as active.
+fn refuse_if_already_linked(wiring: &Wiring, proven: &ProvenLink) -> Result<()> {
+    let (candidates, referrers) = stored_lineage(wiring)?;
+    let stored: Vec<StoredClaim<'_>> = candidates.iter().map(stored_claim).collect();
+    let lineages: Vec<ClaimLineage<'_>> = referrers.iter().map(referrer_lineage).collect();
+    if is_already_linked(proven, &active_links(&stored, &lineages)) {
+        bail!("{}", render_already_linked(proven.login()));
+    }
+    Ok(())
+}
+
 /// Sign the proven link and keep it in the local store.
 fn sign_and_keep(wiring: &Wiring, draft: LinkDraft) -> Result<SignedClaim> {
     let unsigned = draft.into_unsigned();
@@ -120,8 +183,19 @@ fn link(wiring: &Wiring, proven: &ProvenLink, draft: LinkDraft) -> Result<String
         .identity_link_check_writes
         .record_check(&passing_check(proven, wiring))?;
     let published = publish_signed_claim(wiring, &signed)
-        .map_err(|err| anyhow!("{}", render_publish_error(&err).trim_end()))?;
+        .map_err(|err| anyhow!("{}", render_link_publish_failure(proven, &err)))?;
     Ok(render_publish_success(&published))
+}
+
+/// A failed publish keeps the signed link and its check (ADR-085 §7); an
+/// unreachable repo host is said so, with the retry (Q-GDL-D1).
+fn render_link_publish_failure(proven: &ProvenLink, err: &PublishError) -> String {
+    match err {
+        PublishError::PdsFailed { source, cid } => {
+            render_link_kept_locally(proven.login(), &cid.0, &source.to_string())
+        }
+        PublishError::Other(_) => render_publish_error(err).trim_end().to_string(),
+    }
 }
 
 /// Run `identity link github <login>`; returns the stdout to print. Nothing
@@ -132,6 +206,7 @@ pub fn run(wiring: &Wiring, args: &IdentityLinkArgs) -> Result<String> {
         bail!("{}", render_not_a_github_login(&args.login));
     }
     let proven = prove(wiring, &args.login)?;
+    refuse_if_already_linked(wiring, &proven)?;
     let composed_at = wiring.clock.now_utc().to_rfc3339();
     let draft = LinkDraft::new(&proven, &composed_at);
     if !args.yes && !confirmed_after_preview(&draft)? {

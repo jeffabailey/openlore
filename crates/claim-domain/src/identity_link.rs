@@ -12,7 +12,10 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::{bare_did, claim_record_json, Confidence, Did, Provenance, UnsignedClaim};
+use crate::{
+    bare_did, claim_record_json, is_self_retracted, is_superseded_by_author, ClaimLineage,
+    Confidence, Did, Provenance, UnsignedClaim,
+};
 
 /// The reserved predicate of an identity-link claim (ADR-084 §2).
 const LINK_PREDICATE: &str = "sameAs";
@@ -459,6 +462,47 @@ pub fn link_view(links: &[IdentityLink], latest: &[LatestCheck]) -> Vec<LinkedId
             LinkedIdentity { link, standing }
         })
         .collect()
+}
+
+// =============================================================================
+// Link lifecycle (ADR-085 §5): same-author lineage, D-a / D-g / A-4
+// =============================================================================
+
+/// One stored claim that may be a link: its fields and its place in the
+/// reference graph.
+#[derive(Debug, Clone, Copy)]
+pub struct StoredClaim<'a> {
+    pub fields: ClaimFields<'a>,
+    pub lineage: ClaimLineage<'a>,
+}
+
+/// The links still standing: every stored link its own author has neither
+/// retracted nor superseded (the shared claim-domain withdrawal rules, read
+/// against `referrers`, the claims that reference a stored link).
+pub fn active_links(
+    stored: &[StoredClaim<'_>],
+    referrers: &[ClaimLineage<'_>],
+) -> Vec<IdentityLink> {
+    let provenance = Provenance::AppSigned {
+        key_id: String::new(),
+    };
+    stored
+        .iter()
+        .filter(|claim| {
+            !is_self_retracted(&claim.lineage, referrers)
+                && !is_superseded_by_author(&claim.lineage, referrers)
+        })
+        .filter_map(|claim| project(claim.fields, &provenance))
+        .collect()
+}
+
+/// D-a: the proven account is already actively linked to the author's DID,
+/// so linking it again is refused. A retracted link no longer counts (D-g),
+/// and other accounts of the same DID never do (A-4).
+pub fn is_already_linked(proven: &ProvenLink, active: &[IdentityLink]) -> bool {
+    active
+        .iter()
+        .any(|link| link.did == proven.did() && link.user_id == proven.user_id())
 }
 
 #[cfg(test)]
