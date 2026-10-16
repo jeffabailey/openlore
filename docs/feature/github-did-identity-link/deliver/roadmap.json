@@ -1,0 +1,553 @@
+{
+  "roadmap": {
+    "project_id": "github-did-identity-link",
+    "created_at": "2026-10-15T00:00:00Z",
+    "total_steps": 9,
+    "scope": "SLICE 1 ONLY: claim_domain::identity_link core, identity link/verify/list/forget, v7 checks + read/write/purge ports, GithubPort::read_person_by_id + DD-GDL-11 contract test, reserved-predicate guard (claim counter exempt, D-b), GDL-D13 check-arch rules."
+  },
+  "total_steps": 9,
+  "conventions": {
+    "paradigm": "ADR-007: decisions pure in claim-domain; adapters and cli verbs do I/O only.",
+    "test_paradigm": "Acceptance: example-based subprocess. Pure core: proptest against the CORE oracles. Adapters: real DuckDB / real HTTP adapter against FakeGithubAccounts, never mocked.",
+    "scenario_fns": "`<cargo test target>::<fn>` (identity_link = tests/acceptance/identity_link.rs, identity_link_core = tests/acceptance/identity_link_core.rs), in activation order.",
+    "test_edit_allow_list": "Test-file edits limited to: removing the #[ignore] of a named scenario_fn; replacing the named sut_* body with ONE real call plus view mapping (DD-GDL-16). Forbidden: assertions, oracles, strategies, universe slots, helpers, test names. The GREEN diff must match.",
+    "test_runs": "Scoped targets only, never the workspace. libtest runs tests matching ANY positional filter (library/test/src/cli.rs), so `-- f1 f2` is used.",
+    "check_arch": "`cargo xtask check-arch` (.cargo/config.toml alias) + `cargo test -p xtask`; each new rule ships a synthetic-violation test.",
+    "wording": "DISTILL-owned in tests/acceptance/support/identity_links.rs (DD-GDL-7, Q-GDL-D1).",
+    "link_predicate_api": "Q-RM-5: claim_domain::identity_link exposes the link predicate through its API (e.g. link_predicate()); readers select candidate rows with it; project() decides."
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Slice-01 — Prove, sign, publish, re-check and locally forget a GitHub↔DID link from the CLI",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "The v7 check store opens the frozen v6 store unchanged and refuses to start when it cannot keep checks; an empty `identity list` says so",
+          "description": "NEW v7 identity_link_checks (insert-only), check Read/Write ports, DuckDB adapter with live probe (ADR-085 §7, Earned Trust). Bio matcher hoisted into claim-domain::identity_link; review-domain delegates (UC-4). Offline `identity list`, empty case. check-arch: insert-only, readers-no-write-handle.",
+          "criteria": [
+            "IL-13a: the frozen v6 store opens; `identity list` prints `No linked identities`; schema step 7 recorded once; prior rows and golden read-back unchanged.",
+            "IL-13b: listing again gives the same answer and changes nothing.",
+            "CORE-1 and CORE-1x pass on the claim-domain matcher; review-domain and review-app suites pass unchanged.",
+            "A store whose check table cannot hold two checks for one link refuses to start with `health.startup.refused`.",
+            "check-arch fails on: UPDATE/DELETE of identity_link_checks outside identity_link_purge.rs; identity_list.rs naming a check-write or purge port, IdentityPort or GithubPort; infer_people.rs naming a check-write or purge port.",
+            "identity_list.rs selects candidate rows only through the identity_link predicate API (Q-RM-5)."
+          ],
+          "test_file": "tests/acceptance/identity_link.rs",
+          "scenario_name": "opening_a_store_made_before_identity_links_keeps_everything_already_in_it",
+          "scenario_fns": [
+            "identity_link_core::core1_the_bio_proves_a_did_only_by_its_exact_token",
+            "identity_link_core::core1x_the_bio_lie_catalogue",
+            "identity_link::opening_a_store_made_before_identity_links_keeps_everything_already_in_it",
+            "identity_link::reopening_an_upgraded_store_changes_nothing"
+          ],
+          "n_scenarios": [
+            "CORE-1",
+            "CORE-1x",
+            "IL-13a",
+            "IL-13b",
+            "probe test"
+          ],
+          "green": [
+            "cargo test -p cli --test identity_link_core -- core1",
+            "cargo test -p cli --test identity_link -- opening_a_store_made_before reopening_an_upgraded_store",
+            "cargo test -p adapter-duckdb --test identity_link_checks_probe",
+            "cargo test -p adapter-duckdb --lib",
+            "cargo test -p review-domain",
+            "cargo test -p openlore-review-app",
+            "cargo test -p cli --test identity_link_readers -- reading_a_person_whose_bio_names_a_did a_possible_rename_among_inferred_people",
+            "cargo test -p xtask",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "v7 only; never regenerate the fixture (DD-GDL-12). Probe fault seam: raw SQL recreating identity_link_checks with a (subject_did, github_user_id) key, as contribution_links.rs `a_store_whose_upsert_lies_is_refused_by_the_probe`; new ProbeRefusalReason variant. identity list gets check-read and claim-read handles only, never the whole Wiring (C-GDL-9).",
+          "estimate_hours": 7,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/identity_link.rs",
+            "tests/acceptance/identity_link_core.rs",
+            "crates/claim-domain/src/lib.rs",
+            "crates/review-domain/src/ownership.rs",
+            "crates/ports/src/lib.rs",
+            "crates/ports/src/probe.rs",
+            "crates/adapter-duckdb/src/schema.rs",
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/adapter-duckdb/src/probe.rs",
+            "crates/cli/src/lib.rs",
+            "crates/cli/src/verbs/mod.rs",
+            "crates/cli/src/render.rs",
+            "crates/cli/src/wiring.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "files_to_create": [
+            "crates/claim-domain/src/identity_link.rs",
+            "crates/ports/src/identity_link_check.rs",
+            "crates/adapter-duckdb/src/schema_v7.rs",
+            "crates/adapter-duckdb/src/identity_link_checks.rs",
+            "crates/adapter-duckdb/tests/identity_link_checks_probe.rs",
+            "crates/cli/src/verbs/identity_list.rs",
+            "crates/cli/src/render/identity.rs"
+          ],
+          "mutation_note": "Kill: matcher boundary/case changes; an overwriting check write (probe test); removing either rule (its synthetic-violation test)."
+        },
+        {
+          "id": "01-02",
+          "name": "Walking skeleton: `identity link github jeffbailey --yes` publishes the proven sameAs link and `identity list` shows it verified today",
+          "description": "Thinnest WS-GDL-1 thread. claim-domain gains check_link (same-id case), ProvenLink → LinkDraft → UnsignedClaim and record JSON (encoder move, Q-RM-1), thin project and link_view. NEW `identity link` signs and publishes via the single publish path, bypassing the compose step (Q-RM-4).",
+          "criteria": [
+            "WS-GDL-1: linking exits 0, prints the record ID and `openlore claim retract <id>`; the published record is did:plc:test-jeff sameAs github:jeffbailey with profile and account-number evidence.",
+            "WS-GDL-1: `identity list` shows github:jeffbailey verified today; the store gains exactly one claim, its file, one published record, one verified check.",
+            "CORE-4: an encoded link decodes, hashes to the same CID twice, and projects back to the same DID, login and account number.",
+            "Before the move, a new golden test pins today's claim_record_json bytes for a publish and a retract record; it passes unchanged after the move.",
+            "check-arch fails when the `sameAs` literal or link-predicate constant appears outside claim-domain::identity_link."
+          ],
+          "test_file": "tests/acceptance/identity_link.rs",
+          "scenario_name": "jeffs_github_account_is_publicly_linked_to_his_did_and_shows_as_verified",
+          "scenario_fns": [
+            "identity_link_core::core4_an_encoded_link_projects_back_to_the_same_person_and_account",
+            "identity_link::jeffs_github_account_is_publicly_linked_to_his_did_and_shows_as_verified"
+          ],
+          "n_scenarios": [
+            "CORE-4",
+            "WS-GDL-1",
+            "record_json golden"
+          ],
+          "green": [
+            "cargo test -p cli --test identity_link_core -- core4",
+            "cargo test -p cli --test identity_link -- jeffs_github_account_is_publicly_linked",
+            "cargo test -p review-domain --test record_json_golden",
+            "cargo test -p review-domain",
+            "cargo test -p openlore-review-app",
+            "cargo test -p cli --test identity_link_readers -- reading_a_person_whose_bio_names_a_did a_possible_rename_among_inferred_people",
+            "cargo test -p xtask",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "Remove WS-GDL-1's #[ignore] in the commit it goes green. No existing test pins the record bytes (review_app_core.rs only calls claim_record_json), so the golden comes first: it calls review_domain::plans::claim_record_json, is committed green on today's encoder, and must pass unchanged through the re-export after the move. Q-RM-1: claim_record_json, reference_type, CLAIM_COLLECTION move together; review-domain re-exports; nothing copied. Q-RM-4: verbs/identity_link.rs builds the claim via LinkDraft and gets the predicate via the API. Confirm writes one check + the signed claim (ADR-085 §7). CORE-2 waits for 01-07 (DD-GDL-16).",
+          "estimate_hours": 7,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/identity_link.rs",
+            "tests/acceptance/identity_link_core.rs",
+            "crates/claim-domain/src/identity_link.rs",
+            "crates/claim-domain/src/lib.rs",
+            "crates/review-domain/src/plans.rs",
+            "crates/cli/src/lib.rs",
+            "crates/cli/src/verbs/mod.rs",
+            "crates/cli/src/verbs/identity_list.rs",
+            "crates/cli/src/render/identity.rs",
+            "crates/cli/src/wiring.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "files_to_create": [
+            "crates/claim-domain/src/record_json.rs",
+            "crates/review-domain/tests/record_json_golden.rs",
+            "crates/review-domain/tests/fixtures/record_json_golden.json",
+            "crates/cli/src/verbs/identity_link.rs"
+          ],
+          "mutation_note": "Kill: codec evidence-order or confidence changes (CORE-4, WS); removing the compose-only rule (its synthetic-violation test)."
+        },
+        {
+          "id": "01-03",
+          "name": "A link is refused unless a fresh bio read names my exact DID; the preview writes nothing; bad logins and unreadable GitHub change nothing",
+          "description": "Complete `identity link` refusal and preview paths: plan-returning preview (ADR-085 §7), bio verdict refusals, login validated before any request (ADR-076), GitHub failures fail closed (ADR-085 §4, DD-GDL-13).",
+          "criteria": [
+            "IL-2: without confirmation Jeff sees the exact record, that it is public, and that retraction withdraws without erasing; nothing published or recorded.",
+            "IL-3: six bio rows and a missing account refuse with exit 1, verdict token and plain phrase; nothing published or recorded.",
+            "IL-4: Jeff's DID proves the account in each of the four bio positions.",
+            "IL-6: rate limit, outage or rejected token: told GitHub could not be read; nothing published or recorded; token never printed.",
+            "IL-7: each malformed login exits 1 with `not a GitHub username`; GitHub is never asked."
+          ],
+          "test_file": "tests/acceptance/identity_link.rs",
+          "scenario_name": "jeff_sees_exactly_what_a_link_would_publish_before_anything_is_written",
+          "scenario_fns": [
+            "identity_link::jeff_sees_exactly_what_a_link_would_publish_before_anything_is_written",
+            "identity_link::no_link_is_made_unless_the_bio_names_jeffs_exact_did",
+            "identity_link::jeffs_did_proves_the_account_wherever_it_stands_in_his_bio",
+            "identity_link::when_github_cannot_be_read_nothing_is_linked_and_nothing_is_recorded",
+            "identity_link::a_malformed_github_username_is_refused_before_github_is_asked"
+          ],
+          "n_scenarios": [
+            "IL-2",
+            "IL-3",
+            "IL-4",
+            "IL-6",
+            "IL-7"
+          ],
+          "green": [
+            "cargo test -p cli --test identity_link -- jeff_sees_exactly no_link_is_made jeffs_did_proves when_github_cannot_be_read a_malformed_github_username",
+            "cargo test -p cli --test identity_link_readers -- reading_a_person_whose_bio_names_a_did a_possible_rename_among_inferred_people",
+            "cargo test -p openlore-review-app --test review_app_identity_link"
+          ],
+          "implementation_notes": "Only a confirmed, passing link writes a check (ADR-085 §7). Confirmation per Q-GDL-D2.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/identity_link.rs",
+            "crates/claim-domain/src/identity_link.rs",
+            "crates/cli/src/verbs/identity_link.rs",
+            "crates/cli/src/render/identity.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a check on refusal; a request before login validation; the token printed on 401."
+        },
+        {
+          "id": "01-04",
+          "name": "An Active link is not linked twice, a retracted one can be, a second account links alongside, and a link survives an unreachable repo host",
+          "description": "link_view folds same-author lineage (ADR-085 §5, reusing claim-domain retraction rules). `identity link` honours D-a, D-g, A-4; on a repo-host failure it keeps the signed link and its check (Q-GDL-D1 wording).",
+          "criteria": [
+            "IL-5: re-linking an Active link exits 1 `already linked`, naming `openlore identity verify`; nothing signed, published or recorded.",
+            "IL-14: after `claim retract`, linking again publishes a new record ID, shown verified.",
+            "IL-10: a second account links; `identity list` shows both verified for Jeff.",
+            "IL-9a: repo host unreachable: Jeff is told so and to retry with `openlore claim publish`; the link shows verified; nothing published.",
+            "IL-9b: once the host is back, `claim publish <id>` puts the link on the PDS under that record ID."
+          ],
+          "test_file": "tests/acceptance/identity_link.rs",
+          "scenario_name": "linking_an_account_jeff_has_already_linked_is_refused_and_points_to_rechecking",
+          "scenario_fns": [
+            "identity_link::linking_an_account_jeff_has_already_linked_is_refused_and_points_to_rechecking",
+            "identity_link::after_retracting_his_link_jeff_can_link_the_same_account_again",
+            "identity_link::jeff_links_a_second_github_account_and_both_show_as_his",
+            "identity_link::when_the_host_of_jeffs_published_repo_is_unreachable_his_link_is_kept_signed_and_verified_locally",
+            "identity_link::a_link_kept_locally_reaches_jeffs_published_repo_when_he_publishes_it_later"
+          ],
+          "n_scenarios": [
+            "IL-5",
+            "IL-14",
+            "IL-10",
+            "IL-9a",
+            "IL-9b"
+          ],
+          "green": [
+            "cargo test -p cli --test identity_link -- linking_an_account_jeff_has_already after_retracting jeff_links_a_second when_the_host_of a_link_kept_locally",
+            "cargo test -p cli --test identity_link_readers -- reading_a_person_whose_bio_names_a_did a_possible_rename_among_inferred_people",
+            "cargo test -p openlore-review-app --test review_app_identity_link"
+          ],
+          "implementation_notes": "Reuse is_self_retracted / is_superseded_by_author; no second rule. `claim add` publish-failure wording unchanged.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/identity_link.rs",
+            "crates/claim-domain/src/identity_link.rs",
+            "crates/cli/src/verbs/identity_link.rs",
+            "crates/cli/src/render/identity.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: Retracted treated as Active (IL-14); Active treated as absent (IL-5)."
+        },
+        {
+          "id": "01-05",
+          "name": "Generic composers refuse `sameAs` and point to `identity link`; `claim counter` may dispute a link; only the owner's provenance-passed record projects",
+          "description": "One pure reserved-predicate guard in the shared compose path covers claim add, scrape --sign, infer people --sign (ADR-084 §4); claim counter stays exempt (D-b). Full project(&claim, &Provenance) (ADR-084 §3); peers' links list as unchecked assertions.",
+          "criteria": [
+            "IL-8a: a hand-written `sameAs` claim exits 1 pointing to `openlore identity link`; nothing link-like is published.",
+            "IL-8b: an inference edited to `sameAs` exits 1 with the same pointer; no link listed or published.",
+            "IL-8c: Jeff's counter of Rachel's link publishes (author Jeff, subject Rachel's DID, `counters` reference); her link shows not checked; Jeff has none.",
+            "CORE-7 and CORE-3 pass against the real guard and projection.",
+            "The shipped walking_skeleton, claim_compose_advisory, scrape_sign, infer_people_sign and counter_claim suites pass unchanged."
+          ],
+          "test_file": "tests/acceptance/identity_link.rs",
+          "scenario_name": "a_hand_written_same_as_claim_is_refused_and_jeff_is_pointed_to_the_link_command",
+          "scenario_fns": [
+            "identity_link_core::core7_only_the_exact_same_as_predicate_is_reserved",
+            "identity_link::a_hand_written_same_as_claim_is_refused_and_jeff_is_pointed_to_the_link_command",
+            "identity_link::editing_an_inferred_claim_into_same_as_is_refused_at_signing",
+            "identity_link_core::core3_only_the_owners_well_formed_record_projects_as_a_link",
+            "identity_link::jeff_can_publicly_dispute_rachels_link_and_his_dispute_is_never_read_as_a_link"
+          ],
+          "n_scenarios": [
+            "CORE-7",
+            "IL-8a",
+            "IL-8b",
+            "CORE-3",
+            "IL-8c"
+          ],
+          "green": [
+            "cargo test -p cli --test identity_link_core -- core7 core3",
+            "cargo test -p cli --test identity_link -- a_hand_written_same_as editing_an_inferred jeff_can_publicly_dispute",
+            "cargo test -p cli --test walking_skeleton --test claim_compose_advisory --test scrape_sign --test infer_people_sign --test counter_claim",
+            "cargo test -p cli --test identity_link_readers -- reading_a_person_whose_bio_names_a_did a_possible_rename_among_inferred_people",
+            "cargo test -p openlore-review-app --test review_app_identity_link",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "CORE-7 before IL-8a (DD-GDL-14). claim_counter builds its own claim, so D-b needs no code there. Peer provenance from peer_claims.provenance (ADR-071). Link reads per conventions.link_predicate_api (Q-RM-5, 01-01). Review-app suggestion guard: slice 3.",
+          "estimate_hours": 6,
+          "depends_on": [
+            "01-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/identity_link.rs",
+            "tests/acceptance/identity_link_core.rs",
+            "crates/claim-domain/src/identity_link.rs",
+            "crates/cli/src/verbs/claim_add.rs",
+            "crates/ports/src/peer_storage.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs",
+            "crates/cli/src/verbs/identity_list.rs",
+            "crates/cli/src/render/identity.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: dropping any ADR-084 §3 conjunct; case-insensitive reservation; the guard reaching claim counter."
+        },
+        {
+          "id": "01-06",
+          "name": "`identity verify` re-checks each Active link with one request, keeps earlier checks, shows a lost proof as `proof gone`, and records nothing when GitHub fails",
+          "description": "NEW `identity verify` holding check read/write and GithubPort only (ADR-085 §7). Appends one check per decided re-check; never retracts (GDL-D5, C-GDL-6). Empty store and GitHub failures change nothing (ADR-085 §4).",
+          "criteria": [
+            "IV-8: with no links Jeff is told there are none to verify; GitHub is never asked.",
+            "IV-1: once the bio drops the DID, verify reports did_missing; the list shows `proof gone`; the published link is untouched; one did_missing check is added.",
+            "IV-2: with the DID back, one request restores verified-today; earlier checks are kept.",
+            "IV-9: both accounts re-checked, one request each, both verified.",
+            "IV-6: rate limit, outage or rejected token: nothing recorded, token never printed, link still verified."
+          ],
+          "test_file": "tests/acceptance/identity_link.rs",
+          "scenario_name": "with_no_links_a_recheck_says_so_and_asks_github_nothing",
+          "scenario_fns": [
+            "identity_link::with_no_links_a_recheck_says_so_and_asks_github_nothing",
+            "identity_link::once_jeffs_bio_stops_naming_his_did_his_link_shows_the_proof_gone_and_stays_published",
+            "identity_link::when_jeffs_did_is_back_one_recheck_from_one_github_request_restores_the_link",
+            "identity_link::one_recheck_covers_both_of_jeffs_github_accounts",
+            "identity_link::a_github_failure_during_a_recheck_changes_nothing"
+          ],
+          "n_scenarios": [
+            "IV-8",
+            "IV-1",
+            "IV-2",
+            "IV-9",
+            "IV-6"
+          ],
+          "green": [
+            "cargo test -p cli --test identity_link -- with_no_links once_jeffs_bio_stops when_jeffs_did_is_back one_recheck_covers a_github_failure_during",
+            "cargo test -p cli --test identity_link_readers -- reading_a_person_whose_bio_names_a_did a_possible_rename_among_inferred_people",
+            "cargo test -p openlore-review-app --test review_app_identity_link"
+          ],
+          "implementation_notes": "No id read yet (01-07). Latest check = ADR-085 §7 read query.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-05"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/identity_link.rs",
+            "crates/claim-domain/src/identity_link.rs",
+            "crates/cli/src/lib.rs",
+            "crates/cli/src/verbs/mod.rs",
+            "crates/cli/src/render/identity.rs",
+            "crates/cli/src/wiring.rs"
+          ],
+          "files_to_create": [
+            "crates/cli/src/verbs/identity_verify.rs"
+          ],
+          "mutation_note": "Kill: a check on rate limit/outage; retracting or signing on did_missing; replacing an earlier check."
+        },
+        {
+          "id": "01-07",
+          "name": "Renames and re-registrations are told apart by account number; unfollowable GitHub answers change nothing; recorded fixtures pin the profile shape",
+          "description": "EXTEND GithubPort with read_person_by_id (UC-9); at most one same-host redirect (N-2). check_link completes ADR-085 §4. DD-GDL-11 recorded-fixture contract test.",
+          "criteria": [
+            "IV-3a: after a rename with the old login gone, GitHub is asked for the old login then the account number; the link shows verified as github:jeff-b.",
+            "IV-3b: the next re-check asks GitHub once, for jeff-b. IV-4: a forwarded old login: at most two requests, no account-number request, verified as jeff-b.",
+            "IV-5: a re-registered login resolves to the renamed account, verified; a deleted account is account_not_found, proof gone.",
+            "IV-10: chained or cross-host forwarding records nothing; the link stays verified.",
+            "CORE-2 passes; the contract test decodes both fixtures; fixtures/github/PROVENANCE.md gives each fixture's live URL and date, or `NOT LIVE-RECORDED` with a reason."
+          ],
+          "test_file": "tests/acceptance/identity_link.rs",
+          "scenario_name": "a_renamed_account_stays_verified_under_its_new_name",
+          "scenario_fns": [
+            "identity_link_core::core2_a_check_reads_at_most_twice_and_records_nothing_when_github_fails",
+            "identity_link::a_renamed_account_stays_verified_under_its_new_name",
+            "identity_link::after_a_rename_is_recognised_the_next_recheck_reads_the_new_name_with_one_request",
+            "identity_link::jeff_stays_verified_under_his_new_github_name_found_from_his_old_name_alone",
+            "identity_link::the_account_number_tells_a_re_registered_login_and_a_deleted_account_apart",
+            "identity_link::an_answer_from_github_that_openlore_will_not_follow_leaves_jeffs_link_as_it_was"
+          ],
+          "n_scenarios": [
+            "CORE-2",
+            "IV-3a",
+            "IV-3b",
+            "IV-4",
+            "IV-5",
+            "IV-10",
+            "DD-GDL-11 contract test"
+          ],
+          "green": [
+            "cargo test -p cli --test identity_link_core -- core2",
+            "cargo test -p cli --test identity_link -- a_renamed_account after_a_rename jeff_stays_verified the_account_number an_answer_from_github",
+            "cargo test -p adapter-github --test github_profile_contract",
+            "cargo test -p adapter-github --lib",
+            "cargo test -p cli --test identity_link_readers -- reading_a_person_whose_bio_names_a_did a_possible_rename_among_inferred_people",
+            "cargo test -p openlore-review-app --test review_app_identity_link"
+          ],
+          "implementation_notes": "CORE-2 before IV-3a (DD-GDL-14). Fixtures go through the production reshape. If NOT LIVE-RECORDED, the same commit adds a dated A-10 'partly unverified' note to design/wave-decisions.md.",
+          "estimate_hours": 7,
+          "depends_on": [
+            "01-06"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/identity_link.rs",
+            "tests/acceptance/identity_link_core.rs",
+            "crates/ports/src/lib.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-github/src/client.rs",
+            "crates/claim-domain/src/identity_link.rs",
+            "crates/cli/src/verbs/identity_verify.rs"
+          ],
+          "files_to_create": [
+            "crates/adapter-github/tests/github_profile_contract.rs",
+            "crates/test-support/fixtures/github/users_profile.json",
+            "crates/test-support/fixtures/github/user_by_id.json",
+            "crates/test-support/fixtures/github/PROVENANCE.md"
+          ],
+          "mutation_note": "Kill: following a second or cross-host redirect; skipping the account-number read on a different id; recording identity_changed."
+        },
+        {
+          "id": "01-08",
+          "name": "Re-checks cover followed peers and narrow by `--did` or `--github`; only this reader's sole verified check associates; identity verbs leak nothing",
+          "description": "`identity verify` re-checks Active peer links; `--did` / `--github` are exclusive filters. link_view completes the ADR-085 §5 association rule, future checks ignored (Q-RM-3). Guardrails IL-11 and IL-12 ride this step.",
+          "criteria": [
+            "IV-7: no filter asks about jeffbailey and rachelk; `--did` only rachelk; `--github` only jeffbailey; all verified; both flags exit 2 naming --did and ask nothing.",
+            "IL-11: after linking and re-checking, BurntSushi's person view and recorded contributors are unchanged.",
+            "IL-12: link, verify and list never print the private bio phrase; log output names neither Jeff's DID nor login; results carry no log event.",
+            "CORE-5 and CORE-5b pass against the real link_view."
+          ],
+          "test_file": "tests/acceptance/identity_link.rs",
+          "scenario_name": "rechecking_can_be_narrowed_to_one_person_or_one_account",
+          "scenario_fns": [
+            "identity_link_core::core5_only_this_readers_sole_verified_check_associates_an_account",
+            "identity_link_core::core5b_a_squatters_unproven_link_never_changes_anyone_elses_row",
+            "identity_link::rechecking_can_be_narrowed_to_one_person_or_one_account",
+            "identity_link::linking_and_rechecking_leave_the_contributors_jeff_recorded_untouched",
+            "identity_link::the_identity_verbs_never_repeat_jeffs_bio_or_log_his_identity"
+          ],
+          "n_scenarios": [
+            "CORE-5",
+            "CORE-5b",
+            "IV-7",
+            "IL-11",
+            "IL-12"
+          ],
+          "green": [
+            "cargo test -p cli --test identity_link_core -- core5",
+            "cargo test -p cli --test identity_link -- rechecking_can_be_narrowed linking_and_rechecking_leave the_identity_verbs_never_repeat",
+            "cargo test -p cli --test identity_link_readers -- reading_a_person_whose_bio_names_a_did a_possible_rename_among_inferred_people",
+            "cargo test -p openlore-review-app --test review_app_identity_link"
+          ],
+          "implementation_notes": "Contested has no slice-1 scenario; CORE-5 gates it. If IL-11/IL-12 fail, fix the verb, not the test.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-07"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/identity_link.rs",
+            "tests/acceptance/identity_link_core.rs",
+            "crates/claim-domain/src/identity_link.rs",
+            "crates/cli/src/lib.rs",
+            "crates/cli/src/verbs/identity_verify.rs",
+            "crates/cli/src/verbs/identity_list.rs",
+            "crates/cli/src/render/identity.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: unverified links counted toward Contested; a future check used; a filter changing a verdict."
+        },
+        {
+          "id": "01-09",
+          "name": "`identity forget --did` erases one DID's local check history only, through a separate purge capability",
+          "description": "NEW purge port and adapter (the only DELETE, ADR-082 precedent), wired only into NEW `identity forget` (C-GDL-5, ADR-085 §7). check-arch: purge-only-in-forget-verb.",
+          "criteria": [
+            "IF-1a: forgetting Rachel erases only her checks; her link shows not checked, Jeff's stays verified; no claim changes.",
+            "IF-1b: forgetting Rachel again reports `Forgot 0` and changes nothing.",
+            "IF-2: a DID without history reports `Forgot 0`; a missing or malformed `--did` exits 2 naming --did; nothing changes.",
+            "check-arch fails when the purge port is named outside verbs/identity_forget.rs."
+          ],
+          "test_file": "tests/acceptance/identity_link.rs",
+          "scenario_name": "forgetting_rachel_erases_only_her_proof_history",
+          "scenario_fns": [
+            "identity_link::forgetting_rachel_erases_only_her_proof_history",
+            "identity_link::forgetting_rachel_a_second_time_forgets_nothing_more",
+            "identity_link::forgetting_without_a_history_or_a_valid_did_changes_nothing"
+          ],
+          "n_scenarios": [
+            "IF-1a",
+            "IF-1b",
+            "IF-2"
+          ],
+          "green": [
+            "cargo test -p cli --test identity_link -- forgetting",
+            "cargo test -p adapter-duckdb --lib",
+            "cargo test -p cli --test identity_link_readers -- reading_a_person_whose_bio_names_a_did a_possible_rename_among_inferred_people",
+            "cargo test -p openlore-review-app --test review_app_identity_link",
+            "cargo test -p xtask",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "The forget verb holds only the purge port. Slice-1 closure: all identity_link.rs scenarios (not the regenerator) and CORE-1..5b/7 active; CORE-6/6x stay ignored.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-08"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/identity_link.rs",
+            "crates/ports/src/identity_link_check.rs",
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/cli/src/lib.rs",
+            "crates/cli/src/verbs/mod.rs",
+            "crates/cli/src/render/identity.rs",
+            "crates/cli/src/wiring.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "files_to_create": [
+            "crates/adapter-duckdb/src/identity_link_purge.rs",
+            "crates/cli/src/verbs/identity_forget.rs"
+          ],
+          "mutation_note": "Kill: a purge not scoped to one subject_did; removing the purge-only rule (its synthetic-violation test)."
+        }
+      ]
+    }
+  ],
+  "deferred_to_later_slices": {
+    "identity_link.rs": "none; the fixture regenerator is not a scenario and stays ignored.",
+    "identity_link_core.rs": [
+      "core6_identity_links_never_change_a_weighted_view",
+      "core6x_a_link_beside_a_claim_adds_no_pairing"
+    ],
+    "identity_link_readers.rs": "all 19 IR-* (slice 2); IR-13, IR-17 stay active.",
+    "review_app_identity_link.rs": "all 9 RA-* (slice 3); RA-3 stays active.",
+    "review_app_identity_link_readers.rs": "all 5 RR-* (slice 3).",
+    "peer_pull_cid_round_trip": "ADR-084 Earned Trust peer-pull fixture: slice 2 (orchestrator, 2026-10-15).",
+    "review_app_suggestion_guard": "ADR-084 §4 review-app guard: slice 3."
+  },
+  "implementation_scope": {
+    "source_directories": [
+      "crates/claim-domain/src/",
+      "crates/review-domain/src/",
+      "crates/ports/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/adapter-github/src/",
+      "crates/cli/src/",
+      "xtask/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "crates/review-domain/tests/",
+      "crates/adapter-duckdb/tests/",
+      "crates/adapter-github/tests/",
+      "crates/test-support/fixtures/github/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.rs.bk",
+      "tests/fixtures/identity-link-pre-v7-store/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "iteration": 2,
+    "note": "Slice 1: 9 steps, 40 activations (32 identity_link.rs scenarios + 8 CORE). Steps/production files = 9/29 = 0.31. Prose: 2454 words (`jq -r '.. | strings' | wc -w`); per step, max description 39, notes 83, criterion 26 words.",
+    "open_decisions": {
+      "Q-RM-5": "RULED (orchestrator, 2026-10-15): claim_domain::identity_link exposes the link predicate through its API; readers select candidate rows with it; project() decides."
+    },
+    "approved_note": "Orchestrator-verified 2026-10-15 after review iteration 2 (text-only blockers R1-R7 applied; 2472 words)"
+  }
+}

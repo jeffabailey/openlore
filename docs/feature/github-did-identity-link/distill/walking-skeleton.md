@@ -67,7 +67,7 @@ Class: **MISSING_FUNCTIONALITY** — the GIVEN (bio on the GitHub double) succee
 
 1. `claim_domain::identity_link`: matcher (hoisted), `check_link` for the common case (login read, same id), `ProvenLink` → `LinkDraft` → `UnsignedClaim` with the ADR-084 §2 shape, `link_view` for one Verified link.
 2. `IdentityLinkCheckReadPort` / `WritePort` + v7 migration + adapter (insert, latest read).
-3. `openlore identity link github <login> --yes` wired through the shared sign batch / single publish path, printing `Published claim <cid>.` and `openlore claim retract <cid>`.
+3. `openlore identity link github <login> --yes` — bypasses the shared compose step (`build_unsigned_claim`, which holds the reserved-predicate guard): its `UnsignedClaim` comes only from `LinkDraft`; it signs and goes out through the single publish path, printing `Published claim <cid>.` and `openlore claim retract <cid>`. *(Amended 2026-10-15, DELIVER Q-RM-4: previously "wired through the shared sign batch".)*
 4. `openlore identity list` rendering `<did> is github:<login> (verified today)`.
 
 Everything else (rename id read, preview-only path, squatter rules, scorer drop, review app) is

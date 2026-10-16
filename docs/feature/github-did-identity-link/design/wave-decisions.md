@@ -181,6 +181,8 @@ requires a `Provenance`. Structural (`xtask check-arch`): `identity_link_checks_
 `identity_link_compose_only_via_proven_link` (the `sameAs` constant is referenced only in
 `claim-domain::identity_link` and the scorer's exclusion), existing indexer capability boundary.
 Behavioral: AT fixtures (see brief "For Acceptance Designer").
+*Amended 2026-10-15 (DELIVER, Q-RM-2/Q-RM-4): see "DELIVER amendments" below for the rule
+definitions as planned.*
 
 ### Freshness rule (part of GDL-D4/D6)
 "Fresh" = the profile is read within the same CLI invocation or the same review-app HTTP request,
@@ -277,6 +279,17 @@ recommended for GitHub REST — a **required** recorded-fixture contract test in
 `crates/test-support/fixtures/github/users_profile.json` and `user_by_id.json` (shape `login`,
 `id`, `bio`), plus the optional scheduled live smoke already recommended by
 contributor-philosophy-inference. No consumer-driven Pact is possible against GitHub.
+
+## DELIVER amendments (2026-10-15, orchestrator rulings on the slice-1 roadmap review)
+
+| ID | Ruling | Amends |
+|---|---|---|
+| Q-RM-1 | `claim_record_json`, `reference_type` and `CLAIM_COLLECTION` **move together** from `crates/review-domain/src/plans.rs` into `claim-domain` (beside `identity_link`); `review-domain::plans` re-exports/delegates (`review_domain::plans::{claim_record_json, CLAIM_COLLECTION}` keep resolving for `tests/acceptance/review_app_core.rs`). Nothing is copied. claim-domain had no `CLAIM_COLLECTION`; the separate copies in `lexicon`, `adapter-atproto-*`, `scraper-domain` and `test-support` predate this feature and are untouched. Reason: CORE-4's `sut_encode_link` binds with ONE call (DD-GDL-16) and claim-domain cannot depend on review-domain. | UC-4 (second behaviour-preserving hoist) |
+| Q-RM-2 | One file per identity verb: `crates/cli/src/verbs/{identity_link,identity_verify,identity_list,identity_forget}.rs` (house pattern), so the module-scoped check-arch rules can tell them apart. `identity_link_readers_hold_no_write_handle`: `identity_list.rs` names no check-write/purge port, no `IdentityPort`, no `GithubPort`; `infer_people.rs` names no check write or purge port — its `--sign` path holds signing by design. | `architecture-design.md` component table + Reuse Analysis; ADR-085 §7 / Enforcement |
+| Q-RM-3 | Future-dated checks are **ignored**; the latest non-future check governs (a link with only future checks is `NotChecked`). The earlier "renders as NotChecked" text would let one clock-skewed row suppress every real check. Matches DISTILL Q-GDL-D4 and the CORE-5 oracle. | ADR-085 §5 and Earned Trust "Clock" line |
+| Q-RM-4 | `identity_link_compose_only_via_proven_link` = the `sameAs` literal and the link-predicate constant appear ONLY in `claim-domain::identity_link`. `crates/cli/src/verbs/identity_link.rs` builds the claim through `LinkDraft` and obtains the predicate through the `identity_link` API, never by naming it (slice 2 decides how the scorer exclusion obtains it, through the same API). The identity verb bypasses the shared compose step (`build_unsigned_claim`, which holds the reserved-predicate guard) and uses only signing + the single publish path. *Restated 2026-10-15 (orchestrator, roadmap review R4).* | GDL-D13; ADR-085 Enforcement; `walking-skeleton.md` |
+| Q-RM-5 | Link reads: `claim-domain::identity_link` exposes the link predicate through its API (e.g. `link_predicate()`); readers (`identity list`, `identity verify`) use it to select candidate rows from storage, and `project()` decides what is a link. *Ruled 2026-10-15 (orchestrator).* | GDL-D13 (compatible with Q-RM-4) |
+| F14 | **Deferred**: the ADR-084 Earned Trust peer-pull fixture (publish a link to `FakePds`, re-read it through `peer pull`, CID == rkey, projection intact) moves to slice 2 (readers), where IR-1/IR-2 already drive `peer pull` of links. Slice 1 covers the codec at layer 2 (CORE-4) and the app-signed wire record at the PDS (WS-GDL-1). *Orchestrator, 2026-10-15.* | ADR-084 Earned Trust / Consequences |
 
 ## Review
 

@@ -307,7 +307,8 @@ fn oracle_project(claim: &ClaimView, provenance: ProvenanceView) -> Option<LinkV
         })
 }
 
-/// ADR-085 §5 (future checks are ignored — Q-GDL-D4).
+/// ADR-085 §5 "Future-dated checks are ignored" (amended 2026-10-15, DELIVER
+/// Q-RM-3; DISTILL Q-GDL-D4).
 fn oracle_link_view(
     links: &[ProjectedLinkView],
     checks: &[CheckInputView],

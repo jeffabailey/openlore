@@ -99,6 +99,10 @@ Constraints that shape the wire contract:
 - **Id URI dependency**: if `https://api.github.com/user/<id>` ever proves unsuitable (A-7), the
   fallback `github-id:<n>` is a change to the §3 rule (readers must accept both forms), not a
   free-string substitution.
+- **Peer-pull fixture deferred**: the Earned Trust CI fixture below (publish to `FakePds`,
+  re-read through `peer pull`, CID == rkey, projection intact) lands with the readers slice
+  (slice 2). Slice 1 covers the codec round trip at layer 2 (CORE-4) and the app-signed wire
+  record at the PDS (WS-GDL-1). *Deferred 2026-10-15 (orchestrator, DELIVER roadmap review).*
 - **Privacy**: a published link is public and permanent in the ATProto sense (retraction marks it
   withdrawn; copies may persist). The link preview must say so.
 

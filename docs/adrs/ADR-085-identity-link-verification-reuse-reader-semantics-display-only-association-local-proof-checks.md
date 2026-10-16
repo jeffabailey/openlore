@@ -79,6 +79,13 @@ lives, and what every reader does with a link.
      even when the id is `Contested`: the account holder named every such DID in the bio.
    - Every rendered line shows the check age ("verified 12 days ago"). Age alone never
      downgrades the state; past 30 days the line adds "re-check with `openlore identity verify`".
+   - **Future-dated checks are ignored.** "Latest check" means the latest check whose
+     `checked_at` is not after the reader's `now`; a check dated in the future is skipped, so a
+     link with only future-dated checks is `NotChecked`. One clock-skewed row therefore never
+     hides the real checks beside it.
+     *Amended 2026-10-15 (DELIVER, Q-RM-3): the earlier Earned Trust line "a check dated in the
+     future renders as NotChecked" let one skewed row suppress every real check; the rule is now
+     "ignored, latest non-future check governs" (DISTILL Q-GDL-D4, CORE-5 oracle).*
 6. **Readers: association is display-only; a verified link is also the proof of signing
    authority.** Revised by ADR-086/087 (owner-only-signing): a `Verified` link is the source of
    authority over `github:<login>` (subject login = latest `login_seen`) and over repos whose owner
@@ -119,6 +126,14 @@ lives, and what every reader does with a link.
      hold the repo-authority read port, and the scrape and `authority verify` verbs the
      repo-authority write port (ADR-087 §5). `identity_link_readers_hold_no_write_handle` extends
      to `authority_readers_hold_no_write_handle`.
+   - **Readers rule scope.** `identity_link_readers_hold_no_write_handle`: the `identity list`
+     module (`crates/cli/src/verbs/identity_list.rs`) names no check-write or purge port, no
+     `IdentityPort` and no `GithubPort`; the `infer people` module
+     (`crates/cli/src/verbs/infer_people.rs`) names **no check write or purge port** — its
+     `--sign` path holds signing by design (row "`claim add`, `infer people --sign`") and is
+     exempt from the signing clause.
+     *Amended 2026-10-15 (DELIVER, Q-RM-2): the rule previously also forbade `IdentityPort` in the
+     `infer people` module, which hosts `--sign`.*
    - `identity link` without confirmation is **plan-returning**: it reads GitHub, builds the plan
      and renders the preview, and writes nothing. On confirm it writes exactly {one check row, the
      signed claim via the single publish path}.
@@ -164,10 +179,16 @@ lives, and what every reader does with a link.
 - **Enforcement** (three layers): TYPE — private `ProvenLink`/`LinkDraft` constructors; split
   read/write/purge traits; `project` requires a `Provenance`. STRUCTURAL (`xtask check-arch`) —
   `identity_link_checks_insert_only` (no `UPDATE`/`DELETE` on the table outside
-  `adapter-duckdb/src/identity_link_purge.rs`), `identity_link_purge_only_in_forget_verb`,
-  `identity_link_readers_hold_no_write_handle` (the `identity list` / `infer people` modules name
-  no write/purge port and no `IdentityPort`), `identity_link_compose_only_via_proven_link`, and the
-  existing indexer capability boundary. BEHAVIORAL — AT fixtures (brief "For Acceptance
+  `adapter-duckdb/src/identity_link_purge.rs`),
+  `identity_link_readers_hold_no_write_handle` (`identity list` names no write/purge port and no
+  `IdentityPort`; `infer people` names no check write or purge port, `--sign` exempt by design —
+  §7, amended 2026-10-15), `identity_link_compose_only_via_proven_link` (the `sameAs`
+  literal and the link-predicate constant appear ONLY in `claim-domain::identity_link`;
+  `crates/cli/src/verbs/identity_link.rs` builds the claim through `LinkDraft` and gets the
+  predicate through the `identity_link` API; readers select candidate rows through the same API
+  and `project()` decides — amended 2026-10-15, DELIVER Q-RM-4/Q-RM-5), `identity_link_purge_only_in_forget_verb` (purge port named only in
+  `crates/cli/src/verbs/identity_forget.rs`), and the existing indexer
+  capability boundary. BEHAVIORAL — AT fixtures (brief "For Acceptance
   Designer").
 
 ## Earned Trust
@@ -182,4 +203,7 @@ lives, and what every reader does with a link.
 GitHub lies in the `FakeGithub` catalogue: profile ~60 s stale; login 404 after rename (resolved by
 id read); login re-registered by another id; deleted account (404 on both); bios with several DIDs,
 a prefix-colliding DID, an uppercase DID, trailing punctuation; 403 rate limit (records nothing).
-Clock: `checked_at` from `ClockPort`; a check dated in the future renders as `NotChecked`.
+Clock: `checked_at` from `ClockPort`; a check dated in the future is ignored and the latest
+non-future check governs (a link with only future-dated checks is `NotChecked`).
+*Amended 2026-10-15 (DELIVER, Q-RM-3): previously "a check dated in the future renders as
+`NotChecked`"; see §5.*
