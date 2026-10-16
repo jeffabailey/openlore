@@ -54,6 +54,7 @@ mod conn;
 mod contribution_links;
 mod graph_query;
 mod identity_link_checks;
+mod identity_link_purge;
 mod peer_storage;
 mod probe;
 mod schema;
@@ -66,6 +67,7 @@ mod store_read;
 
 pub use contribution_links::DuckDbContributionLinkAdapter;
 pub use identity_link_checks::DuckDbIdentityLinkCheckAdapter;
+pub use identity_link_purge::DuckDbIdentityLinkPurgeAdapter;
 pub use peer_storage::DuckDbPeerStorageAdapter;
 pub use store_read::DuckDbStoreReadAdapter;
 
@@ -219,6 +221,13 @@ impl DuckDbStorageAdapter {
     /// it may hold.
     pub fn identity_link_check_adapter(&self) -> DuckDbIdentityLinkCheckAdapter {
         DuckDbIdentityLinkCheckAdapter::from_shared(self.conn.clone())
+    }
+
+    /// The `identity forget` purge of one DID's checks, over the SAME
+    /// connection handle. Only the composition root hands it out, to the
+    /// forget verb alone (C-GDL-5, ADR-085 §7).
+    pub fn identity_link_purge_adapter(&self) -> DuckDbIdentityLinkPurgeAdapter {
+        DuckDbIdentityLinkPurgeAdapter::from_shared(self.conn.clone())
     }
 
     /// Construct the artifact path for a CID: `<claims_dir>/<cid>.json`.

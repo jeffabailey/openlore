@@ -5,7 +5,9 @@
 //! check, **insert only**. "Latest" is a read, never an overwrite. The ports
 //! are split so each verb holds the narrowest handle (ADR-085 §7 table):
 //! readers hold [`IdentityLinkCheckReadPort`] only; writers also hold
-//! [`IdentityLinkCheckWritePort`], whose single method inserts.
+//! [`IdentityLinkCheckWritePort`], whose single method inserts. The one
+//! exception to insert-only is [`IdentityLinkCheckPurgePort`], held by
+//! `identity forget` alone (C-GDL-5, ADR-082 precedent).
 
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::CheckVerdict;
@@ -61,6 +63,14 @@ pub trait IdentityLinkCheckReadPort {
 /// Write side: insert one check. There is no update and no delete here.
 pub trait IdentityLinkCheckWritePort {
     fn record_check(&self, check: &LinkCheck) -> Result<(), IdentityLinkCheckError>;
+}
+
+/// Purge side: the only removal of checks, held by `identity forget` alone.
+/// It erases the local history of exactly one subject DID and never touches a
+/// claim (C-GDL-5, ADR-085 §7).
+pub trait IdentityLinkCheckPurgePort {
+    /// Delete every check of one bare subject DID; returns how many went.
+    fn purge_subject(&self, subject_did: &str) -> Result<u64, IdentityLinkCheckError>;
 }
 
 /// A stored claim whose predicate is the identity-link predicate — a

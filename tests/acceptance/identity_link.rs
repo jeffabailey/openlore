@@ -1265,7 +1265,6 @@ fn an_answer_from_github_that_openlore_will_not_follow_leaves_jeffs_link_as_it_w
 ///   And no claim changed
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn forgetting_rachel_erases_only_her_proof_history() {
     let mut world = LinkWorld::with(&[JEFF_GH, RACHEL_GH]);
     given_i_linked(&world, JEFF_GH, None);
@@ -1304,7 +1303,6 @@ fn forgetting_rachel_erases_only_her_proof_history() {
 ///   Then he is told 0 proof checks were forgotten and nothing changed
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn forgetting_rachel_a_second_time_forgets_nothing_more() {
     let mut world = LinkWorld::with(&[RACHEL_GH]);
     bio_names(&world, RACHEL_GH, RACHEL_DID);
@@ -1342,7 +1340,6 @@ fn forgetting_rachel_a_second_time_forgets_nothing_more() {
 ///     | --did not-a-did              | a usage error names --did                   |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn forgetting_without_a_history_or_a_valid_did_changes_nothing() {
     let rows: [(&str, &[&str]); 3] = [
         ("no history", &["forget", "--did", STRANGER_DID]),

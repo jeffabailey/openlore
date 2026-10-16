@@ -153,6 +153,12 @@ pub fn render_recheck(did: &str, login_seen: &str, verdict: CheckVerdict) -> Str
     )
 }
 
+/// `identity forget` erased `forgotten` local proof checks of one DID; claims
+/// are never changed (C-GDL-5).
+pub fn render_forgot(did: &str, forgotten: u64) -> String {
+    format!("Forgot {forgotten} proof check(s) of {did}; no claim changed.\n")
+}
+
 /// `identity verify` could not read GitHub for one link: nothing recorded
 /// for it. `reason` never carries the token (ADR-085 §4).
 pub fn render_recheck_unreadable(login: &str, reason: &str) -> String {

@@ -134,8 +134,8 @@ pub use contribution_link::{
 // history, split into read and write ports, plus the link-candidate claim read.
 mod identity_link_check;
 pub use identity_link_check::{
-    CheckFilter, IdentityLinkCheckError, IdentityLinkCheckReadPort, IdentityLinkCheckWritePort,
-    LinkCandidate, LinkCandidateReadPort, LinkCheck,
+    CheckFilter, IdentityLinkCheckError, IdentityLinkCheckPurgePort, IdentityLinkCheckReadPort,
+    IdentityLinkCheckWritePort, LinkCandidate, LinkCandidateReadPort, LinkCheck,
 };
 
 // -----------------------------------------------------------------------------

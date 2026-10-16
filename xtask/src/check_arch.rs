@@ -1516,6 +1516,9 @@ pub fn scan_adapter_github_port_references(workspace_root: &Path) -> anyhow::Res
 //   names no check-write or purge port, no `IdentityPort`, no `GithubPort` and
 //   not the whole `Wiring`; the `infer people` module names no check-write or
 //   purge port (its `--sign` path holds signing by design).
+// * `identity_link_purge_only_in_forget_verb`: the purge port, its method and
+//   its wiring slot are named only by the `identity forget` verb, besides the
+//   port's definition, its adapter and the composition root.
 
 /// The insert-only check table.
 const IDENTITY_LINK_CHECKS_TABLE: &str = "identity_link_checks";
@@ -1629,6 +1632,69 @@ pub fn scan_identity_link_readers_hold_no_write_handle(
                     )
                 }),
         );
+    }
+    Ok(findings)
+}
+
+/// The purge capability's names: the port, its one method and the composition
+/// root's slot holding it.
+const IDENTITY_LINK_PURGE_TOKENS: &[&str] = &[
+    "IdentityLinkCheckPurgePort",
+    "purge_subject",
+    "identity_link_check_purge",
+];
+
+/// The `identity forget` verb module — the one consumer of the purge.
+const IDENTITY_FORGET_SOURCE: &str = "crates/cli/src/verbs/identity_forget.rs";
+
+/// The sources allowed to name the purge: its definition and re-export
+/// (ports), its adapter (adapter-duckdb), the composition root and dispatch
+/// (cli wiring/lib), and the forget verb itself.
+const IDENTITY_LINK_PURGE_EXEMPT_SOURCES: &[&str] = &[
+    "crates/ports/src/identity_link_check.rs",
+    "crates/ports/src/lib.rs",
+    IDENTITY_LINK_PURGE_SOURCE,
+    "crates/cli/src/wiring.rs",
+    "crates/cli/src/lib.rs",
+    IDENTITY_FORGET_SOURCE,
+];
+
+/// Effect shell for `identity_link_purge_only_in_forget_verb`: outside the
+/// exempt sources, no production source under `crates/*/src` names the purge
+/// port, its method or its wiring slot; a tree whose forget verb does not name
+/// the port is reported too, so the rule cannot pass vacuously.
+pub fn scan_identity_link_purge_only_in_forget_verb(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<String>> {
+    const RULE: &str = "identity_link_purge_only_in_forget_verb";
+    let exempt: Vec<PathBuf> = IDENTITY_LINK_PURGE_EXEMPT_SOURCES
+        .iter()
+        .map(|rel| workspace_root.join(rel))
+        .collect();
+    let mut findings = Vec::new();
+    for path in rust_sources_under(&workspace_root.join("crates")) {
+        if exempt.contains(&path) || !path.components().any(|c| c.as_os_str() == "src") {
+            continue;
+        }
+        findings.extend(
+            classify_forbidden_words(&std::fs::read_to_string(&path)?, IDENTITY_LINK_PURGE_TOKENS)
+                .into_iter()
+                .map(|finding| {
+                    format!(
+                        "{RULE}: {}: {finding} — only {IDENTITY_FORGET_SOURCE} may hold the \
+                         check purge (C-GDL-5, ADR-085 §7)",
+                        path.display()
+                    )
+                }),
+        );
+    }
+    let forget_source =
+        std::fs::read_to_string(workspace_root.join(IDENTITY_FORGET_SOURCE)).unwrap_or_default();
+    if classify_forbidden_words(&forget_source, &["IdentityLinkCheckPurgePort"]).is_empty() {
+        findings.push(format!(
+            "{RULE}: {IDENTITY_FORGET_SOURCE} does not hold IdentityLinkCheckPurgePort — \
+             the rule would pass vacuously"
+        ));
     }
     Ok(findings)
 }
@@ -2612,6 +2678,8 @@ pub fn run() -> anyhow::Result<i32> {
         scan_identity_link_readers_hold_no_write_handle(&workspace_root)?;
     let identity_link_compose_findings =
         scan_identity_link_compose_only_via_proven_link(&workspace_root)?;
+    let identity_link_purge_findings =
+        scan_identity_link_purge_only_in_forget_verb(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -2633,6 +2701,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(identity_link_checks_findings);
     rendered.extend(identity_link_reader_findings);
     rendered.extend(identity_link_compose_findings);
+    rendered.extend(identity_link_purge_findings);
 
     if rendered.is_empty() {
         println!(
@@ -3677,6 +3746,69 @@ mod tests {
                 .expect("scan real tree"),
             Vec::<String>::new(),
             "the real readers hold read handles only"
+        );
+    }
+
+    // --- identity_link_purge_only_in_forget_verb (ADR-085 §7, C-GDL-5) ------
+
+    #[test]
+    fn purge_scan_reports_the_purge_outside_the_forget_verb_and_passes_the_real_tree() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let root = violating.path();
+        let write = |rel: &str, body: &str| {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            std::fs::write(path, body).expect("write");
+        };
+        let names_the_purge = "fn forget(p: &dyn IdentityLinkCheckPurgePort, w: &Wiring) {\n    \
+             p.purge_subject(\"did:plc:x\");\n    \
+             w.identity_link_check_purge.as_ref();\n}\n";
+        for exempt in IDENTITY_LINK_PURGE_EXEMPT_SOURCES {
+            write(exempt, names_the_purge);
+        }
+        write("crates/cli/src/verbs/identity_verify.rs", names_the_purge);
+        write(
+            "crates/review-app/src/routes.rs",
+            "// an IdentityLinkCheckPurgePort is never held here\n\
+             fn erase(w: &Wiring) { w.identity_link_check_purge.purge_subject(\"d\"); }\n",
+        );
+
+        let findings = scan_identity_link_purge_only_in_forget_verb(root).expect("scan");
+        let named = |path: &str, token: &str| {
+            findings
+                .iter()
+                .any(|f| f.contains(path) && f.contains(&format!("`{token}`")))
+        };
+        assert_eq!(findings.len(), 5, "{findings:?}");
+        for token in IDENTITY_LINK_PURGE_TOKENS {
+            assert!(
+                named("crates/cli/src/verbs/identity_verify.rs", token),
+                "{token}: {findings:?}"
+            );
+        }
+        assert!(
+            named(
+                "crates/review-app/src/routes.rs",
+                "identity_link_check_purge"
+            ),
+            "{findings:?}"
+        );
+        assert!(
+            named("crates/review-app/src/routes.rs", "purge_subject"),
+            "{findings:?}"
+        );
+
+        let no_forget = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(no_forget.path().join("crates/cli/src/verbs")).expect("mkdir");
+        let vacuous = scan_identity_link_purge_only_in_forget_verb(no_forget.path()).expect("scan");
+        assert_eq!(vacuous.len(), 1, "{vacuous:?}");
+        assert!(vacuous[0].contains("vacuously"), "{vacuous:?}");
+
+        assert_eq!(
+            scan_identity_link_purge_only_in_forget_verb(real_workspace_root())
+                .expect("scan real tree"),
+            Vec::<String>::new(),
+            "only identity forget holds the purge"
         );
     }
 

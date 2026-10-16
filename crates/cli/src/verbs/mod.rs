@@ -27,6 +27,7 @@ pub mod claim_retract;
 pub mod graph_query;
 // github-did-identity-link (ADR-085 §7): one module per identity verb, so the
 // module-scoped check-arch rules can tell readers from writers (Q-RM-2).
+pub mod identity_forget;
 pub mod identity_link;
 pub mod identity_list;
 pub mod identity_verify;

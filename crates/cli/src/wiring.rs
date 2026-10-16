@@ -33,10 +33,10 @@ use adapter_publish_http::{HttpPublishAdapter, WriteToken};
 use adapter_system_clock::SystemClockAdapter;
 use anyhow::{anyhow, Context, Result};
 use ports::{
-    ClockPort, ContributionLinkPort, GithubPort, IdentityLinkCheckReadPort,
-    IdentityLinkCheckWritePort, IdentityPort, IndexQueryPort, InstanceReadPort,
-    LinkCandidateReadPort, PdsPort, PeerStoragePort, ProbeOutcome, ProbeRefused, PublishPort,
-    StoragePort, StoreReadPort,
+    ClockPort, ContributionLinkPort, GithubPort, IdentityLinkCheckPurgePort,
+    IdentityLinkCheckReadPort, IdentityLinkCheckWritePort, IdentityPort, IndexQueryPort,
+    InstanceReadPort, LinkCandidateReadPort, PdsPort, PeerStoragePort, ProbeOutcome, ProbeRefused,
+    PublishPort, StoragePort, StoreReadPort,
 };
 
 use crate::paths::OpenLorePaths;
@@ -64,6 +64,10 @@ pub struct Wiring {
     /// The WRITE side of the check history (insert only), held by the verbs
     /// that check a link (`identity link`); readers are never handed it.
     pub identity_link_check_writes: Box<dyn IdentityLinkCheckWritePort>,
+    /// The PURGE of one DID's checks — the only removal (C-GDL-5). Handed to
+    /// `identity forget` alone (check-arch
+    /// `identity_link_purge_only_in_forget_verb`).
+    pub identity_link_check_purge: Box<dyn IdentityLinkCheckPurgePort>,
     /// The stored claims carrying the identity-link predicate — candidates the
     /// pure projection decides on (Q-RM-5). Read-only.
     pub link_candidates: Box<dyn LinkCandidateReadPort>,
@@ -139,6 +143,8 @@ impl Wiring {
             Box::new(storage.identity_link_check_adapter());
         let identity_link_check_writes: Box<dyn IdentityLinkCheckWritePort> =
             Box::new(storage.identity_link_check_adapter());
+        let identity_link_check_purge: Box<dyn IdentityLinkCheckPurgePort> =
+            Box::new(storage.identity_link_purge_adapter());
         let link_candidates: Box<dyn LinkCandidateReadPort> =
             Box::new(storage.identity_link_check_adapter());
         let storage: Box<dyn StoragePort> = Box::new(storage);
@@ -200,6 +206,7 @@ impl Wiring {
             contribution_links,
             identity_link_checks,
             identity_link_check_writes,
+            identity_link_check_purge,
             link_candidates,
             store_read,
             pds,

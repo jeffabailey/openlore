@@ -350,6 +350,22 @@ pub enum IdentityCommand {
         #[arg(long)]
         github: Option<String>,
     },
+    /// Erase one DID's local proof-check history. Claims, local or
+    /// published, are never changed.
+    Forget {
+        /// The DID whose checks to forget.
+        #[arg(long, value_parser = parse_did)]
+        did: claim_domain::Did,
+    },
+}
+
+/// `--did` must be one whole DID (`did:<method>:<id>`), checked by the same
+/// shape rule that finds a DID in a bio.
+fn parse_did(raw: &str) -> Result<claim_domain::Did, String> {
+    match claim_domain::identity_link::did_tokens(raw).as_slice() {
+        [token] if *token == raw => Ok(claim_domain::Did(raw.to_string())),
+        _ => Err(format!("`{raw}` is not a DID (expected did:<method>:<id>)")),
+    }
 }
 
 /// The services an identity link can name.
@@ -826,6 +842,18 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
                 Err(err) => {
                     eprintln!("openlore identity verify: {err:#}");
+                    1
+                }
+            }
+        }
+        Command::Identity(IdentityCommand::Forget { did }) => {
+            match verbs::identity_forget::run(wiring.identity_link_check_purge.as_ref(), &did) {
+                Ok(stdout) => {
+                    print!("{stdout}");
+                    0
+                }
+                Err(err) => {
+                    eprintln!("openlore identity forget: {err:#}");
                     1
                 }
             }
