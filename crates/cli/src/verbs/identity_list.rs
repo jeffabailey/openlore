@@ -12,7 +12,6 @@ use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
     link_predicate, link_view, project, ClaimFields, IdentityLink, LatestCheck,
 };
-use claim_domain::Provenance;
 use ports::{
     CheckFilter, IdentityLinkCheckReadPort, LinkCandidate, LinkCandidateReadPort, LinkCheck,
 };
@@ -25,9 +24,8 @@ pub struct IdentityListHandles<'a> {
     pub claims: &'a dyn LinkCandidateReadPort,
 }
 
-/// A stored candidate as a link, if it is one. Stored rows are app-signed
-/// claims whose signature was verified when they were written (own) or
-/// pulled (peer).
+/// A stored candidate as a link, if it is one, under the provenance the row
+/// was stored with (own: app-signed; peer: `peer_claims.provenance`).
 fn projected(candidate: &LinkCandidate) -> Option<IdentityLink> {
     let fields = ClaimFields {
         author: &candidate.author_did,
@@ -36,10 +34,7 @@ fn projected(candidate: &LinkCandidate) -> Option<IdentityLink> {
         object: &candidate.object,
         evidence: &candidate.evidence,
     };
-    let provenance = Provenance::AppSigned {
-        key_id: candidate.author_did.clone(),
-    };
-    project(fields, &provenance)
+    project(fields, &candidate.provenance)
 }
 
 fn latest_of(check: LinkCheck) -> LatestCheck {

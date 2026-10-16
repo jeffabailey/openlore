@@ -9,6 +9,7 @@
 
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::CheckVerdict;
+use claim_domain::Provenance;
 
 use crate::probe::ProbeOutcome;
 
@@ -73,6 +74,9 @@ pub struct LinkCandidate {
     pub object: String,
     /// The evidence entries, in signed order.
     pub evidence: Vec<String>,
+    /// The provenance the row was stored under: own rows are app-signed;
+    /// peer rows carry `peer_claims.provenance` (ADR-071).
+    pub provenance: Provenance,
 }
 
 /// Read the stored claims carrying one predicate (callers pass

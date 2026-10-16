@@ -14,10 +14,12 @@ use crate::conn::{ConnGuard, SharedConn};
 
 use chrono::{DateTime, TimeZone, Utc};
 use claim_domain::identity_link::CheckVerdict;
+use claim_domain::{bare_did, Did, Provenance};
 use duckdb::Connection;
 use ports::{
     CheckFilter, IdentityLinkCheckError, IdentityLinkCheckReadPort, IdentityLinkCheckWritePort,
-    LinkCandidate, LinkCandidateReadPort, LinkCheck, ProbeOutcome, ProbeRefusalReason,
+    LinkCandidate, LinkCandidateReadPort, LinkCheck, PeerClaimProvenance, ProbeOutcome,
+    ProbeRefusalReason,
 };
 
 const INSERT_CHECK_SQL: &str = "
@@ -42,9 +44,11 @@ const LATEST_CHECKS_SQL: &str = "
     ORDER BY subject_did, github_user_id";
 
 const LINK_CANDIDATES_SQL: &str = "
-    SELECT cid, author_did, subject, predicate, object FROM claims WHERE predicate = ?
+    SELECT cid, author_did, subject, predicate, object, 'app-signed' AS provenance
+    FROM claims WHERE predicate = ?
     UNION ALL
-    SELECT cid, author_did, subject, predicate, object FROM peer_claims WHERE predicate = ?
+    SELECT cid, author_did, subject, predicate, object, COALESCE(provenance, 'app-signed')
+    FROM peer_claims WHERE predicate = ?
     ORDER BY cid";
 
 /// The evidence of one candidate, in signed order (own or peer claim).
@@ -125,14 +129,31 @@ fn query_latest_checks(
     rows.collect()
 }
 
+/// The provenance a stored row passed under: app-signed rows were verified
+/// against their author's key when written or pulled; self-attested rows
+/// were fetched from their author's own repo (ADR-071).
+fn stored_provenance(author_did: &str, column: &str) -> Provenance {
+    match PeerClaimProvenance::from_column(column) {
+        PeerClaimProvenance::AppSigned => Provenance::AppSigned {
+            key_id: author_did.to_string(),
+        },
+        PeerClaimProvenance::SelfAttested => Provenance::SelfAttested {
+            repo_did: Did(bare_did(author_did).to_string()),
+        },
+    }
+}
+
 fn decode_candidate(row: &duckdb::Row<'_>) -> Result<LinkCandidate, duckdb::Error> {
+    let author_did: String = row.get(1)?;
+    let provenance = stored_provenance(&author_did, &row.get::<_, String>(5)?);
     Ok(LinkCandidate {
         cid: row.get(0)?,
-        author_did: row.get(1)?,
+        author_did,
         subject: row.get(2)?,
         predicate: row.get(3)?,
         object: row.get(4)?,
         evidence: Vec::new(),
+        provenance,
     })
 }
 

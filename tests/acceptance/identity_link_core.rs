@@ -225,8 +225,7 @@ fn sut_link_view(
 }
 
 fn sut_is_reserved_predicate(predicate: &str) -> bool {
-    let _ = predicate;
-    todo!("RED: bind to claim_domain::identity_link::is_reserved_predicate (ADR-084 §4)")
+    claim_domain::identity_link::is_reserved_predicate(predicate)
 }
 
 /// The scoring choke point (REAL today).
@@ -700,7 +699,6 @@ proptest! {
 
     /// CORE-3 (@property @adr-084-3 @m-2 @n-4 @kpi-gdl-1 @contract-shape:pure-function)
     #[test]
-    #[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
     fn core3_only_the_owners_well_formed_record_projects_as_a_link(
         did in arb_did(),
         login in arb_login(),
@@ -789,7 +787,6 @@ proptest! {
 
     /// CORE-7 (@property @adr-084-4 @n-1 @kpi-gdl-1 @contract-shape:pure-function)
     #[test]
-    #[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
     fn core7_only_the_exact_same_as_predicate_is_reserved(predicate in "[ -~]{0,12}") {
         prop_assert_eq!(sut_is_reserved_predicate(&predicate), predicate == SAME_AS);
     }

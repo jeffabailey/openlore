@@ -116,6 +116,7 @@ fn stored_claim(candidate: &LinkCandidate) -> StoredClaim<'_> {
             object: &candidate.object,
             evidence: &candidate.evidence,
         },
+        provenance: &candidate.provenance,
         lineage: ClaimLineage {
             author_did: &candidate.author_did,
             cid: &candidate.cid,

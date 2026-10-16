@@ -38,9 +38,11 @@ use claim_domain::{
     UnsignedClaim,
 };
 
+use claim_domain::identity_link::is_reserved_predicate;
 use lexicon::ObjectAdvisory;
 
 use crate::io::prompt_line;
+use crate::render::render_reserved_predicate_refused;
 use crate::wiring::Wiring;
 
 /// Argument struct for the `claim add` verb (mirrors the clap subcommand).
@@ -267,6 +269,10 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
 /// top of `run` has already rejected anything outside `[0.0, 1.0]`, and
 /// `Confidence::try_new` checks it again.
 pub(crate) fn build_unsigned_claim(composed: &ComposedClaim) -> Result<UnsignedClaim> {
+    // ADR-084 §4: a link is composed only through `openlore identity link`.
+    if is_reserved_predicate(&composed.predicate) {
+        return Err(anyhow!("{}", render_reserved_predicate_refused()));
+    }
     let confidence = claim_domain::Confidence::try_new(composed.confidence)
         .map_err(|e| anyhow!("encoding confidence {}: {e}", composed.confidence))?;
 

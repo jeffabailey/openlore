@@ -1,7 +1,7 @@
 //! `openlore identity list` — the reader's linked identities (ADR-085 §5).
 
 use chrono::{DateTime, Utc};
-use claim_domain::identity_link::{CheckVerdict, LinkStanding, LinkedIdentity};
+use claim_domain::identity_link::{link_predicate, CheckVerdict, LinkStanding, LinkedIdentity};
 use claim_domain::UnsignedClaim;
 
 /// The empty state of `identity list` (Q-GDL-D1, content-frozen wording).
@@ -99,6 +99,14 @@ pub fn render_link_preview(claim: &UnsignedClaim) -> String {
         claim.predicate,
         claim.object,
         claim.evidence.join(", ")
+    )
+}
+
+/// A generic composer refused the reserved link predicate (ADR-084 §4).
+pub fn render_reserved_predicate_refused() -> String {
+    format!(
+        "`{}` is reserved for identity links; link a GitHub account with `openlore identity link`. Nothing signed, published or recorded",
+        link_predicate()
     )
 }
 

@@ -27,6 +27,13 @@ pub fn link_predicate() -> &'static str {
     LINK_PREDICATE
 }
 
+/// Is `predicate` reserved for identity links? Exact, case-sensitive match:
+/// generic composers refuse it and point to `openlore identity link`
+/// (ADR-084 §4); `claim counter` never asks (D-b).
+pub fn is_reserved_predicate(predicate: &str) -> bool {
+    predicate == LINK_PREDICATE
+}
+
 // =============================================================================
 // Bio proof (ADR-076 §4, hoisted by ADR-085 §1)
 // =============================================================================
@@ -359,13 +366,24 @@ fn names_profile_of(evidence: &[String], login: &str) -> bool {
     })
 }
 
-/// A claim whose provenance passed is a link iff: predicate `sameAs`, bare
-/// author == subject, object `github:<valid login>`, exactly one id URI and
-/// a profile URL naming the same login.
-pub fn project(claim: ClaimFields<'_>, _provenance: &Provenance) -> Option<IdentityLink> {
+/// Did the record's provenance pass for `author` itself: signed with the
+/// author's own key, or self-attested from the author's own repo (ADR-071)?
+fn provenance_passed_for(author: &str, provenance: &Provenance) -> bool {
+    let attesting_did = match provenance {
+        Provenance::AppSigned { key_id } => bare_did(key_id),
+        Provenance::SelfAttested { repo_did } => bare_did(&repo_did.0),
+    };
+    attesting_did == bare_did(author)
+}
+
+/// A claim is a link iff (ADR-084 §3): its provenance passed for its author,
+/// predicate `sameAs`, bare author == subject, object `github:<valid login>`,
+/// exactly one id URI and a profile URL naming the same login.
+pub fn project(claim: ClaimFields<'_>, provenance: &Provenance) -> Option<IdentityLink> {
     let login = claim.object.strip_prefix(GITHUB_SUBJECT_PREFIX)?;
     let ids = evidence_ids(claim.evidence)?;
-    let is_link = claim.predicate == LINK_PREDICATE
+    let is_link = provenance_passed_for(claim.author, provenance)
+        && claim.predicate == LINK_PREDICATE
         && bare_did(claim.author) == claim.subject
         && is_github_login(login)
         && ids.len() == 1
@@ -468,11 +486,12 @@ pub fn link_view(links: &[IdentityLink], latest: &[LatestCheck]) -> Vec<LinkedId
 // Link lifecycle (ADR-085 §5): same-author lineage, D-a / D-g / A-4
 // =============================================================================
 
-/// One stored claim that may be a link: its fields and its place in the
-/// reference graph.
+/// One stored claim that may be a link: its fields, the provenance it was
+/// stored under and its place in the reference graph.
 #[derive(Debug, Clone, Copy)]
 pub struct StoredClaim<'a> {
     pub fields: ClaimFields<'a>,
+    pub provenance: &'a Provenance,
     pub lineage: ClaimLineage<'a>,
 }
 
@@ -483,16 +502,13 @@ pub fn active_links(
     stored: &[StoredClaim<'_>],
     referrers: &[ClaimLineage<'_>],
 ) -> Vec<IdentityLink> {
-    let provenance = Provenance::AppSigned {
-        key_id: String::new(),
-    };
     stored
         .iter()
         .filter(|claim| {
             !is_self_retracted(&claim.lineage, referrers)
                 && !is_superseded_by_author(&claim.lineage, referrers)
         })
-        .filter_map(|claim| project(claim.fields, &provenance))
+        .filter_map(|claim| project(claim.fields, claim.provenance))
         .collect()
 }
 

@@ -342,7 +342,6 @@ fn a_malformed_github_username_is_refused_before_github_is_asked() {
 ///   And nothing that readers would treat as a link is in his published repo
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_hand_written_same_as_claim_is_refused_and_jeff_is_pointed_to_the_link_command() {
     let world = LinkWorld::with(&[JEFF_GH]);
     bio_names(&world, JEFF_GH, MY_DID);
@@ -369,7 +368,6 @@ fn a_hand_written_same_as_claim_is_refused_and_jeff_is_pointed_to_the_link_comma
 ///   And his linked identities show no link, and nothing that readers would treat as a link is in his published repo
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn editing_an_inferred_claim_into_same_as_is_refused_at_signing() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_burntsushi_builds_two_signed_memory_safe_repos(&world.env);
@@ -401,7 +399,6 @@ fn editing_an_inferred_claim_into_same_as_is_refused_at_signing() {
 ///   And his linked identities still show Rachel's claim as not checked, and no link for Jeff
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn jeff_can_publicly_dispute_rachels_link_and_his_dispute_is_never_read_as_a_link() {
     let mut world = LinkWorld::with(&[RACHEL_GH]);
     let cids = given_peer_published(
