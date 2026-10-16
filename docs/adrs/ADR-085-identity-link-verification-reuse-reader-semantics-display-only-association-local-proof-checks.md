@@ -49,6 +49,11 @@ lives, and what every reader does with a link.
 3. **Each root performs its own GitHub reads through its own wiring.** `GithubPort` is EXTENDED
    with `read_person_by_id(id)` (one `GET /user/{id}`) in `adapter-github`. No adapter depends on
    another. The indexer gets **no** GitHub capability.
+   *Amended 2026-10-16 (DELIVER review D1): identity reads use `GithubPort::read_account(login)`
+   and `read_person_by_id(id)`, both through one strict reshape: a body whose `id` is missing, not
+   a positive integer, or whose `login` is missing or blank is `ApiShape` (GitHub unavailable), never
+   account 0 or the requested name. The pure core also refuses account 0 and an invalid login, so a
+   `ProvenLink` cannot name account 0. `read_person` stays lenient for `scrape person` only.*
 4. **Check algorithm** (pure decision over at most two reads):
    - Read `/users/{signed or last-seen login}`. GitHub may answer a renamed login with a redirect
      (A-10, partly unverified): the adapter follows at most one same-host `api.github.com`

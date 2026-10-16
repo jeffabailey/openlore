@@ -56,7 +56,9 @@ under 50 users on a single process.
      The user re-verifies.
    - The stored link carries the **numeric GitHub user id** as well as the login.
 5. **Re-verification gate (I-BRA-4).** The scan task is a pipeline whose first stage is
-   `read_person` followed by the ownership verdict.
+   `read_account` followed by the ownership verdict.
+   *Amended 2026-10-16 (github-did-identity-link review D1): previously `read_person`, which read a
+   missing `id` as 0; `read_account` fails closed on a profile without a positive `id` or a `login`.*
    - **Only `Verified` yields the capability value the next stage needs**, a `VerifiedOwnership`
      token. Without it, repo listing cannot be expressed.
    - **On any other verdict:**
