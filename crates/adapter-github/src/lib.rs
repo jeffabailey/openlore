@@ -393,6 +393,17 @@ impl GithubPort for GithubAdapter {
         Ok(client::parse_person_profile(&body, user))
     }
 
+    /// `GET {base}/user/{id}` — the account's current profile, whatever its
+    /// login is now (UC-9). Same reshape as [`read_person`](Self::read_person).
+    async fn read_person_by_id(&self, user_id: u64) -> Result<PersonProfile, GithubError> {
+        let target = user_id.to_string();
+        let body = self
+            .get_public(&format!("/user/{user_id}"), &target)
+            .await?;
+        record_auth_report(client::parse_auth_report(&body));
+        Ok(client::parse_person_profile(&body, &target))
+    }
+
     /// `GET {base}/users/{user}/repos?type=owner&sort=pushed&per_page=100` —
     /// the RAW owned-repo rows (one page; the pure core picks the top few).
     async fn list_owned_repos(&self, user: &str) -> Result<Vec<OwnedRepo>, GithubError> {
@@ -455,9 +466,37 @@ impl GithubAdapter {
     /// wiring lives in ONE place; each caller classifies the RESPONSE per its own
     /// railway rules (a 404 is a refusal for `get_public`, but "absent" for
     /// `content_exists`).
+    ///
+    /// Follows at most ONE redirect, and only on the same host (N-2): a
+    /// redirect to another host, or a second redirect, is refused as
+    /// [`GithubError::ApiShape`] so the caller records nothing.
     async fn send_get(&self, url: &str) -> Result<reqwest::Response, GithubError> {
         let client = client::build_client()
             .map_err(|e| GithubError::Network(format!("could not build HTTP client: {e}")))?;
+        let response = self.send_get_once(&client, url).await?;
+        let Some(location) = redirect_location(&response) else {
+            return Ok(response);
+        };
+        let target = client::redirect_target(url, &location).ok_or_else(|| {
+            GithubError::ApiShape(format!(
+                "GitHub forwarded {url} to another host; not followed"
+            ))
+        })?;
+        let forwarded = self.send_get_once(&client, &target).await?;
+        match redirect_location(&forwarded) {
+            None => Ok(forwarded),
+            Some(_) => Err(GithubError::ApiShape(format!(
+                "GitHub forwarded {url} more than once; not followed"
+            ))),
+        }
+    }
+
+    /// Exactly one GET, no redirect followed.
+    async fn send_get_once(
+        &self,
+        client: &reqwest::Client,
+        url: &str,
+    ) -> Result<reqwest::Response, GithubError> {
         let mut request = client.get(url);
         if let Some(header) = self.auth.authorization_header() {
             request = request.header(reqwest::header::AUTHORIZATION, header);
@@ -753,6 +792,21 @@ async fn classify_refusal(response: reqwest::Response, target: &str) -> GithubEr
         .await
         .unwrap_or_else(|_| serde_json::json!({}));
     classify_status(status_code, &body, target)
+}
+
+/// The `Location` of a redirect response; `None` for any other response.
+fn redirect_location(response: &reqwest::Response) -> Option<String> {
+    if !response.status().is_redirection() {
+        return None;
+    }
+    Some(
+        response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string(),
+    )
 }
 
 /// Whether a refusal body marks a PRIVATE/inaccessible target — the `private`

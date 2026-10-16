@@ -168,8 +168,36 @@ fn sut_bio_verdict(bio: Option<&str>, did: &str) -> VerdictView {
 }
 
 fn sut_check(link: &LinkedView, login_read: &ReadView, id_read: &ReadView) -> CheckView {
-    let _ = (link, login_read, id_read);
-    todo!("RED: bind to claim_domain::identity_link::check_link (ADR-085 §4)")
+    use claim_domain::identity_link::{recheck_link, CheckVerdict, GithubObservation, GithubRead};
+    let answer = |read: &ReadView| match read {
+        ReadView::Profile { id, login, bio } => GithubRead::Profile(GithubObservation {
+            login: login.clone(),
+            user_id: *id,
+            bio: bio.clone(),
+        }),
+        ReadView::NotFound => GithubRead::NotFound,
+        ReadView::RateLimited | ReadView::Unavailable => GithubRead::Unreadable(()),
+    };
+    let linked = claim_domain::identity_link::IdentityLink {
+        did: link.did.clone(),
+        login: link.last_login.clone(),
+        user_id: link.id,
+    };
+    let decided = recheck_link(&linked, &link.last_login, answer(login_read), |_| {
+        answer(id_read)
+    });
+    CheckView {
+        recorded: decided.ok().map(|check| {
+            let verdict = match check.verdict() {
+                CheckVerdict::Verified => VerdictView::Verified,
+                CheckVerdict::DidMissing => VerdictView::DidMissing,
+                CheckVerdict::DifferentDid => VerdictView::DifferentDid,
+                CheckVerdict::NoBio => VerdictView::NoBio,
+                CheckVerdict::AccountNotFound => VerdictView::AccountNotFound,
+            };
+            (verdict, check.login_seen().to_string())
+        }),
+    }
 }
 
 fn sut_project(claim: &ClaimView, provenance: ProvenanceView) -> Option<LinkView> {
@@ -717,7 +745,6 @@ proptest! {
 
     /// CORE-2 (@property @adr-085-4 @uc-10 @contract-shape:pure-function)
     #[test]
-    #[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
     fn core2_a_check_reads_at_most_twice_and_records_nothing_when_github_fails(
         (link, login_read, id_read) in (arb_did(), arb_login(), 1u64..10_000_000)
             .prop_flat_map(|(did, last_login, id)| {

@@ -911,7 +911,6 @@ fn when_jeffs_did_is_back_one_recheck_from_one_github_request_restores_the_link(
 ///   And his linked identities show him as github:jeff-b, verified
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_renamed_account_stays_verified_under_its_new_name() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);
@@ -943,7 +942,6 @@ fn a_renamed_account_stays_verified_under_its_new_name() {
 ///   Then GitHub was asked once, for "jeff-b"
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn after_a_rename_is_recognised_the_next_recheck_reads_the_new_name_with_one_request() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);
@@ -972,7 +970,6 @@ fn after_a_rename_is_recognised_the_next_recheck_reads_the_new_name_with_one_req
 ///   And GitHub was asked at most twice and never by account number
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn jeff_stays_verified_under_his_new_github_name_found_from_his_old_name_alone() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);
@@ -1009,7 +1006,6 @@ fn jeff_stays_verified_under_his_new_github_name_found_from_his_old_name_alone()
 ///     | he deleted his account                                  | the account no longer exists    | his claim on jeffbailey, proof gone     |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn the_account_number_tells_a_re_registered_login_and_a_deleted_account_apart() {
     let rows = [
         (
@@ -1222,7 +1218,6 @@ fn one_recheck_covers_both_of_jeffs_github_accounts() {
 ///     | to another site                                |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn an_answer_from_github_that_openlore_will_not_follow_leaves_jeffs_link_as_it_was() {
     for row in ["chained redirect", "cross-host redirect"] {
         let world = LinkWorld::with(&[JEFF_GH]);

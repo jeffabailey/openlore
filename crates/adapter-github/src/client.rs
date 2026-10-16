@@ -419,7 +419,18 @@ pub fn build_client() -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .user_agent("openlore-adapter-github")
+        // The adapter decides on redirects itself (N-2): see `redirect_target`.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
+}
+
+/// Where a redirect from `requested` to `location` may be followed (N-2):
+/// the resolved target when it stays on the same scheme, host and port;
+/// `None` for another host or an unparseable `Location`. PURE.
+pub fn redirect_target(requested: &str, location: &str) -> Option<String> {
+    let from = reqwest::Url::parse(requested).ok()?;
+    let to = from.join(location).ok()?;
+    (to.origin() == from.origin()).then(|| to.to_string())
 }
 
 #[cfg(test)]

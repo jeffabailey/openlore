@@ -41,6 +41,7 @@ fn latest_of(check: LinkCheck) -> LatestCheck {
     LatestCheck {
         subject_did: check.subject_did,
         user_id: check.github_user_id,
+        login_seen: check.login_seen,
         verdict: check.verdict,
         checked_at: check.checked_at,
     }

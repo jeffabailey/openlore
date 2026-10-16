@@ -535,6 +535,11 @@ pub trait GithubPort: Send + Sync {
     /// [`GithubError::NotFound`].
     async fn read_person(&self, user: &str) -> Result<PersonProfile, GithubError>;
 
+    /// Read an account's current public profile by its stable numeric id:
+    /// exactly ONE `GET /user/{id}` (UC-9, ADR-085 §4). A renamed account
+    /// answers under its new login; a deleted one is [`GithubError::NotFound`].
+    async fn read_person_by_id(&self, user_id: u64) -> Result<PersonProfile, GithubError>;
+
     /// List the repos a person owns: exactly ONE
     /// `GET /users/{user}/repos?type=owner&sort=pushed&per_page=100`, the RAW
     /// rows (forks and archived repos included).

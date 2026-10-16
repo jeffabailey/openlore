@@ -404,6 +404,8 @@ pub fn project(claim: ClaimFields<'_>, provenance: &Provenance) -> Option<Identi
 pub struct LatestCheck {
     pub subject_did: String,
     pub user_id: u64,
+    /// The login GitHub reported on that check (a rename shows here).
+    pub login_seen: String,
     pub verdict: CheckVerdict,
     pub checked_at: DateTime<Utc>,
 }
@@ -477,9 +479,24 @@ pub fn link_view(links: &[IdentityLink], latest: &[LatestCheck]) -> Vec<LinkedId
                     checked_at: check.checked_at,
                 },
             };
-            LinkedIdentity { link, standing }
+            LinkedIdentity {
+                link: under_login_last_seen(link, latest),
+                standing,
+            }
         })
         .collect()
+}
+
+/// `link` under the login this reader's latest check saw: after a rename the
+/// account shows under its new name; an unchecked link keeps the signed one.
+fn under_login_last_seen(link: IdentityLink, latest: &[LatestCheck]) -> IdentityLink {
+    match latest_for(&link, latest) {
+        Some(check) => IdentityLink {
+            login: check.login_seen.clone(),
+            ..link
+        },
+        None => link,
+    }
 }
 
 // =============================================================================
@@ -526,24 +543,65 @@ pub fn links_to_recheck(
         .collect()
 }
 
-/// Re-check an active `link` on a fresh read of `login_read` (ADR-085 §4).
-/// `None` (the login is gone) or an account with another id (the login was
-/// re-registered) no longer proves the link: `account_not_found`. Otherwise
-/// the bio of the linked account decides, against the link's own DID.
-pub fn recheck_link(
+/// One GitHub answer as the check consumes it: the profile, "no such
+/// account", or a failure (`E`) that records nothing (ADR-085 §4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GithubRead<E> {
+    Profile(GithubObservation),
+    NotFound,
+    Unreadable(E),
+}
+
+/// The account was not found under its login nor by its number.
+fn account_not_found(link: &IdentityLink, login_read: &str) -> ProofCheck {
+    ProofCheck::Disproved {
+        verdict: CheckVerdict::AccountNotFound,
+        login_seen: login_read.to_string(),
+        user_id: link.user_id,
+    }
+}
+
+/// The bio of the linked account decides, against the link's own DID. An
+/// answer for any other account does not.
+fn check_linked_account(
     link: &IdentityLink,
     login_read: &str,
-    observation: Option<&GithubObservation>,
+    observed: &GithubObservation,
 ) -> ProofCheck {
-    match observation {
-        Some(observed) if observed.user_id == link.user_id => {
-            check_link(&Did(link.did.clone()), observed)
+    if observed.user_id == link.user_id {
+        check_link(&Did(link.did.clone()), observed)
+    } else {
+        account_not_found(link, login_read)
+    }
+}
+
+/// Re-check an active `link` over at most two reads (ADR-085 §4). The login
+/// read (`login_read`, the last login seen) answering the linked account
+/// decides on its bio. A login that is gone or now names another account
+/// (renamed, maybe re-registered) asks `read_by_account_number` — the second
+/// and last read: the account's current profile decides, under its new
+/// login; no account under that number is `account_not_found`. Any
+/// unreadable answer records nothing: the failure is returned.
+pub fn recheck_link<E>(
+    link: &IdentityLink,
+    login_read: &str,
+    login_answer: GithubRead<E>,
+    read_by_account_number: impl FnOnce(u64) -> GithubRead<E>,
+) -> Result<ProofCheck, E> {
+    match login_answer {
+        GithubRead::Unreadable(failure) => Err(failure),
+        GithubRead::Profile(observed) if observed.user_id == link.user_id => {
+            Ok(check_link(&Did(link.did.clone()), &observed))
         }
-        _ => ProofCheck::Disproved {
-            verdict: CheckVerdict::AccountNotFound,
-            login_seen: login_read.to_string(),
-            user_id: link.user_id,
-        },
+        GithubRead::Profile(_) | GithubRead::NotFound => {
+            match read_by_account_number(link.user_id) {
+                GithubRead::Profile(current) => {
+                    Ok(check_linked_account(link, login_read, &current))
+                }
+                GithubRead::NotFound => Ok(account_not_found(link, login_read)),
+                GithubRead::Unreadable(failure) => Err(failure),
+            }
+        }
     }
 }
 

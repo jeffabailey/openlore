@@ -10,13 +10,13 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
-    link_predicate, links_to_recheck, recheck_link, ClaimFields, GithubObservation, IdentityLink,
-    ProofCheck, StoredClaim,
+    link_predicate, links_to_recheck, recheck_link, ClaimFields, GithubObservation, GithubRead,
+    IdentityLink, ProofCheck, StoredClaim,
 };
 use claim_domain::{Cid, ClaimLineage, SignedClaim};
 use ports::{
     CheckFilter, GithubError, GithubPort, IdentityLinkCheckReadPort, IdentityLinkCheckWritePort,
-    LinkCandidate, LinkCandidateReadPort, LinkCheck, StoragePort,
+    LinkCandidate, LinkCandidateReadPort, LinkCheck, PersonProfile, StoragePort,
 };
 
 use crate::render::{
@@ -101,21 +101,17 @@ fn login_to_read<'a>(link: &'a IdentityLink, latest: &'a [LinkCheck]) -> &'a str
         .map_or(link.login.as_str(), |check| check.login_seen.as_str())
 }
 
-/// One fresh read: `None` when GitHub says the login does not exist; any
-/// other failure is returned untouched (the caller records nothing).
-fn read_account(
-    runtime: &tokio::runtime::Runtime,
-    github: &dyn GithubPort,
-    login: &str,
-) -> std::result::Result<Option<GithubObservation>, GithubError> {
-    match runtime.block_on(github.read_person(login)) {
-        Ok(profile) => Ok(Some(GithubObservation {
+/// One GitHub answer as the check consumes it: "no such account" is an
+/// answer; any other failure is kept so the caller can report it.
+fn answer_of(read: std::result::Result<PersonProfile, GithubError>) -> GithubRead<GithubError> {
+    match read {
+        Ok(profile) => GithubRead::Profile(GithubObservation {
             login: profile.login,
             user_id: profile.id,
             bio: profile.bio,
-        })),
-        Err(GithubError::NotFound { .. }) => Ok(None),
-        Err(err) => Err(err),
+        }),
+        Err(GithubError::NotFound { .. }) => GithubRead::NotFound,
+        Err(err) => GithubRead::Unreadable(err),
     }
 }
 
@@ -139,9 +135,12 @@ fn recheck(
     now: DateTime<Utc>,
     mut report: VerifyReport,
 ) -> Result<VerifyReport> {
-    match read_account(runtime, handles.github, login) {
-        Ok(observation) => {
-            let decided = recheck_link(link, login, observation.as_ref());
+    let github = handles.github;
+    let login_answer = answer_of(runtime.block_on(github.read_person(login)));
+    let read_by_account_number =
+        |user_id: u64| answer_of(runtime.block_on(github.read_person_by_id(user_id)));
+    match recheck_link(link, login, login_answer, read_by_account_number) {
+        Ok(decided) => {
             let check = check_of(link, &decided, now);
             handles.check_writes.record_check(&check)?;
             report.stdout += &render_recheck(&check.subject_did, &check.login_seen, check.verdict);
