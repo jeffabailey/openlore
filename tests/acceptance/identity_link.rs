@@ -637,6 +637,78 @@ fn the_identity_verbs_never_repeat_jeffs_bio_or_log_his_identity() {
     }
 }
 
+/// IL-12b (guardrail, F2 failure path, table — review D4)
+/// ```gherkin
+/// @driving_port @real-io @guardrail @error @gdl-d12 @f2 @contract-shape:pure-function
+/// Scenario Outline: A refused or unreadable identity run never repeats Jeff's bio or logs his DID
+///   Given Jeff's bio holds a private phrase
+///   And <given>
+///   When Jeff runs <verb>
+///   Then it is refused
+///   And the private phrase appears neither in what the command prints nor in its log output
+///   And its log output (stderr) never names his DID
+///   And his login appears in its log output only in the one refusal line about the account he asked for
+///   And no log event is printed among its results (stdout)
+///   Examples:
+///     | given                                                   | verb            |
+///     | his bio names no DID                                    | identity link   |
+///     | his bio names his DID and GitHub is unreachable         | identity link   |
+///     | his bio names his DID and GitHub answers without an account number | identity link |
+///     | he linked the account and GitHub is unreachable         | identity verify |
+///     | he linked the account and GitHub answers without an account number | identity verify |
+/// ```
+#[test]
+fn a_refused_or_unreadable_identity_run_never_repeats_jeffs_bio_or_logs_his_did() {
+    let rows = [
+        ("link, bio names no DID", "link", None, None),
+        (
+            "link, GitHub unreachable",
+            "link",
+            Some(GithubTrouble::Unreachable),
+            None,
+        ),
+        (
+            "link, no account number",
+            "link",
+            None,
+            Some(ProfileFlaw::NoId),
+        ),
+        (
+            "verify, GitHub unreachable",
+            "verify",
+            Some(GithubTrouble::Unreachable),
+            None,
+        ),
+        (
+            "verify, no account number",
+            "verify",
+            None,
+            Some(ProfileFlaw::NoId),
+        ),
+    ];
+    for (row, verb, trouble, flaw) in rows {
+        let world = LinkWorld::with(&[JEFF_GH]);
+        if verb == "verify" {
+            given_i_linked(&world, JEFF_GH, None);
+        }
+        if trouble.is_none() && flaw.is_none() {
+            bio_is(&world, JEFF_GH, Some(PRIVATE_BIO_PHRASE));
+        } else {
+            bio_names_with_private_phrase(&world, JEFF_GH, MY_DID);
+        }
+        trouble.into_iter().for_each(|t| github_has(&world, t));
+        flaw.into_iter()
+            .for_each(|f| github_answers_for_with(&world, JEFF_GH, f));
+
+        let ran = match verb {
+            "link" => when_i_link(&world, JEFF_GH),
+            _ => when_i_verify(&world, &[]),
+        };
+
+        assert_no_link_data_leaked_on_refusal(&ran, MY_DID, JEFF_GH, row);
+    }
+}
+
 /// IL-13a (guardrail, platform: v6 → v7 upgrade)
 /// ```gherkin
 /// @driving_port @real-io @guardrail @adr-085-7 @migration-v7 @contract-shape:bounded-change
@@ -802,6 +874,49 @@ fn after_retracting_his_link_jeff_can_link_the_same_account_again() {
         JEFF_GH,
         Shown::Associated,
     );
+}
+
+/// IL-15 (error, table — review D1)
+/// ```gherkin
+/// @driving_port @real-io @adapter-integration @error @adr-085-4 @d1 @contract-shape:unbounded-preservation
+/// Scenario Outline: When GitHub's answer names no account, nothing is linked and nothing is recorded
+///   Given Jeff's GitHub bio for "jeffbailey" names his DID
+///   And GitHub answers for "jeffbailey" with a profile <flaw>
+///   When Jeff links github "jeffbailey" and confirms
+///   Then he is told GitHub could not be read and nothing was recorded
+///   And nothing is signed, kept locally or published, and his linked identities are unchanged
+///   Examples:
+///     | flaw                                 |
+///     | without an account number            |
+///     | whose account number is 0            |
+///     | whose account number is text         |
+///     | without a username                   |
+/// ```
+#[test]
+fn when_githubs_answer_names_no_account_nothing_is_linked_and_nothing_is_recorded() {
+    for flaw in ProfileFlaw::ALL {
+        let row = format!("{flaw:?}");
+        let world = LinkWorld::with(&[JEFF_GH]);
+        bio_names(&world, JEFF_GH, MY_DID);
+        github_answers_for_with(&world, JEFF_GH, flaw);
+        let before = capture_link_universe(&world.env);
+
+        let attempt = when_i_link(&world, JEFF_GH);
+
+        assert_github_unavailable(&attempt, &row);
+        assert!(
+            world.env.pds.records().is_empty(),
+            "[{row}] nothing published"
+        );
+        assert_shown_in(
+            &row,
+            &when_i_list(&world, None),
+            MY_DID,
+            JEFF_GH,
+            Shown::Nothing,
+        );
+        assert_link_store_unchanged_in(&row, &before, &world.env);
+    }
 }
 
 // =============================================================================
@@ -1248,6 +1363,163 @@ fn an_answer_from_github_that_openlore_will_not_follow_leaves_jeffs_link_as_it_w
             Shown::Associated,
         );
         assert_link_store_unchanged_in(row, &before, &world.env);
+    }
+}
+
+/// IV-11 (error, table — review D1)
+/// ```gherkin
+/// @driving_port @real-io @adapter-integration @error @adr-085-4 @d1 @contract-shape:unbounded-preservation
+/// Scenario Outline: A re-check whose answer names no account records nothing and asks no further
+///   Given Jeff linked github "jeffbailey" and it is verified
+///   And GitHub answers for "jeffbailey" with a profile <flaw>
+///   When Jeff re-checks his links
+///   Then he is told GitHub could not be read and nothing was recorded
+///   And GitHub was asked once, for "jeffbailey", and never by account number
+///   And his linked identities still show him as github:jeffbailey, verified
+///   Examples:
+///     | flaw                                 |
+///     | without an account number            |
+///     | whose account number is 0            |
+///     | whose account number is text         |
+///     | without a username                   |
+/// ```
+#[test]
+fn a_recheck_whose_answer_names_no_account_records_nothing_and_asks_no_further() {
+    for flaw in ProfileFlaw::ALL {
+        let row = format!("{flaw:?}");
+        let world = LinkWorld::with(&[JEFF_GH]);
+        given_i_linked(&world, JEFF_GH, None);
+        github_answers_for_with(&world, JEFF_GH, flaw);
+        let asked_before = world.github_paths().len();
+        let before = capture_link_universe(&world.env);
+
+        let checked = when_i_verify(&world, &[]);
+
+        assert_github_unavailable(&checked, &row);
+        assert_eq!(
+            world.github_paths_since(asked_before),
+            [JEFF_GH.login_path()],
+            "[{row}] the login read only; no account-number read"
+        );
+        assert_shown_in(
+            &row,
+            &when_i_list(&world, None),
+            MY_DID,
+            JEFF_GH,
+            Shown::Associated,
+        );
+        assert_link_store_unchanged_in(&row, &before, &world.env);
+    }
+}
+
+/// IV-12 (error, table — review D1; chained on IV-3a's rename)
+/// ```gherkin
+/// @driving_port @real-io @adapter-integration @error @gdl-d9 @d1 @contract-shape:unbounded-preservation
+/// Scenario Outline: After a rename, an account-number answer that names no account is never read as a deleted account
+///   Given Jeff linked github "jeffbailey" and it is verified
+///   And he renamed his GitHub account to "jeff-b", and the old name now answers "not found"
+///   And GitHub answers for his account number with a profile <flaw>
+///   When Jeff re-checks his links
+///   Then he is told GitHub could not be read and nothing was recorded
+///   And GitHub was asked for "jeffbailey" and then by account number
+///   And his linked identities still show him as github:jeffbailey, verified — never "the account no longer exists"
+///   Examples:
+///     | flaw                                 |
+///     | without an account number            |
+///     | without a username                   |
+/// ```
+#[test]
+fn after_a_rename_an_answer_naming_no_account_is_never_read_as_a_deleted_account() {
+    for flaw in [ProfileFlaw::NoId, ProfileFlaw::NoLogin] {
+        let row = format!("{flaw:?}");
+        let world = LinkWorld::with(&[JEFF_GH]);
+        given_i_linked(&world, JEFF_GH, None);
+        i_renamed_my_account(&world, JEFF_GH, JEFF_RENAMED, OldLogin::NotFound);
+        github_answers_for_with(&world, JEFF_RENAMED, flaw);
+        let asked_before = world.github_paths().len();
+        let before = capture_link_universe(&world.env);
+
+        let checked = when_i_verify(&world, &[]);
+
+        assert_github_unavailable(&checked, &row);
+        assert!(
+            !checked.stdout.contains(Verdict::AccountNotFound.token()),
+            "[{row}] never reported as account_not_found;\n{}",
+            checked.stdout
+        );
+        assert_eq!(
+            world.github_paths_since(asked_before),
+            [JEFF_GH.login_path(), JEFF_GH.id_path()],
+            "[{row}] the login read, then the account-number read"
+        );
+        assert_shown_in(
+            &row,
+            &when_i_list(&world, None),
+            MY_DID,
+            JEFF_GH,
+            Shown::Associated,
+        );
+        assert_link_store_unchanged_in(&row, &before, &world.env);
+    }
+}
+
+/// IV-13 (error, table — review D7)
+/// ```gherkin
+/// @driving_port @real-io @error @guardrail @adr-076 @d7 @contract-shape:bounded-change
+/// Scenario Outline: A stored username that is not a GitHub username is never sent to GitHub
+///   Given Jeff linked github "jeffbailey" and github "jeff-at-work"
+///   And his latest stored check of "jeffbailey" saw the username "<username>"
+///   When Jeff re-checks his links
+///   Then he is told GitHub could not be read for "<username>" and nothing was recorded for it
+///   And GitHub was asked only about "jeff-at-work", which is reported verified and recorded
+///   Examples:
+///     | username        |
+///     | jeff/../admin   |
+///     | -jeff           |
+/// ```
+#[test]
+fn a_stored_username_that_is_not_a_github_username_is_never_sent_to_github() {
+    for stored in ["jeff/../admin", "-jeff"] {
+        let world = LinkWorld::with(&[JEFF_GH, JEFF_WORK_GH]);
+        given_i_linked(&world, JEFF_GH, Some(LINKED_AT));
+        given_i_linked(&world, JEFF_WORK_GH, Some(LINKED_AT));
+        given_a_check_recorded_seeing(
+            &world.env,
+            MY_DID,
+            JEFF_GH,
+            stored,
+            Verdict::Verified,
+            SAME_DAY,
+        );
+        let checks_before = link_checks(&world.env);
+        let asked_before = world.github_paths().len();
+        let before = capture_link_universe(&world.env);
+
+        let checked = when_i_verify_at(&world, &[], Some(TWELVE_DAYS_LATER));
+
+        assert_github_unavailable(&checked, stored);
+        assert!(
+            checked.stderr.contains(&format!("github:{stored}")),
+            "[{stored}] the unreadable line names the stored username;\n{}",
+            checked.stderr
+        );
+        assert_verify_reported(&checked, JEFF_WORK_GH, Verdict::Verified);
+        assert_eq!(
+            world.github_paths_since(asked_before),
+            [JEFF_WORK_GH.login_path()],
+            "[{stored}] GitHub is asked only about the other link"
+        );
+        assert_link_store_delta(
+            &before,
+            &world.env,
+            &[(
+                "local.identity_link_checks",
+                checks_with(
+                    &checks_before,
+                    &[CheckRow::of(MY_DID, JEFF_WORK_GH, Verdict::Verified)],
+                ),
+            )],
+        );
     }
 }
 

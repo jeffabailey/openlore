@@ -27,6 +27,7 @@
 use super::people::*;
 use super::state_delta::{assert_state_delta, set_to, Delta};
 use super::*;
+pub use openlore_test_support::ProfileFlaw;
 use openlore_test_support::{FakeGithubAccounts, GithubAccount, OldLogin};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -377,6 +378,12 @@ pub fn my_account_meets(world: &LinkWorld, fate: AccountFate) {
         }
         AccountFate::Deleted => world.github.delete_account(JEFF_GH.login),
     }
+}
+
+/// GIVEN (outside OpenLore): every GitHub answer about `account` — by login
+/// and by account number — comes back with `flaw` (review D1).
+pub fn github_answers_for_with(world: &LinkWorld, account: Account, flaw: ProfileFlaw) {
+    world.github.serve_flawed_profile(account.login, flaw);
 }
 
 /// GIVEN (outside OpenLore): I renamed my account to `to`; the old login
@@ -964,6 +971,53 @@ pub fn assert_no_link_data_leaked(outcome: &CliOutcome, did: &str, account: Acco
     );
 }
 
+/// THEN (F2, failure path — review D4): a refused or unreadable run never
+/// repeats the bio, never names the DID on its log channel (stderr) and prints
+/// no log event on stdout. The login MAY appear on stderr, but only in the
+/// refusal line about the account the user asked for (every such line says
+/// `nothing recorded`).
+pub fn assert_no_link_data_leaked_on_refusal(
+    outcome: &CliOutcome,
+    did: &str,
+    account: Account,
+    row: &str,
+) {
+    assert_ne!(
+        outcome.status,
+        0,
+        "[{row}] precondition: the run was refused;{}",
+        context(outcome)
+    );
+    assert!(
+        !all_output(outcome).contains(PRIVATE_BIO_PHRASE),
+        "[{row}] the bio is never repeated;{}",
+        context(outcome)
+    );
+    assert!(
+        !outcome.stderr.contains(did),
+        "[{row}] the log channel (stderr) never names the DID;{}",
+        context(outcome)
+    );
+    let login_lines: Vec<&str> = outcome
+        .stderr
+        .lines()
+        .filter(|l| l.contains(account.login))
+        .collect();
+    assert!(
+        login_lines.iter().all(|l| l.contains("nothing recorded")),
+        "[{row}] the login appears on stderr only in the refusal line: {login_lines:?};{}",
+        context(outcome)
+    );
+    assert!(
+        !outcome
+            .stdout
+            .lines()
+            .any(|l| l.trim_start().starts_with("{\"") && l.contains("\"event\"")),
+        "[{row}] no log event is written to stdout;{}",
+        context(outcome)
+    );
+}
+
 /// The lines a reader prints as an identity link: `did:… is github:…` or
 /// `did:… claims github:…` (the shape `assert_shown` pins).
 pub fn link_lines(stdout: &str) -> Vec<String> {
@@ -1168,6 +1222,34 @@ pub fn link_checks(env: &TestEnv) -> Vec<CheckRow> {
         .collect();
     rows.sort();
     rows
+}
+
+/// GIVEN (seeded store row — no verb can write it, review D7): my store holds
+/// a check of `did`'s link to `account` that saw the login `login_seen`, at
+/// `at` (RFC 3339, UTC). Used only to model a stored login that is not a
+/// GitHub login, which the strict GitHub reads can no longer produce.
+pub fn given_a_check_recorded_seeing(
+    env: &TestEnv,
+    did: &str,
+    account: Account,
+    login_seen: &str,
+    verdict: Verdict,
+    at: &str,
+) {
+    let conn = duckdb::Connection::open(env.duckdb_path()).expect("open DuckDB");
+    conn.execute(
+        "INSERT INTO identity_link_checks \
+         (subject_did, github_user_id, login_seen, verdict, checked_at) \
+         VALUES (?, ?, ?, ?, CAST(? AS TIMESTAMP))",
+        duckdb::params![
+            did,
+            account.id as i64,
+            login_seen,
+            verdict.token(),
+            at.trim_end_matches('Z').replace('T', " ")
+        ],
+    )
+    .unwrap_or_else(|e| panic!("seed an identity link check: {e}"));
 }
 
 /// The identity verbs' store universe: the house `store_universe_slots` plus

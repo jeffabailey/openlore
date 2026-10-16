@@ -378,13 +378,20 @@ fn oracle_check(link: &LinkedView, login_read: &ReadView, id_read: &ReadView) ->
             login.to_string(),
         ))
     };
+    // Review D1: an answer naming no account (number 0, invalid login) is
+    // unreadable — it never decides a verdict, never stands in for "gone".
+    let names_an_account = |id: u64, login: &str| id != 0 && is_github_login(login);
     match login_read {
         ReadView::RateLimited | ReadView::Unavailable => CheckView { recorded: None },
+        ReadView::Profile { id, login, .. } if !names_an_account(*id, login) => {
+            CheckView { recorded: None }
+        }
         ReadView::Profile { id, login, bio } if *id == link.id => CheckView {
             recorded: matched(bio, login),
         },
         ReadView::Profile { .. } | ReadView::NotFound => CheckView {
             recorded: match id_read {
+                ReadView::Profile { id, login, .. } if !names_an_account(*id, login) => None,
                 ReadView::Profile { login, bio, .. } => matched(bio, login),
                 ReadView::NotFound => Some((VerdictView::AccountNotFound, link.last_login.clone())),
                 ReadView::RateLimited | ReadView::Unavailable => None,
@@ -428,6 +435,7 @@ fn oracle_project(claim: &ClaimView, provenance: ProvenanceView) -> Option<LinkV
         && bare_author == claim.subject
         && is_github_login(login)
         && ids.len() == 1
+        && ids[0] != 0
         && profile_matches)
         .then(|| LinkView {
             did: claim.subject.clone(),
@@ -542,13 +550,37 @@ fn arb_read(linked_id: u64) -> impl Strategy<Value = ReadView> {
             login,
             bio: None
         }),
+        arb_account_naming_nobody(linked_id),
         Just(ReadView::NotFound),
         Just(ReadView::RateLimited),
         Just(ReadView::Unavailable),
     ]
 }
 
-/// The id read never answers with another account.
+/// A `200` answer that names no account (review D1): account number 0, or
+/// the linked number with a username GitHub would never serve (blank, a
+/// leading hyphen, a path).
+fn arb_account_naming_nobody(linked_id: u64) -> impl Strategy<Value = ReadView> {
+    let bad_login = prop_oneof![
+        Just(String::new()),
+        Just("-jeff".to_string()),
+        Just("jeff/../admin".to_string()),
+    ];
+    prop_oneof![
+        arb_login().prop_map(|login| ReadView::Profile {
+            id: 0,
+            login,
+            bio: None
+        }),
+        bad_login.prop_map(move |login| ReadView::Profile {
+            id: linked_id,
+            login,
+            bio: None
+        }),
+    ]
+}
+
+/// The id read never answers with another account (but may name none).
 fn arb_id_read(linked_id: u64, did: String) -> impl Strategy<Value = ReadView> {
     prop_oneof![
         (arb_login(), arb_bio_for(did)).prop_map(move |(login, bio)| ReadView::Profile {
@@ -556,6 +588,7 @@ fn arb_id_read(linked_id: u64, did: String) -> impl Strategy<Value = ReadView> {
             login,
             bio
         }),
+        arb_account_naming_nobody(linked_id),
         Just(ReadView::NotFound),
         Just(ReadView::RateLimited),
         Just(ReadView::Unavailable),
@@ -576,6 +609,8 @@ enum Mutation {
     IdUriMissing,
     IdUriTwice,
     IdUriNotDigits,
+    /// The id URI names account 0 (review D1).
+    IdUriZero,
 }
 
 fn arb_mutation() -> impl Strategy<Value = Mutation> {
@@ -593,6 +628,7 @@ fn arb_mutation() -> impl Strategy<Value = Mutation> {
         Just(Mutation::IdUriMissing),
         Just(Mutation::IdUriTwice),
         Just(Mutation::IdUriNotDigits),
+        Just(Mutation::IdUriZero),
     ]
 }
 
@@ -662,6 +698,13 @@ fn mutate(claim: ClaimView, m: &Mutation) -> ClaimView {
             evidence: vec![
                 claim.evidence[0].clone(),
                 "https://api.github.com/user/12ab".to_string(),
+            ],
+            ..claim
+        },
+        Mutation::IdUriZero => ClaimView {
+            evidence: vec![
+                claim.evidence[0].clone(),
+                "https://api.github.com/user/0".to_string(),
             ],
             ..claim
         },
@@ -798,7 +841,7 @@ proptest! {
 
     /// CORE-2 (@property @adr-085-4 @uc-10 @contract-shape:pure-function)
     #[test]
-    fn core2_a_check_reads_at_most_twice_and_records_nothing_when_github_fails(
+    fn core2_a_check_decides_from_its_reads_and_records_nothing_when_github_fails(
         (link, login_read, id_read) in (arb_did(), arb_login(), 1u64..10_000_000)
             .prop_flat_map(|(did, last_login, id)| {
                 let link = LinkedView { did: did.clone(), id, last_login };
@@ -917,6 +960,93 @@ fn core7x_only_exact_same_as_is_reserved_not_its_look_alikes() {
             !sut_is_reserved_predicate(near_miss),
             "{near_miss:?} is not the reserved predicate"
         );
+    }
+}
+
+/// CORE-3x: a stored `sameAs` claim whose id evidence names account 0 is no
+/// link, under every provenance — no GitHub account has that number
+/// (review D1). (@adr-084-3 @d1 @contract-shape:pure-function)
+#[test]
+fn core3x_a_link_naming_account_zero_is_no_link() {
+    let did = "did:plc:test-jeff";
+    for zero in ["0", "00"] {
+        let claim = ClaimView {
+            evidence: vec![
+                "https://github.com/jeffbailey".to_string(),
+                format!("https://api.github.com/user/{zero}"),
+            ],
+            ..sound_link(did, "jeffbailey", 1_234_567)
+        };
+        for provenance in [
+            ProvenanceView::AppSigned,
+            ProvenanceView::SelfAttestedFromAuthorPds,
+        ] {
+            assert_eq!(oracle_project(&claim, provenance), None, "oracle {zero:?}");
+            assert_eq!(
+                sut_project(&claim, provenance),
+                None,
+                "user/{zero} under {provenance:?}"
+            );
+        }
+    }
+}
+
+/// CORE-2x: a check whose answer names no account records nothing — on the
+/// login read or, after the login is gone, on the account-number read; never
+/// "the account no longer exists" (review D1).
+/// (@adr-085-4 @d1 @contract-shape:pure-function)
+#[test]
+fn core2x_an_answer_naming_no_account_records_nothing() {
+    let link = LinkedView {
+        did: "did:plc:test-jeff".to_string(),
+        id: 1_234_567,
+        last_login: "jeffbailey".to_string(),
+    };
+    let sound_id_read = ReadView::Profile {
+        id: link.id,
+        login: "jeff-b".to_string(),
+        bio: Some(link.did.clone()),
+    };
+    let naming_nobody = |id: u64, login: &str| ReadView::Profile {
+        id,
+        login: login.to_string(),
+        bio: Some(link.did.clone()),
+    };
+    let rows = [
+        (
+            "login read: account 0",
+            naming_nobody(0, "jeffbailey"),
+            sound_id_read.clone(),
+        ),
+        (
+            "login read: blank login",
+            naming_nobody(link.id, ""),
+            sound_id_read.clone(),
+        ),
+        (
+            "login read: path login",
+            naming_nobody(link.id, "jeff/../admin"),
+            sound_id_read.clone(),
+        ),
+        (
+            "id read: account 0",
+            ReadView::NotFound,
+            naming_nobody(0, "jeff-b"),
+        ),
+        (
+            "id read: blank login",
+            ReadView::NotFound,
+            naming_nobody(link.id, ""),
+        ),
+    ];
+    for (row, login_read, id_read) in rows {
+        let expected = CheckView { recorded: None };
+        assert_eq!(
+            oracle_check(&link, &login_read, &id_read),
+            expected,
+            "oracle {row}"
+        );
+        assert_eq!(sut_check(&link, &login_read, &id_read), expected, "{row}");
     }
 }
 

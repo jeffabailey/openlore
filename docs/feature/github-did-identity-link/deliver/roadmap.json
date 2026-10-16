@@ -356,7 +356,7 @@
           "test_file": "tests/acceptance/identity_link.rs",
           "scenario_name": "a_renamed_account_stays_verified_under_its_new_name",
           "scenario_fns": [
-            "identity_link_core::core2_a_check_reads_at_most_twice_and_records_nothing_when_github_fails",
+            "identity_link_core::core2_a_check_decides_from_its_reads_and_records_nothing_when_github_fails",
             "identity_link::a_renamed_account_stays_verified_under_its_new_name",
             "identity_link::after_a_rename_is_recognised_the_next_recheck_reads_the_new_name_with_one_request",
             "identity_link::jeff_stays_verified_under_his_new_github_name_found_from_his_old_name_alone",

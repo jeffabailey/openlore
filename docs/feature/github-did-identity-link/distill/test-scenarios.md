@@ -25,18 +25,20 @@ The `.rs` files are the scenario SSOT; this is the map.
 
 | File (`tests/acceptance/`) | Slice | Layer | Scenarios | Active today |
 |---|---|---|---|---|
-| `identity_link.rs` | 1 — link / verify / forget / composer guard / upgrade / re-link (incl. WS) | 3/4 subprocess | 32 (+1 fixture regenerator, not a scenario) | 0 |
+| `identity_link.rs` | 1 — link / verify / forget / composer guard / upgrade / re-link (incl. WS) | 3/4 subprocess | 37 (+1 fixture regenerator, not a scenario; IL-12b, IL-15, IV-11..13 added 2026-10-16 for review D1/D4/D7) | 0 at DISTILL hand-off; the 5 review rows are active |
 | `identity_link_readers.rs` | 2 — association rule, person views, scoring, search label | 3/4 subprocess + viewer + indexer | 19 | 2 (IR-13, IR-17) |
-| `identity_link_core.rs` | 1-2 pure core | 2 proptest (256 cases) | 10 | 0 |
+| `identity_link_core.rs` | 1-2 pure core | 2 proptest (256 cases) | 12 (CORE-2x, CORE-3x added for review D1) | 0 at hand-off; CORE-2x/3x active |
 | `review_app_identity_link.rs` | 3 — publish / retract in the review app | 4 HTTP | 9 | 1 (RA-3) |
+| `review_app_sign_in_and_ownership.rs` (review D1 rows only) | slice-1 fix — the ownership proof reads strictly | 4 HTTP | 2 (OW-4b, OW-4c) | 2 |
 | `review_app_identity_link_readers.rs` | 3 — the CLI reads app-written links | 4 HTTP + subprocess | 5 | 0 |
-| **Total** | | | **75** | **3** |
+| **Total** | | | **84** | **3 at hand-off (+9 review rows active)** |
 
 Targets: four in `crates/cli/Cargo.toml`, `review_app_identity_link` in `crates/openlore-review-app/Cargo.toml`.
 Vocabulary: `support/identity_links.rs`, `support/review_app/identity_link.rs`; `support/people.rs` `Invocation` gains `github_token`.
-Double (test-support only): `FakeGithubAccounts` — `GET /user/{id}`, `OldLogin::{NotFound, Redirects, RedirectsToAnotherHost}`, `rename`, `delete_account`, `register`, `serve_stale_profile`/`end_stale_profile`, `request_paths`; 4 unit tests.
+Double (test-support only): `FakeGithubAccounts` — `GET /user/{id}`, `OldLogin::{NotFound, Redirects, RedirectsToAnotherHost}`, `rename`, `delete_account`, `register`, `serve_stale_profile`/`end_stale_profile`, `request_paths`, `serve_flawed_profile(ProfileFlaw::{NoId, ZeroId, IdAsText, NoLogin})` (review D1); 5 unit tests.
+Seeding (review D7): `given_a_check_recorded_seeing` inserts one `identity_link_checks` row directly — the only way to model a stored login that is not a GitHub login, which no verb can now write.
 
-**Mix (75, informational only — not a gate)**: walking skeleton 1 · happy 15 · error 20 · edge 18 · boundary 1 · guardrail 10 · layer-2 property/catalogue 10. Non-happy = 49 / 65 example scenarios (75 %). Counted by the primary category in each doc comment's first line.
+**Mix (75 at DISTILL hand-off, informational only — not a gate; the 9 review rows of 2026-10-16 are all error/guardrail)**: walking skeleton 1 · happy 15 · error 20 · edge 18 · boundary 1 · guardrail 10 · layer-2 property/catalogue 10. Non-happy = 49 / 65 example scenarios (75 %). Counted by the primary category in each doc comment's first line.
 
 ## 3. Traceability (H-5) — scenario → decision, with its elevator pitch
 
@@ -58,10 +60,12 @@ Double (test-support only): `FakeGithubAccounts` — `GET /user/{id}`, `OldLogin
 | IL-9b | A link kept locally reaches Jeff's published repo when he publishes it later | same |
 | IL-10 | Jeff links a second GitHub account and both show as his | A-4, F1 |
 | IL-11 | Linking and re-checking leave the contributors Jeff recorded untouched (observed in BurntSushi's person view) | UC-7, OD-CPI-2 |
-| IL-12 | The identity verbs never repeat Jeff's bio or log his identity (3 rows) | GDL-D12(4), F2 |
+| IL-12 | The identity verbs never repeat Jeff's bio or log his identity (3 rows, success path) | GDL-D12(4), F2 |
+| IL-12b | A refused or unreadable identity run never repeats Jeff's bio or logs his DID (5 rows: link refused for the bio, link/verify with GitHub unreachable, link/verify with an answer lacking the account number). The login MAY appear on stderr, but only in the one refusal line about the account he asked for (`… nothing recorded`) | review D4, GDL-D12(4), F2 |
 | IL-13a | Opening a store made before identity links keeps everything already in it (frozen v6 fixture; v7 recorded once) | GDL-D10, DD-GDL-12 |
 | IL-13b | Reopening an upgraded store changes nothing | GDL-D10 (idempotent) |
 | IL-14 | After retracting his link, Jeff can link the same account again | D-g |
+| IL-15 | When GitHub's answer names no account, nothing is linked and nothing is recorded (4 rows: no `id`, `id: 0`, `id` as text, no `login`; bio names the DID in every row) | review D1, ADR-085 §4 |
 | IV-1 | Once Jeff's bio stops naming his DID, his link shows the proof is gone and stays published | GDL-D5, C-GDL-6, KPI-GDL-3 |
 | IV-2 | When Jeff's DID is back, one re-check from one GitHub request restores the link | GDL-D10 insert-only, ≤ 2 requests |
 | IV-3a | A renamed account stays verified under its new name | GDL-D9, A-10 |
@@ -73,6 +77,9 @@ Double (test-support only): `FakeGithubAccounts` — `GET /user/{id}`, `OldLogin
 | IV-8 | With no links, a re-check says so and asks GitHub nothing | C3 |
 | IV-9 | One re-check covers both of Jeff's GitHub accounts | A-4, F1 |
 | IV-10 | An answer from GitHub that OpenLore will not follow leaves Jeff's link as it was (2 rows) | N-2 (≤ 1 same-host redirect), F8 |
+| IV-11 | A re-check whose answer names no account records nothing and asks no further (4 rows; only the login read, never `/user/{id}`; link still verified) | review D1, ADR-085 §4 |
+| IV-12 | After a rename, an account-number answer that names no account is never read as a deleted account (2 rows: no `id`, no `login`; login read 404 → id read; nothing recorded, never `account_not_found`) | review D1, GDL-D9 |
+| IV-13 | A stored username that is not a GitHub username is never sent to GitHub (2 rows; seeded check row via `given_a_check_recorded_seeing` — no verb can write one; the other link is still re-checked and recorded) | review D7, ADR-076 `is_github_login` |
 | IF-1a | Forgetting Rachel erases only her proof history | C-GDL-5, M-4 |
 | IF-1b | Forgetting Rachel a second time forgets nothing more | C-GDL-5 |
 | IF-2 | Forgetting without a history or a valid DID changes nothing (3 rows) | C-GDL-5 |
@@ -106,8 +113,8 @@ Double (test-support only): `FakeGithubAccounts` — `GET /user/{id}`, `OldLogin
 | ID | Property | Binding | Traces to |
 |---|---|---|---|
 | CORE-1 / 1x | the bio proves a DID only by its exact token (generator + 9-row lie catalogue) | `todo!()` | ADR-076 §4, ADR-085 §1 |
-| CORE-2 | a check decides over ≤ 2 reads and records nothing when GitHub fails; closed verdict set | `todo!()` | ADR-085 §4, UC-10 |
-| CORE-3 | only the owner's well-formed, provenance-passed record projects (11 mutations × 5 provenances; every accepted provenance — incl. app-signed by another DID and self-attested elsewhere — reaches `project`, only `Failed` has no `Provenance` value) | `todo!()` | ADR-084 §3, M-2, N-4 |
+| CORE-2 / 2x | a check decides from its reads and records nothing when GitHub fails or answers naming no account (account 0 / invalid login, on the login read or the id read); closed verdict set. The read count is pinned at layer 3 (IV-2..IV-4, IV-11/12), not here (review D6). CORE-2x pins the no-account answers by example | `todo!()` | ADR-085 §4, UC-10, review D1 |
+| CORE-3 / 3x | only the owner's well-formed, provenance-passed record projects (12 mutations × 5 provenances, incl. an id URI naming account 0 — review D1; CORE-3x pins `user/0` and `user/00` by example; every accepted provenance — incl. app-signed by another DID and self-attested elsewhere — reaches `project`, only `Failed` has no `Provenance` value) | `todo!()` | ADR-084 §3, M-2, N-4 |
 | CORE-4 | the production encoder's wire record → REAL decode/canonicalize/CID (deterministic) → project | `todo!()` encoder (returns the record JSON); real decoder | ADR-084 Earned Trust |
 | CORE-5 / 5b | only this reader's sole Verified check associates; a squatter never changes another row | `todo!()` | ADR-085 §5, GDL-D14 |
 | CORE-6 / 6x | `score(F ∪ sameAs) == score(F)` | REAL `scoring::score` | ADR-085 §6, KPI-GDL-2 |
@@ -126,6 +133,13 @@ Double (test-support only): `FakeGithubAccounts` — `GET /user/{id}`, `OldLogin
 | RA-6 | A link confirmation that did not come from Priya's own page is refused (2 rows) | ADR-076 session/CSRF |
 | RA-7 | Leaving the link preview publishes nothing and keeps the offer open | plan-returning preview |
 | RA-8 | An ended session at confirmation publishes nothing and asks Priya to sign in again (3 rows: server-side 30-day expiry via clock skew, cookie cleared, repo-host session) | ADR-073 |
+
+### review_app_sign_in_and_ownership.rs (review D1 rows; the ownership proof's home)
+
+| ID | Elevator pitch | Traces to |
+|---|---|---|
+| OW-4b | A GitHub answer that names no account never proves ownership (4 rows; "GitHub could not be reached … Nothing was lost", not verified, no scan, no repo read) | review D1, ADR-076 |
+| OW-4c | A scan stops before reading any repo when GitHub's answer names no account (re-verification fails closed → `interrupted`) | review D1, I-BRA-4 |
 
 ### review_app_identity_link_readers.rs
 
@@ -160,8 +174,8 @@ Double (test-support only): `FakeGithubAccounts` — `GET /user/{id}`, `OldLogin
 
 | Driving port | Scenario(s) |
 |---|---|
-| `identity link github <login> [--yes]` | WS, IL-2..IL-12, IL-14 |
-| `identity verify [--did \| --github]` | IV-1..IV-10, IR-2, IR-4, RR-1b, RR-2b |
+| `identity link github <login> [--yes]` | WS, IL-2..IL-12b, IL-14, IL-15 |
+| `identity verify [--did \| --github]` | IV-1..IV-13, IL-12b, IR-2, IR-4, RR-1b, RR-2b |
 | `identity list [--did]` | WS, IR-1..IR-18 (`--did`: IR-18) |
 | `identity forget --did` | IF-1a, IF-1b, IF-2 |
 | `claim retract` | IR-8a/b |
@@ -176,7 +190,7 @@ Double (test-support only): `FakeGithubAccounts` — `GET /user/{id}`, `OldLogin
 
 | Driven adapter | Real-I/O scenario |
 |---|---|
-| `adapter-github` `read_person`, `read_person_by_id`, redirect policy, token | IV-3a (id read), IV-4 (redirect), IV-10 (chained / cross-host), IL-6 / IV-6 (401, anonymous rate limit, outage), IR-12 |
+| `adapter-github` `read_person`, `read_account` / `read_person_by_id` (strict shape), redirect policy, token | IV-3a (id read), IV-4 (redirect), IV-10 (chained / cross-host), IL-6 / IV-6 (401, anonymous rate limit, outage), IL-15 / IV-11 / IV-12 / OW-4b / OW-4c (200 answer naming no account — `FakeGithubAccounts::serve_flawed_profile`), IR-12 |
 | `adapter-duckdb` v7 checks (read / insert / purge), migration | WS, IV-1/2, IF-1a, IL-13a/b (upgrade from the frozen v6 store) |
 | single publish path → PDS | WS, IL-9a/b |
 | `peer pull` (app-signed and self-attested links) | IR-1..IR-10, RR-1a, RR-3 |

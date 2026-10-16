@@ -14,7 +14,7 @@
 #[path = "support/review_app/mod.rs"]
 mod review_app;
 
-use openlore_test_support::{ConsentPosture, TokenPosture};
+use openlore_test_support::{ConsentPosture, ProfileFlaw, TokenPosture};
 use review_app::*;
 
 // =============================================================================
@@ -472,6 +472,79 @@ fn a_github_rate_limit_is_explained_and_retrying_after_the_wait_succeeds() {
     world.github.clear_rate_limit();
     when_verifies_github(&mut browser, Persona::Priya.github_login());
     then_sees_verified(&browser.page, Persona::Priya);
+}
+
+/// OW-4b (review D1)
+/// ```gherkin
+/// @US-BRA-002 @AC-002.3 @error @infrastructure-failure @d1 @contract-shape:unbounded-preservation
+/// Scenario Outline: A GitHub answer that names no account never proves ownership
+///   Given Priya is signed in and her GitHub bio names her DID
+///   And GitHub answers for "priyaraman" with a profile <flaw>
+///   When Priya verifies "priyaraman"
+///   Then she sees that GitHub could not be reached and that nothing was lost
+///   And she is not verified, no scan can start and no repo is read
+///   Examples:
+///     | flaw                          |
+///     | without an account number     |
+///     | whose account number is 0     |
+///     | whose account number is text  |
+///     | without a username            |
+/// ```
+#[test]
+fn a_github_answer_that_names_no_account_never_proves_ownership() {
+    for flaw in ProfileFlaw::ALL {
+        let world = ReviewWorld::new();
+        let mut browser = given_signed_in(&world, Persona::Priya);
+        world
+            .github
+            .serve_flawed_profile(Persona::Priya.github_login(), flaw);
+
+        when_verifies_github(&mut browser, Persona::Priya.github_login());
+
+        let text = browser.page.text();
+        assert!(
+            text.contains("GitHub could not be reached") && text.contains("Nothing was lost"),
+            "[{flaw:?}] {text}"
+        );
+        assert!(!text.contains("Verified:"), "[{flaw:?}] {text}");
+        browser.open("/review");
+        assert!(
+            browser.try_press("Scan my repos").is_err() || browser.page.shows("verify"),
+            "[{flaw:?}] no scan while unverified"
+        );
+        assert_eq!(
+            world.github.scrape_reads_of(Persona::Priya.github_login()),
+            0,
+            "[{flaw:?}] no repo read"
+        );
+    }
+}
+
+/// OW-4c (review D1; chained on WS-2's verification)
+/// ```gherkin
+/// @US-BRA-003 @I-BRA-4 @error @infrastructure-failure @d1 @contract-shape:unbounded-preservation
+/// Scenario: A scan stops before reading any repo when GitHub's answer names no account
+///   Given Priya verified "priyaraman"
+///   And GitHub now answers for "priyaraman" without an account number
+///   When Priya scans her repos
+///   Then the scan is interrupted before any repo is read
+/// ```
+#[test]
+fn a_scan_stops_before_reading_any_repo_when_githubs_answer_names_no_account() {
+    let world = ReviewWorld::new();
+    let mut browser = given_github_verified(&world, Persona::Priya);
+    world
+        .github
+        .serve_flawed_profile(Persona::Priya.github_login(), ProfileFlaw::NoId);
+
+    let status = when_scan_finishes(&mut browser);
+
+    assert_eq!(status, "interrupted", "{}", browser.page.text());
+    assert_eq!(
+        world.github.scrape_reads_of(Persona::Priya.github_login()),
+        0,
+        "no repo read without proof in hand"
+    );
 }
 
 /// OW-5

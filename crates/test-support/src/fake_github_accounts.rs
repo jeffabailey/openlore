@@ -189,6 +189,53 @@ pub enum OldLogin {
     RedirectsToAnotherHost,
 }
 
+/// How a `200` profile answer breaks the account shape (review D1). Applies
+/// to every profile read of the account, by login and by id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileFlaw {
+    /// The body has no `id` field.
+    NoId,
+    /// `"id": 0` — no GitHub account has that number.
+    ZeroId,
+    /// `"id"` is a JSON string, not a number.
+    IdAsText,
+    /// The body has no `login` field.
+    NoLogin,
+}
+
+impl ProfileFlaw {
+    pub const ALL: [ProfileFlaw; 4] = [
+        ProfileFlaw::NoId,
+        ProfileFlaw::ZeroId,
+        ProfileFlaw::IdAsText,
+        ProfileFlaw::NoLogin,
+    ];
+
+    fn apply(self, profile: &mut serde_json::Value) {
+        let Some(fields) = profile.as_object_mut() else {
+            return;
+        };
+        match self {
+            ProfileFlaw::NoId => {
+                fields.remove("id");
+            }
+            ProfileFlaw::ZeroId => {
+                fields.insert("id".to_string(), serde_json::json!(0));
+            }
+            ProfileFlaw::IdAsText => {
+                let text = fields
+                    .get("id")
+                    .map(|id| id.to_string())
+                    .unwrap_or_default();
+                fields.insert("id".to_string(), serde_json::Value::String(text));
+            }
+            ProfileFlaw::NoLogin => {
+                fields.remove("login");
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct GhState {
     accounts: Mutex<BTreeMap<String, GithubAccount>>,
@@ -206,6 +253,8 @@ struct GhState {
     redirects: Mutex<BTreeMap<String, String>>,
     /// Accounts whose profile is served stale (lowercase login → stale bio).
     stale_bio: Mutex<BTreeMap<String, Option<String>>>,
+    /// Accounts whose profile is served with a broken shape (lowercase login).
+    flawed: Mutex<BTreeMap<String, ProfileFlaw>>,
 }
 
 /// The multi-account GitHub double, served on loopback.
@@ -415,6 +464,16 @@ impl FakeGithubAccounts {
             .remove(&login.to_ascii_lowercase());
     }
 
+    /// Every profile read of `login` (by login or by id) answers `200` with
+    /// `flaw` applied to the body, until the account is renamed or deleted.
+    pub fn serve_flawed_profile(&self, login: &str, flaw: ProfileFlaw) {
+        self.state
+            .flawed
+            .lock()
+            .unwrap()
+            .insert(login.to_ascii_lowercase(), flaw);
+    }
+
     // ---------------------------------------------------------- observations
 
     /// Every request, in order.
@@ -612,10 +671,19 @@ fn served_profile(state: &GhState, a: &GithubAccount) -> serde_json::Value {
         .unwrap()
         .get(&a.login.to_ascii_lowercase())
         .cloned();
-    match stale {
+    let mut profile = match stale {
         Some(bio) => profile_json(&GithubAccount { bio, ..a.clone() }),
         None => profile_json(a),
+    };
+    if let Some(flaw) = state
+        .flawed
+        .lock()
+        .unwrap()
+        .get(&a.login.to_ascii_lowercase())
+    {
+        flaw.apply(&mut profile);
     }
+    profile
 }
 
 fn profile_json(a: &GithubAccount) -> serde_json::Value {
@@ -833,6 +901,30 @@ mod tests {
         assert!(get(&gh, "/user/4210001").1.contains("did:plc:"));
         gh.end_stale_profile("priyaraman");
         assert!(!get(&gh, "/users/priyaraman").1.contains("did:plc:"));
+    }
+
+    #[test]
+    fn a_flawed_profile_breaks_the_account_shape_on_both_reads() {
+        for flaw in ProfileFlaw::ALL {
+            let gh = FakeGithubAccounts::start(vec![priya()]);
+            gh.serve_flawed_profile("priyaraman", flaw);
+            for path in ["/users/priyaraman", "/user/4210001"] {
+                let (status, body) = get(&gh, path);
+                assert_eq!(status, 200, "[{flaw:?}] {path}");
+                let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+                let shape_broken = match flaw {
+                    ProfileFlaw::NoId => v.get("id").is_none(),
+                    ProfileFlaw::ZeroId => v["id"] == 0,
+                    ProfileFlaw::IdAsText => v["id"] == "4210001",
+                    ProfileFlaw::NoLogin => v.get("login").is_none(),
+                };
+                assert!(shape_broken, "[{flaw:?}] {path}: {v}");
+                assert!(
+                    v["bio"].as_str().unwrap().contains("did:plc:"),
+                    "[{flaw:?}] bio kept"
+                );
+            }
+        }
     }
 
     #[test]
