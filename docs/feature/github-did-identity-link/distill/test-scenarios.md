@@ -107,11 +107,11 @@ Double (test-support only): `FakeGithubAccounts` — `GET /user/{id}`, `OldLogin
 |---|---|---|---|
 | CORE-1 / 1x | the bio proves a DID only by its exact token (generator + 9-row lie catalogue) | `todo!()` | ADR-076 §4, ADR-085 §1 |
 | CORE-2 | a check decides over ≤ 2 reads and records nothing when GitHub fails; closed verdict set | `todo!()` | ADR-085 §4, UC-10 |
-| CORE-3 | only the owner's well-formed, provenance-passed record projects (11 mutations × 4 provenances) | `todo!()` | ADR-084 §3, M-2, N-4 |
+| CORE-3 | only the owner's well-formed, provenance-passed record projects (11 mutations × 5 provenances; every accepted provenance — incl. app-signed by another DID and self-attested elsewhere — reaches `project`, only `Failed` has no `Provenance` value) | `todo!()` | ADR-084 §3, M-2, N-4 |
 | CORE-4 | the production encoder's wire record → REAL decode/canonicalize/CID (deterministic) → project | `todo!()` encoder (returns the record JSON); real decoder | ADR-084 Earned Trust |
 | CORE-5 / 5b | only this reader's sole Verified check associates; a squatter never changes another row | `todo!()` | ADR-085 §5, GDL-D14 |
 | CORE-6 / 6x | `score(F ∪ sameAs) == score(F)` | REAL `scoring::score` | ADR-085 §6, KPI-GDL-2 |
-| CORE-7 | reserved iff the predicate is exactly `sameAs` | `todo!()` | ADR-084 §4 |
+| CORE-7 (+ CORE-7x) | reserved iff the predicate is exactly `sameAs`; generator mixes the literal and its case/spacing near-misses, CORE-7x pins them by example | `todo!()` | ADR-084 §4 |
 
 ### review_app_identity_link.rs
 

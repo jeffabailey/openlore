@@ -95,8 +95,12 @@ struct CheckView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProvenanceView {
     AppSigned,
+    /// App-signed, but under another DID's application key.
+    AppSignedByAnotherDid,
     SelfAttestedFromAuthorPds,
     SelfAttestedFromElsewhere,
+    /// Verification refused (ADR-071 `ProvenanceRejection`): there is no
+    /// accepted `Provenance` to hand to `project`, so nothing projects.
     Failed,
 }
 
@@ -169,14 +173,25 @@ fn sut_check(link: &LinkedView, login_read: &ReadView, id_read: &ReadView) -> Ch
 }
 
 fn sut_project(claim: &ClaimView, provenance: ProvenanceView) -> Option<LinkView> {
+    // Every ACCEPTED provenance — passed for the author or not — reaches
+    // `project`, so `project` itself must refuse one that did not pass for the
+    // author. Only `Failed` has no accepted `Provenance` value to pass.
+    let bare_author = claim_domain::bare_did(&claim.author);
+    let other_did = format!("{bare_author}-elsewhere");
     let accepted = match provenance {
         ProvenanceView::AppSigned => Some(claim_domain::Provenance::AppSigned {
             key_id: format!("{}#org.openlore.application", claim.author),
         }),
+        ProvenanceView::AppSignedByAnotherDid => Some(claim_domain::Provenance::AppSigned {
+            key_id: format!("{other_did}#org.openlore.application"),
+        }),
         ProvenanceView::SelfAttestedFromAuthorPds => Some(claim_domain::Provenance::SelfAttested {
             repo_did: Did(claim.author.clone()),
         }),
-        ProvenanceView::SelfAttestedFromElsewhere | ProvenanceView::Failed => None,
+        ProvenanceView::SelfAttestedFromElsewhere => Some(claim_domain::Provenance::SelfAttested {
+            repo_did: Did(other_did),
+        }),
+        ProvenanceView::Failed => None,
     };
     let fields = claim_domain::identity_link::ClaimFields {
         author: &claim.author,
@@ -575,11 +590,28 @@ fn mutate(claim: ClaimView, m: &Mutation) -> ClaimView {
 fn arb_provenance() -> impl Strategy<Value = ProvenanceView> {
     prop_oneof![
         Just(ProvenanceView::AppSigned),
+        Just(ProvenanceView::AppSignedByAnotherDid),
         Just(ProvenanceView::SelfAttestedFromAuthorPds),
         Just(ProvenanceView::SelfAttestedFromElsewhere),
         Just(ProvenanceView::Failed),
     ]
 }
+
+/// Random printable predicates practically never hit `sameAs`, so the exact
+/// literal and its near-misses (case, surrounding space) are mixed in.
+fn arb_predicate() -> impl Strategy<Value = String> {
+    prop_oneof![
+        2 => Just(SAME_AS.to_string()),
+        2 => proptest::sample::select(SAME_AS_NEAR_MISSES).prop_map(str::to_string),
+        3 => "[ -~]{0,12}",
+    ]
+}
+
+/// Predicates that look like `sameAs` but are not it (ADR-084 §4: exact match).
+const SAME_AS_NEAR_MISSES: &[&str] = &[
+    "SameAs", "sameas", "SAMEAS", "sameAS", " sameAs", "sameAs ", "sameAs\t", "same As", "sameA",
+    "sameAss",
+];
 
 /// A small universe of DIDs × ids so collisions (contest, duplicates) happen.
 fn arb_reader_state() -> impl Strategy<Value = (Vec<ProjectedLinkView>, Vec<CheckInputView>)> {
@@ -787,7 +819,7 @@ proptest! {
 
     /// CORE-7 (@property @adr-084-4 @n-1 @kpi-gdl-1 @contract-shape:pure-function)
     #[test]
-    fn core7_only_the_exact_same_as_predicate_is_reserved(predicate in "[ -~]{0,12}") {
+    fn core7_only_the_exact_same_as_predicate_is_reserved(predicate in arb_predicate()) {
         prop_assert_eq!(sut_is_reserved_predicate(&predicate), predicate == SAME_AS);
     }
 }
@@ -795,6 +827,20 @@ proptest! {
 // =============================================================================
 // Example-pinned catalogue (closed-world rows beside the generators)
 // =============================================================================
+
+/// CORE-7x: only the exact `sameAs` literal is reserved; every case or
+/// spacing variant of it is an ordinary predicate.
+/// (@adr-084-4 @n-1 @contract-shape:pure-function)
+#[test]
+fn core7x_only_exact_same_as_is_reserved_not_its_look_alikes() {
+    assert!(sut_is_reserved_predicate(SAME_AS), "`sameAs` is reserved");
+    for near_miss in SAME_AS_NEAR_MISSES {
+        assert!(
+            !sut_is_reserved_predicate(near_miss),
+            "{near_miss:?} is not the reserved predicate"
+        );
+    }
+}
 
 /// CORE-1x: the ADR-085 GitHub lie catalogue, by name.
 /// (@adr-085-earned-trust @contract-shape:pure-function)
