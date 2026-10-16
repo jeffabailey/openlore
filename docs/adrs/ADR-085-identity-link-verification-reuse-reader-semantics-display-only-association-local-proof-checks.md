@@ -54,6 +54,12 @@ lives, and what every reader does with a link.
    a positive integer, or whose `login` is missing or blank is `ApiShape` (GitHub unavailable), never
    account 0 or the requested name. The pure core also refuses account 0 and an invalid login, so a
    `ProvenLink` cannot name account 0. `read_person` stays lenient for `scrape person` only.*
+   *Amended 2026-10-16 (DELIVER re-review N8): a **valid login** is 1-39 ASCII characters,
+   each a letter, digit or `-`, not starting with `-`. A trailing hyphen and consecutive hyphens
+   are accepted on purpose: GitHub's signup form forbids them today, but older accounts have such
+   logins, and refusing them would lock real people out of linking. The same rule guards the typed
+   login (before any request), the stored `login_seen` (before a re-check) and `github:<login>` in
+   projection (ADR-084 §3).*
 4. **Check algorithm** (pure decision over at most two reads):
    - Read `/users/{signed or last-seen login}`. GitHub may answer a renamed login with a redirect
      (A-10, partly unverified): the adapter follows at most one same-host `api.github.com`
