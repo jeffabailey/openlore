@@ -26,6 +26,9 @@ mod canonicalize;
 mod cid;
 mod confidence;
 mod decode;
+// github-did-identity-link (ADR-084/085): the link's pure rules — bio proof,
+// check verdicts, link predicate.
+pub mod identity_link;
 mod normalize;
 mod provenance;
 mod references;

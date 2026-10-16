@@ -155,8 +155,12 @@ enum ShownView {
 // =============================================================================
 
 fn sut_bio_verdict(bio: Option<&str>, did: &str) -> VerdictView {
-    let _ = (bio, did);
-    todo!("RED: bind to claim_domain::identity_link bio matcher (hoisted from review_domain::ownership, ADR-085 §1)")
+    match claim_domain::identity_link::bio_verdict(bio, did) {
+        claim_domain::identity_link::BioVerdict::Verified => VerdictView::Verified,
+        claim_domain::identity_link::BioVerdict::DidMissing => VerdictView::DidMissing,
+        claim_domain::identity_link::BioVerdict::DifferentDid(_) => VerdictView::DifferentDid,
+        claim_domain::identity_link::BioVerdict::NoBio => VerdictView::NoBio,
+    }
 }
 
 fn sut_check(link: &LinkedView, login_read: &ReadView, id_read: &ReadView) -> CheckView {
@@ -644,7 +648,6 @@ proptest! {
 
     /// CORE-1 (@property @adr-076 @kpi-gdl-1 @contract-shape:pure-function)
     #[test]
-    #[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
     fn core1_the_bio_proves_a_did_only_by_its_exact_token(
         (did, bio) in arb_did().prop_flat_map(|d| (Just(d.clone()), arb_bio_for(d)))
     ) {
@@ -770,7 +773,6 @@ proptest! {
 /// CORE-1x: the ADR-085 GitHub lie catalogue, by name.
 /// (@adr-085-earned-trust @contract-shape:pure-function)
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn core1x_the_bio_lie_catalogue() {
     let did = "did:plc:test-jeff";
     let rows: [(Option<&str>, VerdictView); 9] = [

@@ -130,6 +130,14 @@ pub use contribution_link::{
     RecordSnapshotOutcome,
 };
 
+// github-did-identity-link (ADR-085 §7): the local, insert-only proof-check
+// history, split into read and write ports, plus the link-candidate claim read.
+mod identity_link_check;
+pub use identity_link_check::{
+    CheckFilter, IdentityLinkCheckError, IdentityLinkCheckReadPort, IdentityLinkCheckWritePort,
+    LinkCandidate, LinkCandidateReadPort, LinkCheck,
+};
+
 // -----------------------------------------------------------------------------
 // Slice-05 (appview search) — the indexer subsystem ports + boundary ADTs
 // -----------------------------------------------------------------------------

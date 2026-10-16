@@ -66,6 +66,10 @@ pub enum Command {
     /// contributor-philosophy-inference (ADR-063; DDD-13).
     #[command(subcommand)]
     Infer(InferCommand),
+    /// Linked identities: GitHub accounts publicly linked to a DID
+    /// (github-did-identity-link; ADR-084/085).
+    #[command(subcommand)]
+    Identity(IdentityCommand),
     /// Search the NETWORK index — slice-05 (ADR-027). A NEW top-level verb
     /// (WD-113): `graph query` stays unambiguously LOCAL; `search` is the only
     /// NETWORK verb. Queries the self-hosted indexer over HTTP/XRPC along one
@@ -316,6 +320,13 @@ pub enum PeerCommand {
         #[arg(long = "no-tty")]
         no_tty: bool,
     },
+}
+
+/// Identity-link verbs (github-did-identity-link; ADR-085 §7).
+#[derive(Debug, Subcommand)]
+pub enum IdentityCommand {
+    /// Show linked identities from the last local check (offline).
+    List,
 }
 
 /// Inference verbs (contributor-philosophy-inference; DDD-13).
@@ -720,6 +731,21 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
                 Err(err) => {
                     eprintln!("openlore infer people: {err:#}");
+                    1
+                }
+            }
+        }
+        Command::Identity(IdentityCommand::List) => {
+            match verbs::identity_list::run(&verbs::identity_list::IdentityListHandles {
+                checks: wiring.identity_link_checks.as_ref(),
+                claims: wiring.link_candidates.as_ref(),
+            }) {
+                Ok(stdout) => {
+                    print!("{stdout}");
+                    0
+                }
+                Err(err) => {
+                    eprintln!("openlore identity list: {err:#}");
                     1
                 }
             }

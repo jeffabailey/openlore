@@ -1506,6 +1506,134 @@ pub fn scan_adapter_github_port_references(workspace_root: &Path) -> anyhow::Res
 }
 
 // -----------------------------------------------------------------------------
+// Identity-link check rules (github-did-identity-link, ADR-085 §7 Enforcement)
+// -----------------------------------------------------------------------------
+//
+// * `identity_link_checks_insert_only`: no production SQL updates, deletes or
+//   truncates `identity_link_checks` outside the purge adapter — a check is a
+//   recorded observation, and "latest" is a read, never an overwrite.
+// * `identity_link_readers_hold_no_write_handle`: the `identity list` module
+//   names no check-write or purge port, no `IdentityPort`, no `GithubPort` and
+//   not the whole `Wiring`; the `infer people` module names no check-write or
+//   purge port (its `--sign` path holds signing by design).
+
+/// The insert-only check table.
+const IDENTITY_LINK_CHECKS_TABLE: &str = "identity_link_checks";
+
+/// The one source allowed to delete checks (`identity forget`'s purge).
+const IDENTITY_LINK_PURGE_SOURCE: &str = "crates/adapter-duckdb/src/identity_link_purge.rs";
+
+/// Statements that rewrite or remove check rows.
+const CHECK_REWRITING_SQL_KEYWORDS: &[&str] = &["UPDATE", "DELETE", "TRUNCATE"];
+
+/// Pure rule: `Some(excerpt)` iff one SQL literal names `identity_link_checks`
+/// together with an `UPDATE` (an upsert's `DO UPDATE` included), `DELETE` or
+/// `TRUNCATE`.
+pub fn classify_identity_link_checks_literal(literal: &str) -> Option<String> {
+    if !contains_word(literal, IDENTITY_LINK_CHECKS_TABLE) {
+        return None;
+    }
+    let rewrites = literal
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .map(str::to_ascii_uppercase)
+        .any(|word| CHECK_REWRITING_SQL_KEYWORDS.contains(&word.as_str()));
+    rewrites.then(|| excerpt_of(literal))
+}
+
+/// Production string literals of one Rust source (test modules skipped).
+fn production_literals(path: &Path) -> anyhow::Result<Vec<String>> {
+    let source = std::fs::read_to_string(path)?;
+    let file = syn::parse_file(&source)
+        .map_err(|e| anyhow::anyhow!("syn parse {}: {e}", path.display()))?;
+    let mut collector = ProductionLiteralCollector {
+        literals: Vec::new(),
+    };
+    collector.visit_file(&file);
+    Ok(collector.literals)
+}
+
+/// Effect shell for `identity_link_checks_insert_only`: every production SQL
+/// literal under `crates/*/src`, the purge adapter excepted.
+pub fn scan_identity_link_checks_insert_only(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let purge_source = workspace_root.join(IDENTITY_LINK_PURGE_SOURCE);
+    let mut findings = Vec::new();
+    for path in rust_sources_under(&workspace_root.join("crates")) {
+        if path == purge_source || !path.components().any(|c| c.as_os_str() == "src") {
+            continue;
+        }
+        findings.extend(
+            production_literals(&path)?
+                .iter()
+                .filter_map(|literal| classify_identity_link_checks_literal(literal))
+                .map(|excerpt| {
+                    format!(
+                        "{}: SQL updates, deletes or truncates `identity_link_checks`, which is                          insert-only — only {IDENTITY_LINK_PURGE_SOURCE} may delete checks                          (identity_link_checks_insert_only, ADR-085 §7): {excerpt}",
+                        path.display()
+                    )
+                }),
+        );
+    }
+    Ok(findings)
+}
+
+/// The `identity list` verb module and what it may not name.
+const IDENTITY_LIST_SOURCE: &str = "crates/cli/src/verbs/identity_list.rs";
+const IDENTITY_LIST_FORBIDDEN_TOKENS: &[&str] = &[
+    "IdentityLinkCheckWritePort",
+    "IdentityLinkCheckPurgePort",
+    "IdentityPort",
+    "GithubPort",
+    "Wiring",
+];
+
+/// The `infer people` verb module and what it may not name.
+const INFER_PEOPLE_SOURCE: &str = "crates/cli/src/verbs/infer_people.rs";
+const INFER_PEOPLE_FORBIDDEN_TOKENS: &[&str] =
+    &["IdentityLinkCheckWritePort", "IdentityLinkCheckPurgePort"];
+
+/// Pure rule: every non-comment line naming one of `tokens` as a whole word.
+pub fn classify_forbidden_words(source: &str, tokens: &[&str]) -> Vec<String> {
+    source
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim_start().starts_with("//"))
+        .flat_map(|(index, line)| {
+            tokens
+                .iter()
+                .filter(move |token| contains_word(line, token))
+                .map(move |token| format!("line {}: `{token}` in `{}`", index + 1, line.trim()))
+        })
+        .collect()
+}
+
+/// Effect shell for `identity_link_readers_hold_no_write_handle`.
+pub fn scan_identity_link_readers_hold_no_write_handle(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for (rel_path, tokens) in [
+        (IDENTITY_LIST_SOURCE, IDENTITY_LIST_FORBIDDEN_TOKENS),
+        (INFER_PEOPLE_SOURCE, INFER_PEOPLE_FORBIDDEN_TOKENS),
+    ] {
+        let path = workspace_root.join(rel_path);
+        if !path.is_file() {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path)?;
+        findings.extend(
+            classify_forbidden_words(&source, tokens)
+                .into_iter()
+                .map(|finding| {
+                    format!(
+                        "{rel_path}: {finding} — a reader holds no check-write, purge, signing                          or GitHub handle (identity_link_readers_hold_no_write_handle, ADR-085 §7)"
+                    )
+                }),
+        );
+    }
+    Ok(findings)
+}
+
+// -----------------------------------------------------------------------------
 // Review-app rules (bluesky-claim-review-app, component-boundaries §5)
 // -----------------------------------------------------------------------------
 //
@@ -2431,6 +2559,9 @@ pub fn run() -> anyhow::Result<i32> {
     let index_delete_findings = scan_index_store_delete_only_in_purge(&workspace_root)?;
     let index_purge_findings = scan_index_purge_only_in_pass_runner(&workspace_root)?;
     let search_event_findings = scan_indexer_search_events_carry_no_query(&workspace_root)?;
+    let identity_link_checks_findings = scan_identity_link_checks_insert_only(&workspace_root)?;
+    let identity_link_reader_findings =
+        scan_identity_link_readers_hold_no_write_handle(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -2449,6 +2580,8 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(index_delete_findings);
     rendered.extend(index_purge_findings);
     rendered.extend(search_event_findings);
+    rendered.extend(identity_link_checks_findings);
+    rendered.extend(identity_link_reader_findings);
 
     if rendered.is_empty() {
         println!(
@@ -3376,6 +3509,123 @@ mod tests {
             scan_adapter_github_port_references(real_workspace_root()).expect("scan real tree"),
             Vec::<String>::new(),
             "the real adapter-github names no storage / identity port"
+        );
+    }
+
+    // --- identity_link_checks_insert_only (ADR-085 §7) ----------------------
+
+    #[test]
+    fn insert_only_guard_fires_on_every_rewrite_of_the_checks_and_allows_inserts_and_reads() {
+        for synthetic in [
+            "UPDATE identity_link_checks SET verdict = 'verified'",
+            "DELETE FROM identity_link_checks WHERE subject_did = ?",
+            "truncate identity_link_checks",
+            "INSERT INTO identity_link_checks (subject_did) VALUES (?) \
+             ON CONFLICT (subject_did) DO UPDATE SET verdict = excluded.verdict",
+        ] {
+            assert!(
+                classify_identity_link_checks_literal(synthetic).is_some(),
+                "must fire on: {synthetic}"
+            );
+        }
+        for allowed in [
+            "INSERT INTO identity_link_checks (subject_did) VALUES (?)",
+            "SELECT verdict FROM identity_link_checks WHERE subject_did = ?",
+            "CREATE INDEX IF NOT EXISTS idx_identity_link_checks_link ON identity_link_checks (subject_did)",
+            "DELETE FROM claims WHERE cid = ?",
+        ] {
+            assert_eq!(
+                classify_identity_link_checks_literal(allowed),
+                None,
+                "must allow: {allowed}"
+            );
+        }
+    }
+
+    #[test]
+    fn insert_only_scan_reports_a_rewrite_outside_the_purge_adapter_and_passes_the_real_tree() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let src = violating.path().join("crates/adapter-duckdb/src");
+        std::fs::create_dir_all(&src).expect("mkdir");
+        let delete =
+            "const FORGET: &str = \"DELETE FROM identity_link_checks WHERE subject_did = ?\";\n";
+        std::fs::write(src.join("identity_link_checks.rs"), delete).expect("write");
+        std::fs::write(src.join("identity_link_purge.rs"), delete).expect("write");
+        std::fs::write(
+            src.join("other.rs"),
+            "#[cfg(test)]\nmod tests {\n    const RESET: &str = \"DELETE FROM identity_link_checks\";\n}\n",
+        )
+        .expect("write");
+        let findings = scan_identity_link_checks_insert_only(violating.path()).expect("scan");
+        assert_eq!(
+            findings.len(),
+            1,
+            "only the non-purge production DELETE: {findings:?}"
+        );
+        assert!(
+            findings[0].contains("identity_link_checks.rs"),
+            "{findings:?}"
+        );
+
+        assert_eq!(
+            scan_identity_link_checks_insert_only(real_workspace_root()).expect("scan real tree"),
+            Vec::<String>::new(),
+            "the real tree only inserts and reads identity_link_checks"
+        );
+    }
+
+    // --- identity_link_readers_hold_no_write_handle (ADR-085 §7) ------------
+
+    #[test]
+    fn reader_scan_reports_write_purge_signing_or_github_handles_and_passes_the_real_tree() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let verbs = violating.path().join("crates/cli/src/verbs");
+        std::fs::create_dir_all(&verbs).expect("mkdir");
+        std::fs::write(
+            verbs.join("identity_list.rs"),
+            "// never an IdentityPort here\n\
+             use ports::{IdentityLinkCheckReadPort, IdentityLinkCheckWritePort};\n\
+             fn run(wiring: &crate::wiring::Wiring) {}\n\
+             fn sign(id: &dyn IdentityPort, gh: &dyn GithubPort, p: &dyn IdentityLinkCheckPurgePort) {}\n",
+        )
+        .expect("write");
+        std::fs::write(
+            verbs.join("infer_people.rs"),
+            "fn sign(id: &dyn IdentityPort) {}\n\
+             fn note(w: &dyn IdentityLinkCheckWritePort) {}\n",
+        )
+        .expect("write");
+        let findings =
+            scan_identity_link_readers_hold_no_write_handle(violating.path()).expect("scan");
+        let named = |path: &str, token: &str| {
+            findings
+                .iter()
+                .any(|f| f.starts_with(path) && f.contains(&format!("`{token}`")))
+        };
+        assert_eq!(findings.len(), 6, "{findings:?}");
+        for token in [
+            "IdentityLinkCheckWritePort",
+            "Wiring",
+            "IdentityPort",
+            "GithubPort",
+            "IdentityLinkCheckPurgePort",
+        ] {
+            assert!(named(IDENTITY_LIST_SOURCE, token), "{token}: {findings:?}");
+        }
+        assert!(
+            named(INFER_PEOPLE_SOURCE, "IdentityLinkCheckWritePort"),
+            "{findings:?}"
+        );
+        assert!(
+            !named(INFER_PEOPLE_SOURCE, "IdentityPort"),
+            "--sign is exempt: {findings:?}"
+        );
+
+        assert_eq!(
+            scan_identity_link_readers_hold_no_write_handle(real_workspace_root())
+                .expect("scan real tree"),
+            Vec::<String>::new(),
+            "the real readers hold read handles only"
         );
     }
 }

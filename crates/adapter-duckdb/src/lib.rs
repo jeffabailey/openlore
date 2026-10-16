@@ -53,6 +53,7 @@ use ports::{
 mod conn;
 mod contribution_links;
 mod graph_query;
+mod identity_link_checks;
 mod peer_storage;
 mod probe;
 mod schema;
@@ -60,9 +61,11 @@ mod schema_v3;
 mod schema_v4;
 mod schema_v5;
 mod schema_v6;
+mod schema_v7;
 mod store_read;
 
 pub use contribution_links::DuckDbContributionLinkAdapter;
+pub use identity_link_checks::DuckDbIdentityLinkCheckAdapter;
 pub use peer_storage::DuckDbPeerStorageAdapter;
 pub use store_read::DuckDbStoreReadAdapter;
 
@@ -121,6 +124,9 @@ impl DuckDbStorageAdapter {
         // bluesky-claim-review-app migration v6 (ADR-071): the additive
         // `peer_claims.provenance` column. Idempotent forward-only.
         schema_v6::run_migration(&mut conn)?;
+        // github-did-identity-link migration v7 (ADR-085 §7): the insert-only
+        // `identity_link_checks` table. Idempotent forward-only.
+        schema_v7::run_migration(&mut conn)?;
         drop(conn);
 
         // Colocate `claims/` next to the DB file. data-models.md
@@ -205,6 +211,14 @@ impl DuckDbStorageAdapter {
     /// connection handle (DDD-4; the `peer_adapter` single-writer precedent).
     pub fn contribution_link_adapter(&self) -> DuckDbContributionLinkAdapter {
         DuckDbContributionLinkAdapter::from_shared(self.conn.clone())
+    }
+
+    /// Construct a `DuckDbIdentityLinkCheckAdapter` SHARING this adapter's
+    /// connection handle (ADR-085 §7; the `peer_adapter` single-writer
+    /// precedent). The composition root hands each verb only the port traits
+    /// it may hold.
+    pub fn identity_link_check_adapter(&self) -> DuckDbIdentityLinkCheckAdapter {
+        DuckDbIdentityLinkCheckAdapter::from_shared(self.conn.clone())
     }
 
     /// Construct the artifact path for a CID: `<claims_dir>/<cid>.json`.

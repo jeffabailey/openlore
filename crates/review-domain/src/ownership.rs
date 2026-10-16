@@ -5,65 +5,18 @@
 //! way to obtain a [`VerifiedOwnership`] — the capability a scan needs — is
 //! [`prove_ownership`] returning it for a passing check.
 
-/// Characters a bio token is made of: maximal runs of `[A-Za-z0-9._:%-]`.
-fn is_token_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '%' | '-')
-}
-
-/// Sentence punctuation stripped from the end of a token (`(did:…).`).
-fn is_trailing_punctuation(c: char) -> bool {
-    matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '>')
-}
-
-/// `did:<lowercase method>:<non-empty rest>`.
-fn is_did_shaped(token: &str) -> bool {
-    let mut parts = token.splitn(3, ':');
-    let scheme = parts.next();
-    let method = parts.next().unwrap_or_default();
-    let rest = parts.next().unwrap_or_default();
-    scheme == Some("did")
-        && !method.is_empty()
-        && method.chars().all(|c| c.is_ascii_lowercase())
-        && !rest.is_empty()
-}
-
-/// The DID-shaped tokens of a bio, in order of appearance.
-pub fn did_tokens(bio: &str) -> Vec<&str> {
-    bio.split(|c: char| !is_token_char(c))
-        .map(|run| run.trim_end_matches(is_trailing_punctuation))
-        .filter(|token| is_did_shaped(token))
-        .collect()
-}
+// The bio matcher lives in `claim_domain::identity_link` (ADR-085 §1, UC-4):
+// one proof rule for the review app, the CLI and every reader.
+pub use ports::claim_domain::identity_link::did_tokens;
 
 /// What a bio says about the signed-in DID.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OwnershipVerdict {
-    /// The signed-in DID is a byte-equal token of the bio.
-    Verified,
-    /// The bio holds no DID at all.
-    DidMissing,
-    /// The bio holds DIDs, none of them the signed-in one (the first found).
-    DifferentDid(String),
-    /// There is no public bio.
-    NoBio,
-}
+pub use ports::claim_domain::identity_link::BioVerdict as OwnershipVerdict;
 
 /// The ownership verdict of a bio against the signed-in DID: exact,
 /// case-sensitive token equality; several DIDs may appear, only the
-/// signed-in one counts.
+/// signed-in one counts. Delegates to the shared identity-link proof.
 pub fn ownership_verdict(bio: Option<&str>, session_did: &str) -> OwnershipVerdict {
-    let Some(bio) = bio.filter(|b| !b.trim().is_empty()) else {
-        return OwnershipVerdict::NoBio;
-    };
-    let tokens = did_tokens(bio);
-    if tokens.contains(&session_did) {
-        OwnershipVerdict::Verified
-    } else {
-        tokens
-            .first()
-            .map(|found| OwnershipVerdict::DifferentDid((*found).to_string()))
-            .unwrap_or(OwnershipVerdict::DidMissing)
-    }
+    ports::claim_domain::identity_link::bio_verdict(bio, session_did)
 }
 
 /// A GitHub account's public profile, as read just now.

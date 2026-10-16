@@ -141,6 +141,12 @@ pub enum ProbeRefusalReason {
     /// `ON CONFLICT` lie), or the table is unusable.
     StorageContributionLinkUpsertUnreliable,
 
+    // -------- github-did-identity-link additions (ADR-085 Earned Trust) --------
+    /// The `identity_link_checks` sentinel did not keep two checks of one link
+    /// (the store overwrote or refused the second), did not read the later one
+    /// back as latest, or the table is unusable.
+    StorageIdentityLinkCheckHistoryUnreliable,
+
     // -------- bluesky-claim-review-app additions (ADR-073/074) --------
     /// The private store was written by a newer app (schema_version ahead).
     ReviewStoreSchemaMismatch,

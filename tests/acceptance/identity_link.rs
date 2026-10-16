@@ -664,7 +664,6 @@ fn the_identity_verbs_never_repeat_jeffs_bio_or_log_his_identity() {
 ///   And the store records the identity-link schema step exactly once, with every earlier row unchanged
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn opening_a_store_made_before_identity_links_keeps_everything_already_in_it() {
     let world = LinkWorld::with_frozen_pre_v7_store(&[JEFF_GH]);
     let versions_before = schema_versions(&world.env);
@@ -716,7 +715,6 @@ fn opening_a_store_made_before_identity_links_keeps_everything_already_in_it() {
 ///   And the identity-link schema step is still recorded once and every row is unchanged
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn reopening_an_upgraded_store_changes_nothing() {
     let world = LinkWorld::with_frozen_pre_v7_store(&[JEFF_GH]);
     let first = when_i_list(&world, None);

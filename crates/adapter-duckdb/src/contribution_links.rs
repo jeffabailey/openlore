@@ -368,10 +368,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        // v5 applied exactly once; later additive migrations (v6) follow it.
+        // v5 applied exactly once; later additive migrations (v6, v7) follow it.
         assert_eq!(
             (schema_version(&db), v5_rows),
-            (crate::schema_v6::PEER_PROVENANCE_VERSION, 1)
+            (crate::schema_v7::IDENTITY_LINK_CHECKS_VERSION, 1)
         );
     }
 
