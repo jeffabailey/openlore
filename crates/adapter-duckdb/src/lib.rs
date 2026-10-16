@@ -55,6 +55,7 @@ mod contribution_links;
 mod graph_query;
 mod identity_link_checks;
 mod identity_link_purge;
+mod link_lineage;
 mod peer_storage;
 mod probe;
 mod schema;
@@ -68,6 +69,7 @@ mod store_read;
 pub use contribution_links::DuckDbContributionLinkAdapter;
 pub use identity_link_checks::DuckDbIdentityLinkCheckAdapter;
 pub use identity_link_purge::DuckDbIdentityLinkPurgeAdapter;
+pub use link_lineage::DuckDbLinkLineageAdapter;
 pub use peer_storage::DuckDbPeerStorageAdapter;
 pub use store_read::DuckDbStoreReadAdapter;
 
@@ -228,6 +230,17 @@ impl DuckDbStorageAdapter {
     /// forget verb alone (C-GDL-5, ADR-085 §7).
     pub fn identity_link_purge_adapter(&self) -> DuckDbIdentityLinkPurgeAdapter {
         DuckDbIdentityLinkPurgeAdapter::from_shared(self.conn.clone())
+    }
+
+    /// The read-only lineage of stored claims (the claims referencing one),
+    /// over the SAME connection handle. Exposes no write (ADR-085 §7).
+    pub fn link_lineage_adapter(&self) -> DuckDbLinkLineageAdapter {
+        DuckDbLinkLineageAdapter::from_shared(Self {
+            conn: self.conn.clone(),
+            claims_dir: self.claims_dir.clone(),
+            peer_claims_root: self.peer_claims_root.clone(),
+            philosophies_dir: self.philosophies_dir.clone(),
+        })
     }
 
     /// Construct the artifact path for a CID: `<claims_dir>/<cid>.json`.

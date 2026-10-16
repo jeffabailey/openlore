@@ -1,0 +1,98 @@
+//! The reads the identity verbs share (ADR-085 §4/§7): the stored link
+//! lineage — the link candidates and every stored claim referencing one (the
+//! retraction / supersession markers), through the candidate and lineage READ
+//! ports only — and a GitHub profile as the observation a check consumes.
+//!
+//! The decisions (which candidates are active links, what a read proves) stay
+//! in `claim_domain::identity_link`; this module only reads and adapts.
+
+use anyhow::Result;
+use claim_domain::identity_link::{
+    active_links, link_predicate, links_to_recheck, ClaimFields, GithubObservation, IdentityLink,
+    StoredClaim,
+};
+use claim_domain::{ClaimLineage, SignedClaim};
+use ports::{LinkCandidate, LinkCandidateReadPort, LinkLineageReadPort, PersonProfile};
+
+/// The link candidates in the store and every stored claim referencing one.
+pub struct StoredLinkLineage {
+    candidates: Vec<LinkCandidate>,
+    referrers: Vec<SignedClaim>,
+}
+
+impl StoredLinkLineage {
+    /// Read the candidates carrying the link predicate and their referrers.
+    pub fn read(
+        candidates: &dyn LinkCandidateReadPort,
+        lineage: &dyn LinkLineageReadPort,
+    ) -> Result<Self> {
+        let candidates = candidates.link_candidates(link_predicate())?;
+        let referrers = candidates
+            .iter()
+            .map(|candidate| lineage.referrers_of(&candidate.cid))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok(Self {
+            candidates,
+            referrers,
+        })
+    }
+
+    /// The active links (every active link claim).
+    pub fn active_links(&self) -> Vec<IdentityLink> {
+        self.decide(active_links)
+    }
+
+    /// The active links, once per (DID, account id).
+    pub fn links_to_recheck(&self) -> Vec<IdentityLink> {
+        self.decide(links_to_recheck)
+    }
+
+    fn decide(
+        &self,
+        decision: fn(&[StoredClaim<'_>], &[ClaimLineage<'_>]) -> Vec<IdentityLink>,
+    ) -> Vec<IdentityLink> {
+        let stored: Vec<StoredClaim<'_>> = self.candidates.iter().map(stored_claim).collect();
+        let lineages: Vec<ClaimLineage<'_>> = self.referrers.iter().map(referrer_lineage).collect();
+        decision(&stored, &lineages)
+    }
+}
+
+/// One candidate as the pure projection reads it.
+fn stored_claim(candidate: &LinkCandidate) -> StoredClaim<'_> {
+    StoredClaim {
+        fields: ClaimFields {
+            author: &candidate.author_did,
+            subject: &candidate.subject,
+            predicate: &candidate.predicate,
+            object: &candidate.object,
+            evidence: &candidate.evidence,
+        },
+        provenance: &candidate.provenance,
+        lineage: ClaimLineage {
+            author_did: &candidate.author_did,
+            cid: &candidate.cid,
+            references: &[],
+        },
+    }
+}
+
+/// One referrer as a lineage marker (its author and what it references).
+fn referrer_lineage(referrer: &SignedClaim) -> ClaimLineage<'_> {
+    ClaimLineage {
+        author_did: &referrer.unsigned.author_did.0,
+        cid: "",
+        references: &referrer.unsigned.references,
+    }
+}
+
+/// The observation a fresh profile read makes.
+pub fn observation_of(profile: PersonProfile) -> GithubObservation {
+    GithubObservation {
+        login: profile.login,
+        user_id: profile.id,
+        bio: profile.bio,
+    }
+}

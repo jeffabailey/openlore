@@ -31,6 +31,8 @@ pub mod identity_forget;
 pub mod identity_link;
 pub mod identity_list;
 pub mod identity_verify;
+// The reads the identity verbs share (link lineage, GitHub observation).
+pub mod identity_reads;
 pub mod infer_people;
 pub mod init;
 pub mod peer_add;

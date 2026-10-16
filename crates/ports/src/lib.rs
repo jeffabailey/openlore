@@ -131,11 +131,13 @@ pub use contribution_link::{
 };
 
 // github-did-identity-link (ADR-085 §7): the local, insert-only proof-check
-// history, split into read and write ports, plus the link-candidate claim read.
+// history, split into read and write ports, plus the link-candidate and
+// link-lineage claim reads.
 mod identity_link_check;
 pub use identity_link_check::{
     CheckFilter, IdentityLinkCheckError, IdentityLinkCheckPurgePort, IdentityLinkCheckReadPort,
     IdentityLinkCheckWritePort, LinkCandidate, LinkCandidateReadPort, LinkCheck,
+    LinkLineageReadPort,
 };
 
 // -----------------------------------------------------------------------------

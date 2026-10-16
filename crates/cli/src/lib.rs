@@ -784,52 +784,33 @@ pub fn dispatch(cli: Cli) -> i32 {
             provider: LinkProvider::Github,
             login,
             yes,
-        }) => match verbs::identity_link::run(
-            &wiring,
-            &verbs::identity_link::IdentityLinkArgs { login, yes },
-        ) {
-            Ok(stdout) => {
-                print!("{stdout}");
-                0
-            }
-            Err(err) => {
-                eprintln!("openlore identity link: {err:#}");
-                1
-            }
-        },
-        Command::Identity(IdentityCommand::List) => {
-            match verbs::identity_list::run(
+        }) => print_verb_stdout(
+            "identity link",
+            verbs::identity_link::run(
+                &wiring,
+                &verbs::identity_link::IdentityLinkArgs { login, yes },
+            ),
+        ),
+        Command::Identity(IdentityCommand::List) => print_verb_stdout(
+            "identity list",
+            verbs::identity_list::run(
                 &verbs::identity_list::IdentityListHandles {
                     checks: wiring.identity_link_checks.as_ref(),
                     claims: wiring.link_candidates.as_ref(),
                 },
                 wiring.clock.now_utc(),
-            ) {
-                Ok(stdout) => {
-                    print!("{stdout}");
-                    0
-                }
-                Err(err) => {
-                    eprintln!("openlore identity list: {err:#}");
-                    1
-                }
-            }
-        }
+            ),
+        ),
         Command::Identity(IdentityCommand::Verify { did, github }) => {
-            let scope = match (did, github) {
-                (Some(did), _) => claim_domain::identity_link::RecheckScope::Person(did),
-                (None, Some(login)) => claim_domain::identity_link::RecheckScope::Account(login),
-                (None, None) => claim_domain::identity_link::RecheckScope::Everyone,
-            };
             match verbs::identity_verify::run(
                 &verbs::identity_verify::IdentityVerifyHandles {
                     checks: wiring.identity_link_checks.as_ref(),
                     check_writes: wiring.identity_link_check_writes.as_ref(),
                     claims: wiring.link_candidates.as_ref(),
-                    lineage: wiring.storage.as_ref(),
+                    lineage: wiring.link_lineage.as_ref(),
                     github: wiring.github.as_ref(),
                 },
-                &scope,
+                &recheck_scope(did, github),
                 wiring.clock.now_utc(),
             ) {
                 Ok(report) => {
@@ -846,18 +827,10 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
             }
         }
-        Command::Identity(IdentityCommand::Forget { did }) => {
-            match verbs::identity_forget::run(wiring.identity_link_check_purge.as_ref(), &did) {
-                Ok(stdout) => {
-                    print!("{stdout}");
-                    0
-                }
-                Err(err) => {
-                    eprintln!("openlore identity forget: {err:#}");
-                    1
-                }
-            }
-        }
+        Command::Identity(IdentityCommand::Forget { did }) => print_verb_stdout(
+            "identity forget",
+            verbs::identity_forget::run(wiring.identity_link_check_purge.as_ref(), &did),
+        ),
         Command::Search {
             object,
             contributor,
@@ -972,6 +945,34 @@ pub fn dispatch(cli: Cli) -> i32 {
 /// gated on the bootstrap-state arm. (`scrape github --sign` reuses the
 /// slice-01 sign/publish pipeline, which requires the identity; harvest
 /// alone is harmless, but gating uniformly keeps the contract simple.)
+/// Print a verb's stdout (exit 0), or its error under the verb's name (exit 1).
+fn print_verb_stdout(verb: &str, outcome: anyhow::Result<String>) -> i32 {
+    match outcome {
+        Ok(stdout) => {
+            print!("{stdout}");
+            0
+        }
+        Err(err) => {
+            eprintln!("openlore {verb}: {err:#}");
+            1
+        }
+    }
+}
+
+/// The links one `identity verify` covers: `--did` wins (clap already
+/// refuses both), then `--github`, else every active link.
+fn recheck_scope(
+    did: Option<String>,
+    github: Option<String>,
+) -> claim_domain::identity_link::RecheckScope {
+    use claim_domain::identity_link::RecheckScope;
+    match (did, github) {
+        (Some(did), _) => RecheckScope::Person(did),
+        (None, Some(login)) => RecheckScope::Account(login),
+        (None, None) => RecheckScope::Everyone,
+    }
+}
+
 fn requires_initialized_state(cmd: &Command) -> bool {
     !matches!(cmd, Command::Init { .. })
 }

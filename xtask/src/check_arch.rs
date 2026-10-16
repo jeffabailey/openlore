@@ -1519,6 +1519,11 @@ pub fn scan_adapter_github_port_references(workspace_root: &Path) -> anyhow::Res
 // * `identity_link_purge_only_in_forget_verb`: the purge port, its method and
 //   its wiring slot are named only by the `identity forget` verb, besides the
 //   port's definition, its adapter and the composition root.
+// * `identity_verify_holds_no_storage_or_signing_handle`: the `identity
+//   verify` module reads lineage through `LinkLineageReadPort` only — it names
+//   no `StoragePort`, no `IdentityPort` / signing or publish entry point, no
+//   purge and not the whole `Wiring` (C-GDL-6). Its check-write and GitHub
+//   handles are by design (it appends re-checks from fresh reads).
 
 /// The insert-only check table.
 const IDENTITY_LINK_CHECKS_TABLE: &str = "identity_link_checks";
@@ -1570,7 +1575,9 @@ pub fn scan_identity_link_checks_insert_only(workspace_root: &Path) -> anyhow::R
                 .filter_map(|literal| classify_identity_link_checks_literal(literal))
                 .map(|excerpt| {
                     format!(
-                        "{}: SQL updates, deletes or truncates `identity_link_checks`, which is                          insert-only — only {IDENTITY_LINK_PURGE_SOURCE} may delete checks                          (identity_link_checks_insert_only, ADR-085 §7): {excerpt}",
+                        "{}: SQL updates, deletes or truncates `identity_link_checks`, which is \
+                         insert-only — only {IDENTITY_LINK_PURGE_SOURCE} may delete checks \
+                         (identity_link_checks_insert_only, ADR-085 §7): {excerpt}",
                         path.display()
                     )
                 }),
@@ -1628,12 +1635,51 @@ pub fn scan_identity_link_readers_hold_no_write_handle(
                 .into_iter()
                 .map(|finding| {
                     format!(
-                        "{rel_path}: {finding} — a reader holds no check-write, purge, signing                          or GitHub handle (identity_link_readers_hold_no_write_handle, ADR-085 §7)"
+                        "{rel_path}: {finding} — a reader holds no check-write, purge, signing \
+                         or GitHub handle (identity_link_readers_hold_no_write_handle, ADR-085 §7)"
                     )
                 }),
         );
     }
     Ok(findings)
+}
+
+/// The `identity verify` verb module and what it may not name: the whole
+/// store, signing and publishing, the purge, and the whole wiring.
+const IDENTITY_VERIFY_SOURCE: &str = "crates/cli/src/verbs/identity_verify.rs";
+const IDENTITY_VERIFY_FORBIDDEN_TOKENS: &[&str] = &[
+    "StoragePort",
+    "IdentityPort",
+    "sign_and_keep",
+    "publish_signed_claim",
+    "PdsPort",
+    "IdentityLinkCheckPurgePort",
+    "purge_subject",
+    "identity_link_check_purge",
+    "Wiring",
+];
+
+/// Effect shell for `identity_verify_holds_no_storage_or_signing_handle`.
+pub fn scan_identity_verify_holds_no_storage_or_signing_handle(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let path = workspace_root.join(IDENTITY_VERIFY_SOURCE);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let source = std::fs::read_to_string(&path)?;
+    Ok(
+        classify_forbidden_words(&source, IDENTITY_VERIFY_FORBIDDEN_TOKENS)
+            .into_iter()
+            .map(|finding| {
+                format!(
+                    "{IDENTITY_VERIFY_SOURCE}: {finding} — `identity verify` reads lineage \
+                     through LinkLineageReadPort and holds no store, signing, publish or purge \
+                     handle (identity_verify_holds_no_storage_or_signing_handle, C-GDL-6)"
+                )
+            })
+            .collect(),
+    )
 }
 
 /// The purge capability's names: the port, its one method and the composition
@@ -2680,6 +2726,8 @@ pub fn run() -> anyhow::Result<i32> {
         scan_identity_link_compose_only_via_proven_link(&workspace_root)?;
     let identity_link_purge_findings =
         scan_identity_link_purge_only_in_forget_verb(&workspace_root)?;
+    let identity_verify_findings =
+        scan_identity_verify_holds_no_storage_or_signing_handle(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -2702,6 +2750,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(identity_link_reader_findings);
     rendered.extend(identity_link_compose_findings);
     rendered.extend(identity_link_purge_findings);
+    rendered.extend(identity_verify_findings);
 
     if rendered.is_empty() {
         println!(
@@ -3746,6 +3795,55 @@ mod tests {
                 .expect("scan real tree"),
             Vec::<String>::new(),
             "the real readers hold read handles only"
+        );
+    }
+
+    // --- identity_verify_holds_no_storage_or_signing_handle (C-GDL-6) ------
+
+    #[test]
+    fn verify_scan_reports_store_signing_publish_purge_or_wiring_and_passes_the_real_tree() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let verbs = violating.path().join("crates/cli/src/verbs");
+        std::fs::create_dir_all(&verbs).expect("mkdir");
+        std::fs::write(
+            verbs.join("identity_verify.rs"),
+            "// never a StoragePort here\n\
+             use ports::{GithubPort, IdentityLinkCheckWritePort, LinkLineageReadPort};\n\
+             fn lineage(s: &dyn StoragePort, id: &dyn IdentityPort, pds: &dyn PdsPort) {}\n\
+             fn sign(w: &crate::wiring::Wiring) { sign_and_keep(w); publish_signed_claim(w); }\n\
+             fn erase(p: &dyn IdentityLinkCheckPurgePort) { p.purge_subject(\"d\"); }\n\
+             fn slot(w: &W) { w.identity_link_check_purge; }\n",
+        )
+        .expect("write");
+        let findings = scan_identity_verify_holds_no_storage_or_signing_handle(violating.path())
+            .expect("scan");
+        assert_eq!(
+            findings.len(),
+            IDENTITY_VERIFY_FORBIDDEN_TOKENS.len(),
+            "{findings:?}"
+        );
+        for token in IDENTITY_VERIFY_FORBIDDEN_TOKENS {
+            assert!(
+                findings.iter().any(|f| f.contains(&format!("`{token}`"))),
+                "{token}: {findings:?}"
+            );
+        }
+        for allowed in [
+            "GithubPort",
+            "IdentityLinkCheckWritePort",
+            "LinkLineageReadPort",
+        ] {
+            assert!(
+                !findings.iter().any(|f| f.contains(&format!("`{allowed}`"))),
+                "{allowed} is held by design: {findings:?}"
+            );
+        }
+
+        assert_eq!(
+            scan_identity_verify_holds_no_storage_or_signing_handle(real_workspace_root())
+                .expect("scan real tree"),
+            Vec::<String>::new(),
+            "the real verify verb holds the narrow handles only"
         );
     }
 

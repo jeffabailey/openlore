@@ -35,8 +35,8 @@ use anyhow::{anyhow, Context, Result};
 use ports::{
     ClockPort, ContributionLinkPort, GithubPort, IdentityLinkCheckPurgePort,
     IdentityLinkCheckReadPort, IdentityLinkCheckWritePort, IdentityPort, IndexQueryPort,
-    InstanceReadPort, LinkCandidateReadPort, PdsPort, PeerStoragePort, ProbeOutcome, ProbeRefused,
-    PublishPort, StoragePort, StoreReadPort,
+    InstanceReadPort, LinkCandidateReadPort, LinkLineageReadPort, PdsPort, PeerStoragePort,
+    ProbeOutcome, ProbeRefused, PublishPort, StoragePort, StoreReadPort,
 };
 
 use crate::paths::OpenLorePaths;
@@ -71,6 +71,9 @@ pub struct Wiring {
     /// The stored claims carrying the identity-link predicate — candidates the
     /// pure projection decides on (Q-RM-5). Read-only.
     pub link_candidates: Box<dyn LinkCandidateReadPort>,
+    /// The stored claims referencing a link (its lineage) — a read-only
+    /// handle, so a verb that only folds lineage never holds `storage`.
+    pub link_lineage: Box<dyn LinkLineageReadPort>,
     /// READ-ONLY own-store surface sharing the SAME DuckDB handle as
     /// `storage` (no second handle). The `publish push` verb enumerates the
     /// user's own claims through it.
@@ -147,6 +150,7 @@ impl Wiring {
             Box::new(storage.identity_link_purge_adapter());
         let link_candidates: Box<dyn LinkCandidateReadPort> =
             Box::new(storage.identity_link_check_adapter());
+        let link_lineage: Box<dyn LinkLineageReadPort> = Box::new(storage.link_lineage_adapter());
         let storage: Box<dyn StoragePort> = Box::new(storage);
 
         let pds_endpoint = std::env::var("OPENLORE_PDS_ENDPOINT").unwrap_or_default();
@@ -208,6 +212,7 @@ impl Wiring {
             identity_link_check_writes,
             identity_link_check_purge,
             link_candidates,
+            link_lineage,
             store_read,
             pds,
             clock,

@@ -11,12 +11,13 @@
 use std::io::Write;
 
 use anyhow::{anyhow, bail, Result};
+use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
-    active_links, check_link, is_already_linked, is_github_login, link_predicate, CheckVerdict,
-    ClaimFields, GithubObservation, LinkDraft, ProofCheck, ProvenLink, StoredClaim,
+    check_link, is_already_linked, is_github_login, CheckVerdict, GithubObservation, LinkDraft,
+    ProofCheck, ProvenLink,
 };
-use claim_domain::{canonicalize, compute_cid, Cid, ClaimLineage, SignedClaim};
-use ports::{GithubError, LinkCandidate, LinkCheck, PersonProfile};
+use claim_domain::{canonicalize, compute_cid, SignedClaim};
+use ports::{GithubError, LinkCheck};
 
 use crate::io::prompt_line;
 use crate::render::{
@@ -27,6 +28,7 @@ use crate::verbs::claim_publish::{
     build_tokio_runtime, publish_signed_claim, render_publish_error, render_publish_success,
     PublishError,
 };
+use crate::verbs::identity_reads::{observation_of, StoredLinkLineage};
 use crate::wiring::Wiring;
 
 /// Arguments of `identity link github <login>`.
@@ -37,23 +39,14 @@ pub struct IdentityLinkArgs {
     pub yes: bool,
 }
 
-/// The observation a fresh profile read makes.
-fn observation_of(profile: PersonProfile) -> GithubObservation {
-    GithubObservation {
-        login: profile.login,
-        user_id: profile.id,
-        bio: profile.bio,
-    }
-}
-
 /// The one check a confirmed, passing link records (ADR-085 §7).
-fn passing_check(proven: &ProvenLink, wiring: &Wiring) -> LinkCheck {
+fn passing_check(proven: &ProvenLink, checked_at: DateTime<Utc>) -> LinkCheck {
     LinkCheck {
         subject_did: proven.did().to_string(),
         github_user_id: proven.user_id(),
         login_seen: proven.login().to_string(),
         verdict: CheckVerdict::Verified,
-        checked_at: wiring.clock.now_utc(),
+        checked_at,
     }
 }
 
@@ -83,63 +76,14 @@ fn prove(wiring: &Wiring, login: &str) -> Result<ProvenLink> {
     }
 }
 
-/// The stored link candidates and every stored claim referencing one (the
-/// retraction / supersession markers its lineage is folded over).
-fn stored_lineage(wiring: &Wiring) -> Result<(Vec<LinkCandidate>, Vec<SignedClaim>)> {
-    let candidates = wiring.link_candidates.link_candidates(link_predicate())?;
-    let referrers = candidates
-        .iter()
-        .map(|candidate| referrers_of(wiring, &candidate.cid))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect();
-    Ok((candidates, referrers))
-}
-
-/// The stored claims referencing `cid`.
-fn referrers_of(wiring: &Wiring, cid: &str) -> Result<Vec<SignedClaim>> {
-    let referencing = wiring.storage.query_referencing(&Cid(cid.to_string()))?;
-    let read = referencing
-        .iter()
-        .map(|(referrer, _)| wiring.storage.read_signed_claim(referrer))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(read.into_iter().flatten().collect())
-}
-
-fn stored_claim(candidate: &LinkCandidate) -> StoredClaim<'_> {
-    StoredClaim {
-        fields: ClaimFields {
-            author: &candidate.author_did,
-            subject: &candidate.subject,
-            predicate: &candidate.predicate,
-            object: &candidate.object,
-            evidence: &candidate.evidence,
-        },
-        provenance: &candidate.provenance,
-        lineage: ClaimLineage {
-            author_did: &candidate.author_did,
-            cid: &candidate.cid,
-            references: &[],
-        },
-    }
-}
-
-fn referrer_lineage(referrer: &SignedClaim) -> ClaimLineage<'_> {
-    ClaimLineage {
-        author_did: &referrer.unsigned.author_did.0,
-        cid: "",
-        references: &referrer.unsigned.references,
-    }
-}
-
 /// D-a: refuse, before anything is signed or recorded, a link the local
 /// store already holds as active.
 fn refuse_if_already_linked(wiring: &Wiring, proven: &ProvenLink) -> Result<()> {
-    let (candidates, referrers) = stored_lineage(wiring)?;
-    let stored: Vec<StoredClaim<'_>> = candidates.iter().map(stored_claim).collect();
-    let lineages: Vec<ClaimLineage<'_>> = referrers.iter().map(referrer_lineage).collect();
-    if is_already_linked(proven, &active_links(&stored, &lineages)) {
+    let stored = StoredLinkLineage::read(
+        wiring.link_candidates.as_ref(),
+        wiring.link_lineage.as_ref(),
+    )?;
+    if is_already_linked(proven, &stored.active_links()) {
         bail!("{}", render_already_linked(proven.login()));
     }
     Ok(())
@@ -182,7 +126,7 @@ fn link(wiring: &Wiring, proven: &ProvenLink, draft: LinkDraft) -> Result<String
     let signed = sign_and_keep(wiring, draft)?;
     wiring
         .identity_link_check_writes
-        .record_check(&passing_check(proven, wiring))?;
+        .record_check(&passing_check(proven, wiring.clock.now_utc()))?;
     let published = publish_signed_claim(wiring, &signed)
         .map_err(|err| anyhow!("{}", render_link_publish_failure(proven, &err)))?;
     Ok(render_publish_success(&published))

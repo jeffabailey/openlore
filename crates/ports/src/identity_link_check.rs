@@ -7,13 +7,16 @@
 //! readers hold [`IdentityLinkCheckReadPort`] only; writers also hold
 //! [`IdentityLinkCheckWritePort`], whose single method inserts. The one
 //! exception to insert-only is [`IdentityLinkCheckPurgePort`], held by
-//! `identity forget` alone (C-GDL-5, ADR-082 precedent).
+//! `identity forget` alone (C-GDL-5, ADR-082 precedent). A link's lineage
+//! (the stored claims referencing it) is read through
+//! [`LinkLineageReadPort`], which can never write a claim.
 
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::CheckVerdict;
-use claim_domain::Provenance;
+use claim_domain::{Provenance, SignedClaim};
 
 use crate::probe::ProbeOutcome;
+use crate::StorageError;
 
 /// One proof check of one link (subject DID, numeric GitHub id).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,4 +99,12 @@ pub trait LinkCandidateReadPort {
         &self,
         predicate: &str,
     ) -> Result<Vec<LinkCandidate>, IdentityLinkCheckError>;
+}
+
+/// Read a link's lineage: the stored claims referencing one claim (its
+/// retraction / supersession markers). Read-only — the narrow handle a verb
+/// holds instead of the whole `StoragePort`.
+pub trait LinkLineageReadPort {
+    /// The stored signed claims referencing the claim at `cid`.
+    fn referrers_of(&self, cid: &str) -> Result<Vec<SignedClaim>, StorageError>;
 }

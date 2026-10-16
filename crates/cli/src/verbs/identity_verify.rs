@@ -10,26 +10,25 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
-    is_in_scope, link_predicate, links_to_recheck, recheck_link, ClaimFields, GithubObservation,
-    GithubRead, IdentityLink, ProofCheck, RecheckScope, StoredClaim,
+    is_in_scope, recheck_link, GithubRead, IdentityLink, ProofCheck, RecheckScope,
 };
-use claim_domain::{Cid, ClaimLineage, SignedClaim};
 use ports::{
     CheckFilter, GithubError, GithubPort, IdentityLinkCheckReadPort, IdentityLinkCheckWritePort,
-    LinkCandidate, LinkCandidateReadPort, LinkCheck, PersonProfile, StoragePort,
+    LinkCandidateReadPort, LinkCheck, LinkLineageReadPort, PersonProfile,
 };
 
 use crate::render::{
     render_no_identity_links_to_verify, render_recheck, render_recheck_unreadable,
 };
+use crate::verbs::identity_reads::{observation_of, StoredLinkLineage};
 
 /// The narrow handles `identity verify` holds.
 pub struct IdentityVerifyHandles<'a> {
     pub checks: &'a dyn IdentityLinkCheckReadPort,
     pub check_writes: &'a dyn IdentityLinkCheckWritePort,
     pub claims: &'a dyn LinkCandidateReadPort,
-    /// Stored-claim reads only: the claims referencing a link (its lineage).
-    pub lineage: &'a dyn StoragePort,
+    /// Read-only: the claims referencing a link (its lineage).
+    pub lineage: &'a dyn LinkLineageReadPort,
     pub github: &'a dyn GithubPort,
 }
 
@@ -41,55 +40,9 @@ pub struct VerifyReport {
     pub unreadable: Vec<String>,
 }
 
-fn stored_claim(candidate: &LinkCandidate) -> StoredClaim<'_> {
-    StoredClaim {
-        fields: ClaimFields {
-            author: &candidate.author_did,
-            subject: &candidate.subject,
-            predicate: &candidate.predicate,
-            object: &candidate.object,
-            evidence: &candidate.evidence,
-        },
-        provenance: &candidate.provenance,
-        lineage: ClaimLineage {
-            author_did: &candidate.author_did,
-            cid: &candidate.cid,
-            references: &[],
-        },
-    }
-}
-
-fn referrer_lineage(referrer: &SignedClaim) -> ClaimLineage<'_> {
-    ClaimLineage {
-        author_did: &referrer.unsigned.author_did.0,
-        cid: "",
-        references: &referrer.unsigned.references,
-    }
-}
-
-/// The stored claims referencing `cid`.
-fn referrers_of(storage: &dyn StoragePort, cid: &str) -> Result<Vec<SignedClaim>> {
-    let referencing = storage.query_referencing(&Cid(cid.to_string()))?;
-    let read = referencing
-        .iter()
-        .map(|(referrer, _)| storage.read_signed_claim(referrer))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(read.into_iter().flatten().collect())
-}
-
 /// The active links in the store, once per (DID, account id).
 fn active_links_in_store(handles: &IdentityVerifyHandles<'_>) -> Result<Vec<IdentityLink>> {
-    let candidates = handles.claims.link_candidates(link_predicate())?;
-    let referrers: Vec<SignedClaim> = candidates
-        .iter()
-        .map(|candidate| referrers_of(handles.lineage, &candidate.cid))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect();
-    let stored: Vec<StoredClaim<'_>> = candidates.iter().map(stored_claim).collect();
-    let lineages: Vec<ClaimLineage<'_>> = referrers.iter().map(referrer_lineage).collect();
-    Ok(links_to_recheck(&stored, &lineages))
+    Ok(StoredLinkLineage::read(handles.claims, handles.lineage)?.links_to_recheck())
 }
 
 /// The login to read for `link`: the last one this reader saw, else the
@@ -105,11 +58,7 @@ fn login_to_read<'a>(link: &'a IdentityLink, latest: &'a [LinkCheck]) -> &'a str
 /// answer; any other failure is kept so the caller can report it.
 fn answer_of(read: std::result::Result<PersonProfile, GithubError>) -> GithubRead<GithubError> {
     match read {
-        Ok(profile) => GithubRead::Profile(GithubObservation {
-            login: profile.login,
-            user_id: profile.id,
-            bio: profile.bio,
-        }),
+        Ok(profile) => GithubRead::Profile(observation_of(profile)),
         Err(GithubError::NotFound { .. }) => GithubRead::NotFound,
         Err(err) => GithubRead::Unreadable(err),
     }
