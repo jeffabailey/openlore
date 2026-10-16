@@ -380,7 +380,7 @@ fn oracle_check(link: &LinkedView, login_read: &ReadView, id_read: &ReadView) ->
     };
     // Review D1: an answer naming no account (number 0, invalid login) is
     // unreadable — it never decides a verdict, never stands in for "gone".
-    let names_an_account = |id: u64, login: &str| id != 0 && is_github_login(login);
+    let names_an_account = |id: u64, login: &str| id != 0 && is_valid_login(login);
     match login_read {
         ReadView::RateLimited | ReadView::Unavailable => CheckView { recorded: None },
         ReadView::Profile { id, login, .. } if !names_an_account(*id, login) => {
@@ -400,10 +400,18 @@ fn oracle_check(link: &LinkedView, login_read: &ReadView, id_read: &ReadView) ->
     }
 }
 
-fn is_github_login(login: &str) -> bool {
-    (1..=39).contains(&login.len())
-        && !login.starts_with('-')
-        && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+/// The characters a GitHub login may use (ADR-085 §4, re-review N8).
+const LOGIN_ALPHABET: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-";
+
+/// ADR-085 §4 (re-review N8), stated from the ADR text and independent of
+/// production: a valid login is 1-39 ASCII characters, each a letter, digit
+/// or `-`, not starting with `-`. A trailing hyphen and consecutive hyphens
+/// are accepted on purpose (older GitHub accounts have them).
+fn is_valid_login(login: &str) -> bool {
+    let count = login.chars().count();
+    let from_alphabet = login.chars().all(|c| LOGIN_ALPHABET.contains(c));
+    let first = login.chars().next();
+    (1..=39).contains(&count) && from_alphabet && first != Some('-')
 }
 
 /// ADR-084 §3.
@@ -433,7 +441,7 @@ fn oracle_project(claim: &ClaimView, provenance: ProvenanceView) -> Option<LinkV
     (provenance_ok
         && claim.predicate == SAME_AS
         && bare_author == claim.subject
-        && is_github_login(login)
+        && is_valid_login(login)
         && ids.len() == 1
         && ids[0] != 0
         && profile_matches)
@@ -511,8 +519,26 @@ fn arb_did() -> impl Strategy<Value = String> {
     "did:plc:[a-z0-9]{6,12}"
 }
 
+/// A login GitHub serves: the whole valid space, including the 38-39
+/// character edge, a trailing hyphen and consecutive hyphens.
 fn arb_login() -> impl Strategy<Value = String> {
-    "[A-Za-z0-9][A-Za-z0-9-]{0,20}"
+    prop_oneof![
+        3 => "[A-Za-z0-9][A-Za-z0-9-]{0,20}",
+        1 => "[A-Za-z0-9][A-Za-z0-9-]{37,38}",
+        1 => "[A-Za-z0-9]{1,8}--[A-Za-z0-9-]{0,8}-",
+    ]
+}
+
+/// Any username an answer may carry (re-review N8): 1-45 characters, about
+/// half of them valid logins, the rest too long (40-45), starting with a
+/// hyphen, or holding a character outside the login alphabet.
+fn arb_any_login() -> impl Strategy<Value = String> {
+    prop_oneof![
+        5 => arb_login(),
+        2 => "[A-Za-z0-9][A-Za-z0-9-]{39,44}",
+        1 => "-[A-Za-z0-9-]{0,38}",
+        1 => "[A-Za-z0-9]{0,10}[^A-Za-z0-9-][A-Za-z0-9-]{0,10}",
+    ]
 }
 
 /// A bio assembled from words, other DIDs and near-misses of `did`.
@@ -538,14 +564,14 @@ fn arb_bio_for(did: String) -> impl Strategy<Value = Option<String>> {
 
 fn arb_read(linked_id: u64) -> impl Strategy<Value = ReadView> {
     prop_oneof![
-        (arb_login(), proptest::option::of("[ -~]{0,40}")).prop_map(move |(login, bio)| {
+        (arb_any_login(), proptest::option::of("[ -~]{0,40}")).prop_map(move |(login, bio)| {
             ReadView::Profile {
                 id: linked_id,
                 login,
                 bio,
             }
         }),
-        (arb_login(), 1u64..1_000).prop_map(|(login, id)| ReadView::Profile {
+        (arb_any_login(), 1u64..1_000).prop_map(|(login, id)| ReadView::Profile {
             id: 10_000_000_000 + id,
             login,
             bio: None
@@ -567,7 +593,7 @@ fn arb_account_naming_nobody(linked_id: u64) -> impl Strategy<Value = ReadView> 
         Just("jeff/../admin".to_string()),
     ];
     prop_oneof![
-        arb_login().prop_map(|login| ReadView::Profile {
+        arb_any_login().prop_map(|login| ReadView::Profile {
             id: 0,
             login,
             bio: None
@@ -583,7 +609,7 @@ fn arb_account_naming_nobody(linked_id: u64) -> impl Strategy<Value = ReadView> 
 /// The id read never answers with another account (but may name none).
 fn arb_id_read(linked_id: u64, did: String) -> impl Strategy<Value = ReadView> {
     prop_oneof![
-        (arb_login(), arb_bio_for(did)).prop_map(move |(login, bio)| ReadView::Profile {
+        (arb_any_login(), arb_bio_for(did)).prop_map(move |(login, bio)| ReadView::Profile {
             id: linked_id,
             login,
             bio
@@ -842,7 +868,7 @@ proptest! {
     /// CORE-2 (@property @adr-085-4 @uc-10 @contract-shape:pure-function)
     #[test]
     fn core2_a_check_decides_from_its_reads_and_records_nothing_when_github_fails(
-        (link, login_read, id_read) in (arb_did(), arb_login(), 1u64..10_000_000)
+        (link, login_read, id_read) in (arb_did(), arb_any_login(), 1u64..10_000_000)
             .prop_flat_map(|(did, last_login, id)| {
                 let link = LinkedView { did: did.clone(), id, last_login };
                 (Just(link), arb_read(id), arb_id_read(id, did))
@@ -856,7 +882,7 @@ proptest! {
     #[test]
     fn core3_only_the_owners_well_formed_record_projects_as_a_link(
         did in arb_did(),
-        login in arb_login(),
+        login in arb_any_login(),
         id in 1u64..10_000_000_000,
         mutation in arb_mutation(),
         provenance in arb_provenance(),
