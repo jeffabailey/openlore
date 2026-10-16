@@ -560,7 +560,6 @@ fn jeff_links_a_second_github_account_and_both_show_as_his() {
 ///   And BurntSushi's person view lists exactly the same repos and ranks as before
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn linking_and_rechecking_leave_the_contributors_jeff_recorded_untouched() {
     let world = LinkWorld::with(&[JEFF_GH, BURNTSUSHI_GH]);
     given_repo_scraped(
@@ -619,7 +618,6 @@ fn linking_and_rechecking_leave_the_contributors_jeff_recorded_untouched() {
 ///     | he linked the account     | identity list   |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn the_identity_verbs_never_repeat_jeffs_bio_or_log_his_identity() {
     for verb in ["link", "verify", "list"] {
         let world = LinkWorld::with(&[JEFF_GH]);
@@ -1103,7 +1101,6 @@ fn a_github_failure_during_a_recheck_changes_nothing() {
 ///     | --did and --github together  | nothing (usage error naming --did)   |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn rechecking_can_be_narrowed_to_one_person_or_one_account() {
     let rows: [(&str, &[&str], Vec<Account>); 4] = [
         ("no filter", &[], vec![JEFF_GH, RACHEL_GH]),

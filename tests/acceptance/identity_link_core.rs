@@ -263,8 +263,61 @@ fn sut_link_view(
     links: &[ProjectedLinkView],
     checks: &[CheckInputView],
 ) -> BTreeMap<(String, u64), ShownView> {
-    let _ = (links, checks);
-    todo!("RED: bind to claim_domain::identity_link::link_view (ADR-085 §5), now = a fixed instant")
+    use claim_domain::identity_link::{
+        link_view, CheckVerdict, IdentityLink, LatestCheck, LinkLifecycle, LinkStanding, ReaderLink,
+    };
+    let now = Utc.with_ymd_and_hms(2026, 10, 15, 12, 0, 0).unwrap();
+    let verdict_of = |verdict: VerdictView| match verdict {
+        VerdictView::Verified => CheckVerdict::Verified,
+        VerdictView::DidMissing => CheckVerdict::DidMissing,
+        VerdictView::DifferentDid => CheckVerdict::DifferentDid,
+        VerdictView::NoBio => CheckVerdict::NoBio,
+        VerdictView::AccountNotFound => CheckVerdict::AccountNotFound,
+    };
+    let view_of = |verdict: CheckVerdict| match verdict {
+        CheckVerdict::Verified => VerdictView::Verified,
+        CheckVerdict::DidMissing => VerdictView::DidMissing,
+        CheckVerdict::DifferentDid => VerdictView::DifferentDid,
+        CheckVerdict::NoBio => VerdictView::NoBio,
+        CheckVerdict::AccountNotFound => VerdictView::AccountNotFound,
+    };
+    let reader_links: Vec<ReaderLink> = links
+        .iter()
+        .map(|link| ReaderLink {
+            link: IdentityLink {
+                did: link.did.clone(),
+                login: link.login.clone(),
+                user_id: link.id,
+            },
+            lifecycle: match link.lifecycle {
+                LifecycleView::Active => LinkLifecycle::Active,
+                LifecycleView::Retracted => LinkLifecycle::Retracted,
+                LifecycleView::Superseded => LinkLifecycle::Superseded,
+            },
+        })
+        .collect();
+    let recorded: Vec<LatestCheck> = checks
+        .iter()
+        .map(|check| LatestCheck {
+            subject_did: check.did.clone(),
+            user_id: check.id,
+            login_seen: format!("login{}", check.id),
+            verdict: verdict_of(check.verdict),
+            checked_at: now + chrono::Duration::days(check.days_from_now),
+        })
+        .collect();
+    link_view(&reader_links, &recorded, now)
+        .into_iter()
+        .map(|shown| {
+            let view = match shown.standing {
+                LinkStanding::Associated { .. } => ShownView::Associated,
+                LinkStanding::NotChecked => ShownView::NotChecked,
+                LinkStanding::ProofGone { verdict, .. } => ShownView::ProofGone(view_of(verdict)),
+                LinkStanding::Contested => ShownView::Contested,
+            };
+            ((shown.link.did, shown.link.user_id), view)
+        })
+        .collect()
 }
 
 fn sut_is_reserved_predicate(predicate: &str) -> bool {
@@ -790,7 +843,6 @@ proptest! {
 
     /// CORE-5 (@property @adr-085-5 @gdl-d14 @h-2 @kpi-gdl-1 @contract-shape:pure-function)
     #[test]
-    #[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
     fn core5_only_this_readers_sole_verified_check_associates_an_account(
         (links, checks) in arb_reader_state()
     ) {
@@ -801,7 +853,6 @@ proptest! {
     /// unchecked or disproved never changes any existing row.
     /// (@property @gdl-d14 @h-2 @contract-shape:unbounded-preservation)
     #[test]
-    #[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
     fn core5b_a_squatters_unproven_link_never_changes_anyone_elses_row(
         (links, checks) in arb_reader_state(),
         disproved in proptest::bool::ANY,

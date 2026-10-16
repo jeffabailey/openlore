@@ -10,8 +10,8 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
-    link_predicate, links_to_recheck, recheck_link, ClaimFields, GithubObservation, GithubRead,
-    IdentityLink, ProofCheck, StoredClaim,
+    is_in_scope, link_predicate, links_to_recheck, recheck_link, ClaimFields, GithubObservation,
+    GithubRead, IdentityLink, ProofCheck, RecheckScope, StoredClaim,
 };
 use claim_domain::{Cid, ClaimLineage, SignedClaim};
 use ports::{
@@ -152,16 +152,24 @@ fn recheck(
     Ok(report)
 }
 
-/// Run `identity verify` as of `now`.
-pub fn run(handles: &IdentityVerifyHandles<'_>, now: DateTime<Utc>) -> Result<VerifyReport> {
-    let links = active_links_in_store(handles)?;
+/// Run `identity verify` as of `now`, re-checking the active links (own and
+/// followed peers') within `scope`.
+pub fn run(
+    handles: &IdentityVerifyHandles<'_>,
+    scope: &RecheckScope,
+    now: DateTime<Utc>,
+) -> Result<VerifyReport> {
+    let latest = handles.checks.latest_checks(&CheckFilter::All, now)?;
+    let links: Vec<IdentityLink> = active_links_in_store(handles)?
+        .into_iter()
+        .filter(|link| is_in_scope(scope, link, login_to_read(link, &latest)))
+        .collect();
     if links.is_empty() {
         return Ok(VerifyReport {
             stdout: render_no_identity_links_to_verify(),
             unreadable: Vec::new(),
         });
     }
-    let latest = handles.checks.latest_checks(&CheckFilter::All, now)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()

@@ -10,7 +10,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
-    link_predicate, link_view, project, ClaimFields, IdentityLink, LatestCheck,
+    link_predicate, link_view, project, ClaimFields, LatestCheck, LinkLifecycle, ReaderLink,
 };
 use ports::{
     CheckFilter, IdentityLinkCheckReadPort, LinkCandidate, LinkCandidateReadPort, LinkCheck,
@@ -25,8 +25,9 @@ pub struct IdentityListHandles<'a> {
 }
 
 /// A stored candidate as a link, if it is one, under the provenance the row
-/// was stored with (own: app-signed; peer: `peer_claims.provenance`).
-fn projected(candidate: &LinkCandidate) -> Option<IdentityLink> {
+/// was stored with (own: app-signed; peer: `peer_claims.provenance`). The
+/// list holds no lineage reads: every projected link is shown as active.
+fn projected(candidate: &LinkCandidate) -> Option<ReaderLink> {
     let fields = ClaimFields {
         author: &candidate.author_did,
         subject: &candidate.subject,
@@ -34,7 +35,10 @@ fn projected(candidate: &LinkCandidate) -> Option<IdentityLink> {
         object: &candidate.object,
         evidence: &candidate.evidence,
     };
-    project(fields, &candidate.provenance)
+    project(fields, &candidate.provenance).map(|link| ReaderLink {
+        link,
+        lifecycle: LinkLifecycle::Active,
+    })
 }
 
 fn latest_of(check: LinkCheck) -> LatestCheck {
@@ -49,7 +53,7 @@ fn latest_of(check: LinkCheck) -> LatestCheck {
 
 /// Run `identity list` as of `now`; returns the stdout to print.
 pub fn run(handles: &IdentityListHandles<'_>, now: DateTime<Utc>) -> Result<String> {
-    let links: Vec<IdentityLink> = handles
+    let links: Vec<ReaderLink> = handles
         .claims
         .link_candidates(link_predicate())?
         .iter()
@@ -64,5 +68,8 @@ pub fn run(handles: &IdentityListHandles<'_>, now: DateTime<Utc>) -> Result<Stri
         .into_iter()
         .map(latest_of)
         .collect();
-    Ok(render_linked_identities(&link_view(&links, &latest), now))
+    Ok(render_linked_identities(
+        &link_view(&links, &latest, now),
+        now,
+    ))
 }

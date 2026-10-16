@@ -399,7 +399,8 @@ pub fn project(claim: ClaimFields<'_>, provenance: &Provenance) -> Option<Identi
 // Reader view (ADR-085 §5)
 // =============================================================================
 
-/// This reader's latest check of one link.
+/// One check this reader recorded for a link (insert-only, ADR-085 §7): the
+/// latest one not dated after `now` decides (Q-RM-3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LatestCheck {
     pub subject_did: String,
@@ -433,19 +434,46 @@ pub struct LinkedIdentity {
     pub standing: LinkStanding,
 }
 
-/// The latest check of `link`, if this reader checked it.
-fn latest_for<'a>(link: &IdentityLink, latest: &'a [LatestCheck]) -> Option<&'a LatestCheck> {
-    latest
-        .iter()
-        .find(|check| check.subject_did == link.did && check.user_id == link.user_id)
+/// Where a stored link stands in its author's own lineage (ADR-060).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkLifecycle {
+    Active,
+    Retracted,
+    Superseded,
 }
 
-/// How many links are verified per account id.
-fn verified_per_account(links: &[IdentityLink], latest: &[LatestCheck]) -> BTreeMap<u64, usize> {
+/// A projected link with its lifecycle, as a reader holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReaderLink {
+    pub link: IdentityLink,
+    pub lifecycle: LinkLifecycle,
+}
+
+/// The check of `link` that decides as of `now`: the latest recorded one not
+/// dated in the future (Q-RM-3); among equal instants the last recorded.
+fn latest_for<'a>(
+    link: &IdentityLink,
+    checks: &'a [LatestCheck],
+    now: DateTime<Utc>,
+) -> Option<&'a LatestCheck> {
+    checks
+        .iter()
+        .filter(|check| check.subject_did == link.did && check.user_id == link.user_id)
+        .filter(|check| check.checked_at <= now)
+        .max_by_key(|check| check.checked_at)
+}
+
+/// How many active links are verified per account id. Unchecked or
+/// disproved links never count (no griefing by an unproven claimant).
+fn verified_per_account(
+    links: &[IdentityLink],
+    checks: &[LatestCheck],
+    now: DateTime<Utc>,
+) -> BTreeMap<u64, usize> {
     links
         .iter()
         .filter(|link| {
-            latest_for(link, latest).is_some_and(|c| c.verdict == CheckVerdict::Verified)
+            latest_for(link, checks, now).is_some_and(|c| c.verdict == CheckVerdict::Verified)
         })
         .fold(BTreeMap::new(), |mut counts, link| {
             *counts.entry(link.user_id).or_insert(0) += 1;
@@ -453,20 +481,35 @@ fn verified_per_account(links: &[IdentityLink], latest: &[LatestCheck]) -> BTree
         })
 }
 
-/// The association rule: associated iff this reader's latest check is
-/// Verified and no other DID is Verified for the same account.
-pub fn link_view(links: &[IdentityLink], latest: &[LatestCheck]) -> Vec<LinkedIdentity> {
-    let distinct: Vec<IdentityLink> = links
+/// The active links, once per (DID, account id).
+fn distinct_active(links: &[ReaderLink]) -> Vec<IdentityLink> {
+    links
         .iter()
-        .map(|link| ((link.did.clone(), link.user_id), link.clone()))
+        .filter(|reader_link| reader_link.lifecycle == LinkLifecycle::Active)
+        .map(|reader_link| {
+            let link = &reader_link.link;
+            ((link.did.clone(), link.user_id), link.clone())
+        })
         .collect::<BTreeMap<_, _>>()
         .into_values()
-        .collect();
-    let verified = verified_per_account(&distinct, latest);
+        .collect()
+}
+
+/// The association rule (ADR-085 §5) as of `now`: only active links are
+/// shown; one is associated iff this reader's deciding check is Verified and
+/// no other active DID is Verified for the same account (else Contested).
+pub fn link_view(
+    links: &[ReaderLink],
+    checks: &[LatestCheck],
+    now: DateTime<Utc>,
+) -> Vec<LinkedIdentity> {
+    let distinct = distinct_active(links);
+    let verified = verified_per_account(&distinct, checks, now);
     distinct
         .into_iter()
         .map(|link| {
-            let standing = match latest_for(&link, latest) {
+            let deciding = latest_for(&link, checks, now);
+            let standing = match deciding {
                 None => LinkStanding::NotChecked,
                 Some(check) if check.verdict != CheckVerdict::Verified => LinkStanding::ProofGone {
                     verdict: check.verdict,
@@ -480,17 +523,17 @@ pub fn link_view(links: &[IdentityLink], latest: &[LatestCheck]) -> Vec<LinkedId
                 },
             };
             LinkedIdentity {
-                link: under_login_last_seen(link, latest),
+                link: under_login_last_seen(link, deciding),
                 standing,
             }
         })
         .collect()
 }
 
-/// `link` under the login this reader's latest check saw: after a rename the
-/// account shows under its new name; an unchecked link keeps the signed one.
-fn under_login_last_seen(link: IdentityLink, latest: &[LatestCheck]) -> IdentityLink {
-    match latest_for(&link, latest) {
+/// `link` under the login its deciding check saw: after a rename the account
+/// shows under its new name; an unchecked link keeps the signed one.
+fn under_login_last_seen(link: IdentityLink, deciding: Option<&LatestCheck>) -> IdentityLink {
+    match deciding {
         Some(check) => IdentityLink {
             login: check.login_seen.clone(),
             ..link
@@ -512,21 +555,53 @@ pub struct StoredClaim<'a> {
     pub lineage: ClaimLineage<'a>,
 }
 
+/// Where `claim` stands in its own author's lineage (the shared claim-domain
+/// withdrawal rules, read against `referrers`, the claims referencing it).
+fn lifecycle_of(claim: &StoredClaim<'_>, referrers: &[ClaimLineage<'_>]) -> LinkLifecycle {
+    if is_self_retracted(&claim.lineage, referrers) {
+        LinkLifecycle::Retracted
+    } else if is_superseded_by_author(&claim.lineage, referrers) {
+        LinkLifecycle::Superseded
+    } else {
+        LinkLifecycle::Active
+    }
+}
+
 /// The links still standing: every stored link its own author has neither
-/// retracted nor superseded (the shared claim-domain withdrawal rules, read
-/// against `referrers`, the claims that reference a stored link).
+/// retracted nor superseded.
 pub fn active_links(
     stored: &[StoredClaim<'_>],
     referrers: &[ClaimLineage<'_>],
 ) -> Vec<IdentityLink> {
     stored
         .iter()
-        .filter(|claim| {
-            !is_self_retracted(&claim.lineage, referrers)
-                && !is_superseded_by_author(&claim.lineage, referrers)
-        })
+        .filter(|claim| lifecycle_of(claim, referrers) == LinkLifecycle::Active)
         .filter_map(|claim| project(claim.fields, claim.provenance))
         .collect()
+}
+
+/// Which links one re-check covers (`identity verify --did` / `--github`).
+/// A scope only selects links; it never changes a verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecheckScope {
+    /// Every active link.
+    Everyone,
+    /// The links of one DID (compared bare).
+    Person(String),
+    /// The links of one GitHub account, by login (case-insensitive, as
+    /// signed or as last seen).
+    Account(String),
+}
+
+/// Is `link`, last seen under `login_last_seen`, within `scope`?
+pub fn is_in_scope(scope: &RecheckScope, link: &IdentityLink, login_last_seen: &str) -> bool {
+    match scope {
+        RecheckScope::Everyone => true,
+        RecheckScope::Person(did) => bare_did(did) == link.did,
+        RecheckScope::Account(login) => {
+            login.eq_ignore_ascii_case(&link.login) || login.eq_ignore_ascii_case(login_last_seen)
+        }
+    }
 }
 
 /// The links one re-check covers: every active link, once per

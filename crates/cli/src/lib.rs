@@ -339,9 +339,17 @@ pub enum IdentityCommand {
     },
     /// Show linked identities from the last local check (offline).
     List,
-    /// Re-check every active link against a fresh GitHub read; appends one
-    /// local check per decided re-check, never retracts.
-    Verify,
+    /// Re-check every active link (yours and followed peers') against a
+    /// fresh GitHub read; appends one local check per decided re-check,
+    /// never retracts.
+    Verify {
+        /// Re-check only the links of this DID.
+        #[arg(long, conflicts_with = "github")]
+        did: Option<String>,
+        /// Re-check only the links of this GitHub login.
+        #[arg(long)]
+        github: Option<String>,
+    },
 }
 
 /// The services an identity link can name.
@@ -791,7 +799,12 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
             }
         }
-        Command::Identity(IdentityCommand::Verify) => {
+        Command::Identity(IdentityCommand::Verify { did, github }) => {
+            let scope = match (did, github) {
+                (Some(did), _) => claim_domain::identity_link::RecheckScope::Person(did),
+                (None, Some(login)) => claim_domain::identity_link::RecheckScope::Account(login),
+                (None, None) => claim_domain::identity_link::RecheckScope::Everyone,
+            };
             match verbs::identity_verify::run(
                 &verbs::identity_verify::IdentityVerifyHandles {
                     checks: wiring.identity_link_checks.as_ref(),
@@ -800,6 +813,7 @@ pub fn dispatch(cli: Cli) -> i32 {
                     lineage: wiring.storage.as_ref(),
                     github: wiring.github.as_ref(),
                 },
+                &scope,
                 wiring.clock.now_utc(),
             ) {
                 Ok(report) => {
