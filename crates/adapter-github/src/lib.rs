@@ -43,8 +43,8 @@
 
 use async_trait::async_trait;
 use ports::{
-    GithubError, GithubPort, OwnedRepo, PersonProfile, ProbeOutcome, RateBudget, RawContributor,
-    Signal, TargetKind,
+    GithubAccountProfile, GithubError, GithubPort, OwnedRepo, PersonProfile, ProbeOutcome,
+    RateBudget, RawContributor, Signal, TargetKind,
 };
 
 pub mod client;
@@ -395,7 +395,7 @@ impl GithubPort for GithubAdapter {
 
     /// `GET {base}/users/{login}` — the account a login names, strictly
     /// reshaped: no account number or login is `ApiShape` (fail closed).
-    async fn read_account(&self, login: &str) -> Result<PersonProfile, GithubError> {
+    async fn read_account(&self, login: &str) -> Result<GithubAccountProfile, GithubError> {
         self.read_account_at(&format!("/users/{login}"), login)
             .await
     }
@@ -403,7 +403,7 @@ impl GithubPort for GithubAdapter {
     /// `GET {base}/user/{id}` — the account's current profile, whatever its
     /// login is now (UC-9). Same strict reshape as
     /// [`read_account`](Self::read_account).
-    async fn read_person_by_id(&self, user_id: u64) -> Result<PersonProfile, GithubError> {
+    async fn read_person_by_id(&self, user_id: u64) -> Result<GithubAccountProfile, GithubError> {
         self.read_account_at(&format!("/user/{user_id}"), &user_id.to_string())
             .await
     }
@@ -450,7 +450,7 @@ impl GithubAdapter {
         &self,
         path: &str,
         target: &str,
-    ) -> Result<PersonProfile, GithubError> {
+    ) -> Result<GithubAccountProfile, GithubError> {
         let body = self.get_public(path, target).await?;
         record_auth_report(client::parse_auth_report(&body));
         client::parse_account_profile(&body).map_err(GithubError::ApiShape)

@@ -12,7 +12,7 @@ use claim_domain::identity_link::{
     StoredClaim,
 };
 use claim_domain::{ClaimLineage, SignedClaim};
-use ports::{LinkCandidate, LinkCandidateReadPort, LinkLineageReadPort, PersonProfile};
+use ports::{GithubAccountProfile, LinkCandidate, LinkCandidateReadPort, LinkLineageReadPort};
 
 /// The link candidates in the store and every stored claim referencing one.
 pub struct StoredLinkLineage {
@@ -88,8 +88,10 @@ fn referrer_lineage(referrer: &SignedClaim) -> ClaimLineage<'_> {
     }
 }
 
-/// The observation a fresh profile read makes.
-pub fn observation_of(profile: PersonProfile) -> GithubObservation {
+/// The observation a fresh strict account read makes — only a profile
+/// naming an account (`read_account` / `read_person_by_id`) is observed.
+pub(crate) fn observation_of(account: GithubAccountProfile) -> GithubObservation {
+    let profile = account.into_profile();
     GithubObservation {
         login: profile.login,
         user_id: profile.id,

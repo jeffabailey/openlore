@@ -281,6 +281,39 @@ pub struct PersonProfile {
     pub html_url: String,
 }
 
+/// A profile that names a GitHub account — a positive numeric `id` and a
+/// non-blank `login` — the only shape an identity proof reads (ADR-085 §4).
+/// The strict account reads ([`crate::GithubPort::read_account`],
+/// [`crate::GithubPort::read_person_by_id`]) return it; a lenient
+/// `scrape person` profile cannot pass for one without [`Self::new`]'s check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubAccountProfile(PersonProfile);
+
+impl GithubAccountProfile {
+    /// The profile, when it names an account; else what it lacks.
+    pub fn new(profile: PersonProfile) -> Result<Self, String> {
+        if profile.login.trim().is_empty() {
+            return Err("the profile has no `login` string".to_string());
+        }
+        if profile.id == 0 {
+            return Err("the profile has no positive numeric `id`".to_string());
+        }
+        Ok(Self(profile))
+    }
+
+    pub fn into_profile(self) -> PersonProfile {
+        self.0
+    }
+}
+
+impl std::ops::Deref for GithubAccountProfile {
+    type Target = PersonProfile;
+
+    fn deref(&self) -> &PersonProfile {
+        &self.0
+    }
+}
+
 /// One RAW row of `GET /users/{user}/repos` (`scrape person`). Forks and
 /// archived repos are included; choosing which to scrape is the pure core's
 /// job (`scraper_domain::select_person_repos`).

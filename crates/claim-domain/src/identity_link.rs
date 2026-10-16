@@ -213,7 +213,6 @@ pub enum ProofCheck {
     Disproved {
         verdict: CheckVerdict,
         login_seen: String,
-        user_id: u64,
     },
 }
 
@@ -263,7 +262,6 @@ pub fn check_link(
             other => ProofCheck::Disproved {
                 verdict: recorded_verdict(&other),
                 login_seen: login.to_string(),
-                user_id: user_id.get(),
             },
         },
     )
@@ -656,11 +654,10 @@ pub enum GithubRead<E> {
 }
 
 /// The account was not found under its login nor by its number.
-fn account_not_found(link: &IdentityLink, login_read: &str) -> ProofCheck {
+fn account_not_found(login_read: &str) -> ProofCheck {
     ProofCheck::Disproved {
         verdict: CheckVerdict::AccountNotFound,
         login_seen: login_read.to_string(),
-        user_id: link.user_id,
     }
 }
 
@@ -693,7 +690,7 @@ fn check_linked_account<E>(
     if user_id.get() == link.user_id {
         check_link(&Did(link.did.clone()), observed).map_err(RecheckUnreadable::Malformed)
     } else {
-        Ok(account_not_found(link, login_read))
+        Ok(account_not_found(login_read))
     }
 }
 
@@ -722,7 +719,7 @@ pub fn recheck_link<E>(
         GithubRead::Profile(_) | GithubRead::NotFound => {
             match read_by_account_number(link.user_id) {
                 GithubRead::Profile(current) => check_linked_account(link, login_read, &current),
-                GithubRead::NotFound => Ok(account_not_found(link, login_read)),
+                GithubRead::NotFound => Ok(account_not_found(login_read)),
                 GithubRead::Unreadable(failure) => Err(RecheckUnreadable::Failed(failure)),
             }
         }

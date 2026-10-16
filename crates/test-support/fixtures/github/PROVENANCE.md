@@ -15,4 +15,4 @@ deleted-account halves of A-10 (current profile after a rename, 404 once
 deleted) are not observable on a demo account and stay partly unverified.
 
 Decoded by `crates/adapter-github/tests/github_profile_contract.rs` through
-the production reshape `adapter_github::client::parse_person_profile`.
+the strict production reshape `adapter_github::client::parse_account_profile`.

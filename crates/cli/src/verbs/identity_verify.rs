@@ -13,8 +13,8 @@ use claim_domain::identity_link::{
     is_github_login, is_in_scope, recheck_link, GithubRead, IdentityLink, ProofCheck, RecheckScope,
 };
 use ports::{
-    CheckFilter, GithubError, GithubPort, IdentityLinkCheckReadPort, IdentityLinkCheckWritePort,
-    LinkCandidateReadPort, LinkCheck, LinkLineageReadPort, PersonProfile,
+    CheckFilter, GithubAccountProfile, GithubError, GithubPort, IdentityLinkCheckReadPort,
+    IdentityLinkCheckWritePort, LinkCandidateReadPort, LinkCheck, LinkLineageReadPort,
 };
 
 use crate::render::{
@@ -56,7 +56,9 @@ fn login_to_read<'a>(link: &'a IdentityLink, latest: &'a [LinkCheck]) -> &'a str
 
 /// One GitHub answer as the check consumes it: "no such account" is an
 /// answer; any other failure is kept so the caller can report it.
-fn answer_of(read: std::result::Result<PersonProfile, GithubError>) -> GithubRead<GithubError> {
+fn answer_of(
+    read: std::result::Result<GithubAccountProfile, GithubError>,
+) -> GithubRead<GithubError> {
     match read {
         Ok(profile) => GithubRead::Profile(observation_of(profile)),
         Err(GithubError::NotFound { .. }) => GithubRead::NotFound,

@@ -81,11 +81,8 @@ impl OwnershipRefusal {
 
 /// A GitHub username: 1–39 ASCII letters, digits or hyphens, not starting
 /// with a hyphen. Anything else names no account (and never reaches a URL).
-pub fn is_github_login(typed: &str) -> bool {
-    (1..=39).contains(&typed.len())
-        && !typed.starts_with('-')
-        && typed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-}
+/// The one login rule, shared with the CLI (`claim_domain::identity_link`).
+pub use ports::claim_domain::identity_link::is_github_login;
 
 /// The capability a scan needs: this DID proved this GitHub account is
 /// theirs. Only [`prove_ownership`] mints it.
@@ -112,12 +109,17 @@ impl VerifiedOwnership {
 
 /// Prove that `account` belongs to `session_did`. `linked_user_id` is the
 /// numeric id recorded when the link was verified (re-verification before a
-/// scan); a different id means the login changed hands.
+/// scan); a different id means the login changed hands. A profile naming no
+/// account (account number 0, or no GitHub login) proves nothing either way:
+/// it is refused as an unreadable GitHub answer (fail closed, ADR-085 §4).
 pub fn prove_ownership(
     session_did: &str,
     account: &GithubAccount<'_>,
     linked_user_id: Option<u64>,
 ) -> Result<VerifiedOwnership, OwnershipRefusal> {
+    if account.user_id == 0 || !is_github_login(account.login) {
+        return Err(OwnershipRefusal::GithubUnavailable);
+    }
     if linked_user_id.is_some_and(|id| id != account.user_id) {
         return Err(OwnershipRefusal::IdentityChanged);
     }
@@ -193,6 +195,29 @@ mod tests {
             } else if let Err(refusal) = proven {
                 prop_assert!(refusal.disproves_ownership());
             }
+        }
+
+        /// Universe: (session DID, bio naming it, recorded id, malformed
+        /// account). An account numbered 0 or without a GitHub login is
+        /// never proven — even when its bio names the session DID — and the
+        /// refusal disproves nothing (the link is not marked unverified).
+        #[test]
+        fn an_account_github_did_not_name_is_never_proven(
+            did in did(), words in words(),
+            linked in proptest::option::of(0u64..1_000),
+            malformed in prop_oneof![
+                Just(("priyaraman", 0u64)),
+                Just(("", 4_210_001)),
+                Just(("-priya", 4_210_001)),
+                Just(("priya/raman", 4_210_001)),
+            ],
+        ) {
+            let bio = format!("{words} {did}");
+            let (login, user_id) = malformed;
+            let account = GithubAccount { login, user_id, bio: Some(&bio) };
+            let refused = prove_ownership(&did, &account, linked);
+            prop_assert_eq!(&refused, &Err(OwnershipRefusal::GithubUnavailable));
+            prop_assert!(!refused.unwrap_err().disproves_ownership());
         }
 
         /// Universe: typed strings. Only GitHub-username-shaped text is

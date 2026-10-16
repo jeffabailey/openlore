@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use hyper::StatusCode;
-use ports::{GithubError, GithubLink, LinkRecorded, PersonProfile, WebSession};
+use ports::{GithubAccountProfile, GithubError, GithubLink, LinkRecorded, WebSession};
 use review_domain::budget::{budget_allows, HOUR_SECS, VERIFY_ATTEMPTS_PER_HOUR};
 use review_domain::ownership::{
     is_github_login, prove_ownership, GithubAccount, OwnershipRefusal, VerifiedOwnership,
@@ -114,7 +114,7 @@ async fn check_bio(
             Err(refusal)
         }
     };
-    (profile.login, outcome)
+    (profile.into_profile().login, outcome)
 }
 
 /// Record the proven link; its verification is counted with it.
@@ -136,7 +136,7 @@ fn record_link(app: &App, ownership: &VerifiedOwnership) -> Result<(), Ownership
 fn unverify_if_linked(
     app: &App,
     session: &WebSession,
-    profile: &PersonProfile,
+    profile: &GithubAccountProfile,
     refusal: &OwnershipRefusal,
 ) {
     let linked = app.links.github_link(&session.owner_did).ok().flatten();
@@ -149,7 +149,7 @@ fn unverify_if_linked(
 }
 
 /// The facts of a profile the ownership proof reads.
-pub(crate) fn account_of(profile: &PersonProfile) -> GithubAccount<'_> {
+pub(crate) fn account_of(profile: &GithubAccountProfile) -> GithubAccount<'_> {
     GithubAccount {
         login: &profile.login,
         user_id: profile.id,

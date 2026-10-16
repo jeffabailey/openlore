@@ -345,14 +345,15 @@ pub fn parse_person_profile(body: &serde_json::Value, user: &str) -> ports::Pers
 /// offending detail (the adapter lifts it to `GithubError::ApiShape`). No
 /// fallback: the requested login or number never stands in for GitHub's
 /// answer (ADR-085 §4). PURE.
-pub fn parse_account_profile(body: &serde_json::Value) -> Result<ports::PersonProfile, String> {
+pub fn parse_account_profile(
+    body: &serde_json::Value,
+) -> Result<ports::GithubAccountProfile, String> {
     let login = text(body, "login").ok_or("the profile has no `login` string")?;
     let id = body
         .get("id")
         .and_then(serde_json::Value::as_u64)
-        .filter(|id| *id != 0)
         .ok_or("the profile has no positive numeric `id`")?;
-    Ok(ports::PersonProfile {
+    ports::GithubAccountProfile::new(ports::PersonProfile {
         id,
         ..parse_person_profile(body, &login)
     })

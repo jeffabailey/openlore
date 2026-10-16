@@ -118,8 +118,8 @@ pub use peer_storage::{
 // pure `scraper-domain` derivation crate (step 01-02) consumes these shapes.
 
 pub use github::{
-    CandidateClaim, CandidateClaimError, GithubError, OwnedRepo, PersonProfile, RawContributor,
-    Signal, SignalKind, TargetKind,
+    CandidateClaim, CandidateClaimError, GithubAccountProfile, GithubError, OwnedRepo,
+    PersonProfile, RawContributor, Signal, SignalKind, TargetKind,
 };
 
 // contributor-philosophy-inference (DDD-4 / ADR-063 §3): the NEW append-only
@@ -542,14 +542,14 @@ pub trait GithubPort: Send + Sync {
     /// account is [`GithubError::NotFound`]; a profile without a positive
     /// numeric `id` or a `login` string is [`GithubError::ApiShape`] — an
     /// identity decision never runs on an account GitHub did not name.
-    async fn read_account(&self, login: &str) -> Result<PersonProfile, GithubError>;
+    async fn read_account(&self, login: &str) -> Result<GithubAccountProfile, GithubError>;
 
     /// Read an account's current public profile by its stable numeric id:
     /// exactly ONE `GET /user/{id}` (UC-9, ADR-085 §4). A renamed account
     /// answers under its new login; a deleted one is [`GithubError::NotFound`];
     /// a profile without a positive numeric `id` or a `login` string is
     /// [`GithubError::ApiShape`].
-    async fn read_person_by_id(&self, user_id: u64) -> Result<PersonProfile, GithubError>;
+    async fn read_person_by_id(&self, user_id: u64) -> Result<GithubAccountProfile, GithubError>;
 
     /// List the repos a person owns: exactly ONE
     /// `GET /users/{user}/repos?type=owner&sort=pushed&per_page=100`, the RAW
