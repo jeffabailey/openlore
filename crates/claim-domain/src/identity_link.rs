@@ -852,4 +852,52 @@ mod tests {
         )
         .is_some());
     }
+
+    /// A DID ending a sentence is still the DID: trailing punctuation is
+    /// not part of the token.
+    #[test]
+    fn a_did_ending_a_sentence_verifies() {
+        for bio in [
+            "my DID is did:plc:abc.",
+            "did:plc:abc, and more",
+            "did:plc:abc; then prose",
+        ] {
+            assert_eq!(
+                bio_verdict(Some(bio), "did:plc:abc"),
+                BioVerdict::Verified,
+                "{bio}"
+            );
+        }
+    }
+
+    proptest::proptest! {
+        /// Universe: DID-shaped tokens and every stripped trailing character.
+        #[test]
+        fn a_did_followed_by_trailing_punctuation_verifies(
+            did in "did:[a-z]{1,8}:[A-Za-z0-9]{1,24}",
+            trailing in proptest::sample::select(vec!['.', ',', ';', ':', '!', '?', ')', ']', '}', '>']),
+        ) {
+            let bio = format!("see {did}{trailing}");
+            proptest::prop_assert_eq!(bio_verdict(Some(&bio), &did), BioVerdict::Verified);
+        }
+    }
+
+    /// A token is DID-shaped only as `did:<lowercase method>:<rest>`: an
+    /// empty or uppercase method, or another scheme, is no DID at all.
+    #[test]
+    fn a_token_not_shaped_as_a_did_is_no_did() {
+        for bio in ["did::x", "did:PLC:x", "foo:abc:def"] {
+            assert_eq!(bio_verdict(Some(bio), DID), BioVerdict::DidMissing, "{bio}");
+        }
+    }
+
+    /// The wording `openlore identity verify` shows for an answer naming no
+    /// account.
+    #[test]
+    fn an_answer_naming_no_account_reads_as_such() {
+        assert_eq!(
+            RecheckUnreadable::<String>::Malformed(MalformedObservation).to_string(),
+            "GitHub answered without a valid account number and login"
+        );
+    }
 }
