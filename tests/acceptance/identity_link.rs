@@ -103,7 +103,6 @@ fn jeffs_github_account_is_publicly_linked_to_his_did_and_shows_as_verified() {
 ///   And his published repo and his linked identities are unchanged
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn jeff_sees_exactly_what_a_link_would_publish_before_anything_is_written() {
     let world = LinkWorld::with(&[JEFF_GH]);
     bio_names(&world, JEFF_GH, MY_DID);
@@ -136,7 +135,6 @@ fn jeff_sees_exactly_what_a_link_would_publish_before_anything_is_written() {
 ///     | does not exist on GitHub                  | the account no longer exists         |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn no_link_is_made_unless_the_bio_names_jeffs_exact_did() {
     let upper = MY_DID.to_ascii_uppercase();
     let rows: [(&str, Option<&str>, Verdict); 6] = [
@@ -199,7 +197,6 @@ fn no_link_is_made_unless_the_bio_names_jeffs_exact_did() {
 ///     | Rust, tools; my DID: did:plc:test-jeff, say hi!  |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn jeffs_did_proves_the_account_wherever_it_stands_in_his_bio() {
     let bios = [
         ("in parentheses", format!("({MY_DID}).")),
@@ -270,7 +267,6 @@ fn linking_an_account_jeff_has_already_linked_is_refused_and_points_to_recheckin
 ///     | rejects his GITHUB_TOKEN                        |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn when_github_cannot_be_read_nothing_is_linked_and_nothing_is_recorded() {
     for trouble in GithubTrouble::ALL {
         let row = format!("{trouble:?}");
@@ -313,7 +309,6 @@ fn when_github_cannot_be_read_nothing_is_linked_and_nothing_is_recorded() {
 ///     | a-forty-character-username-is-too-long-x  |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_malformed_github_username_is_refused_before_github_is_asked() {
     let too_long = "a".repeat(40);
     for username in ["-jeff", "jeff/../admin", "jeff bailey", too_long.as_str()] {

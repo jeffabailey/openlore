@@ -329,7 +329,9 @@ pub enum IdentityCommand {
     Link {
         /// Where the account lives.
         provider: LinkProvider,
-        /// The account's login.
+        /// The account's login. Taken verbatim (a leading `-` included) so a
+        /// malformed login is refused by the login rules, not as a flag.
+        #[arg(allow_hyphen_values = true)]
         login: String,
         /// Confirm without the interactive preview.
         #[arg(long)]

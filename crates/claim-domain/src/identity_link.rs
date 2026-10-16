@@ -275,6 +275,11 @@ impl LinkDraft {
         }
     }
 
+    /// The exact claim a confirmation would sign and publish.
+    pub fn claim(&self) -> &UnsignedClaim {
+        &self.claim
+    }
+
     pub fn into_unsigned(self) -> UnsignedClaim {
         self.claim
     }
@@ -317,8 +322,9 @@ pub struct IdentityLink {
     pub user_id: u64,
 }
 
-/// A GitHub login: 1..=39 ASCII alphanumerics or hyphens, not leading `-`.
-fn is_github_login(login: &str) -> bool {
+/// A GitHub login: 1..=39 ASCII alphanumerics or hyphens, not leading `-`
+/// (ADR-076). Anything else names no account and never reaches a request.
+pub fn is_github_login(login: &str) -> bool {
     (1..=39).contains(&login.len())
         && !login.starts_with('-')
         && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')

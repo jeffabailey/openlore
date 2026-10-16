@@ -8,11 +8,20 @@
 //! shared compose step (`claim add`'s `build_unsigned_claim`) is bypassed by
 //! design: this verb never names the link predicate (Q-RM-4).
 
-use anyhow::{anyhow, bail, Result};
-use claim_domain::identity_link::{check_link, GithubObservation, LinkDraft, ProofCheck};
-use claim_domain::{bare_did, canonicalize, compute_cid, SignedClaim};
-use ports::{LinkCheck, PersonProfile};
+use std::io::Write;
 
+use anyhow::{anyhow, bail, Result};
+use claim_domain::identity_link::{
+    check_link, is_github_login, CheckVerdict, GithubObservation, LinkDraft, ProofCheck, ProvenLink,
+};
+use claim_domain::{canonicalize, compute_cid, SignedClaim};
+use ports::{GithubError, LinkCheck, PersonProfile};
+
+use crate::io::prompt_line;
+use crate::render::{
+    render_github_unreadable, render_link_declined, render_link_preview, render_link_refused,
+    render_not_a_github_login,
+};
 use crate::verbs::claim_publish::{
     build_tokio_runtime, publish_signed_claim, render_publish_error, render_publish_success,
 };
@@ -35,23 +44,41 @@ fn observation_of(profile: PersonProfile) -> GithubObservation {
     }
 }
 
-/// The check row one proof check records.
-fn recorded_check(subject_did: &str, proof: &ProofCheck, wiring: &Wiring) -> LinkCheck {
+/// The one check a confirmed, passing link records (ADR-085 §7).
+fn passing_check(proven: &ProvenLink, wiring: &Wiring) -> LinkCheck {
     LinkCheck {
-        subject_did: subject_did.to_string(),
-        github_user_id: proof.user_id(),
-        login_seen: proof.login_seen().to_string(),
-        verdict: proof.verdict(),
+        subject_did: proven.did().to_string(),
+        github_user_id: proven.user_id(),
+        login_seen: proven.login().to_string(),
+        verdict: CheckVerdict::Verified,
         checked_at: wiring.clock.now_utc(),
     }
 }
 
-/// Read the account fresh from GitHub (one `GET /users/<login>`).
-fn read_account(wiring: &Wiring, login: &str) -> Result<GithubObservation> {
-    build_tokio_runtime()
-        .block_on(wiring.github.read_person(login))
-        .map(observation_of)
-        .map_err(|err| anyhow!("GitHub could not be read for {login}: {err}"))
+/// Read the account fresh from GitHub (one `GET /users/<login>`). `None` when
+/// GitHub says it does not exist; any other failure fails closed. The error
+/// rendering never carries the token (`GithubError` never holds it).
+fn read_account(wiring: &Wiring, login: &str) -> Result<Option<GithubObservation>> {
+    match build_tokio_runtime().block_on(wiring.github.read_person(login)) {
+        Ok(profile) => Ok(Some(observation_of(profile))),
+        Err(GithubError::NotFound { .. }) => Ok(None),
+        Err(err) => bail!("{}", render_github_unreadable(login, &err.to_string())),
+    }
+}
+
+/// The proven link of a fresh read, or the refusal naming its verdict.
+fn prove(wiring: &Wiring, login: &str) -> Result<ProvenLink> {
+    let author = wiring.identity.author_did().clone();
+    let Some(observation) = read_account(wiring, login)? else {
+        bail!(
+            "{}",
+            render_link_refused(login, CheckVerdict::AccountNotFound)
+        );
+    };
+    match check_link(&author, &observation) {
+        ProofCheck::Verified(proven) => Ok(proven),
+        ProofCheck::Disproved { verdict, .. } => bail!("{}", render_link_refused(login, verdict)),
+    }
 }
 
 /// Sign the proven link and keep it in the local store.
@@ -73,27 +100,42 @@ fn sign_and_keep(wiring: &Wiring, draft: LinkDraft) -> Result<SignedClaim> {
     Ok(signed)
 }
 
-/// Run `identity link github <login>`; returns the stdout to print.
-pub fn run(wiring: &Wiring, args: &IdentityLinkArgs) -> Result<String> {
-    if !args.yes {
-        bail!("the link preview is not available yet; confirm with --yes");
-    }
-    let author = wiring.identity.author_did().clone();
-    let observation = read_account(wiring, &args.login)?;
-    let proof = check_link(&author, &observation);
-    let ProofCheck::Verified(proven) = &proof else {
-        bail!(
-            "github:{} is not linked ({})",
-            args.login,
-            proof.verdict().token()
-        );
-    };
-    let composed_at = wiring.clock.now_utc().to_rfc3339();
-    let signed = sign_and_keep(wiring, LinkDraft::new(proven, &composed_at))?;
+/// Show the exact record and ask; only an interactive `y` confirms (Q-GDL-D2).
+fn confirmed_after_preview(draft: &LinkDraft) -> Result<bool> {
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(render_link_preview(draft.claim()).as_bytes())?;
+    let answer = prompt_line(
+        &mut stdout,
+        &mut std::io::stdin().lock(),
+        "Publish this link? [y/N]: ",
+    )?;
+    writeln!(stdout)?;
+    Ok(answer.as_deref().map(str::trim) == Some("y"))
+}
+
+/// Record the one passing check, then publish the signed link.
+fn link(wiring: &Wiring, proven: &ProvenLink, draft: LinkDraft) -> Result<String> {
+    let signed = sign_and_keep(wiring, draft)?;
     wiring
         .identity_link_check_writes
-        .record_check(&recorded_check(bare_did(&author.0), &proof, wiring))?;
+        .record_check(&passing_check(proven, wiring))?;
     let published = publish_signed_claim(wiring, &signed)
         .map_err(|err| anyhow!("{}", render_publish_error(&err).trim_end()))?;
     Ok(render_publish_success(&published))
+}
+
+/// Run `identity link github <login>`; returns the stdout to print. Nothing
+/// is written unless the login is valid, a fresh read proves the link and
+/// the link is confirmed (ADR-076, ADR-085 §4/§7).
+pub fn run(wiring: &Wiring, args: &IdentityLinkArgs) -> Result<String> {
+    if !is_github_login(&args.login) {
+        bail!("{}", render_not_a_github_login(&args.login));
+    }
+    let proven = prove(wiring, &args.login)?;
+    let composed_at = wiring.clock.now_utc().to_rfc3339();
+    let draft = LinkDraft::new(&proven, &composed_at);
+    if !args.yes && !confirmed_after_preview(&draft)? {
+        return Ok(render_link_declined());
+    }
+    link(wiring, &proven, draft)
 }
