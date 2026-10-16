@@ -1392,8 +1392,11 @@ pub fn classify_contribution_links_literal(literal: &str) -> Option<String> {
 /// `syn` visitor collecting string literals of PRODUCTION code only: items
 /// gated `#[cfg(test)]` (and `#[test]` fns) are skipped, so a test fixture
 /// that resets the table is not a violation.
+#[derive(Default)]
 struct ProductionLiteralCollector {
     literals: Vec<String>,
+    /// The literals of each macro call (nested calls' included), in order.
+    macro_groups: Vec<Vec<String>>,
 }
 
 fn is_test_only(attrs: &[syn::Attribute]) -> bool {
@@ -1432,15 +1435,49 @@ impl<'ast> Visit<'ast> for ProductionLiteralCollector {
     }
 
     /// A macro body (`format!`, `concat!`, `vec!`, …) is opaque tokens to
-    /// syn; read it as comma-separated expressions so its literals count.
+    /// syn; read it as comma-separated expressions so its literals count. A
+    /// body that is no expression list (`json!({…})`, a `macro_rules!`
+    /// transcriber) is walked token by token instead — every string literal
+    /// still counts (fail closed). The call's literals are also kept as one
+    /// group, so a predicate split across one call's literals is caught.
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        let first = self.literals.len();
         let args = mac.parse_body_with(
             syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
         );
-        if let Ok(args) = args {
-            args.iter().for_each(|arg| self.visit_expr(arg));
+        match args {
+            Ok(args) => args.iter().for_each(|arg| self.visit_expr(arg)),
+            Err(_) => self.literals.extend(string_literals_of(mac.tokens.clone())),
         }
+        self.macro_groups.push(self.literals[first..].to_vec());
     }
+}
+
+/// Is `group` the `[doc = "…"]` body of a doc attribute (a `///` comment
+/// inside a macro body)? Doc prose is skipped, as in parsed code.
+fn is_doc_attribute_body(group: &proc_macro2::Group) -> bool {
+    group.delimiter() == proc_macro2::Delimiter::Bracket
+        && matches!(
+            group.stream().into_iter().next(),
+            Some(proc_macro2::TokenTree::Ident(ident)) if ident == "doc"
+        )
+}
+
+/// Every string literal (normal or raw, decoded) of a token stream,
+/// descending into delimited groups; doc attributes skipped.
+fn string_literals_of(tokens: proc_macro2::TokenStream) -> Vec<String> {
+    tokens
+        .into_iter()
+        .flat_map(|tree| match tree {
+            proc_macro2::TokenTree::Group(group) if is_doc_attribute_body(&group) => Vec::new(),
+            proc_macro2::TokenTree::Group(group) => string_literals_of(group.stream()),
+            proc_macro2::TokenTree::Literal(literal) => match syn::Lit::new(literal) {
+                syn::Lit::Str(string) => vec![string.value()],
+                _ => Vec::new(),
+            },
+            proc_macro2::TokenTree::Ident(_) | proc_macro2::TokenTree::Punct(_) => Vec::new(),
+        })
+        .collect()
 }
 
 /// Every `.rs` file under `dir` (sorted), or none when `dir` is absent.
@@ -1465,9 +1502,7 @@ pub fn scan_contribution_links_append_only(workspace_root: &Path) -> anyhow::Res
         let source = std::fs::read_to_string(&path)?;
         let file = syn::parse_file(&source)
             .map_err(|e| anyhow::anyhow!("syn parse {}: {e}", path.display()))?;
-        let mut collector = ProductionLiteralCollector {
-            literals: Vec::new(),
-        };
+        let mut collector = ProductionLiteralCollector::default();
         collector.visit_file(&file);
         findings.extend(
             collector
@@ -1591,16 +1626,15 @@ pub fn classify_identity_link_checks_source(literals: &[String]) -> Option<Strin
         .map(|literal| excerpt_of(literal))
 }
 
-/// Production string literals of one Rust source (test modules skipped).
-fn production_literals(path: &Path) -> anyhow::Result<Vec<String>> {
+/// Production string literals of one Rust source (test modules skipped),
+/// with each macro call's literals grouped.
+fn production_literals(path: &Path) -> anyhow::Result<ProductionLiteralCollector> {
     let source = std::fs::read_to_string(path)?;
     let file = syn::parse_file(&source)
         .map_err(|e| anyhow::anyhow!("syn parse {}: {e}", path.display()))?;
-    let mut collector = ProductionLiteralCollector {
-        literals: Vec::new(),
-    };
+    let mut collector = ProductionLiteralCollector::default();
     collector.visit_file(&file);
-    Ok(collector.literals)
+    Ok(collector)
 }
 
 /// Effect shell for `identity_link_checks_insert_only`: every production SQL
@@ -1612,7 +1646,7 @@ pub fn scan_identity_link_checks_insert_only(workspace_root: &Path) -> anyhow::R
         if path == purge_source || !path.components().any(|c| c.as_os_str() == "src") {
             continue;
         }
-        let literals = production_literals(&path)?;
+        let literals = production_literals(&path)?.literals;
         let per_literal: Vec<String> = literals
             .iter()
             .filter_map(|literal| classify_identity_link_checks_literal(literal))
@@ -1664,17 +1698,43 @@ const INFER_PEOPLE_FORBIDDEN_TOKENS: &[&str] = &[
     "identity_link_check_purge",
 ];
 
-/// Pure rule: every non-comment line glob-importing (`use …::*;`) — a glob
-/// hides which names a module holds, so the forbidden-name rules could not
-/// see them.
+/// Pure rule: every glob import (`use …::*;`, `use a::{B, *};`, a glob
+/// nested in braces or spread over lines) as a `line N: …` finding, read
+/// from the parsed `use` items — a glob hides which names a module holds, so
+/// the forbidden-name rules could not see them. Comments are not items, so a
+/// commented-out glob is no import. An unparseable source is itself a
+/// finding (fail closed).
 pub fn classify_glob_imports(source: &str) -> Vec<String> {
-    source
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| !line.trim_start().starts_with("//"))
-        .filter(|(_, line)| line.contains("::*") || line.contains("{*"))
-        .map(|(index, line)| format!("line {}: glob import in `{}`", index + 1, line.trim()))
+    let file = match syn::parse_file(source) {
+        Ok(file) => file,
+        Err(error) => {
+            return vec![format!(
+                "unparseable source, glob imports unchecked: {error}"
+            )]
+        }
+    };
+    let mut collector = GlobImportCollector { lines: Vec::new() };
+    collector.visit_file(&file);
+    let source_lines: Vec<&str> = source.lines().collect();
+    collector
+        .lines
+        .into_iter()
+        .map(|line| {
+            let code = source_lines.get(line - 1).map_or("", |code| code.trim());
+            format!("line {line}: glob import in `{code}`")
+        })
         .collect()
+}
+
+/// `syn` visitor collecting the source line of every `*` in a `use` tree.
+struct GlobImportCollector {
+    lines: Vec<usize>,
+}
+
+impl<'ast> Visit<'ast> for GlobImportCollector {
+    fn visit_use_glob(&mut self, glob: &'ast syn::UseGlob) {
+        self.lines.push(glob.star_token.spans[0].start().line);
+    }
 }
 
 /// A line's forbidden names and glob imports.
@@ -1834,6 +1894,77 @@ pub fn classify_link_predicate_literal(literal: &str) -> Option<String> {
     contains_word(literal, LINK_PREDICATE_LITERAL).then(|| excerpt_of(literal))
 }
 
+/// One literal's text with each `format!` placeholder (`{}`, `{name}`,
+/// `{0:?}`) replaced by the next of `fillers` (or nothing once they run
+/// out); `{{` / `}}` read as braces.
+fn fill_placeholders(literal: &str, fillers: &[String]) -> String {
+    let mut filled = String::new();
+    let mut fillers = fillers.iter();
+    let mut chars = literal.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (c, chars.peek()) {
+            ('{', Some('{')) | ('}', Some('}')) => {
+                filled.push(c);
+                chars.next();
+            }
+            ('{', _) => {
+                chars.by_ref().find(|&inner| inner == '}');
+                filled.push_str(fillers.next().map_or("", String::as_str));
+            }
+            _ => filled.push(c),
+        }
+    }
+    filled
+}
+
+/// The strings a split predicate could be assembled into: two adjacent
+/// literals of the file (either order), any two literals of one macro call
+/// (either order), one call's literals joined (`concat!`), and one call's
+/// first literal with its placeholders filled by the rest (`format!`) —
+/// placeholders removed everywhere else.
+fn joined_literal_candidates(literals: &[String], macro_groups: &[Vec<String>]) -> Vec<String> {
+    let bare = |literal: &String| fill_placeholders(literal, &[]);
+    let pairs_of = |group: &[String]| -> Vec<String> {
+        group
+            .iter()
+            .enumerate()
+            .flat_map(|(i, first)| {
+                group
+                    .iter()
+                    .enumerate()
+                    .filter(move |(j, _)| *j != i)
+                    .map(move |(_, second)| format!("{}{}", bare(first), bare(second)))
+            })
+            .collect()
+    };
+    let adjacent = literals.windows(2).flat_map(&pairs_of);
+    let per_call = macro_groups.iter().flat_map(|group| {
+        let joined = group.iter().map(bare).collect::<String>();
+        let formatted = group
+            .split_first()
+            .map(|(template, args)| fill_placeholders(template, args));
+        pairs_of(group)
+            .into_iter()
+            .chain(std::iter::once(joined))
+            .chain(formatted)
+    });
+    adjacent.chain(per_call).collect()
+}
+
+/// Pure rule over one file's production literals: `Some(excerpt)` iff the
+/// link predicate is assembled from split literals (`concat!("same",
+/// "As")`, `format!("{}As", "same")`, two adjacent consts) — see
+/// [`joined_literal_candidates`]. The excerpt is the assembled string.
+pub fn classify_link_predicate_split(
+    literals: &[String],
+    macro_groups: &[Vec<String>],
+) -> Option<String> {
+    joined_literal_candidates(literals, macro_groups)
+        .into_iter()
+        .find(|joined| contains_word(joined, LINK_PREDICATE_LITERAL))
+        .map(|joined| excerpt_of(&joined))
+}
+
 /// Effect shell for `identity_link_compose_only_via_proven_link`: outside
 /// `claim-domain::identity_link`, no production source under `crates/*/src`
 /// names the `sameAs` literal or the link-predicate constant — a link is
@@ -1848,14 +1979,31 @@ pub fn scan_identity_link_compose_only_via_proven_link(
         if path == allowed || !path.components().any(|c| c.as_os_str() == "src") {
             continue;
         }
-        let literal_findings = production_literals(&path)?
-            .into_iter()
-            .filter_map(|literal| classify_link_predicate_literal(&literal))
-            .map(|excerpt| format!("the `{LINK_PREDICATE_LITERAL}` literal in \"{excerpt}\""));
+        let collected = production_literals(&path)?;
+        let per_literal: Vec<String> = collected
+            .literals
+            .iter()
+            .filter_map(|literal| classify_link_predicate_literal(literal))
+            .map(|excerpt| format!("the `{LINK_PREDICATE_LITERAL}` literal in \"{excerpt}\""))
+            .collect();
+        let literal_findings = if per_literal.is_empty() {
+            classify_link_predicate_split(&collected.literals, &collected.macro_groups)
+                .map(|joined| {
+                    format!(
+                        "the `{LINK_PREDICATE_LITERAL}` literal assembled from split literals \
+                         as \"{joined}\""
+                    )
+                })
+                .into_iter()
+                .collect()
+        } else {
+            per_literal
+        };
         let constant_findings =
             classify_forbidden_words(&std::fs::read_to_string(&path)?, &[LINK_PREDICATE_CONSTANT]);
         findings.extend(
             literal_findings
+                .into_iter()
                 .chain(constant_findings)
                 .map(|finding| {
                     format!(
@@ -3944,6 +4092,131 @@ mod tests {
                 .expect("scan");
         assert_eq!(verify_findings.len(), 1, "{verify_findings:?}");
         assert!(verify_findings[0].contains("line 2: glob import"));
+    }
+
+    #[test]
+    fn glob_imports_are_read_from_parsed_use_trees() {
+        let mixed = classify_glob_imports("use ports::{GithubPort, *};\n");
+        assert_eq!(mixed.len(), 1, "{mixed:?}");
+        assert!(mixed[0].starts_with("line 1: glob import"), "{mixed:?}");
+
+        let multi_line = classify_glob_imports("use ports::{\n    GithubPort,\n    *,\n};\n");
+        assert_eq!(multi_line.len(), 1, "{multi_line:?}");
+        assert!(
+            multi_line[0].starts_with("line 3: glob import"),
+            "{multi_line:?}"
+        );
+
+        let nested = classify_glob_imports("use a::{b::{c, *}};\n");
+        assert_eq!(nested.len(), 1, "{nested:?}");
+
+        assert_eq!(
+            classify_glob_imports("// use ports::*;\nuse a::{b, c};\nuse d::e as f;\n"),
+            Vec::<String>::new(),
+            "named imports and commented-out globs are no glob import"
+        );
+        assert_eq!(
+            classify_glob_imports("use a::{").len(),
+            1,
+            "an unparseable source fails closed"
+        );
+    }
+
+    #[test]
+    fn opaque_macro_bodies_still_yield_their_string_literals() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let src = violating.path().join("crates/adapter-duckdb/src");
+        std::fs::create_dir_all(&src).expect("mkdir");
+        std::fs::write(
+            src.join("json_body.rs"),
+            "fn body() -> V { json!({\"k\": \"DELETE FROM identity_link_checks\"}) }\n",
+        )
+        .expect("write");
+        std::fs::write(
+            src.join("transcriber.rs"),
+            "macro_rules! wipe {\n    () => { run(r#\"TRUNCATE identity_link_checks\"#) };\n}\n\
+             macro_rules! documented {\n    () => { /// DELETE FROM identity_link_checks\n fn f() {} };\n}\n",
+        )
+        .expect("write");
+        let findings = scan_identity_link_checks_insert_only(violating.path()).expect("scan");
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        assert!(
+            findings.iter().any(|f| f.contains("json_body.rs")),
+            "{findings:?}"
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.contains("transcriber.rs") && f.contains("TRUNCATE")),
+            "{findings:?}"
+        );
+
+        let verbs = violating.path().join("crates/cli/src/verbs");
+        std::fs::create_dir_all(&verbs).expect("mkdir");
+        std::fs::write(
+            verbs.join("json_link.rs"),
+            "fn link() -> V { json!({\"predicate\": \"sameAs\"}) }\n",
+        )
+        .expect("write");
+        std::fs::write(
+            verbs.join("macro_link.rs"),
+            "macro_rules! link {\n    () => { compose(\"sameAs\") };\n}\n",
+        )
+        .expect("write");
+        let compose =
+            scan_identity_link_compose_only_via_proven_link(violating.path()).expect("scan");
+        assert_eq!(compose.len(), 2, "{compose:?}");
+        assert!(
+            compose.iter().all(|f| f.contains("`sameAs` literal in")),
+            "{compose:?}"
+        );
+    }
+
+    #[test]
+    fn compose_only_scan_reports_the_predicate_split_across_literals() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let verbs = violating.path().join("crates/cli/src/verbs");
+        std::fs::create_dir_all(&verbs).expect("mkdir");
+        for (name, body) in [
+            (
+                "concat_split.rs",
+                "fn p() -> &'static str { concat!(\"same\", \"As\") }\n",
+            ),
+            (
+                "format_split.rs",
+                "fn p() -> String { format!(\"{}As\", \"same\") }\n",
+            ),
+            (
+                "format_infix.rs",
+                "fn p() -> String { format!(\"sa{}As\", \"me\") }\n",
+            ),
+            (
+                "const_split.rs",
+                "const A: &str = \"same\";\nconst B: &str = \"As\";\n",
+            ),
+            (
+                "innocent.rs",
+                "fn p() -> String { format!(\"{} same {}\", \"As\", \"x\") }\n",
+            ),
+        ] {
+            std::fs::write(verbs.join(name), body).expect("write");
+        }
+        let findings =
+            scan_identity_link_compose_only_via_proven_link(violating.path()).expect("scan");
+        for name in [
+            "concat_split.rs",
+            "format_split.rs",
+            "format_infix.rs",
+            "const_split.rs",
+        ] {
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.contains(name) && f.contains("assembled from split literals")),
+                "{name}: {findings:?}"
+            );
+        }
+        assert_eq!(findings.len(), 4, "{findings:?}");
     }
 
     #[test]

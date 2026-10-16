@@ -25,6 +25,11 @@ cargo_metadata = "0.23"
 anyhow = { workspace = true }
 syn = { version = "2", features = ["full", "visit", "extra-traits", "parsing"] }
 walkdir = "2"
+# Identity-link re-review N1/N2: `span-locations` gives the line of a parsed
+# glob import; `TokenTree` walks an opaque macro body (`json!`, a
+# `macro_rules!` transcriber) for its string literals. Already in the graph
+# through `syn`.
+proc-macro2 = { version = "1", features = ["span-locations"] }
 
 [dev-dependencies]
 # step 06-05 inner-TDD: hand-constructed in-memory dep graphs feed the
