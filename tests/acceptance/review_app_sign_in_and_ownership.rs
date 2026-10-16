@@ -419,10 +419,7 @@ fn sam_cannot_claim_someone_elses_github_account() {
     );
     assert!(!text.contains("Verified:"));
     sam.open("/review");
-    assert!(
-        sam.try_press("Scan my repos").is_err() || sam.page.shows("verify"),
-        "no scan while unverified"
-    );
+    then_no_scan_can_start(&sam.page, "Sam");
     assert_eq!(world.github.scrape_reads_of(BURNTSUSHI), 0);
     assert!(sam.open("/review").pending_cards().is_empty());
 }
@@ -508,10 +505,7 @@ fn a_github_answer_that_names_no_account_never_proves_ownership() {
         );
         assert!(!text.contains("Verified:"), "[{flaw:?}] {text}");
         browser.open("/review");
-        assert!(
-            browser.try_press("Scan my repos").is_err() || browser.page.shows("verify"),
-            "[{flaw:?}] no scan while unverified"
-        );
+        then_no_scan_can_start(&browser.page, &format!("{flaw:?}"));
         assert_eq!(
             world.github.scrape_reads_of(Persona::Priya.github_login()),
             0,
@@ -715,4 +709,27 @@ fn with_only_the_broad_permission_the_app_says_why_and_still_writes_only_claims(
         .iter()
         .all(|w| w.collection == openlore_test_support::CLAIM_COLLECTION));
     assert!(b.open("/review").status == 200);
+}
+
+// =============================================================================
+// Shared outcomes
+// =============================================================================
+
+/// THEN the review queue offers no way to start a scan: it shows the GitHub
+/// step ("verify that your GitHub account is yours" with the
+/// "Verify GitHub ownership" link) and none of the scan actions a verified
+/// owner's queue carries ("Scan my repos", "Scan again", "Resume scan").
+fn then_no_scan_can_start(page: &Page, context: &str) {
+    let text = page.text();
+    for label in ["Scan my repos", "Scan again", "Resume scan"] {
+        assert!(
+            !page.offers(label),
+            "[{context}] an unverified queue offers {label:?}:\n{text}"
+        );
+    }
+    assert!(
+        text.contains("Before anything is scanned, verify that your GitHub account is yours.")
+            && page.offers("Verify GitHub ownership"),
+        "[{context}] the queue shows the GitHub step, not a scan:\n{text}"
+    );
 }
