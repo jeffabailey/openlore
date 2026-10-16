@@ -340,12 +340,10 @@ pub fn is_github_login(login: &str) -> bool {
         && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-/// The numeric id of an id-URI evidence entry; `Err` when it is malformed.
-fn id_of_uri(digits: &str) -> Result<u64, ()> {
-    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
-        return Err(());
-    }
-    digits.parse().map_err(|_| ())
+/// The numeric id of an id-URI evidence entry; `None` when it is malformed.
+fn id_of_uri(digits: &str) -> Option<u64> {
+    let all_digits = !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit());
+    all_digits.then(|| digits.parse().ok()).flatten()
 }
 
 /// The ids every id-URI evidence entry names; `None` if one is malformed.
@@ -353,7 +351,7 @@ fn evidence_ids(evidence: &[String]) -> Option<Vec<u64>> {
     evidence
         .iter()
         .filter_map(|entry| entry.strip_prefix(ID_URI_PREFIX))
-        .map(|digits| id_of_uri(digits).ok())
+        .map(id_of_uri)
         .collect()
 }
 
@@ -481,18 +479,25 @@ fn verified_per_account(
         })
 }
 
-/// The active links, once per (DID, account id).
-fn distinct_active(links: &[ReaderLink]) -> Vec<IdentityLink> {
+/// `links` once per (DID, account id), ordered by that key; of duplicates
+/// the last one stays.
+fn once_per_link(links: impl IntoIterator<Item = IdentityLink>) -> Vec<IdentityLink> {
     links
-        .iter()
-        .filter(|reader_link| reader_link.lifecycle == LinkLifecycle::Active)
-        .map(|reader_link| {
-            let link = &reader_link.link;
-            ((link.did.clone(), link.user_id), link.clone())
-        })
+        .into_iter()
+        .map(|link| ((link.did.clone(), link.user_id), link))
         .collect::<BTreeMap<_, _>>()
         .into_values()
         .collect()
+}
+
+/// The active links, once per (DID, account id).
+fn distinct_active(links: &[ReaderLink]) -> Vec<IdentityLink> {
+    once_per_link(
+        links
+            .iter()
+            .filter(|reader_link| reader_link.lifecycle == LinkLifecycle::Active)
+            .map(|reader_link| reader_link.link.clone()),
+    )
 }
 
 /// The association rule (ADR-085 §5) as of `now`: only active links are
@@ -610,12 +615,7 @@ pub fn links_to_recheck(
     stored: &[StoredClaim<'_>],
     referrers: &[ClaimLineage<'_>],
 ) -> Vec<IdentityLink> {
-    active_links(stored, referrers)
-        .into_iter()
-        .map(|link| ((link.did.clone(), link.user_id), link))
-        .collect::<BTreeMap<_, _>>()
-        .into_values()
-        .collect()
+    once_per_link(active_links(stored, referrers))
 }
 
 /// One GitHub answer as the check consumes it: the profile, "no such
@@ -666,7 +666,7 @@ pub fn recheck_link<E>(
     match login_answer {
         GithubRead::Unreadable(failure) => Err(failure),
         GithubRead::Profile(observed) if observed.user_id == link.user_id => {
-            Ok(check_link(&Did(link.did.clone()), &observed))
+            Ok(check_linked_account(link, login_read, &observed))
         }
         GithubRead::Profile(_) | GithubRead::NotFound => {
             match read_by_account_number(link.user_id) {
