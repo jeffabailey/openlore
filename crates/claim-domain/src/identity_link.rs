@@ -8,6 +8,8 @@
 //! literal appears nowhere else).
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::num::NonZeroU64;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -154,13 +156,36 @@ pub struct GithubObservation {
     pub bio: Option<String>,
 }
 
+/// A GitHub answer that names no account: no positive account number or no
+/// valid login. It is unreadable — it proves nothing and records nothing
+/// (ADR-085 §4, fail closed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MalformedObservation;
+
+impl fmt::Display for MalformedObservation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("GitHub answered without a valid account number and login")
+    }
+}
+
+/// The account an observation names: its positive number and valid login.
+fn account_named_by(
+    observation: &GithubObservation,
+) -> Result<(NonZeroU64, &str), MalformedObservation> {
+    let user_id = NonZeroU64::new(observation.user_id).ok_or(MalformedObservation)?;
+    is_github_login(&observation.login)
+        .then_some((user_id, observation.login.as_str()))
+        .ok_or(MalformedObservation)
+}
+
 /// A link whose bio proof passed on a fresh read. Built only by
-/// [`check_link`]: holding one is the capability to compose a link.
+/// [`check_link`]: holding one is the capability to compose a link, always
+/// for a real account (a positive number, a valid login).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProvenLink {
     author: Did,
     login: String,
-    user_id: u64,
+    user_id: NonZeroU64,
 }
 
 impl ProvenLink {
@@ -175,7 +200,7 @@ impl ProvenLink {
     }
 
     pub fn user_id(&self) -> u64 {
-        self.user_id
+        self.user_id.get()
     }
 }
 
@@ -208,14 +233,6 @@ impl ProofCheck {
             ProofCheck::Disproved { login_seen, .. } => login_seen,
         }
     }
-
-    /// The account's stable numeric id.
-    pub fn user_id(&self) -> u64 {
-        match self {
-            ProofCheck::Verified(proven) => proven.user_id(),
-            ProofCheck::Disproved { user_id, .. } => *user_id,
-        }
-    }
 }
 
 /// The verdict a check records for what the bio says.
@@ -229,20 +246,27 @@ fn recorded_verdict(bio: &BioVerdict) -> CheckVerdict {
 }
 
 /// Check `author`'s link to the account observed on a fresh login read
-/// (the common case: the login read returned the account itself).
-pub fn check_link(author: &Did, observation: &GithubObservation) -> ProofCheck {
-    match bio_verdict(observation.bio.as_deref(), bare_did(&author.0)) {
-        BioVerdict::Verified => ProofCheck::Verified(ProvenLink {
-            author: author.clone(),
-            login: observation.login.clone(),
-            user_id: observation.user_id,
-        }),
-        other => ProofCheck::Disproved {
-            verdict: recorded_verdict(&other),
-            login_seen: observation.login.clone(),
-            user_id: observation.user_id,
+/// (the common case: the login read returned the account itself). An
+/// observation naming no account is unreadable: it decides nothing.
+pub fn check_link(
+    author: &Did,
+    observation: &GithubObservation,
+) -> Result<ProofCheck, MalformedObservation> {
+    let (user_id, login) = account_named_by(observation)?;
+    Ok(
+        match bio_verdict(observation.bio.as_deref(), bare_did(&author.0)) {
+            BioVerdict::Verified => ProofCheck::Verified(ProvenLink {
+                author: author.clone(),
+                login: login.to_string(),
+                user_id,
+            }),
+            other => ProofCheck::Disproved {
+                verdict: recorded_verdict(&other),
+                login_seen: login.to_string(),
+                user_id: user_id.get(),
+            },
         },
-    }
+    )
 }
 
 // =============================================================================
@@ -302,7 +326,7 @@ pub fn self_attested_link_record(
     observation: &GithubObservation,
     composed_at: &str,
 ) -> Option<Value> {
-    match check_link(&Did(did.to_string()), observation) {
+    match check_link(&Did(did.to_string()), observation).ok()? {
         ProofCheck::Verified(proven) => Some(claim_record_json(
             &LinkDraft::new(&proven, composed_at).into_unsigned(),
         )),
@@ -340,10 +364,14 @@ pub fn is_github_login(login: &str) -> bool {
         && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-/// The numeric id of an id-URI evidence entry; `None` when it is malformed.
+/// The numeric id of an id-URI evidence entry; `None` when it is malformed
+/// or names account 0 (no GitHub account has that number).
 fn id_of_uri(digits: &str) -> Option<u64> {
     let all_digits = !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit());
-    all_digits.then(|| digits.parse().ok()).flatten()
+    all_digits
+        .then(|| digits.parse::<NonZeroU64>().ok())
+        .flatten()
+        .map(NonZeroU64::get)
 }
 
 /// The ids every id-URI evidence entry names; `None` if one is malformed.
@@ -636,17 +664,36 @@ fn account_not_found(link: &IdentityLink, login_read: &str) -> ProofCheck {
     }
 }
 
+/// Why a re-check decided nothing and recorded nothing (ADR-085 §4): GitHub
+/// failed (`E`), or answered with a profile naming no account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecheckUnreadable<E> {
+    Failed(E),
+    Malformed(MalformedObservation),
+}
+
+impl<E: fmt::Display> fmt::Display for RecheckUnreadable<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RecheckUnreadable::Failed(failure) => failure.fmt(f),
+            RecheckUnreadable::Malformed(malformed) => malformed.fmt(f),
+        }
+    }
+}
+
 /// The bio of the linked account decides, against the link's own DID. An
-/// answer for any other account does not.
-fn check_linked_account(
+/// answer for any other account does not; one naming no account is
+/// unreadable.
+fn check_linked_account<E>(
     link: &IdentityLink,
     login_read: &str,
     observed: &GithubObservation,
-) -> ProofCheck {
-    if observed.user_id == link.user_id {
-        check_link(&Did(link.did.clone()), observed)
+) -> Result<ProofCheck, RecheckUnreadable<E>> {
+    let (user_id, _) = account_named_by(observed).map_err(RecheckUnreadable::Malformed)?;
+    if user_id.get() == link.user_id {
+        check_link(&Did(link.did.clone()), observed).map_err(RecheckUnreadable::Malformed)
     } else {
-        account_not_found(link, login_read)
+        Ok(account_not_found(link, login_read))
     }
 }
 
@@ -656,25 +703,27 @@ fn check_linked_account(
 /// (renamed, maybe re-registered) asks `read_by_account_number` — the second
 /// and last read: the account's current profile decides, under its new
 /// login; no account under that number is `account_not_found`. Any
-/// unreadable answer records nothing: the failure is returned.
+/// unreadable answer — a GitHub failure, or a profile naming no account —
+/// records nothing: the reason is returned.
 pub fn recheck_link<E>(
     link: &IdentityLink,
     login_read: &str,
     login_answer: GithubRead<E>,
     read_by_account_number: impl FnOnce(u64) -> GithubRead<E>,
-) -> Result<ProofCheck, E> {
+) -> Result<ProofCheck, RecheckUnreadable<E>> {
     match login_answer {
-        GithubRead::Unreadable(failure) => Err(failure),
+        GithubRead::Unreadable(failure) => Err(RecheckUnreadable::Failed(failure)),
         GithubRead::Profile(observed) if observed.user_id == link.user_id => {
-            Ok(check_linked_account(link, login_read, &observed))
+            check_linked_account(link, login_read, &observed)
+        }
+        GithubRead::Profile(observed) if account_named_by(&observed).is_err() => {
+            Err(RecheckUnreadable::Malformed(MalformedObservation))
         }
         GithubRead::Profile(_) | GithubRead::NotFound => {
             match read_by_account_number(link.user_id) {
-                GithubRead::Profile(current) => {
-                    Ok(check_linked_account(link, login_read, &current))
-                }
+                GithubRead::Profile(current) => check_linked_account(link, login_read, &current),
                 GithubRead::NotFound => Ok(account_not_found(link, login_read)),
-                GithubRead::Unreadable(failure) => Err(failure),
+                GithubRead::Unreadable(failure) => Err(RecheckUnreadable::Failed(failure)),
             }
         }
     }
@@ -699,5 +748,111 @@ mod tests {
             assert_eq!(CheckVerdict::from_token(verdict.token()), Some(verdict));
         }
         assert_eq!(CheckVerdict::from_token("identity_changed"), None);
+    }
+
+    const DID: &str = "did:plc:abcdefghijklmnopqrstuvwx";
+
+    fn observed(login: &str, user_id: u64) -> GithubObservation {
+        GithubObservation {
+            login: login.to_string(),
+            user_id,
+            bio: Some(DID.to_string()),
+        }
+    }
+
+    fn linked(user_id: u64) -> IdentityLink {
+        IdentityLink {
+            did: DID.to_string(),
+            login: "priyaraman".to_string(),
+            user_id,
+        }
+    }
+
+    /// Account 0 or an invalid login names no account: even a bio naming
+    /// the DID proves nothing, composes nothing and records nothing.
+    #[test]
+    fn an_observation_naming_no_account_proves_nothing() {
+        for malformed in [
+            observed("priyaraman", 0),
+            observed("", 4_210_001),
+            observed("4210001/../x", 4_210_001),
+            observed("-priya", 4_210_001),
+        ] {
+            assert_eq!(
+                check_link(&Did(DID.to_string()), &malformed),
+                Err(MalformedObservation),
+                "{malformed:?}"
+            );
+            assert_eq!(
+                self_attested_link_record(DID, &malformed, "2026-10-01T09:00:00Z"),
+                None
+            );
+        }
+        assert!(matches!(
+            check_link(&Did(DID.to_string()), &observed("priyaraman", 4_210_001)),
+            Ok(ProofCheck::Verified(_))
+        ));
+    }
+
+    /// A re-check over an answer naming no account — by login or by number —
+    /// records nothing, never `account_not_found`.
+    #[test]
+    fn a_recheck_over_an_answer_naming_no_account_records_nothing() {
+        let link = linked(4_210_001);
+        let by_login = recheck_link::<()>(
+            &link,
+            "priyaraman",
+            GithubRead::Profile(observed("priyaraman", 0)),
+            |_| panic!("an unreadable login answer asks nothing more"),
+        );
+        assert_eq!(
+            by_login,
+            Err(RecheckUnreadable::Malformed(MalformedObservation))
+        );
+        let by_number = recheck_link::<()>(&link, "priyaraman", GithubRead::NotFound, |_| {
+            GithubRead::Profile(observed("priyaraman", 0))
+        });
+        assert_eq!(
+            by_number,
+            Err(RecheckUnreadable::Malformed(MalformedObservation))
+        );
+        let bad_login = recheck_link::<()>(
+            &link,
+            "priyaraman",
+            GithubRead::Profile(observed("not a login", 4_210_001)),
+            |_| GithubRead::NotFound,
+        );
+        assert_eq!(
+            bad_login,
+            Err(RecheckUnreadable::Malformed(MalformedObservation))
+        );
+    }
+
+    #[test]
+    fn a_link_naming_account_zero_is_no_link() {
+        let evidence = [
+            "https://github.com/priyaraman".to_string(),
+            "https://api.github.com/user/0".to_string(),
+        ];
+        let fields = ClaimFields {
+            author: DID,
+            subject: DID,
+            predicate: LINK_PREDICATE,
+            object: "github:priyaraman",
+            evidence: &evidence,
+        };
+        let provenance = Provenance::SelfAttested {
+            repo_did: Did(DID.to_string()),
+        };
+        assert_eq!(project(fields, &provenance), None);
+        let numbered = [evidence[0].clone(), format!("{ID_URI_PREFIX}4210001")];
+        assert!(project(
+            ClaimFields {
+                evidence: &numbered,
+                ..fields
+            },
+            &provenance
+        )
+        .is_some());
     }
 }

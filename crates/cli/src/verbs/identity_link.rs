@@ -51,10 +51,11 @@ fn passing_check(proven: &ProvenLink, checked_at: DateTime<Utc>) -> LinkCheck {
 }
 
 /// Read the account fresh from GitHub (one `GET /users/<login>`). `None` when
-/// GitHub says it does not exist; any other failure fails closed. The error
+/// GitHub says it does not exist; any other failure — an answer naming no
+/// account included — fails closed. The error
 /// rendering never carries the token (`GithubError` never holds it).
 fn read_account(wiring: &Wiring, login: &str) -> Result<Option<GithubObservation>> {
-    match build_tokio_runtime().block_on(wiring.github.read_person(login)) {
+    match build_tokio_runtime().block_on(wiring.github.read_account(login)) {
         Ok(profile) => Ok(Some(observation_of(profile))),
         Err(GithubError::NotFound { .. }) => Ok(None),
         Err(err) => bail!("{}", render_github_unreadable(login, &err.to_string())),
@@ -71,8 +72,14 @@ fn prove(wiring: &Wiring, login: &str) -> Result<ProvenLink> {
         );
     };
     match check_link(&author, &observation) {
-        ProofCheck::Verified(proven) => Ok(proven),
-        ProofCheck::Disproved { verdict, .. } => bail!("{}", render_link_refused(login, verdict)),
+        Ok(ProofCheck::Verified(proven)) => Ok(proven),
+        Ok(ProofCheck::Disproved { verdict, .. }) => {
+            bail!("{}", render_link_refused(login, verdict))
+        }
+        Err(malformed) => bail!(
+            "{}",
+            render_github_unreadable(login, &malformed.to_string())
+        ),
     }
 }
 

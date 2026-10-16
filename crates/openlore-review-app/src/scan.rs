@@ -161,7 +161,7 @@ async fn reverify(
 ) -> Result<VerifiedOwnership, OwnershipRefusal> {
     let profile = app
         .github
-        .read_person(&link.github_login)
+        .read_account(&link.github_login)
         .await
         .map_err(|error| refusal_of(&error))?;
     prove_ownership(owner_did, &account_of(&profile), Some(link.github_user_id))

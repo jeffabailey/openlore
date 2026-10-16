@@ -393,15 +393,19 @@ impl GithubPort for GithubAdapter {
         Ok(client::parse_person_profile(&body, user))
     }
 
+    /// `GET {base}/users/{login}` — the account a login names, strictly
+    /// reshaped: no account number or login is `ApiShape` (fail closed).
+    async fn read_account(&self, login: &str) -> Result<PersonProfile, GithubError> {
+        self.read_account_at(&format!("/users/{login}"), login)
+            .await
+    }
+
     /// `GET {base}/user/{id}` — the account's current profile, whatever its
-    /// login is now (UC-9). Same reshape as [`read_person`](Self::read_person).
+    /// login is now (UC-9). Same strict reshape as
+    /// [`read_account`](Self::read_account).
     async fn read_person_by_id(&self, user_id: u64) -> Result<PersonProfile, GithubError> {
-        let target = user_id.to_string();
-        let body = self
-            .get_public(&format!("/user/{user_id}"), &target)
-            .await?;
-        record_auth_report(client::parse_auth_report(&body));
-        Ok(client::parse_person_profile(&body, &target))
+        self.read_account_at(&format!("/user/{user_id}"), &user_id.to_string())
+            .await
     }
 
     /// `GET {base}/users/{user}/repos?type=owner&sort=pushed&per_page=100` —
@@ -438,6 +442,18 @@ impl GithubAdapter {
                 None
             }
         }
+    }
+
+    /// One public GET of an account profile, strictly reshaped
+    /// ([`client::parse_account_profile`]); records the auth posture.
+    async fn read_account_at(
+        &self,
+        path: &str,
+        target: &str,
+    ) -> Result<PersonProfile, GithubError> {
+        let body = self.get_public(path, target).await?;
+        record_auth_report(client::parse_auth_report(&body));
+        client::parse_account_profile(&body).map_err(GithubError::ApiShape)
     }
 
     async fn get_public(&self, path: &str, target: &str) -> Result<serde_json::Value, GithubError> {

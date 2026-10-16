@@ -10,7 +10,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
-    is_in_scope, recheck_link, GithubRead, IdentityLink, ProofCheck, RecheckScope,
+    is_github_login, is_in_scope, recheck_link, GithubRead, IdentityLink, ProofCheck, RecheckScope,
 };
 use ports::{
     CheckFilter, GithubError, GithubPort, IdentityLinkCheckReadPort, IdentityLinkCheckWritePort,
@@ -75,7 +75,12 @@ fn check_of(link: &IdentityLink, decided: &ProofCheck, now: DateTime<Utc>) -> Li
     }
 }
 
-/// Re-check one link: read, decide, append. A GitHub failure records nothing.
+/// Why a stored login is never sent to GitHub.
+const NOT_A_GITHUB_LOGIN: &str = "the stored login is not a GitHub login; it was not read";
+
+/// Re-check one link: read, decide, append. A GitHub failure, an answer
+/// naming no account, or a stored login that is no GitHub login (never
+/// sent) records nothing.
 fn recheck(
     handles: &IdentityVerifyHandles<'_>,
     runtime: &tokio::runtime::Runtime,
@@ -84,8 +89,14 @@ fn recheck(
     now: DateTime<Utc>,
     mut report: VerifyReport,
 ) -> Result<VerifyReport> {
+    if !is_github_login(login) {
+        report
+            .unreadable
+            .push(render_recheck_unreadable(login, NOT_A_GITHUB_LOGIN));
+        return Ok(report);
+    }
     let github = handles.github;
-    let login_answer = answer_of(runtime.block_on(github.read_person(login)));
+    let login_answer = answer_of(runtime.block_on(github.read_account(login)));
     let read_by_account_number =
         |user_id: u64| answer_of(runtime.block_on(github.read_person_by_id(user_id)));
     match recheck_link(link, login, login_answer, read_by_account_number) {

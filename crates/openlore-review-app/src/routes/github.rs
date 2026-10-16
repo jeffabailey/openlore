@@ -102,7 +102,7 @@ async fn check_bio(
     if !is_github_login(typed) {
         return (typed.to_string(), Err(OwnershipRefusal::AccountNotFound));
     }
-    let profile = match app.github.read_person(typed).await {
+    let profile = match app.github.read_account(typed).await {
         Ok(profile) => profile,
         Err(error) => return (typed.to_string(), Err(refusal_of(&error))),
     };

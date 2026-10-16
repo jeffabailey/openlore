@@ -537,9 +537,18 @@ pub trait GithubPort: Send + Sync {
     /// [`GithubError::NotFound`].
     async fn read_person(&self, user: &str) -> Result<PersonProfile, GithubError>;
 
+    /// Read the account a login names, as an identity proof reads it:
+    /// exactly ONE `GET /users/{login}` (ADR-076 §4, ADR-085 §4). A missing
+    /// account is [`GithubError::NotFound`]; a profile without a positive
+    /// numeric `id` or a `login` string is [`GithubError::ApiShape`] — an
+    /// identity decision never runs on an account GitHub did not name.
+    async fn read_account(&self, login: &str) -> Result<PersonProfile, GithubError>;
+
     /// Read an account's current public profile by its stable numeric id:
     /// exactly ONE `GET /user/{id}` (UC-9, ADR-085 §4). A renamed account
-    /// answers under its new login; a deleted one is [`GithubError::NotFound`].
+    /// answers under its new login; a deleted one is [`GithubError::NotFound`];
+    /// a profile without a positive numeric `id` or a `login` string is
+    /// [`GithubError::ApiShape`].
     async fn read_person_by_id(&self, user_id: u64) -> Result<PersonProfile, GithubError>;
 
     /// List the repos a person owns: exactly ONE
