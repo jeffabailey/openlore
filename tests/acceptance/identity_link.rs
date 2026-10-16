@@ -58,7 +58,6 @@ use openlore_test_support::OldLogin;
 ///   And his linked identities show him as github:jeffbailey, verified today
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER; un-ignore with the first green step"]
 fn jeffs_github_account_is_publicly_linked_to_his_did_and_shows_as_verified() {
     let world = LinkWorld::with(&[JEFF_GH]);
     bio_names(&world, JEFF_GH, MY_DID);

@@ -325,8 +325,24 @@ pub enum PeerCommand {
 /// Identity-link verbs (github-did-identity-link; ADR-085 §7).
 #[derive(Debug, Subcommand)]
 pub enum IdentityCommand {
+    /// Publicly link an account to your DID, proven by its bio naming the DID.
+    Link {
+        /// Where the account lives.
+        provider: LinkProvider,
+        /// The account's login.
+        login: String,
+        /// Confirm without the interactive preview.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Show linked identities from the last local check (offline).
     List,
+}
+
+/// The services an identity link can name.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum LinkProvider {
+    Github,
 }
 
 /// Inference verbs (contributor-philosophy-inference; DDD-13).
@@ -735,11 +751,31 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
             }
         }
+        Command::Identity(IdentityCommand::Link {
+            provider: LinkProvider::Github,
+            login,
+            yes,
+        }) => match verbs::identity_link::run(
+            &wiring,
+            &verbs::identity_link::IdentityLinkArgs { login, yes },
+        ) {
+            Ok(stdout) => {
+                print!("{stdout}");
+                0
+            }
+            Err(err) => {
+                eprintln!("openlore identity link: {err:#}");
+                1
+            }
+        },
         Command::Identity(IdentityCommand::List) => {
-            match verbs::identity_list::run(&verbs::identity_list::IdentityListHandles {
-                checks: wiring.identity_link_checks.as_ref(),
-                claims: wiring.link_candidates.as_ref(),
-            }) {
+            match verbs::identity_list::run(
+                &verbs::identity_list::IdentityListHandles {
+                    checks: wiring.identity_link_checks.as_ref(),
+                    claims: wiring.link_candidates.as_ref(),
+                },
+                wiring.clock.now_utc(),
+            ) {
                 Ok(stdout) => {
                     print!("{stdout}");
                     0

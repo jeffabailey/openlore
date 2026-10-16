@@ -31,6 +31,7 @@ mod decode;
 pub mod identity_link;
 mod normalize;
 mod provenance;
+mod record_json;
 mod references;
 mod retraction;
 mod sign;
@@ -52,6 +53,8 @@ pub use provenance::{
     provenance_mode, provenance_verdict, ClaimRecord, Provenance, ProvenanceMode,
     ProvenanceRejection, RecordOrigin, SelfAttestedClaim,
 };
+// Q-RM-1: the self-attested record JSON, moved from review-domain::plans.
+pub use record_json::{claim_record_json, reference_type, CLAIM_COLLECTION};
 pub use references::reference_rules_validate;
 // ADR-060 D-RF-D3 self-retraction rule, hoisted here so appview search and
 // person inference share ONE rule (contributor-philosophy-inference DDD-7).

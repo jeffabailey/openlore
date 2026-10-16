@@ -69,7 +69,10 @@ pub struct LinkCandidate {
     pub cid: String,
     pub author_did: String,
     pub subject: String,
+    pub predicate: String,
     pub object: String,
+    /// The evidence entries, in signed order.
+    pub evidence: Vec<String>,
 }
 
 /// Read the stored claims carrying one predicate (callers pass

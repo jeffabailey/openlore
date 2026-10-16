@@ -1633,6 +1633,54 @@ pub fn scan_identity_link_readers_hold_no_write_handle(
     Ok(findings)
 }
 
+/// The one module allowed to name the identity-link predicate.
+const IDENTITY_LINK_SOURCE: &str = "crates/claim-domain/src/identity_link.rs";
+
+/// The identity-link predicate literal and its constant's name.
+const LINK_PREDICATE_LITERAL: &str = "sameAs";
+const LINK_PREDICATE_CONSTANT: &str = "LINK_PREDICATE";
+
+/// Pure rule: does one production string literal name the link predicate?
+pub fn classify_link_predicate_literal(literal: &str) -> Option<String> {
+    contains_word(literal, LINK_PREDICATE_LITERAL).then(|| excerpt_of(literal))
+}
+
+/// Effect shell for `identity_link_compose_only_via_proven_link`: outside
+/// `claim-domain::identity_link`, no production source under `crates/*/src`
+/// names the `sameAs` literal or the link-predicate constant — a link is
+/// composed only through `LinkDraft` and selected only through the
+/// `identity_link` predicate API (ADR-085 Enforcement, Q-RM-4).
+pub fn scan_identity_link_compose_only_via_proven_link(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let allowed = workspace_root.join(IDENTITY_LINK_SOURCE);
+    let mut findings = Vec::new();
+    for path in rust_sources_under(&workspace_root.join("crates")) {
+        if path == allowed || !path.components().any(|c| c.as_os_str() == "src") {
+            continue;
+        }
+        let literal_findings = production_literals(&path)?
+            .into_iter()
+            .filter_map(|literal| classify_link_predicate_literal(&literal))
+            .map(|excerpt| format!("the `{LINK_PREDICATE_LITERAL}` literal in \"{excerpt}\""));
+        let constant_findings =
+            classify_forbidden_words(&std::fs::read_to_string(&path)?, &[LINK_PREDICATE_CONSTANT]);
+        findings.extend(
+            literal_findings
+                .chain(constant_findings)
+                .map(|finding| {
+                    format!(
+                        "{}: {finding} — only {IDENTITY_LINK_SOURCE} names the link predicate; compose through \
+                         `LinkDraft` and select through `link_predicate()` \
+                         (identity_link_compose_only_via_proven_link, ADR-085 Enforcement)",
+                        path.display()
+                    )
+                }),
+        );
+    }
+    Ok(findings)
+}
+
 // -----------------------------------------------------------------------------
 // Review-app rules (bluesky-claim-review-app, component-boundaries §5)
 // -----------------------------------------------------------------------------
@@ -2562,6 +2610,8 @@ pub fn run() -> anyhow::Result<i32> {
     let identity_link_checks_findings = scan_identity_link_checks_insert_only(&workspace_root)?;
     let identity_link_reader_findings =
         scan_identity_link_readers_hold_no_write_handle(&workspace_root)?;
+    let identity_link_compose_findings =
+        scan_identity_link_compose_only_via_proven_link(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -2582,6 +2632,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(search_event_findings);
     rendered.extend(identity_link_checks_findings);
     rendered.extend(identity_link_reader_findings);
+    rendered.extend(identity_link_compose_findings);
 
     if rendered.is_empty() {
         println!(
@@ -3626,6 +3677,58 @@ mod tests {
                 .expect("scan real tree"),
             Vec::<String>::new(),
             "the real readers hold read handles only"
+        );
+    }
+
+    // --- identity_link_compose_only_via_proven_link (ADR-085 Enforcement) ---
+
+    #[test]
+    fn compose_only_scan_reports_the_predicate_outside_identity_link_and_passes_the_real_tree() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let domain = violating.path().join("crates/claim-domain/src");
+        let verbs = violating.path().join("crates/cli/src/verbs");
+        std::fs::create_dir_all(&domain).expect("mkdir");
+        std::fs::create_dir_all(&verbs).expect("mkdir");
+        std::fs::write(
+            domain.join("identity_link.rs"),
+            "const LINK_PREDICATE: &str = \"sameAs\";\n",
+        )
+        .expect("write");
+        std::fs::write(
+            verbs.join("identity_link.rs"),
+            "fn compose() -> &'static str { \"sameAs\" }\n\
+             fn select() -> &'static str { claim_domain::identity_link::LINK_PREDICATE }\n\
+             #[cfg(test)]\nmod tests {\n    const FIXTURE: &str = \"sameAs\";\n}\n",
+        )
+        .expect("write");
+        std::fs::write(
+            verbs.join("claim_add.rs"),
+            "fn predicate() -> &'static str { \"adheres_to\" }\n",
+        )
+        .expect("write");
+        let findings =
+            scan_identity_link_compose_only_via_proven_link(violating.path()).expect("scan");
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        assert!(
+            findings
+                .iter()
+                .all(|f| f.contains("crates/cli/src/verbs/identity_link.rs")),
+            "{findings:?}"
+        );
+        assert!(
+            findings.iter().any(|f| f.contains("`sameAs` literal")),
+            "{findings:?}"
+        );
+        assert!(
+            findings.iter().any(|f| f.contains("`LINK_PREDICATE`")),
+            "{findings:?}"
+        );
+
+        assert_eq!(
+            scan_identity_link_compose_only_via_proven_link(real_workspace_root())
+                .expect("scan real tree"),
+            Vec::<String>::new(),
+            "only claim-domain::identity_link names the link predicate"
         );
     }
 }

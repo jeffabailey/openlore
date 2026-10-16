@@ -1,0 +1,4 @@
+{
+  "publish": "{\"$type\":\"org.openlore.claim\",\"author\":\"did:plc:test-maria\",\"composedAt\":\"2026-10-01T09:00:00Z\",\"confidence\":8500,\"evidence\":[\"https://github.com/BurntSushi/ripgrep/blob/master/CHANGELOG.md\",\"https://github.com/BurntSushi/ripgrep/releases\"],\"object\":\"org.openlore.philosophy.semver\",\"predicate\":\"adheres_to\",\"references\":[],\"subject\":\"github:BurntSushi/ripgrep\"}",
+  "retract": "{\"$type\":\"org.openlore.claim\",\"author\":\"did:plc:test-maria\",\"composedAt\":\"2026-10-02T09:00:00Z\",\"confidence\":8500,\"evidence\":[\"https://github.com/BurntSushi/ripgrep/blob/master/CHANGELOG.md\",\"https://github.com/BurntSushi/ripgrep/releases\"],\"object\":\"org.openlore.philosophy.semver\",\"predicate\":\"adheres_to\",\"references\":[{\"cid\":\"bafyreigoldenpublishedclaim\",\"type\":\"retracts\"}],\"subject\":\"github:BurntSushi/ripgrep\"}"
+}

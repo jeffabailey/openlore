@@ -33,9 +33,10 @@ use adapter_publish_http::{HttpPublishAdapter, WriteToken};
 use adapter_system_clock::SystemClockAdapter;
 use anyhow::{anyhow, Context, Result};
 use ports::{
-    ClockPort, ContributionLinkPort, GithubPort, IdentityLinkCheckReadPort, IdentityPort,
-    IndexQueryPort, InstanceReadPort, LinkCandidateReadPort, PdsPort, PeerStoragePort,
-    ProbeOutcome, ProbeRefused, PublishPort, StoragePort, StoreReadPort,
+    ClockPort, ContributionLinkPort, GithubPort, IdentityLinkCheckReadPort,
+    IdentityLinkCheckWritePort, IdentityPort, IndexQueryPort, InstanceReadPort,
+    LinkCandidateReadPort, PdsPort, PeerStoragePort, ProbeOutcome, ProbeRefused, PublishPort,
+    StoragePort, StoreReadPort,
 };
 
 use crate::paths::OpenLorePaths;
@@ -60,6 +61,9 @@ pub struct Wiring {
     /// live probe refuses startup when the store cannot keep two checks of one
     /// link.
     pub identity_link_checks: Box<dyn IdentityLinkCheckReadPort>,
+    /// The WRITE side of the check history (insert only), held by the verbs
+    /// that check a link (`identity link`); readers are never handed it.
+    pub identity_link_check_writes: Box<dyn IdentityLinkCheckWritePort>,
     /// The stored claims carrying the identity-link predicate — candidates the
     /// pure projection decides on (Q-RM-5). Read-only.
     pub link_candidates: Box<dyn LinkCandidateReadPort>,
@@ -133,6 +137,8 @@ impl Wiring {
             Box::new(storage.contribution_link_adapter());
         let identity_link_checks: Box<dyn IdentityLinkCheckReadPort> =
             Box::new(storage.identity_link_check_adapter());
+        let identity_link_check_writes: Box<dyn IdentityLinkCheckWritePort> =
+            Box::new(storage.identity_link_check_adapter());
         let link_candidates: Box<dyn LinkCandidateReadPort> =
             Box::new(storage.identity_link_check_adapter());
         let storage: Box<dyn StoragePort> = Box::new(storage);
@@ -193,6 +199,7 @@ impl Wiring {
             peer_storage,
             contribution_links,
             identity_link_checks,
+            identity_link_check_writes,
             link_candidates,
             store_read,
             pds,

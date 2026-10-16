@@ -169,8 +169,29 @@ fn sut_check(link: &LinkedView, login_read: &ReadView, id_read: &ReadView) -> Ch
 }
 
 fn sut_project(claim: &ClaimView, provenance: ProvenanceView) -> Option<LinkView> {
-    let _ = (claim, provenance);
-    todo!("RED: bind to claim_domain::identity_link::project (ADR-084 §3)")
+    let accepted = match provenance {
+        ProvenanceView::AppSigned => Some(claim_domain::Provenance::AppSigned {
+            key_id: format!("{}#org.openlore.application", claim.author),
+        }),
+        ProvenanceView::SelfAttestedFromAuthorPds => Some(claim_domain::Provenance::SelfAttested {
+            repo_did: Did(claim.author.clone()),
+        }),
+        ProvenanceView::SelfAttestedFromElsewhere | ProvenanceView::Failed => None,
+    };
+    let fields = claim_domain::identity_link::ClaimFields {
+        author: &claim.author,
+        subject: &claim.subject,
+        predicate: &claim.predicate,
+        object: &claim.object,
+        evidence: &claim.evidence,
+    };
+    accepted
+        .and_then(|provenance| claim_domain::identity_link::project(fields, &provenance))
+        .map(|link| LinkView {
+            did: link.did,
+            login: link.login,
+            id: link.user_id,
+        })
 }
 
 /// The production wire form of a proven link: the self-attested
@@ -178,8 +199,17 @@ fn sut_project(claim: &ClaimView, provenance: ProvenanceView) -> Option<LinkView
 /// review app's create-only write (ADR-084 §2). The app-signed CLI wire form
 /// is covered at layer 3 (WS-GDL-1 decodes the real record at the PDS).
 fn sut_encode_link(did: &str, login: &str, id: u64) -> serde_json::Value {
-    let _ = (did, login, id);
-    todo!("RED: bind to claim_domain::identity_link ProvenLink → LinkDraft → record JSON (ADR-084 §2)")
+    let observation = claim_domain::identity_link::GithubObservation {
+        login: login.to_string(),
+        user_id: id,
+        bio: Some(did.to_string()),
+    };
+    claim_domain::identity_link::self_attested_link_record(
+        did,
+        &observation,
+        "2026-10-01T09:00:00Z",
+    )
+    .expect("a bio naming the DID proves the link")
 }
 
 /// DESIGN signature: `link_view(links, lineages, checks)`. The view type folds
@@ -687,7 +717,6 @@ proptest! {
     /// REAL canonicalize / compute_cid (deterministic) → project == the same
     /// DID, login and id.
     #[test]
-    #[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
     fn core4_an_encoded_link_projects_back_to_the_same_person_and_account(
         did in arb_did(),
         login in arb_login(),

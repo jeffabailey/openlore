@@ -12,12 +12,13 @@ use ports::claim_domain::{
     ReferenceType, SelfAttestedClaim, UnsignedClaim,
 };
 use ports::{PlanKind, StoredPublishPlan, SuggestionKey};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::edits::ClaimEdit;
 
-/// The ATProto collection approved claims are written to.
-pub const CLAIM_COLLECTION: &str = "org.openlore.claim";
+/// The ATProto collection and the self-attested record JSON live in
+/// claim-domain (Q-RM-1); re-exported here so existing paths keep resolving.
+pub use ports::claim_domain::{claim_record_json, CLAIM_COLLECTION};
 
 /// What the owner is about to publish: a suggestion's key, evidence and
 /// confidence (basis points, 0..=10000).
@@ -285,37 +286,6 @@ pub fn restore_retract_plan(
     }
 }
 
-/// The self-attested wire shape of a claim (SPIKE-1): `$type`, the claim
-/// fields, confidence as basis points, the bare-DID author, `references`.
-pub fn claim_record_json(claim: &UnsignedClaim) -> Value {
-    let references: Vec<Value> = claim
-        .references
-        .iter()
-        .map(|r| json!({"type": reference_type(r.ref_type), "cid": r.cid.0}))
-        .collect();
-    json!({
-        "$type": CLAIM_COLLECTION,
-        "subject": claim.subject,
-        "predicate": claim.predicate,
-        "object": claim.object,
-        "evidence": claim.evidence,
-        "confidence": claim.confidence.basis_points(),
-        "author": claim.author_did.0,
-        "composedAt": claim.composed_at,
-        "references": references,
-    })
-}
-
-fn reference_type(ref_type: ports::claim_domain::ReferenceType) -> &'static str {
-    use ports::claim_domain::ReferenceType;
-    match ref_type {
-        ReferenceType::Retracts => "retracts",
-        ReferenceType::Corrects => "corrects",
-        ReferenceType::Counters => "counters",
-        ReferenceType::Supersedes => "supersedes",
-    }
-}
-
 /// `at://<did>/org.openlore.claim/<rkey>`.
 pub fn at_uri(owner_did: &str, rkey: &str) -> String {
     format!("at://{owner_did}/{CLAIM_COLLECTION}/{rkey}")
@@ -393,6 +363,7 @@ mod tests {
     //! its own value; restoring a stored plan yields the same plan.
     use super::*;
     use proptest::prelude::*;
+    use serde_json::json;
 
     fn arb_draft() -> impl Strategy<Value = (String, ClaimDraft)> {
         (

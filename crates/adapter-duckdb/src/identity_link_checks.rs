@@ -42,10 +42,17 @@ const LATEST_CHECKS_SQL: &str = "
     ORDER BY subject_did, github_user_id";
 
 const LINK_CANDIDATES_SQL: &str = "
-    SELECT cid, author_did, subject, object FROM claims WHERE predicate = ?
+    SELECT cid, author_did, subject, predicate, object FROM claims WHERE predicate = ?
     UNION ALL
-    SELECT cid, author_did, subject, object FROM peer_claims WHERE predicate = ?
+    SELECT cid, author_did, subject, predicate, object FROM peer_claims WHERE predicate = ?
     ORDER BY cid";
+
+/// The evidence of one candidate, in signed order (own or peer claim).
+const CANDIDATE_EVIDENCE_SQL: &str = "
+    SELECT evidence, ordinal FROM claim_evidence WHERE cid = ?
+    UNION ALL
+    SELECT evidence, ordinal FROM peer_claim_evidence WHERE cid = ?
+    ORDER BY ordinal";
 
 /// Check history + link-candidate reads sharing the one DuckDB connection.
 pub struct DuckDbIdentityLinkCheckAdapter {
@@ -123,7 +130,25 @@ fn decode_candidate(row: &duckdb::Row<'_>) -> Result<LinkCandidate, duckdb::Erro
         cid: row.get(0)?,
         author_did: row.get(1)?,
         subject: row.get(2)?,
-        object: row.get(3)?,
+        predicate: row.get(3)?,
+        object: row.get(4)?,
+        evidence: Vec::new(),
+    })
+}
+
+fn candidate_evidence(conn: &Connection, cid: &str) -> Result<Vec<String>, duckdb::Error> {
+    let mut stmt = conn.prepare(CANDIDATE_EVIDENCE_SQL)?;
+    let rows = stmt.query_map(duckdb::params![cid, cid], |row| row.get(0))?;
+    rows.collect()
+}
+
+fn with_evidence(
+    conn: &Connection,
+    candidate: LinkCandidate,
+) -> Result<LinkCandidate, duckdb::Error> {
+    Ok(LinkCandidate {
+        evidence: candidate_evidence(conn, &candidate.cid)?,
+        ..candidate
     })
 }
 
@@ -164,8 +189,14 @@ impl LinkCandidateReadPort for DuckDbIdentityLinkCheckAdapter {
         let rows = stmt
             .query_map(duckdb::params![predicate, predicate], decode_candidate)
             .map_err(store_error("query link candidates"))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(store_error("decode link candidate"))
+        let candidates = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(store_error("decode link candidate"))?;
+        candidates
+            .into_iter()
+            .map(|candidate| with_evidence(&conn, candidate))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(store_error("read link candidate evidence"))
     }
 }
 

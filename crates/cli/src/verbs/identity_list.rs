@@ -7,11 +7,17 @@
 //! `claim_domain::identity_link` predicate API (Q-RM-5); the projection
 //! decides what is a link.
 
-use anyhow::{bail, Result};
-use claim_domain::identity_link::link_predicate;
-use ports::{IdentityLinkCheckReadPort, LinkCandidateReadPort};
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use claim_domain::identity_link::{
+    link_predicate, link_view, project, ClaimFields, IdentityLink, LatestCheck,
+};
+use claim_domain::Provenance;
+use ports::{
+    CheckFilter, IdentityLinkCheckReadPort, LinkCandidate, LinkCandidateReadPort, LinkCheck,
+};
 
-use crate::render::render_no_linked_identities;
+use crate::render::{render_linked_identities, render_no_linked_identities};
 
 /// The narrow read handles `identity list` holds.
 pub struct IdentityListHandles<'a> {
@@ -19,18 +25,48 @@ pub struct IdentityListHandles<'a> {
     pub claims: &'a dyn LinkCandidateReadPort,
 }
 
-/// Run `identity list`; returns the stdout to print.
-pub fn run(handles: &IdentityListHandles<'_>) -> Result<String> {
-    let candidates = handles.claims.link_candidates(link_predicate())?;
-    if candidates.is_empty() {
+/// A stored candidate as a link, if it is one. Stored rows are app-signed
+/// claims whose signature was verified when they were written (own) or
+/// pulled (peer).
+fn projected(candidate: &LinkCandidate) -> Option<IdentityLink> {
+    let fields = ClaimFields {
+        author: &candidate.author_did,
+        subject: &candidate.subject,
+        predicate: &candidate.predicate,
+        object: &candidate.object,
+        evidence: &candidate.evidence,
+    };
+    let provenance = Provenance::AppSigned {
+        key_id: candidate.author_did.clone(),
+    };
+    project(fields, &provenance)
+}
+
+fn latest_of(check: LinkCheck) -> LatestCheck {
+    LatestCheck {
+        subject_did: check.subject_did,
+        user_id: check.github_user_id,
+        verdict: check.verdict,
+        checked_at: check.checked_at,
+    }
+}
+
+/// Run `identity list` as of `now`; returns the stdout to print.
+pub fn run(handles: &IdentityListHandles<'_>, now: DateTime<Utc>) -> Result<String> {
+    let links: Vec<IdentityLink> = handles
+        .claims
+        .link_candidates(link_predicate())?
+        .iter()
+        .filter_map(projected)
+        .collect();
+    if links.is_empty() {
         return Ok(render_no_linked_identities());
     }
-    // SCAFFOLD: the link projection (`identity_link::project` + `link_view`
-    // over `handles.checks`) lands with the first linked-identity scenario;
-    // until then the verb fails closed rather than misreport stored links.
-    let _ = handles.checks;
-    bail!(
-        "{} stored identity-link claim(s) cannot be shown yet",
-        candidates.len()
-    )
+    let latest: Vec<LatestCheck> = handles
+        .checks
+        .latest_checks(&CheckFilter::All, now)?
+        .into_iter()
+        .map(latest_of)
+        .collect();
+    Ok(render_linked_identities(&link_view(&links, &latest), now))
 }
