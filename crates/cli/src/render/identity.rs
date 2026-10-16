@@ -130,3 +130,31 @@ pub fn render_link_kept_locally(login: &str, cid: &str, reason: &str) -> String 
          nothing published. The signed link is kept: retry with `openlore claim publish {cid}` once it is reachable"
     )
 }
+
+/// The empty state of `identity verify`.
+pub const NO_IDENTITY_LINKS_TO_VERIFY: &str = "No identity links to verify";
+
+/// Render `identity verify` when the store holds no active link.
+pub fn render_no_identity_links_to_verify() -> String {
+    format!("{NO_IDENTITY_LINKS_TO_VERIFY}; GitHub was not asked.\n")
+}
+
+/// One decided re-check, as one line. A failed proof says the link stays
+/// published: verify never retracts (GDL-D5).
+pub fn render_recheck(did: &str, login_seen: &str, verdict: CheckVerdict) -> String {
+    let consequence = match verdict {
+        CheckVerdict::Verified => "",
+        _ => "; proof gone, the link stays published",
+    };
+    format!(
+        "github:{login_seen} ({did}): {} — {}{consequence}\n",
+        verdict.token(),
+        verdict_plainly(verdict)
+    )
+}
+
+/// `identity verify` could not read GitHub for one link: nothing recorded
+/// for it. `reason` never carries the token (ADR-085 §4).
+pub fn render_recheck_unreadable(login: &str, reason: &str) -> String {
+    format!("GitHub could not be read for github:{login} ({reason}); nothing recorded")
+}

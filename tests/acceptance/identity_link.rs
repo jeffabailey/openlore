@@ -822,7 +822,6 @@ fn after_retracting_his_link_jeff_can_link_the_same_account_again() {
 ///   And the link is still in his published repo, unretracted
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn once_jeffs_bio_stops_naming_his_did_his_link_shows_the_proof_gone_and_stays_published() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);
@@ -866,7 +865,6 @@ fn once_jeffs_bio_stops_naming_his_did_his_link_shows_the_proof_gone_and_stays_p
 ///   And his linked identities show him as github:jeffbailey, verified today
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn when_jeffs_did_is_back_one_recheck_from_one_github_request_restores_the_link() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, Some(LINKED_AT));
@@ -1072,7 +1070,6 @@ fn the_account_number_tells_a_re_registered_login_and_a_deleted_account_apart() 
 ///     | rejects his GITHUB_TOKEN             |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_github_failure_during_a_recheck_changes_nothing() {
     for trouble in GithubTrouble::ALL {
         let row = format!("{trouble:?}");
@@ -1166,7 +1163,6 @@ fn rechecking_can_be_narrowed_to_one_person_or_one_account() {
 ///   And GitHub was never asked
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn with_no_links_a_recheck_says_so_and_asks_github_nothing() {
     let world = LinkWorld::with(&[JEFF_GH]);
 
@@ -1194,7 +1190,6 @@ fn with_no_links_a_recheck_says_so_and_asks_github_nothing() {
 ///   Then GitHub was asked about both accounts and both are reported verified
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn one_recheck_covers_both_of_jeffs_github_accounts() {
     let world = LinkWorld::with(&[JEFF_GH, JEFF_WORK_GH]);
     given_i_linked(&world, JEFF_GH, None);

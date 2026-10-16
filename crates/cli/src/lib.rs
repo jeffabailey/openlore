@@ -339,6 +339,9 @@ pub enum IdentityCommand {
     },
     /// Show linked identities from the last local check (offline).
     List,
+    /// Re-check every active link against a fresh GitHub read; appends one
+    /// local check per decided re-check, never retracts.
+    Verify,
 }
 
 /// The services an identity link can name.
@@ -784,6 +787,31 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
                 Err(err) => {
                     eprintln!("openlore identity list: {err:#}");
+                    1
+                }
+            }
+        }
+        Command::Identity(IdentityCommand::Verify) => {
+            match verbs::identity_verify::run(
+                &verbs::identity_verify::IdentityVerifyHandles {
+                    checks: wiring.identity_link_checks.as_ref(),
+                    check_writes: wiring.identity_link_check_writes.as_ref(),
+                    claims: wiring.link_candidates.as_ref(),
+                    lineage: wiring.storage.as_ref(),
+                    github: wiring.github.as_ref(),
+                },
+                wiring.clock.now_utc(),
+            ) {
+                Ok(report) => {
+                    print!("{}", report.stdout);
+                    report
+                        .unreadable
+                        .iter()
+                        .for_each(|line| eprintln!("openlore identity verify: {line}"));
+                    i32::from(!report.unreadable.is_empty())
+                }
+                Err(err) => {
+                    eprintln!("openlore identity verify: {err:#}");
                     1
                 }
             }

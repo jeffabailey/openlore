@@ -512,6 +512,41 @@ pub fn active_links(
         .collect()
 }
 
+/// The links one re-check covers: every active link, once per
+/// (DID, numeric id), so each account is read once (ADR-085 §7).
+pub fn links_to_recheck(
+    stored: &[StoredClaim<'_>],
+    referrers: &[ClaimLineage<'_>],
+) -> Vec<IdentityLink> {
+    active_links(stored, referrers)
+        .into_iter()
+        .map(|link| ((link.did.clone(), link.user_id), link))
+        .collect::<BTreeMap<_, _>>()
+        .into_values()
+        .collect()
+}
+
+/// Re-check an active `link` on a fresh read of `login_read` (ADR-085 §4).
+/// `None` (the login is gone) or an account with another id (the login was
+/// re-registered) no longer proves the link: `account_not_found`. Otherwise
+/// the bio of the linked account decides, against the link's own DID.
+pub fn recheck_link(
+    link: &IdentityLink,
+    login_read: &str,
+    observation: Option<&GithubObservation>,
+) -> ProofCheck {
+    match observation {
+        Some(observed) if observed.user_id == link.user_id => {
+            check_link(&Did(link.did.clone()), observed)
+        }
+        _ => ProofCheck::Disproved {
+            verdict: CheckVerdict::AccountNotFound,
+            login_seen: login_read.to_string(),
+            user_id: link.user_id,
+        },
+    }
+}
+
 /// D-a: the proven account is already actively linked to the author's DID,
 /// so linking it again is refused. A retracted link no longer counts (D-g),
 /// and other accounts of the same DID never do (A-4).

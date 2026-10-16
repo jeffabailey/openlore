@@ -29,6 +29,7 @@ pub mod graph_query;
 // module-scoped check-arch rules can tell readers from writers (Q-RM-2).
 pub mod identity_link;
 pub mod identity_list;
+pub mod identity_verify;
 pub mod infer_people;
 pub mod init;
 pub mod peer_add;
