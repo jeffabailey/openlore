@@ -24,7 +24,6 @@
 class Openlore < Formula
   desc "Local-first CLI for authoring and querying federated philosophical claims"
   homepage "https://github.com/jeffabailey/openlore"
-  version "0.1.0"
   license any_of: ["MIT", "Apache-2.0"]
 
   on_macos do

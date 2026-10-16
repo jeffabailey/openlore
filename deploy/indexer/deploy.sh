@@ -377,8 +377,9 @@ alarm_transitions() {
 laptop_kpi() { # $1 = days (1-30)
   need aws jq
   local days="${1:-7}" now start q_ok q_fail ok_times fail_times a1 a2 a3
-  [[ "$days" =~ ^[0-9]+$ ]] && [ "$days" -ge 1 ] && [ "$days" -le 30 ] ||
+  if ! [[ "$days" =~ ^[0-9]+$ ]] || [ "$days" -lt 1 ] || [ "$days" -gt 30 ]; then
     die "usage: deploy.sh kpi [days 1-30]"
+  fi
   now=$(date +%s)
   start=$((now - days * 86400))
   local summary='filter event = "indexer.ingest.pass_summary"'
@@ -777,8 +778,9 @@ measure_verdict() {
 host_measure() { # $1 = minutes (1-30)
   local minutes="${1:-}" interval="${INDEXER_MEASURE_INTERVAL_S:-5}"
   local cgroups="${INDEXER_CGROUP_ROOT:-/sys/fs/cgroup/system.slice}" proc="${INDEXER_PROC:-/proc}"
-  [[ "$minutes" =~ ^[0-9]+$ ]] && [ "$minutes" -ge 1 ] && [ "$minutes" -le 30 ] ||
+  if ! [[ "$minutes" =~ ^[0-9]+$ ]] || [ "$minutes" -lt 1 ] || [ "$minutes" -gt 30 ]; then
     die "usage: deploy.sh measure <minutes 1-30>"
+  fi
   local ix ra samples i
   ix=$(docker inspect -f '{{.Id}}' openlore-indexer) || die "openlore-indexer is not running"
   ra=$(docker inspect -f '{{.Id}}' review-app-review-app-1 2>/dev/null || true)
