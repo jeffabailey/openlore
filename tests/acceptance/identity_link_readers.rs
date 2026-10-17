@@ -602,7 +602,6 @@ fn the_person_view_shows_a_verified_link_even_with_the_network_off() {
 ///   And his linked identities now show the same
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn reading_a_person_shows_their_link_has_lost_its_proof_at_no_extra_github_cost() {
     let mut world = LinkWorld::with(&[BURNTSUSHI_GH]);
     bio_names(&world, BURNTSUSHI_GH, TOBIAS_DID);

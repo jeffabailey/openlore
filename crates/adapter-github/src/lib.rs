@@ -139,6 +139,9 @@ pub struct GithubAdapter {
     /// The `/repos/{owner}/{repo}` body `resolve_target` just read, taken once
     /// by the `harvest_repo` of the same repo so a repo scrape reads it once.
     resolved_repo: std::sync::Mutex<Option<(String, serde_json::Value)>>,
+    /// The strict account of the `/users/{user}` body `resolve_target` just
+    /// read, keyed by `user`; cleared on every resolve (UC-8, ADR-085 §4).
+    resolved_account: std::sync::Mutex<Option<(String, GithubAccountProfile)>>,
 }
 
 impl GithubAdapter {
@@ -151,6 +154,7 @@ impl GithubAdapter {
             auth: client::read_auth_mode(),
             last_rate_budget: std::sync::Mutex::new(None),
             resolved_repo: std::sync::Mutex::new(None),
+            resolved_account: std::sync::Mutex::new(None),
         }
     }
 
@@ -164,6 +168,7 @@ impl GithubAdapter {
             auth: client::read_auth_mode(),
             last_rate_budget: std::sync::Mutex::new(None),
             resolved_repo: std::sync::Mutex::new(None),
+            resolved_account: std::sync::Mutex::new(None),
         }
     }
 
@@ -178,6 +183,7 @@ impl GithubAdapter {
             },
             last_rate_budget: std::sync::Mutex::new(None),
             resolved_repo: std::sync::Mutex::new(None),
+            resolved_account: std::sync::Mutex::new(None),
         }
     }
 
@@ -260,6 +266,7 @@ impl GithubPort for GithubAdapter {
     /// (allowlist: `/repos/...`, `/users/...`) — there is no private
     /// surface (I-SCR-2). The HTTP status classifies the refusal.
     async fn resolve_target(&self, target: &str) -> Result<TargetKind, GithubError> {
+        self.remember_resolved_account(None);
         match split_target(target) {
             ResolvedTarget::Repo { owner, repo } => {
                 let path = format!("/repos/{owner}/{repo}");
@@ -276,6 +283,11 @@ impl GithubPort for GithubAdapter {
                 let path = format!("/users/{user}");
                 let body = self.get_public(&path, target).await?;
                 record_auth_report(client::parse_auth_report(&body));
+                self.remember_resolved_account(
+                    client::parse_account_profile(&body)
+                        .ok()
+                        .map(|account| (user.clone(), account)),
+                );
                 Ok(TargetKind::User { user })
             }
         }
@@ -419,6 +431,16 @@ impl GithubPort for GithubAdapter {
     fn last_rate_budget(&self) -> Option<RateBudget> {
         self.last_rate_budget.lock().ok().and_then(|slot| *slot)
     }
+
+    /// The strict account of the last resolved user body, when it was
+    /// `user`'s and named an account — read from the cache, never fetched.
+    fn resolved_account(&self, user: &str) -> Option<GithubAccountProfile> {
+        let resolved = self.resolved_account.lock().ok()?;
+        resolved
+            .as_ref()
+            .filter(|(resolved_user, _)| resolved_user == user)
+            .map(|(_, account)| account.clone())
+    }
 }
 
 impl GithubAdapter {
@@ -431,6 +453,13 @@ impl GithubAdapter {
     ///
     /// `path` is always on the public allowlist (`/repos/...` or
     /// `/users/...`); there is no private surface (WD-51 / I-SCR-2).
+    /// Replace the resolved-user account (`None` clears it).
+    fn remember_resolved_account(&self, account: Option<(String, GithubAccountProfile)>) {
+        if let Ok(mut resolved) = self.resolved_account.lock() {
+            *resolved = account;
+        }
+    }
+
     /// The body `resolve_target` read for `path`, if it was the last repo it
     /// resolved; taken, so it serves one harvest only.
     fn take_resolved_repo(&self, path: &str) -> Option<serde_json::Value> {

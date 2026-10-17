@@ -36,6 +36,7 @@
 //! slice-01 verb internals).
 
 use anyhow::{anyhow, Result};
+use claim_domain::identity_link::{check_on_profile, RecheckScope};
 use ports::{CandidateClaim, GithubError, LinkFilter, TargetKind};
 use scraper_domain::{
     contributor_count_for, derive_candidates, load_mapping, new_inferred_candidate_count,
@@ -51,6 +52,7 @@ use crate::render::{
     render_public_data_banner, render_shared_contributors,
 };
 use crate::verbs::claim_publish::build_tokio_runtime;
+use crate::verbs::identity_reads::{check_of, links_in_scope, observation_of};
 use crate::verbs::infer_people::{person_signables, read_inference_report, read_person_link_lines};
 use crate::verbs::sign_batch::{self, SignableCandidate};
 use crate::wiring::Wiring;
@@ -148,7 +150,8 @@ pub(crate) struct RepoTarget<'a> {
 /// reported, and nothing of theirs is crawled. The view is rendered from the
 /// LOCAL store only: their links (repo + rank) and the person-scoped
 /// inference report through the SAME read `infer people --person` uses
-/// (DDD-13) — so the numbering is identical. Nothing is written.
+/// (DDD-13) — so the numbering is identical. The one write: the profile the
+/// resolve read refreshes the checks of the links to that login (UC-8).
 fn show_person(
     wiring: &Wiring,
     user: &str,
@@ -156,7 +159,36 @@ fn show_person(
     mut out: String,
 ) -> Result<ScrapeGithubOutcome> {
     out.push_str(&render_auth_report(&adapter_github::take_last_auth_report()));
+    refresh_link_checks(wiring, user)?;
     person_view(wiring, user, args.sign.as_deref(), out)
+}
+
+/// Re-check the active links to `user` on the profile the resolve already
+/// read — no other GitHub request, no new link (UC-8, GDL-D12). Only that
+/// strict account is observed; when the resolve named none, nothing is
+/// recorded. Each check is decided by `check_on_profile`: a profile of
+/// another account decides nothing (U-5).
+fn refresh_link_checks(wiring: &Wiring, user: &str) -> Result<()> {
+    let Some(account) = wiring.github.resolved_account(user) else {
+        return Ok(());
+    };
+    let profile = observation_of(account);
+    let now = wiring.clock.now_utc();
+    let links = links_in_scope(
+        wiring.identity_link_checks.as_ref(),
+        wiring.link_candidates.as_ref(),
+        wiring.link_lineage.as_ref(),
+        &RecheckScope::Account(user.to_string()),
+        now,
+    )?;
+    links
+        .iter()
+        .filter_map(|to_recheck| {
+            check_on_profile(&to_recheck.link, &profile)
+                .map(|decided| check_of(&to_recheck.link, &decided, now))
+        })
+        .try_for_each(|check| wiring.identity_link_check_writes.record_check(&check))?;
+    Ok(())
 }
 
 /// The person view itself (shared with `scrape person`): links, possible

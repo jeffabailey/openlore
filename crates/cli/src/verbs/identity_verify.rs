@@ -10,17 +10,17 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
-    is_github_login, is_in_scope, recheck_link, GithubRead, IdentityLink, ProofCheck, RecheckScope,
+    is_github_login, recheck_link, GithubRead, IdentityLink, RecheckScope,
 };
 use ports::{
-    CheckFilter, GithubAccountProfile, GithubError, GithubPort, IdentityLinkCheckReadPort,
-    IdentityLinkCheckWritePort, LinkCandidateReadPort, LinkCheck, LinkLineageReadPort,
+    GithubAccountProfile, GithubError, GithubPort, IdentityLinkCheckReadPort,
+    IdentityLinkCheckWritePort, LinkCandidateReadPort, LinkLineageReadPort,
 };
 
 use crate::render::{
     render_no_identity_links_to_verify, render_recheck, render_recheck_unreadable,
 };
-use crate::verbs::identity_reads::{observation_of, StoredLinkLineage};
+use crate::verbs::identity_reads::{check_of, links_in_scope, observation_of};
 
 /// The narrow handles `identity verify` holds.
 pub struct IdentityVerifyHandles<'a> {
@@ -40,20 +40,6 @@ pub struct VerifyReport {
     pub unreadable: Vec<String>,
 }
 
-/// The active links in the store, once per (DID, account id).
-fn active_links_in_store(handles: &IdentityVerifyHandles<'_>) -> Result<Vec<IdentityLink>> {
-    Ok(StoredLinkLineage::read(handles.claims, handles.lineage)?.links_to_recheck())
-}
-
-/// The login to read for `link`: the last one this reader saw, else the
-/// signed one (ADR-085 §4).
-fn login_to_read<'a>(link: &'a IdentityLink, latest: &'a [LinkCheck]) -> &'a str {
-    latest
-        .iter()
-        .find(|check| check.subject_did == link.did && check.github_user_id == link.user_id)
-        .map_or(link.login.as_str(), |check| check.login_seen.as_str())
-}
-
 /// One GitHub answer as the check consumes it: "no such account" is an
 /// answer; any other failure is kept so the caller can report it.
 fn answer_of(
@@ -63,17 +49,6 @@ fn answer_of(
         Ok(profile) => GithubRead::Profile(observation_of(profile)),
         Err(GithubError::NotFound { .. }) => GithubRead::NotFound,
         Err(err) => GithubRead::Unreadable(err),
-    }
-}
-
-/// The one check a decided re-check appends.
-fn check_of(link: &IdentityLink, decided: &ProofCheck, now: DateTime<Utc>) -> LinkCheck {
-    LinkCheck {
-        subject_did: link.did.clone(),
-        github_user_id: link.user_id,
-        login_seen: decided.login_seen().to_string(),
-        verdict: decided.verdict(),
-        checked_at: now,
     }
 }
 
@@ -121,11 +96,7 @@ pub fn run(
     scope: &RecheckScope,
     now: DateTime<Utc>,
 ) -> Result<VerifyReport> {
-    let latest = handles.checks.latest_checks(&CheckFilter::All, now)?;
-    let links: Vec<IdentityLink> = active_links_in_store(handles)?
-        .into_iter()
-        .filter(|link| is_in_scope(scope, link, login_to_read(link, &latest)))
-        .collect();
+    let links = links_in_scope(handles.checks, handles.claims, handles.lineage, scope, now)?;
     if links.is_empty() {
         return Ok(VerifyReport {
             stdout: render_no_identity_links_to_verify(),
@@ -138,12 +109,12 @@ pub fn run(
         .build()?;
     links
         .iter()
-        .try_fold(VerifyReport::default(), |report, link| {
+        .try_fold(VerifyReport::default(), |report, to_recheck| {
             recheck(
                 handles,
                 &runtime,
-                link,
-                login_to_read(link, &latest),
+                &to_recheck.link,
+                &to_recheck.login,
                 now,
                 report,
             )

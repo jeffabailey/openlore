@@ -561,6 +561,16 @@ pub trait GithubPort: Send + Sync {
     fn last_rate_budget(&self) -> Option<RateBudget> {
         None
     }
+
+    /// The account the last [`resolve_target`](Self::resolve_target) of
+    /// `user` read, strictly: never a request (UC-8, ADR-085 §4). `None`
+    /// when the last resolve was not of `user`, failed, or its body named no
+    /// account (no positive numeric `id` or no `login`). The default
+    /// observes nothing, so an adapter without it records no check.
+    fn resolved_account(&self, user: &str) -> Option<GithubAccountProfile> {
+        let _ = user;
+        None
+    }
 }
 
 /// GitHub's `x-ratelimit-remaining` / `x-ratelimit-reset` on one response.

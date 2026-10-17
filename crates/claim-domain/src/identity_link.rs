@@ -852,6 +852,16 @@ pub fn recheck_link<E>(
     }
 }
 
+/// The check one profile already read decides for `link` (UC-8 / U-5): only
+/// a profile of the linked account decides, exactly as [`check_link`] does.
+/// A profile of any other account, or one naming no account, decides
+/// nothing — nothing is recorded and the link's standing is unchanged.
+pub fn check_on_profile(link: &IdentityLink, profile: &GithubObservation) -> Option<ProofCheck> {
+    (profile.user_id == link.user_id)
+        .then(|| check_link(&Did(link.did.clone()), profile).ok())
+        .flatten()
+}
+
 /// D-a: the proven account is already actively linked to the author's DID,
 /// so linking it again is refused. A retracted link no longer counts (D-g),
 /// and other accounts of the same DID never do (A-4).
@@ -1286,6 +1296,52 @@ mod tests {
             proptest::prop_assert!(of_alice.iter().all(|l| l.identity.link.user_id == 1));
             proptest::prop_assert!(of_bob.iter().all(|l| l.identity.link.user_id == 2));
             proptest::prop_assert_eq!(of_alice.len() + of_bob.len(), shown.len());
+        }
+    }
+
+    proptest::proptest! {
+        /// Universe: an active link to account 1..=3 and one profile already
+        /// read (by the person scrape's resolve) for an account 0..=3, under a
+        /// valid or invalid login, with a bio naming the link's DID, another
+        /// DID or none. U-5: only a profile of the linked account decides a
+        /// check, and then exactly as `check_link` does; a profile of another
+        /// account, or one naming no account, decides nothing — so nothing is
+        /// recorded and the link's standing is unchanged.
+        #[test]
+        fn only_a_profile_of_the_linked_account_decides_a_check(
+            link_id in 1u64..=3,
+            profile_id in 0u64..=3,
+            login in proptest::sample::select(vec!["BurntSushi", "", "-bad-"]),
+            bio in proptest::sample::select(vec![
+                Some(DID.to_string()),
+                Some("did:plc:someoneelseentirelyxyz".to_string()),
+                None,
+            ]),
+        ) {
+            let link = linked(link_id);
+            let profile = GithubObservation { login: login.to_string(), user_id: profile_id, bio };
+            let decided = check_on_profile(&link, &profile);
+            let expected = (profile_id == link_id)
+                .then(|| check_link(&Did(DID.to_string()), &profile).ok())
+                .flatten();
+            proptest::prop_assert_eq!(&decided, &expected);
+            if profile_id != link_id {
+                let at = instant("2026-10-01T09:00:00Z");
+                let before = [LatestCheck {
+                    subject_did: DID.to_string(),
+                    user_id: link_id,
+                    login_seen: "priyaraman".to_string(),
+                    verdict: CheckVerdict::Verified,
+                    checked_at: at,
+                }];
+                let reader = [ReaderLink { link: link.clone(), lifecycle: LinkLifecycle::Active }];
+                let now = at + chrono::Duration::days(1);
+                proptest::prop_assert!(decided.is_none());
+                proptest::prop_assert_eq!(
+                    &link_view(&reader, &before, now)[0].standing,
+                    &LinkStanding::Associated { checked_at: at }
+                );
+            }
         }
     }
 }

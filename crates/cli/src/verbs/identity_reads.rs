@@ -9,9 +9,9 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
-    active_link_records, active_links, link_predicate, link_view, links_to_recheck, listed_links,
-    ClaimFields, GithubObservation, IdentityLink, LatestCheck, LinkLifecycle, LinkRecord,
-    ListedLink, ReaderLink, StoredClaim,
+    active_link_records, active_links, is_in_scope, link_predicate, link_view, links_to_recheck,
+    listed_links, ClaimFields, GithubObservation, IdentityLink, LatestCheck, LinkLifecycle,
+    LinkRecord, ListedLink, ProofCheck, ReaderLink, RecheckScope, StoredClaim,
 };
 use claim_domain::{ClaimLineage, SignedClaim};
 use ports::{
@@ -151,5 +151,58 @@ pub(crate) fn observation_of(account: GithubAccountProfile) -> GithubObservation
         login: profile.login,
         user_id: profile.id,
         bio: profile.bio,
+    }
+}
+
+/// The active links in the store, once per (DID, account id).
+fn active_links_in_store(
+    claims: &dyn LinkCandidateReadPort,
+    lineage: &dyn LinkLineageReadPort,
+) -> Result<Vec<IdentityLink>> {
+    Ok(StoredLinkLineage::read(claims, lineage)?.links_to_recheck())
+}
+
+/// The login to read for `link`: the last one this reader saw, else the
+/// signed one (ADR-085 §4).
+fn login_to_read<'a>(link: &'a IdentityLink, latest: &'a [LinkCheck]) -> &'a str {
+    latest
+        .iter()
+        .find(|check| check.subject_did == link.did && check.github_user_id == link.user_id)
+        .map_or(link.login.as_str(), |check| check.login_seen.as_str())
+}
+
+/// One active link a re-check covers, with the login to read for it.
+pub(crate) struct LinkToRecheck {
+    pub link: IdentityLink,
+    pub login: String,
+}
+
+/// The active links within `scope` as of `now`, once per (DID, account id),
+/// each with the login to read for it (`identity verify`, the person scrape).
+pub(crate) fn links_in_scope(
+    checks: &dyn IdentityLinkCheckReadPort,
+    claims: &dyn LinkCandidateReadPort,
+    lineage: &dyn LinkLineageReadPort,
+    scope: &RecheckScope,
+    now: DateTime<Utc>,
+) -> Result<Vec<LinkToRecheck>> {
+    let latest = checks.latest_checks(&CheckFilter::All, now)?;
+    Ok(active_links_in_store(claims, lineage)?
+        .into_iter()
+        .filter_map(|link| {
+            let login = login_to_read(&link, &latest).to_string();
+            is_in_scope(scope, &link, &login).then_some(LinkToRecheck { link, login })
+        })
+        .collect())
+}
+
+/// The one check a decided re-check appends.
+pub(crate) fn check_of(link: &IdentityLink, decided: &ProofCheck, now: DateTime<Utc>) -> LinkCheck {
+    LinkCheck {
+        subject_did: link.did.clone(),
+        github_user_id: link.user_id,
+        login_seen: decided.login_seen().to_string(),
+        verdict: decided.verdict(),
+        checked_at: now,
     }
 }

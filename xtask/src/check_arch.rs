@@ -1354,7 +1354,9 @@ const CONTRIBUTION_LINKS_TABLE: &str = "contribution_links";
 /// Statements that remove link rows or the table itself.
 const DESTRUCTIVE_SQL_KEYWORDS: &[&str] = &["DELETE", "DROP", "TRUNCATE"];
 
-/// Ports that store, sign or publish — none may appear in `adapter-github`.
+/// Ports that store, sign or publish — or write or purge an identity-link
+/// check (UC-8: the verb records, the adapter only reads) — none may appear
+/// in `adapter-github`.
 const STORAGE_AND_IDENTITY_PORTS: &[&str] = &[
     "StoragePort",
     "PeerStoragePort",
@@ -1365,6 +1367,8 @@ const STORAGE_AND_IDENTITY_PORTS: &[&str] = &[
     "IdentityResolvePort",
     "PdsPort",
     "PublishPort",
+    "IdentityLinkCheckWritePort",
+    "IdentityLinkCheckPurgePort",
 ];
 
 /// Pure rule: `Some(excerpt)` iff one SQL literal names `contribution_links`
@@ -3878,6 +3882,23 @@ mod tests {
         );
         assert!(
             findings[1].contains("line 4") && findings[1].contains("IdentityPort"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn github_port_guard_fires_on_an_identity_link_check_writer_or_purger() {
+        let source = "use ports::IdentityLinkCheckReadPort;\n\
+             struct Writer { checks: Box<dyn ports::IdentityLinkCheckWritePort> }\n\
+             fn purge(purger: &dyn IdentityLinkCheckPurgePort) {}\n";
+        let findings = classify_adapter_github_port_reference(source);
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        assert!(
+            findings[0].contains("line 2") && findings[0].contains("IdentityLinkCheckWritePort"),
+            "{findings:?}"
+        );
+        assert!(
+            findings[1].contains("line 3") && findings[1].contains("IdentityLinkCheckPurgePort"),
             "{findings:?}"
         );
     }

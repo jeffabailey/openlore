@@ -312,7 +312,8 @@ pub fn render_linked_person_view(
     report: &InferenceReport,
 ) -> String {
     if links.is_empty() {
-        return render_unlinked_person(person_subject);
+        return render_unlinked_person(person_subject)
+            + &identity_links.render_for(person_subject, "  ");
     }
     let mut out = render_person_links(person_subject, links);
     out.push_str(&render_possible_renames(possible_renames));
