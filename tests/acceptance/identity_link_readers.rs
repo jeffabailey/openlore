@@ -16,8 +16,9 @@
 //! `FakePds`, `FakeIdentity`, `FakeIngestServer`.
 //!
 //! Layer 3/4 — example-only (Mandate 9). PRIMARY Thens through driving ports;
-//! the store universe is a secondary guardrail (D-e). All `#[ignore]`d except
-//! IR-13, IR-17, IR-19 (F14) and IR-16b (U-7), regression guards that hold today (D-d).
+//! the store universe is a secondary guardrail (D-e). The slice-2 review RED
+//! scenarios IR-8c, IR-8d (B2) and IR-18b (B1) are `#[ignore]`d pending the
+//! DELIVER fix; IR-12b and IR-12c (H2) hold today and run as regression guards.
 
 mod support;
 
@@ -323,6 +324,91 @@ fn a_link_jeff_retracted_is_no_longer_rechecked() {
     assert_link_store_unchanged(&before, &world.env);
 }
 
+/// IR-8c (error, lifecycle — slice-2 review B2)
+/// ```gherkin
+/// @driving_port @real-io @error @gdl-d5 @adr-060 @c2a @review-b2 @contract-shape:unbounded-preservation
+/// Scenario: A link its peer author retracted no longer shows or is re-checked
+///   Given Jeff follows Rachel, who published a link to github "rachelk" that her bio proves
+///   And Rachel retracted that link, and Jeff pulled her claims again
+///   When Jeff lists linked identities
+///   Then nothing links did:plc:rachel-test to github:rachelk
+///   And when Jeff re-checks his links he is told there are none to verify
+///   And GitHub was not asked anything, and nothing was recorded
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: review B2 — pending DELIVER fix"]
+fn a_link_its_peer_author_retracted_no_longer_shows_or_is_rechecked() {
+    let mut world = LinkWorld::with(&[RACHEL_GH]);
+    bio_names(&world, RACHEL_GH, RACHEL_DID);
+    let link = link_spec(RACHEL_DID, RACHEL_GH);
+    let cids = given_peer_published(&mut world, Peer::Rachel, vec![link.clone()]);
+    given_peer_published(
+        &mut world,
+        Peer::Rachel,
+        vec![peer_retraction_of(&link, &cids[0])],
+    );
+    let before = capture_link_universe(&world.env);
+
+    let listed = when_i_list(&world, None);
+
+    assert_eq!(listed.status, 0, "{}\n{}", listed.stdout, listed.stderr);
+    assert_shown(&listed, RACHEL_DID, RACHEL_GH, Shown::Nothing);
+    let checked = when_i_verify(&world, &[]);
+    assert_eq!(checked.status, 0, "{}\n{}", checked.stdout, checked.stderr);
+    assert!(
+        checked.stdout.contains("No identity links to verify"),
+        "a retracted link is not re-checked;\n{}",
+        checked.stdout
+    );
+    assert!(
+        world.github_paths().is_empty(),
+        "GitHub must not be asked about a retracted link: {:?}",
+        world.github_paths()
+    );
+    assert_link_store_unchanged(&before, &world.env);
+}
+
+/// IR-8d (error, lifecycle — slice-2 review B2; chained on IR-10)
+/// ```gherkin
+/// @driving_port @real-io @error @gdl-d5 @gdl-d9 @c2a @review-b2 @contract-shape:pure-function
+/// Scenario: A link its peer author superseded no longer shows
+///   Given Jeff follows Rachel, who published a link to github "rachelk"
+///   And Rachel replaced that link with a new one, and Jeff pulled her claims again
+///   When Jeff lists linked identities
+///   Then exactly one line shows Rachel's claim on github:rachelk, naming only the new record
+///   And the replaced record is not listed anywhere
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: review B2 — pending DELIVER fix"]
+fn a_link_its_peer_author_superseded_no_longer_shows() {
+    let mut world = LinkWorld::with(&[RACHEL_GH]);
+    let link = link_spec(RACHEL_DID, RACHEL_GH);
+    let replaced = given_peer_published(&mut world, Peer::Rachel, vec![link.clone()]);
+    let successor = given_peer_published(
+        &mut world,
+        Peer::Rachel,
+        vec![peer_supersession_of(&link, &replaced[0])],
+    );
+
+    let listed = when_i_list(&world, None);
+
+    assert_eq!(listed.status, 0, "{}\n{}", listed.stdout, listed.stderr);
+    assert_shown(&listed, RACHEL_DID, RACHEL_GH, Shown::NotChecked);
+    let line = link_line(&listed.stdout, RACHEL_DID, RACHEL_GH)
+        .unwrap_or_else(|| panic!("a line for Rachel's link;\n{}", listed.stdout));
+    assert!(
+        line.ends_with(&records_named(&successor)),
+        "the line names only the new record `{}`: {line:?}",
+        records_named(&successor)
+    );
+    assert!(
+        !listed.stdout.contains(&replaced[0]),
+        "the superseded record {} must not be listed;\n{}",
+        replaced[0],
+        listed.stdout
+    );
+}
+
 /// IR-9 (boundary, table)
 /// ```gherkin
 /// @driving_port @real-io @boundary @n-3 @adr-085-5 @contract-shape:pure-function
@@ -409,6 +495,47 @@ fn jeff_can_list_one_persons_linked_identities() {
     assert_eq!(listed.status, 0, "{}\n{}", listed.stdout, listed.stderr);
     assert_shown(&listed, RACHEL_DID, RACHEL_GH, Shown::Associated);
     assert_shown(&listed, MY_DID, JEFF_GH, Shown::Nothing);
+}
+
+/// IR-18b (error, contested — slice-2 review B1; chained on IR-5 and IR-18)
+/// ```gherkin
+/// @driving_port @real-io @error @gdl-d14 @a-4 @f7 @review-b1 @contract-shape:pure-function
+/// Scenario: Listing one person never hides that their account is contested
+///   Given the bio of github "jeffbailey" names both Jeff's DID and Rachel's DID
+///   And both Jeff and Rachel linked github "jeffbailey", and Jeff re-checked every link
+///   When Jeff lists linked identities for did:plc:test-jeff only, and then for did:plc:rachel-test only
+///   Then each listing shows github:jeffbailey as contested, naming that person
+///   And neither listing shows that person as github:jeffbailey, verified
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: review B1 — pending DELIVER fix"]
+fn listing_one_person_never_hides_that_their_account_is_contested() {
+    let mut world = LinkWorld::with(&[JEFF_GH]);
+    given_i_linked(&world, JEFF_GH, None);
+    bio_names_both(&world, JEFF_GH, MY_DID, RACHEL_DID);
+    given_peer_published(
+        &mut world,
+        Peer::Rachel,
+        vec![link_spec(RACHEL_DID, JEFF_GH)],
+    );
+    given_i_verified(&world, None);
+
+    for did in [MY_DID, RACHEL_DID] {
+        let listed = when_i_list_with(&world, &["--did", did], None);
+
+        assert_eq!(
+            listed.status, 0,
+            "[--did {did}] {}\n{}",
+            listed.stdout, listed.stderr
+        );
+        assert_shown_in(
+            &format!("--did {did}"),
+            &listed,
+            did,
+            JEFF_GH,
+            Shown::Contested,
+        );
+    }
 }
 
 // =============================================================================
@@ -619,6 +746,98 @@ fn reading_a_person_shows_their_link_has_lost_its_proof_at_no_extra_github_cost(
     );
 }
 
+/// IR-12b (error, fail-closed refresh — slice-2 review H2; chained on IV-5)
+/// ```gherkin
+/// @driving_port @real-io @adapter-integration @error @gdl-d9 @a-10 @uc-8 @review-h2 @contract-shape:unbounded-preservation
+/// Scenario: Reading a re-registered login records nothing
+///   Given Jeff linked github "jeffbailey" and it is verified
+///   And he renamed his account, and a stranger took the login "jeffbailey"
+///   When Jeff reads the person github "jeffbailey"
+///   Then GitHub was asked once, for that login's profile
+///   And his linked identities read exactly as before
+///   And no check was recorded
+/// ```
+#[test]
+fn reading_a_re_registered_login_records_nothing() {
+    let world = LinkWorld::with(&[JEFF_GH]);
+    given_i_linked(&world, JEFF_GH, None);
+    my_account_meets(&world, AccountFate::RenamedAndLoginReRegistered);
+    let listed_before = when_i_list(&world, None);
+    assert_shown(&listed_before, MY_DID, JEFF_GH, Shown::Associated);
+    let asked_before = world.github_paths().len();
+    let before = capture_link_universe(&world.env);
+
+    let read = when_i_read_the_person(&world, JEFF_LOGIN_RE_REGISTERED);
+
+    assert_eq!(read.status, 0, "{}\n{}", read.stdout, read.stderr);
+    assert_target_record_read_once(
+        &world.github_paths_since(asked_before),
+        JEFF_LOGIN_RE_REGISTERED.login,
+    );
+    let listed_after = when_i_list(&world, None);
+    assert_eq!(
+        link_lines(&listed_after.stdout),
+        link_lines(&listed_before.stdout),
+        "the prior standing is unchanged"
+    );
+    assert_link_store_unchanged(&before, &world.env);
+}
+
+/// IR-12c (edge, rename refresh — slice-2 review H2; chained on IV-4).
+/// Written to the login-scoped refresh U-15 accepts: reading a login
+/// refreshes the links signed under it or last seen under it, so the rename
+/// is first recognised by a re-check that GitHub's redirect answered.
+/// ```gherkin
+/// @driving_port @real-io @adapter-integration @edge @gdl-d9 @n-2 @uc-8 @u-15 @review-h2 @contract-shape:bounded-change
+/// Scenario: Reading a renamed account refreshes its link once
+///   Given Jeff linked github "jeffbailey"
+///   And he renamed his account to "jeff-b", and GitHub forwards the old name to the new one
+///   And Jeff re-checked his links, so his link was last seen as github:jeff-b
+///   And his bio no longer names his DID
+///   When Jeff reads the person github "jeff-b"
+///   Then GitHub was asked once, for jeff-b's profile
+///   And exactly one check was recorded: his link to github:jeff-b, proof gone because the bio names no DID
+///   And his linked identities show his claim on github:jeff-b as proof gone
+/// ```
+#[test]
+fn reading_a_renamed_account_refreshes_its_link_once() {
+    let world = LinkWorld::with(&[JEFF_GH]);
+    given_i_linked(&world, JEFF_GH, None);
+    i_renamed_my_account(
+        &world,
+        JEFF_GH,
+        JEFF_RENAMED,
+        openlore_test_support::OldLogin::Redirects,
+    );
+    given_i_verified(&world, None);
+    bio_drops_the_did(&world, JEFF_RENAMED);
+    let checks_before = link_checks(&world.env);
+    let asked_before = world.github_paths().len();
+    let before = capture_link_universe(&world.env);
+
+    let read = when_i_read_the_person(&world, JEFF_RENAMED);
+
+    assert_eq!(read.status, 0, "{}\n{}", read.stdout, read.stderr);
+    assert_target_record_read_once(&world.github_paths_since(asked_before), JEFF_RENAMED.login);
+    assert_link_store_delta(
+        &before,
+        &world.env,
+        &[(
+            "local.identity_link_checks",
+            checks_with(
+                &checks_before,
+                &[CheckRow::of(MY_DID, JEFF_RENAMED, Verdict::DidMissing)],
+            ),
+        )],
+    );
+    assert_shown(
+        &when_i_list(&world, None),
+        MY_DID,
+        JEFF_RENAMED,
+        Shown::ProofGone(Verdict::DidMissing),
+    );
+}
+
 /// IR-13 (guardrail, privacy — ACTIVE regression guard, D-d)
 /// ```gherkin
 /// @driving_port @real-io @guardrail @gdl-d12 @a-2 @contract-shape:unbounded-preservation
@@ -771,7 +990,8 @@ fn a_link_never_changes_weighted_results_in_the_terminal() {
 /// Scenario: A link never changes a contributor's score page
 ///   Given two stores holding Rachel's memory-safety claim, one also holding her link to github "rachelk"
 ///   When Jeff opens Rachel's score page in each store's viewer
-///   Then the scored results are identical, and github:rachelk is not scored
+///   Then both pages weigh Rachel's memory-safety claim on github:rust-lang/regex
+///   And the scored results are identical, and github:rachelk is not scored
 /// ```
 #[test]
 fn a_link_never_changes_a_contributors_score_page() {
@@ -790,6 +1010,16 @@ fn a_link_never_changes_a_contributors_score_page() {
     let without = render(&rachels_store(false));
     let with = render(&rachels_store(true));
 
+    // Precondition (review H1): the page scores Rachel's memory-safety
+    // pairing, so the equality below compares a weighted row, not two empty
+    // pages.
+    let pairing = format!("github:rust-lang/regex — {MEMORY_SAFETY}");
+    for (store, page) in [("without the link", &without), ("with the link", &with)] {
+        assert!(
+            page.contains(&pairing) && page.contains("Weight: "),
+            "[{store}] precondition: the score page weighs `{pairing}`;\n{page}"
+        );
+    }
     assert_eq!(without, with, "the score page must not change with a link");
     assert!(!with.contains(&RACHEL_GH.subject()), "{with}");
 }
@@ -800,7 +1030,7 @@ fn a_link_never_changes_a_contributors_score_page() {
 /// Scenario: Network search lists a link as not checked here
 ///   Given the network index holds Priya's link to github "priyaraman"
 ///   When Jeff searches the network for github:priyaraman
-///   Then the link is listed, attributed to Priya, labelled "authority not checked here"
+///   Then the link is listed, attributed to Priya, and her row is labelled "authority not checked here"
 /// ```
 #[test]
 fn network_search_lists_a_link_as_not_checked_here() {
@@ -830,7 +1060,12 @@ fn network_search_lists_a_link_as_not_checked_here() {
         "the link is listed and attributed;\n{}",
         found.stdout
     );
-    assert!(found.stdout.contains(SEARCH_LABEL), "{}", found.stdout);
+    let priyas = search_group_of(&found.stdout, openlore_test_support::PRIYA_DID);
+    assert!(
+        priyas.iter().any(|l| l.contains(SEARCH_LABEL)),
+        "Priya's link carries the `{SEARCH_LABEL}` label in her own group (review L1);\n{}",
+        found.stdout
+    );
 }
 
 /// The lines of `author`'s group in network search output: its `author:`

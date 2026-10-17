@@ -97,16 +97,21 @@ Seeding (review D7): `given_a_check_recorded_seeing` inserts one `identity_link_
 | IR-7 | A link record with a flaw never links anyone (5 rows) | ADR-084 §3, N-4 |
 | IR-8a | A link Jeff retracted no longer shows among his identities | GDL-D5, ADR-060 |
 | IR-8b | A link Jeff retracted is no longer re-checked | GDL-D5 |
+| IR-8c | A link its peer author retracted no longer shows or is re-checked (RED, `#[ignore]` pending DELIVER) | slice-2 review **B2**, GDL-D5, ADR-060 D-RF-D3 |
+| IR-8d | A link its peer author superseded no longer shows (RED, `#[ignore]` pending DELIVER) | slice-2 review **B2**, GDL-D9, DDD-7 |
 | IR-9 | Each link line says how old its check is, with a re-check hint after 30 days (5 rows) | N-3, ADR-085 §5 |
 | IR-10 | Two link records for the same person and account read as one link naming both, at the end of the line as ` (records <id>, <id>)` in ascending order (`records_named`, U-13) | GDL-D9, U-13 |
 | IR-18 | Jeff can list one person's linked identities | `identity list --did`, F7 |
+| IR-18b | Listing one person never hides that their account is contested (RED, `#[ignore]` pending DELIVER) | slice-2 review **B1**, GDL-D14, A-4, F7 |
 | IR-11 | The person view shows a verified link even with the network off | C-GDL-7 |
 | IR-12 | Reading a person shows their link has lost its proof, at no extra GitHub cost | UC-8, KPI-GDL-3 |
+| IR-12b | Reading a re-registered login records nothing (active: holds today) | slice-2 review **H2**(1), GDL-D9, A-10, UC-8 |
+| IR-12c | Reading a renamed account refreshes its link once — written to the U-15 login scope: the rename is first seen by a re-check through GitHub's redirect (active: holds today) | slice-2 review **H2**(2), U-15, N-2, UC-8 |
 | IR-13 | Reading a person whose bio names a DID never surfaces or suggests a link | GDL-D12(2), A-2 |
 | IR-17 | A possible rename among inferred people never becomes a link | A-2, GDL-D12, F3 |
 | IR-14 | A link never changes weighted results in the terminal | GDL-D8, ADR-022, KPI-GDL-2 |
-| IR-15 | A link never changes a contributor's score page | GDL-D8, KPI-GDL-2 |
-| IR-16 | Network search lists a link as "authority not checked here" | GDL-D11, C-GDL-8, D-c |
+| IR-15 | A link never changes a contributor's score page; precondition: both pages weigh Rachel's memory-safety pairing, so the equality is never vacuous | GDL-D8, KPI-GDL-2, slice-2 review H1 |
+| IR-16 | Network search lists a link as "authority not checked here", the label read inside Priya's own group | GDL-D11, C-GDL-8, D-c, slice-2 review L1 |
 | IR-16b | Network search leaves a GitHub row that is not a link unlabelled (active guard: holds today and after 02-08). Slice 2 labels link rows only; widening `SEARCH_LABEL` to every `github:` row is a follow-up that would change this scenario | U-7, D-c, F11 |
 | IR-19 | A self-attested link pulled from a peer keeps its record id and reads as a link (active: holds today) | ADR-084 Earned Trust, F14, U-11 |
 
@@ -172,18 +177,86 @@ Seeding (review D7): `given_a_check_recorded_seeing` inserts one `identity_link_
 | C-GDL-9 read-only verbs hold no write / purge / signing handle | structural (xtask `identity_link_readers_hold_no_write_handle`, DELIVER); behavioural evidence: IR-1 (`identity list` asks GitHub nothing) and IL-13b (reopening changes nothing) |
 | GDL-D7, GDL-D13 | structural (crate placement, `check-arch` rules) — DELIVER |
 
+### Slice-2 review RED scenarios (2026-10-17)
+
+The slice-2 adversarial review was rejected; its findings are pinned here before the fix.
+B1/B2 scenarios fail today and carry
+`#[ignore = "DISTILL github-did-identity-link: review B1/B2 — pending DELIVER fix"]`;
+the H2 scenarios hold today and run un-ignored. Hardening of existing scenarios: IR-15 (H1),
+IR-16 (L1), and `support::identity_links::link_checks` (M1: only a missing
+`identity_link_checks` table reads as "no checks"; any other read failure panics, so the
+"unchanged" guards cannot pass vacuously).
+
+```gherkin
+@driving_port @real-io @error @gdl-d14 @a-4 @f7 @review-b1 @contract-shape:pure-function
+Scenario: Listing one person never hides that their account is contested            # IR-18b
+  Given the bio of github "jeffbailey" names both Jeff's DID and Rachel's DID
+  And both Jeff and Rachel linked github "jeffbailey", and Jeff re-checked every link
+  When Jeff lists linked identities for did:plc:test-jeff only, and then for did:plc:rachel-test only
+  Then each listing shows github:jeffbailey as contested, naming that person
+  And neither listing shows that person as github:jeffbailey, verified
+
+@driving_port @real-io @error @gdl-d5 @adr-060 @c2a @review-b2 @contract-shape:unbounded-preservation
+Scenario: A link its peer author retracted no longer shows or is re-checked          # IR-8c
+  Given Jeff follows Rachel, who published a link to github "rachelk" that her bio proves
+  And Rachel retracted that link, and Jeff pulled her claims again
+  When Jeff lists linked identities
+  Then nothing links did:plc:rachel-test to github:rachelk
+  And when Jeff re-checks his links he is told there are none to verify
+  And GitHub was not asked anything, and nothing was recorded
+
+@driving_port @real-io @error @gdl-d5 @gdl-d9 @c2a @review-b2 @contract-shape:pure-function
+Scenario: A link its peer author superseded no longer shows                          # IR-8d
+  Given Jeff follows Rachel, who published a link to github "rachelk"
+  And Rachel replaced that link with a new one, and Jeff pulled her claims again
+  When Jeff lists linked identities
+  Then exactly one line shows Rachel's claim on github:rachelk, naming only the new record
+  And the replaced record is not listed anywhere
+
+@driving_port @real-io @adapter-integration @error @gdl-d9 @a-10 @uc-8 @review-h2 @contract-shape:unbounded-preservation
+Scenario: Reading a re-registered login records nothing                              # IR-12b
+  Given Jeff linked github "jeffbailey" and it is verified
+  And he renamed his account, and a stranger took the login "jeffbailey"
+  When Jeff reads the person github "jeffbailey"
+  Then GitHub was asked once, for that login's profile
+  And his linked identities read exactly as before
+  And no check was recorded
+
+@driving_port @real-io @adapter-integration @edge @gdl-d9 @n-2 @uc-8 @u-15 @review-h2 @contract-shape:bounded-change
+Scenario: Reading a renamed account refreshes its link once                          # IR-12c
+  Given Jeff linked github "jeffbailey"
+  And he renamed his account to "jeff-b", and GitHub forwards the old name to the new one
+  And Jeff re-checked his links, so his link was last seen as github:jeff-b
+  And his bio no longer names his DID
+  When Jeff reads the person github "jeff-b"
+  Then GitHub was asked once, for jeff-b's profile
+  And exactly one check was recorded: his link to github:jeff-b, proof gone because the bio names no DID
+  And his linked identities show his claim on github:jeff-b as proof gone
+```
+
+Peer markers use production shapes: `peer_retraction_of` mirrors `claim_retract::run`
+(same subject/predicate/object, no evidence, confidence 1.0, one `retracts` reference);
+`peer_supersession_of` is the `LinkDraft` link re-stated with one `supersedes` reference, as
+the production signer marks a successor (`infer_people::references_for`, DDD-7). Both travel
+through the real `peer pull` path, signed by the peer's app key.
+
+IR-12c is written to U-15 (accepted, DELIVER 02-07): the person-scrape refresh selects links
+by their signed login or the login last seen by this reader's checks, so reading the new login
+of a rename this reader has never observed refreshes nothing; `identity verify` (IV-4) is what
+first observes the rename through the redirect.
+
 ## 4. Driving-adapter coverage
 
 | Driving port | Scenario(s) |
 |---|---|
 | `identity link github <login> [--yes]` | WS, IL-2..IL-12b, IL-14, IL-15 |
 | `identity verify [--did \| --github]` | IV-1..IV-13, IL-12b, IR-2, IR-4, RR-1b, RR-2b |
-| `identity list [--did]` | WS, IR-1..IR-18 (`--did`: IR-18) |
+| `identity list [--did]` | WS, IR-1..IR-18b (`--did`: IR-18, IR-18b) |
 | `identity forget --did` | IF-1a, IF-1b, IF-2 |
 | `claim retract` | IR-8a/b |
 | `claim add`, `claim counter`, `infer people --sign` | IL-8a, IL-8c, IL-8b |
 | `infer people` | IR-11, IR-17 |
-| `scrape github <user>` | IR-12, IR-13 |
+| `scrape github <user>` | IR-12, IR-12b, IR-12c, IR-13 |
 | `graph query --weighted` / viewer `/score` | IR-14 / IR-15 |
 | `search` | IR-16 |
 | review app "Publish this link" / "Retract this link" | RA-1a..RA-8, RR-2a/b |
@@ -195,7 +268,7 @@ Seeding (review D7): `given_a_check_recorded_seeing` inserts one `identity_link_
 | `adapter-github` `read_person`, `read_account` / `read_person_by_id` (strict shape), redirect policy, token | IV-3a (id read), IV-4 (redirect), IV-10 (chained / cross-host), IL-6 / IV-6 (401, anonymous rate limit, outage), IL-15 / IV-11 / IV-12 / OW-4b / OW-4c (200 answer naming no account — `FakeGithubAccounts::serve_flawed_profile`), IR-12 |
 | `adapter-duckdb` v7 checks (read / insert / purge), migration | WS, IV-1/2, IF-1a, IL-13a/b (upgrade from the frozen v6 store) |
 | single publish path → PDS | WS, IL-9a/b |
-| `peer pull` (app-signed and self-attested links) | IR-1..IR-10, RR-1a, RR-3 |
+| `peer pull` (app-signed and self-attested links; a peer's retraction and supersession markers) | IR-1..IR-10, IR-8c, IR-8d, RR-1a, RR-3 |
 | review app `UserRepoWritePort` | RA-1b, RA-4, RA-8 |
 | indexer ingest + `search` | IR-16 |
 | GitHub REST recorded-fixture contract | owned by DELIVER, slice 1 (see wave-decisions) — not an acceptance test |

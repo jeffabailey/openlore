@@ -534,6 +534,40 @@ pub fn link_spec(subject_did: &str, account: Account) -> PeerClaimSpec {
     }
 }
 
+/// When a peer withdraws or replaces a link (after [`link_spec`]'s instant).
+pub const LINK_WITHDRAWN_AT: &str = "2026-10-02T08:00:00Z";
+
+/// The peer's own retraction of the link `link` (CID `link_cid`), in the
+/// shape the production `claim retract` verb signs (`claim_retract::run`):
+/// the original's subject, predicate and object, NO evidence, confidence 1.0,
+/// one `retracts` reference to the original, a fresh instant. Its empty
+/// evidence means it is never itself a link (ADR-084 §3).
+pub fn peer_retraction_of(link: &PeerClaimSpec, link_cid: &str) -> PeerClaimSpec {
+    PeerClaimSpec {
+        evidence: Vec::new(),
+        confidence: 1.0,
+        references: vec![(claim_domain::ReferenceType::Retracts, link_cid.to_string())],
+        composed_at: LINK_WITHDRAWN_AT.to_string(),
+        ..link.clone()
+    }
+}
+
+/// The peer's replacement of the link `link` (CID `link_cid`): the same
+/// well-formed link (the `LinkDraft` shape — profile URL, id URI, 1.0)
+/// re-stated later with one `supersedes` reference to the original, the way
+/// the production signer marks a successor (`infer_people::references_for`,
+/// DDD-7: only the author's own `supersedes` replaces a claim).
+pub fn peer_supersession_of(link: &PeerClaimSpec, link_cid: &str) -> PeerClaimSpec {
+    PeerClaimSpec {
+        references: vec![(
+            claim_domain::ReferenceType::Supersedes,
+            link_cid.to_string(),
+        )],
+        composed_at: LINK_WITHDRAWN_AT.to_string(),
+        ..link.clone()
+    }
+}
+
 /// A link record with exactly one ADR-084 §3 flaw.
 pub fn flawed_link_spec(subject_did: &str, account: Account, flaw: LinkFlaw) -> PeerClaimSpec {
     let sound = link_spec(subject_did, account);
@@ -1254,7 +1288,8 @@ impl CheckRow {
     }
 }
 
-/// Every recorded proof check, sorted (empty when the table does not exist).
+/// Every recorded proof check, sorted (empty only when the store or the
+/// table does not exist; any other read failure panics).
 pub fn link_checks(env: &TestEnv) -> Vec<CheckRow> {
     let path = env.duckdb_path();
     if !path.exists() {
@@ -1262,12 +1297,27 @@ pub fn link_checks(env: &TestEnv) -> Vec<CheckRow> {
     }
     let conn = duckdb::Connection::open(&path)
         .unwrap_or_else(|e| panic!("open DuckDB for identity link checks: {e}"));
-    let Ok(mut stmt) = conn.prepare(
-        "SELECT subject_did, CAST(github_user_id AS BIGINT), login_seen, verdict \
-         FROM identity_link_checks",
-    ) else {
+    // A store made before identity links (pre-v7) has no proof-check table:
+    // that, and only that, reads as "no checks". Any other failure to read the
+    // table panics, so an "unchanged" guard can never pass on an unread table
+    // (review M1).
+    let table_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM information_schema.tables \
+             WHERE table_name = 'identity_link_checks'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|e| panic!("look up the identity link checks table: {e}"));
+    if !table_exists {
         return Vec::new();
-    };
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT subject_did, CAST(github_user_id AS BIGINT), login_seen, verdict \
+             FROM identity_link_checks",
+        )
+        .unwrap_or_else(|e| panic!("prepare the identity link checks read: {e}"));
     let mut rows: Vec<CheckRow> = stmt
         .query_map([], |row| {
             Ok(CheckRow {

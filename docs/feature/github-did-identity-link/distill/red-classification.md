@@ -43,3 +43,21 @@ with its v6 precondition). No scenario fails in compile, fixture or setup.
 | **IR-13**, **IR-17**, **RA-3** | — | pass | ACTIVE regression guards (D-d) |
 
 Result: **0 BROKEN, 0 WRONG_ASSERTION.**
+
+## Slice-2 review RED scenarios (2026-10-17)
+
+Run: `cargo test -p cli --test identity_link_readers -- --include-ignored`, after the slice-2
+DELIVER, against `main` at `c07bfe9`. Every GIVEN (link, `peer pull` of the link and of the
+retraction/supersession marker, `identity verify`) succeeded; each failure is the reviewer's
+failure scenario.
+
+| Scenario | Failing step | Actual failure | Class |
+|---|---|---|---|
+| IR-18b (B1) | THEN `--did did:plc:test-jeff` shows github:jeffbailey as contested | `expected "github:jeffbailey is contested" naming did:plc:test-jeff` — stdout `did:plc:test-jeff is github:jeffbailey — verified today (record …)` | MISSING_FUNCTIONALITY ✅ |
+| IR-8c (B2) | THEN nothing links Rachel to github:rachelk after her retraction was pulled | `did:plc:rachel-test and github:rachelk must not be shown as a link at all` — stdout `did:plc:rachel-test claims github:rachelk — not checked (record …)` | MISSING_FUNCTIONALITY ✅ |
+| IR-8d (B2) | THEN the line names only the successor record | `the line names only the new record " (record <successor>)"` — line ends `(records <successor>, <superseded>)` | MISSING_FUNCTIONALITY ✅ |
+| IR-12b (H2-1) | — | pass: a re-registered login decides nothing (`check_on_profile` gates on the account number) | ACTIVE regression guard |
+| IR-12c (H2-2, U-15 scope) | — | pass | ACTIVE regression guard |
+| IR-15 (H1), IR-16 (L1) hardened; `link_checks` (M1) | — | pass | — |
+
+Default run: readers 25 passed / 3 ignored; identity_link 39 passed / 1 ignored.
