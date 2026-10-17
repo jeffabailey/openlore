@@ -187,6 +187,9 @@ pub enum LinkNotPublished {
     TooManyAttempts,
     /// The confirm-time GitHub read did not prove the previewed link.
     NotProven,
+    /// The confirm-time GitHub read disproves the link: the bio no longer
+    /// names the DID (RA-2). A new preview has to prove it again.
+    ProofGone,
     /// The repo host session ended: only a fresh sign-in helps.
     SessionExpired,
     /// The repo host did not take the record.
@@ -209,6 +212,10 @@ fn link_not_published_reason(why: LinkNotPublished) -> &'static str {
         LinkNotPublished::NotProven => {
             "Your GitHub profile did not prove this link when you \
              confirmed it."
+        }
+        LinkNotPublished::ProofGone => {
+            "The proof is gone: your GitHub bio no longer names your DID. \
+             Put it back, then press \"Publish this link\" for a fresh preview."
         }
         LinkNotPublished::SessionExpired => {
             "Your Bluesky session has expired. Sign in again, \
@@ -281,6 +288,7 @@ mod tests {
             LinkNotPublished::Expired,
             LinkNotPublished::TooManyAttempts,
             LinkNotPublished::NotProven,
+            LinkNotPublished::ProofGone,
             LinkNotPublished::SessionExpired,
             LinkNotPublished::NotWritten,
             LinkNotPublished::NotAsPreviewed,

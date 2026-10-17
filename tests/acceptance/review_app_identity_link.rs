@@ -90,7 +90,6 @@ fn priyas_verified_github_account_is_publicly_linked_to_her_did_from_the_app() {
 ///   Then she is told the proof is gone and nothing is written to her repo
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_link_is_never_published_on_the_strength_of_an_old_verification() {
     let world = ReviewWorld::new();
     let mut browser = given_github_verified(&world, Persona::Priya);

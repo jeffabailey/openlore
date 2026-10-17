@@ -135,7 +135,7 @@ async fn proven_again(
         &Did(plan.owner_did().to_string()),
         &observation_of(&profile),
     );
-    confirm_link(plan, fresh).map_err(|refusal| (LinkNotPublished::NotProven, label_of(&refusal)))
+    confirm_link(plan, fresh).map_err(|refusal| (refusal.not_published(), label_of(&refusal)))
 }
 
 fn label_of(refusal: &LinkConfirmRefusal) -> &'static str {

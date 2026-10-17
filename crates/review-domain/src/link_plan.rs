@@ -137,6 +137,18 @@ pub enum LinkConfirmRefusal {
     IdentityChanged,
 }
 
+impl LinkConfirmRefusal {
+    /// Why the owner is told the link is not published: a disproved fresh
+    /// read says the proof is gone (RA-2); any other refusal says the read
+    /// did not prove the link.
+    pub fn not_published(&self) -> LinkNotPublished {
+        match self {
+            Self::ProofGone(_) => LinkNotPublished::ProofGone,
+            Self::Unreadable | Self::IdentityChanged => LinkNotPublished::NotProven,
+        }
+    }
+}
+
 /// The link confirm (RA-1b, RR-2a, C-GDL-10): admit `plan` only when the
 /// confirm-time check `fresh` proves exactly the plan's DID, login and
 /// account. The decision is the confirm-time read alone; a stored
@@ -483,12 +495,44 @@ mod tests {
                 LinkNotPublished::Expired,
                 LinkNotPublished::TooManyAttempts,
                 LinkNotPublished::NotProven,
+                LinkNotPublished::ProofGone,
                 LinkNotPublished::SessionExpired,
                 LinkNotPublished::NotWritten,
                 LinkNotPublished::NotAsPreviewed,
             ]),
         ) {
             prop_assert_eq!(keeps_plan_for_retry(why), why == LinkNotPublished::NotWritten, "{:?}", why);
+        }
+
+        /// Universe: owner DIDs × another DID × a GitHub account × the
+        /// disproving bios (literal oracles: a bio without the DID, a bio
+        /// naming another DID, no bio). A confirm whose fresh read disproves
+        /// the link is refused as ProofGone with that verdict, writes nothing
+        /// (no plan is admitted), keeps no plan for Retry, and its page says
+        /// the proof is gone and that nothing was published.
+        #[test]
+        fn a_disproved_link_confirm_writes_nothing_and_keeps_no_plan(
+            did in arb_did(), other in arb_did(), account in arb_account(), bio_kind in 0usize..3,
+        ) {
+            prop_assume!(did != other);
+            let plan = link_plan(&did, &proven(&did, &account), COMPOSED_AT).expect("link plan");
+            let (login, user_id) = account;
+            let (bio, verdict) = match bio_kind {
+                0 => (Some("Builder. Rust, tide models".to_string()), CheckVerdict::DidMissing),
+                1 => (Some(format!("my DID: {other}")), CheckVerdict::DifferentDid),
+                _ => (None, CheckVerdict::NoBio),
+            };
+            let fresh = check_link(&Did(did.clone()), &GithubObservation { login, user_id, bio });
+
+            let refusal = confirm_link(plan, fresh).expect_err("a disproved read admits no plan");
+
+            prop_assert_eq!(&refusal, &LinkConfirmRefusal::ProofGone(verdict));
+            let why = refusal.not_published();
+            prop_assert_eq!(why, LinkNotPublished::ProofGone);
+            prop_assert!(!keeps_plan_for_retry(why));
+            let page = crate::views::link_not_published_page(why, None);
+            prop_assert!(page.contains("proof is gone"), "{}", page);
+            prop_assert!(page.contains(crate::views::NOTHING_PUBLISHED), "{}", page);
         }
 
         /// One encoder, no copy: the plan's record is exactly the record
