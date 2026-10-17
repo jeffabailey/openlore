@@ -27,6 +27,18 @@ pub const VERIFIED_MARKER: &str = "[verified]";
 /// signature). App-signed rows carry no second marker. Do NOT paraphrase.
 pub const SELF_ATTESTED_MARKER: &str = "[self-attested]";
 
+/// Content-frozen label on a network row that is an identity link (ADR-085 §8 /
+/// D-c): the indexer never checks the GitHub authority behind a link, so search
+/// says so. Slice 2 labels link rows only (U-7). Do NOT paraphrase.
+pub const LINK_AUTHORITY_NOT_CHECKED_LABEL: &str = "authority not checked here";
+
+/// The label line for one network row: `Some` for an identity-link row (selected
+/// through the claim-domain link API, Q-RM-5), `None` for every other row.
+pub(crate) fn network_row_link_label(predicate: &str) -> Option<&'static str> {
+    claim_domain::identity_link::is_reserved_predicate(predicate)
+        .then_some(LINK_AUTHORITY_NOT_CHECKED_LABEL)
+}
+
 /// The marker line of one network row: `[verified]`, plus `[self-attested]` for
 /// a self-attested claim. App-signed rows render exactly as before (NFR-3).
 pub(crate) fn network_row_markers(provenance: ports::PeerClaimProvenance) -> String {
@@ -222,6 +234,9 @@ pub(crate) fn render_one_network_row(
     ));
     out.push_str(&format!("    cid:        {}\n", row.cid.0));
     out.push_str(&format!("    {}\n", network_row_markers(row.provenance)));
+    if let Some(label) = network_row_link_label(&row.predicate) {
+        out.push_str(&format!("    {label}\n"));
+    }
     // OD-AV-7: the counter annotation(s) for THIS row (it is countered by K).
     for annotation in network_counter_annotations_for(&row.cid.0, counters) {
         out.push_str(&format!("    {annotation}\n"));

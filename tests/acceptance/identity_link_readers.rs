@@ -820,7 +820,6 @@ fn a_link_never_changes_a_contributors_score_page() {
 ///   Then the link is listed, attributed to Priya, labelled "authority not checked here"
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn network_search_lists_a_link_as_not_checked_here() {
     let env = TestEnv::initialized();
     let priya = Account {
