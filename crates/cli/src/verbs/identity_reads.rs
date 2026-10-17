@@ -13,8 +13,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
     active_link_records, active_links, is_in_scope, link_predicate, links_to_recheck,
-    listing_in_scope, ClaimFields, GithubObservation, IdentityLink, LatestCheck, LinkRecord,
-    ListedLink, ProofCheck, RecheckScope, StoredClaim,
+    listing_in_scope, login_to_read, ClaimFields, GithubObservation, IdentityLink, LatestCheck,
+    LinkRecord, ListedLink, ProofCheck, RecheckScope, StoredClaim,
 };
 use claim_domain::ClaimLineage;
 use ports::{
@@ -148,15 +148,6 @@ pub(crate) fn observation_of(account: GithubAccountProfile) -> GithubObservation
     }
 }
 
-/// The login to read for `link`: the last one this reader saw, else the
-/// signed one (ADR-085 §4).
-fn login_to_read<'a>(link: &'a IdentityLink, latest: &'a [LinkCheck]) -> &'a str {
-    latest
-        .iter()
-        .find(|check| check.subject_did == link.did && check.github_user_id == link.user_id)
-        .map_or(link.login.as_str(), |check| check.login_seen.as_str())
-}
-
 /// One active link a re-check covers, with the login to read for it.
 pub(crate) struct LinkToRecheck {
     pub link: IdentityLink,
@@ -172,7 +163,11 @@ pub(crate) fn links_in_scope(
     scope: &RecheckScope,
     now: DateTime<Utc>,
 ) -> Result<Vec<LinkToRecheck>> {
-    let latest = checks.latest_checks(&CheckFilter::All, now)?;
+    let latest: Vec<LatestCheck> = checks
+        .latest_checks(&CheckFilter::All, now)?
+        .into_iter()
+        .map(latest_of)
+        .collect();
     Ok(StoredLinkLineage::read(claims, lineage)?
         .links_to_recheck()
         .into_iter()

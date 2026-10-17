@@ -181,18 +181,14 @@ fn links_by_person(
         .collect()
 }
 
-/// A person row's join key: the GitHub account ids its contribution links
-/// carry, else its login (U-6). Pure.
+/// A person row's join key (U-6): `PersonKey::of_person` over the
+/// contribution links' (person subject, account id) pairs.
 fn person_key(person_subject: &str, contribution_links: &[ContributionLink]) -> PersonKey {
-    let login = person_subject
-        .strip_prefix("github:")
-        .unwrap_or(person_subject);
-    PersonKey::of(
-        login,
+    PersonKey::of_person(
+        person_subject,
         contribution_links
             .iter()
-            .filter(|link| link.person_subject.eq_ignore_ascii_case(person_subject))
-            .map(|link| link.github_user_id),
+            .map(|link| (link.person_subject.as_str(), link.github_user_id)),
     )
 }
 

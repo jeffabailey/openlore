@@ -595,6 +595,16 @@ fn under_login_last_seen(link: IdentityLink, deciding: Option<&LatestCheck>) -> 
     }
 }
 
+/// The login a re-check reads `link` under (ADR-085 §4): the one this
+/// reader last saw on its latest check of the link, else the signed one.
+pub fn login_to_read<'a>(link: &'a IdentityLink, checks: &'a [LatestCheck]) -> &'a str {
+    checks
+        .iter()
+        .filter(|check| check.subject_did == link.did && check.user_id == link.user_id)
+        .max_by_key(|check| check.checked_at)
+        .map_or(link.login.as_str(), |check| check.login_seen.as_str())
+}
+
 // =============================================================================
 // Link lifecycle (ADR-085 §5): same-author lineage, D-a / D-g / A-4
 // =============================================================================
@@ -719,6 +729,23 @@ impl PersonKey {
         }
     }
 
+    /// A person row's key from its subject (`github:<login>`) and the
+    /// contribution links' `(person subject, account id)` pairs: the ids of
+    /// the links naming this person, subjects compared case-insensitively,
+    /// else the login with the `github:` prefix (in any case) stripped (U-6).
+    pub fn of_person<'a>(
+        person_subject: &str,
+        contribution_links: impl IntoIterator<Item = (&'a str, u64)>,
+    ) -> Self {
+        PersonKey::of(
+            without_github_prefix(person_subject),
+            contribution_links
+                .into_iter()
+                .filter(|(subject, _)| subject.eq_ignore_ascii_case(person_subject))
+                .map(|(_, user_id)| user_id),
+        )
+    }
+
     /// Does `link` (under its last-seen login) belong to this person?
     pub fn owns(&self, link: &IdentityLink) -> bool {
         match self {
@@ -726,6 +753,15 @@ impl PersonKey {
             PersonKey::Login(login) => login.eq_ignore_ascii_case(&link.login),
         }
     }
+}
+
+/// `subject` without its `github:` prefix, the prefix matched in any case
+/// (subjects compare case-insensitively); any other subject as given.
+fn without_github_prefix(subject: &str) -> &str {
+    subject
+        .get(..GITHUB_SUBJECT_PREFIX.len())
+        .filter(|prefix| prefix.eq_ignore_ascii_case(GITHUB_SUBJECT_PREFIX))
+        .map_or(subject, |prefix| &subject[prefix.len()..])
 }
 
 /// The shown links that belong to one person (U-6), in shown order.
@@ -1467,6 +1503,103 @@ mod tests {
                     .collect();
                 proptest::prop_assert_eq!(scoped.iter().collect::<Vec<_>>(), of_person);
             }
+        }
+    }
+
+    /// ADR-085 §4: a re-check reads the login last seen on this link's
+    /// latest check; with no check of this link (another DID's or another
+    /// account's never counts) it reads the signed login.
+    #[test]
+    fn a_recheck_reads_the_login_last_seen_else_the_signed_one() {
+        let link = linked(1);
+        let seen = |did: &str, user_id: u64, login: &str, day: &str| LatestCheck {
+            subject_did: did.to_string(),
+            user_id,
+            login_seen: login.to_string(),
+            verdict: CheckVerdict::Verified,
+            checked_at: instant(&format!("2026-10-{day}T09:00:00Z")),
+        };
+        assert_eq!(login_to_read(&link, &[]), "priyaraman");
+        assert_eq!(
+            login_to_read(
+                &link,
+                &[
+                    seen("did:plc:other", 1, "elsewhere", "05"),
+                    seen(DID, 2, "otheraccount", "05"),
+                ]
+            ),
+            "priyaraman"
+        );
+        assert_eq!(
+            login_to_read(&link, &[seen(DID, 1, "priya-r", "02")]),
+            "priya-r"
+        );
+        assert_eq!(
+            login_to_read(
+                &link,
+                &[seen(DID, 1, "newest", "09"), seen(DID, 1, "older", "02")]
+            ),
+            "newest"
+        );
+    }
+
+    /// U-6: a `github:` person row with no contribution link joins by its
+    /// login with the prefix stripped; with one, by the account ids of the
+    /// links naming it (subject in any case), never another person's.
+    #[test]
+    fn a_person_row_keys_on_its_own_account_ids_else_its_stripped_login() {
+        assert_eq!(
+            PersonKey::of_person("github:BurntSushi", []),
+            PersonKey::Login("BurntSushi".to_string())
+        );
+        assert_eq!(
+            PersonKey::of_person(
+                "github:BurntSushi",
+                [
+                    ("GITHUB:burntsushi", 7),
+                    ("github:rachelk", 9),
+                    ("github:burntsushi", 0)
+                ]
+            ),
+            PersonKey::AccountIds(BTreeSet::from([7]))
+        );
+        assert_eq!(
+            PersonKey::of_person("rachelk", []),
+            PersonKey::Login("rachelk".to_string())
+        );
+    }
+
+    proptest::proptest! {
+        /// Universe: a `github:` person subject in any letter case, the
+        /// contribution links' (subject, account id) pairs naming it or
+        /// another person in any case, and a shown link on account 1..=3
+        /// under either person's login in any case. U-6: the case the row
+        /// is spelled in never changes which links it owns, and another
+        /// person's contribution links never do either.
+        #[test]
+        fn a_person_rows_case_and_other_peoples_links_never_change_what_it_owns(
+            upper in proptest::bool::ANY,
+            own_links in proptest::collection::vec(
+                (proptest::sample::select(vec!["github:burntsushi", "GITHUB:BURNTSUSHI"]), 0u64..=3),
+                0..3,
+            ),
+            others_links in proptest::collection::vec(
+                (proptest::sample::select(vec!["github:rachelk", "GITHUB:RACHELK"]), 0u64..=3),
+                0..3,
+            ),
+            link_id in 1u64..=3,
+            link_login in proptest::sample::select(vec!["burntsushi", "BurntSushi", "rachelk"]),
+        ) {
+            let person = "github:BurntSushi";
+            let respelled = if upper { person.to_ascii_uppercase() } else { person.to_ascii_lowercase() };
+            let shown = IdentityLink { did: DID.to_string(), login: link_login.to_string(), user_id: link_id };
+            let owns = |subject: &str, links: &[(&'static str, u64)]| {
+                PersonKey::of_person(subject, links.iter().copied()).owns(&shown)
+            };
+            let everyone: Vec<(&'static str, u64)> =
+                own_links.iter().chain(others_links.iter()).copied().collect();
+            proptest::prop_assert_eq!(owns(person, &own_links), owns(&respelled, &own_links));
+            proptest::prop_assert_eq!(owns(person, &own_links), owns(person, &everyone));
         }
     }
 
