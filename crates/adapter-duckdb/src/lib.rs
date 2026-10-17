@@ -232,15 +232,10 @@ impl DuckDbStorageAdapter {
         DuckDbIdentityLinkPurgeAdapter::from_shared(self.conn.clone())
     }
 
-    /// The read-only lineage of stored claims (the claims referencing one),
-    /// over the SAME connection handle. Exposes no write (ADR-085 §7).
+    /// The read-only lineage of stored claims (the own and peer claims
+    /// referencing one), over the SAME connection handle. Exposes no write (ADR-085 §7).
     pub fn link_lineage_adapter(&self) -> DuckDbLinkLineageAdapter {
-        DuckDbLinkLineageAdapter::from_shared(Self {
-            conn: self.conn.clone(),
-            claims_dir: self.claims_dir.clone(),
-            peer_claims_root: self.peer_claims_root.clone(),
-            philosophies_dir: self.philosophies_dir.clone(),
-        })
+        DuckDbLinkLineageAdapter::from_shared(self.conn.clone())
     }
 
     /// Construct the artifact path for a CID: `<claims_dir>/<cid>.json`.

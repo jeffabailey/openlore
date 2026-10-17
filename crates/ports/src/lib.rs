@@ -135,9 +135,9 @@ pub use contribution_link::{
 // link-lineage claim reads.
 mod identity_link_check;
 pub use identity_link_check::{
-    CheckFilter, IdentityLinkCheckError, IdentityLinkCheckPurgePort, IdentityLinkCheckReadPort,
-    IdentityLinkCheckWritePort, LinkCandidate, LinkCandidateReadPort, LinkCheck,
-    LinkLineageReadPort,
+    CheckFilter, ClaimReferrer, IdentityLinkCheckError, IdentityLinkCheckPurgePort,
+    IdentityLinkCheckReadPort, IdentityLinkCheckWritePort, LinkCandidate, LinkCandidateReadPort,
+    LinkCheck, LinkLineageReadPort,
 };
 
 // -----------------------------------------------------------------------------

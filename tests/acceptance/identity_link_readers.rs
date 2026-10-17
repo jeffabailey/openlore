@@ -336,7 +336,6 @@ fn a_link_jeff_retracted_is_no_longer_rechecked() {
 ///   And GitHub was not asked anything, and nothing was recorded
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: review B2 — pending DELIVER fix"]
 fn a_link_its_peer_author_retracted_no_longer_shows_or_is_rechecked() {
     let mut world = LinkWorld::with(&[RACHEL_GH]);
     bio_names(&world, RACHEL_GH, RACHEL_DID);
@@ -379,7 +378,6 @@ fn a_link_its_peer_author_retracted_no_longer_shows_or_is_rechecked() {
 ///   And the replaced record is not listed anywhere
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: review B2 — pending DELIVER fix"]
 fn a_link_its_peer_author_superseded_no_longer_shows() {
     let mut world = LinkWorld::with(&[RACHEL_GH]);
     let link = link_spec(RACHEL_DID, RACHEL_GH);

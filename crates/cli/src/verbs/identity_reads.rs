@@ -16,16 +16,17 @@ use claim_domain::identity_link::{
     listed_links, ClaimFields, GithubObservation, IdentityLink, LatestCheck, LinkLifecycle,
     LinkRecord, ListedLink, ProofCheck, ReaderLink, RecheckScope, StoredClaim,
 };
-use claim_domain::{ClaimLineage, SignedClaim};
+use claim_domain::ClaimLineage;
 use ports::{
-    CheckFilter, GithubAccountProfile, IdentityLinkCheckReadPort, LinkCandidate,
+    CheckFilter, ClaimReferrer, GithubAccountProfile, IdentityLinkCheckReadPort, LinkCandidate,
     LinkCandidateReadPort, LinkCheck, LinkLineageReadPort,
 };
 
-/// The link candidates in the store and every stored claim referencing one.
+/// The link candidates in the store and every stored claim — own or a
+/// peer's — referencing one.
 pub struct StoredLinkLineage {
     candidates: Vec<LinkCandidate>,
-    referrers: Vec<SignedClaim>,
+    referrers: Vec<ClaimReferrer>,
 }
 
 impl StoredLinkLineage {
@@ -142,11 +143,11 @@ fn stored_claim(candidate: &LinkCandidate) -> StoredClaim<'_> {
 }
 
 /// One referrer as a lineage marker (its author and what it references).
-fn referrer_lineage(referrer: &SignedClaim) -> ClaimLineage<'_> {
+fn referrer_lineage(referrer: &ClaimReferrer) -> ClaimLineage<'_> {
     ClaimLineage {
-        author_did: &referrer.unsigned.author_did.0,
-        cid: "",
-        references: &referrer.unsigned.references,
+        author_did: &referrer.author_did,
+        cid: &referrer.cid,
+        references: &referrer.references,
     }
 }
 

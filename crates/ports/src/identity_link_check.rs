@@ -13,7 +13,7 @@
 
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::CheckVerdict;
-use claim_domain::{Provenance, SignedClaim};
+use claim_domain::{ClaimReference, Provenance};
 
 use crate::probe::ProbeOutcome;
 use crate::StorageError;
@@ -101,10 +101,22 @@ pub trait LinkCandidateReadPort {
     ) -> Result<Vec<LinkCandidate>, IdentityLinkCheckError>;
 }
 
-/// Read a link's lineage: the stored claims referencing one claim (its
-/// retraction / supersession markers). Read-only — the narrow handle a verb
-/// holds instead of the whole `StoragePort`.
+/// One stored claim referencing another — own or a peer's — as its lineage
+/// reads it: its CID, its author as stored, and its references to the claim
+/// read. Only its author can retract or supersede their own claim, so the
+/// author is never elided (I-FED-1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimReferrer {
+    pub cid: String,
+    pub author_did: String,
+    pub references: Vec<ClaimReference>,
+}
+
+/// Read a link's lineage: the stored claims — own and pulled from peers —
+/// referencing one claim (its retraction / supersession markers).
+/// Read-only — the narrow handle a verb holds instead of the whole
+/// `StoragePort`.
 pub trait LinkLineageReadPort {
-    /// The stored signed claims referencing the claim at `cid`.
-    fn referrers_of(&self, cid: &str) -> Result<Vec<SignedClaim>, StorageError>;
+    /// The stored claims (own and peer) referencing the claim at `cid`.
+    fn referrers_of(&self, cid: &str) -> Result<Vec<ClaimReferrer>, StorageError>;
 }
