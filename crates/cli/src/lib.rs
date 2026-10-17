@@ -338,7 +338,11 @@ pub enum IdentityCommand {
         yes: bool,
     },
     /// Show linked identities from the last local check (offline).
-    List,
+    List {
+        /// Show only the links of this DID.
+        #[arg(long)]
+        did: Option<String>,
+    },
     /// Re-check every active link (yours and followed peers') against a
     /// fresh GitHub read; appends one local check per decided re-check,
     /// never retracts.
@@ -791,7 +795,7 @@ pub fn dispatch(cli: Cli) -> i32 {
                 &verbs::identity_link::IdentityLinkArgs { login, yes },
             ),
         ),
-        Command::Identity(IdentityCommand::List) => print_verb_stdout(
+        Command::Identity(IdentityCommand::List { did }) => print_verb_stdout(
             "identity list",
             verbs::identity_list::run(
                 &verbs::identity_list::IdentityListHandles {
@@ -799,6 +803,7 @@ pub fn dispatch(cli: Cli) -> i32 {
                     claims: wiring.link_candidates.as_ref(),
                     lineage: wiring.link_lineage.as_ref(),
                 },
+                &recheck_scope(did, None),
                 wiring.clock.now_utc(),
             ),
         ),
@@ -960,8 +965,8 @@ fn print_verb_stdout(verb: &str, outcome: anyhow::Result<String>) -> i32 {
     }
 }
 
-/// The links one `identity verify` covers: `--did` wins (clap already
-/// refuses both), then `--github`, else every active link.
+/// The links one `identity verify` (or `identity list`) covers: `--did`
+/// wins (clap already refuses both), then `--github`, else every active link.
 fn recheck_scope(
     did: Option<String>,
     github: Option<String>,

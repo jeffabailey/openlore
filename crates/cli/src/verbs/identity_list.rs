@@ -6,10 +6,15 @@
 //! check write or purge, no signing, no GitHub. The link lineage is read as
 //! `identity verify` reads it (`identity_reads`), so a link its author
 //! retracted or superseded is never listed (ADR-085 §5, ADR-060).
+//!
+//! `--did` narrows the list to one person (F7): links are selected by the
+//! same bare-DID rule `identity verify --did` uses (`is_in_scope`), and only
+//! that subject's checks are read. The scope selects lines; it never changes
+//! a standing.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use claim_domain::identity_link::{link_view, LatestCheck, ReaderLink};
+use claim_domain::identity_link::{is_in_scope, link_view, LatestCheck, ReaderLink, RecheckScope};
 use ports::{
     CheckFilter, IdentityLinkCheckReadPort, LinkCandidateReadPort, LinkCheck, LinkLineageReadPort,
 };
@@ -34,16 +39,31 @@ fn latest_of(check: LinkCheck) -> LatestCheck {
     }
 }
 
-/// Run `identity list` as of `now`; returns the stdout to print.
-pub fn run(handles: &IdentityListHandles<'_>, now: DateTime<Utc>) -> Result<String> {
-    let links: Vec<ReaderLink> =
-        StoredLinkLineage::read(handles.claims, handles.lineage)?.reader_links();
+/// The checks a listing within `scope` needs: one person's, or everyone's.
+fn check_filter_of(scope: &RecheckScope) -> CheckFilter {
+    match scope {
+        RecheckScope::Person(did) => CheckFilter::Subject(claim_domain::bare_did(did).to_string()),
+        RecheckScope::Everyone | RecheckScope::Account(_) => CheckFilter::All,
+    }
+}
+
+/// Run `identity list` within `scope` as of `now`; returns the stdout to print.
+pub fn run(
+    handles: &IdentityListHandles<'_>,
+    scope: &RecheckScope,
+    now: DateTime<Utc>,
+) -> Result<String> {
+    let links: Vec<ReaderLink> = StoredLinkLineage::read(handles.claims, handles.lineage)?
+        .reader_links()
+        .into_iter()
+        .filter(|reader| is_in_scope(scope, &reader.link, &reader.link.login))
+        .collect();
     if links.is_empty() {
         return Ok(render_no_linked_identities());
     }
     let latest: Vec<LatestCheck> = handles
         .checks
-        .latest_checks(&CheckFilter::All, now)?
+        .latest_checks(&check_filter_of(scope), now)?
         .into_iter()
         .map(latest_of)
         .collect();

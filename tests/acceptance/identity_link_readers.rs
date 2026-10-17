@@ -412,7 +412,6 @@ fn two_link_records_for_the_same_person_and_account_read_as_one_link_naming_both
 ///   Then he sees Rachel as github:rachelk and nothing about himself
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn jeff_can_list_one_persons_linked_identities() {
     let mut world = LinkWorld::with(&[JEFF_GH, RACHEL_GH]);
     given_i_linked(&world, JEFF_GH, None);
