@@ -108,8 +108,9 @@ third review round:
 - `c31579a`: pure ownership refuses account 0; `observation_of` narrowed; a write-only field dropped (N5, N7, N9, N11).
 - **N6 accepted as is**: a malformed GitHub answer is worded "GitHub could not be
   reached". It still fails closed; only the wording is coarse.
-- **N10 open**: legacy review-app links may carry `github_user_id` 0. The
-  production DB has not been checked.
+- **N10 closed**: legacy review-app links might have carried `github_user_id` 0.
+  Checked 2026-10-16 on a read-only copy of the production store: 1 link, verified,
+  none with an id of 0 or less.
 
 ## Quality gates — final report
 
@@ -118,7 +119,7 @@ third review round:
 | Roadmap | APPROVED: 9 steps, slice 1 only; slice-2/3 scenarios stay ignored (`deferred_to_later_slices`) |
 | DES integrity | `des-verify-integrity` PASS; 9/9 steps COMMIT/PASS in `execution-log.json` |
 | Phase-3 refactor | `25c2f61`, `b9616a4` |
-| Phase-4 adversarial review | Round 1 rejected (D1 fail-open), fixed. Re-review rejected (N1–N11), fixed directly except N6 (accepted) and N10 (open) |
+| Phase-4 adversarial review | Round 1 rejected (D1 fail-open), fixed. Re-review rejected (N1–N11), fixed directly except N6 (accepted); N10 checked, none found |
 | Phase-5 mutation (per-feature, gate ≥80%) | core claim-domain **106/113 viable caught (94%)**; CLI verbs and render **66/70 (94%)**; adapter-github redirects **9/9**; adapter-duckdb **8/8**. Gate PASSED. All 13 survivors then killed by new tests: `f2dd9d4` (acceptance: check age, declined message, verified recheck line), `e987465` and `56a8d47` (claim-domain unit and property tests) |
 | check-arch | OK, with the GDL-D13 rules and the review-driven reader/glob/macro hardening |
 
@@ -158,8 +159,6 @@ applies each mutant's diff in a worktree and runs the relevant `cli` tests.
 - `identity list` does not fold the retraction lineage (slice 2).
 - `self_attested_link_record` has no production caller (slice 3).
 - The review-app changes (strict `read_account`) are not yet deployed.
-- N10: legacy review-app links with `github_user_id` 0 are unchecked in the
-  production DB.
 
 ## Lessons
 
