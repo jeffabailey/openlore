@@ -12,6 +12,7 @@ use openlore_test_support::{StoredRecord, CLAIM_COLLECTION};
 
 use super::browser::{Browser, Page};
 use super::domain::*;
+use super::html::{self, Form};
 use super::world::*;
 
 /// The reserved identity-link predicate (ADR-084 §2).
@@ -41,12 +42,110 @@ pub fn github_id_uri(persona: Persona) -> String {
 /// (the exact-record preview; nothing is written yet).
 pub fn when_opens_link_preview(browser: &mut Browser) -> &Page {
     browser.open("/github");
-    browser.press("Publish this link")
+    browser.press(PUBLISH_LINK)
+}
+
+/// The offer's button label on the GitHub step (Q-GDL-D1 wording pin).
+pub const PUBLISH_LINK: &str = "Publish this link";
+
+/// The confirm button on the link preview (reuses the shipped preview's).
+pub const CONFIRM_LINK: &str = "Publish to my repo";
+
+/// The field of the offer form that names the GitHub username to link
+/// (U-26: the login comes from the offer's form field, as in the Verify form).
+pub const LINK_LOGIN_FIELD: &str = "github_login";
+
+/// Every refused link publish ends with this sentence (U-31, RA-5).
+pub const NOTHING_PUBLISHED: &str = "Nothing was published.";
+
+/// The refusal once the hourly verify budget is spent (ADR-076 §2, U-26).
+pub const TOO_MANY_ATTEMPTS: &str = "Too many verification attempts in the last hour";
+
+/// The refusal for a GitHub username with no account behind it.
+pub fn account_not_found_message(login: &str) -> String {
+    format!("We couldn't find a GitHub account at github.com/{login}")
+}
+
+/// The "Publish this link" offer form on the GitHub step, captured for
+/// adversarial replays (forged token, another login, spent budget). Panics,
+/// as `Browser::press` would, when the step offers no link to publish.
+pub fn link_offer_form(browser: &mut Browser) -> Form {
+    browser.open("/github");
+    let form = browser
+        .forms()
+        .into_iter()
+        .find(|f| {
+            f.buttons
+                .iter()
+                .any(|(l, _, _)| html::label_matches(l, PUBLISH_LINK))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "no button or link labelled {PUBLISH_LINK:?} on /github:\n{}",
+                browser.page.text()
+            )
+        });
+    assert!(
+        form.fields.iter().any(|(k, _)| k == LINK_LOGIN_FIELD),
+        "the offer names the account to link in a {LINK_LOGIN_FIELD:?} field: {form:?}"
+    );
+    form
+}
+
+/// The confirm form on the current link preview, captured for replays.
+pub fn link_confirm_form(browser: &Browser) -> Form {
+    browser
+        .forms()
+        .into_iter()
+        .find(|f| {
+            f.buttons
+                .iter()
+                .any(|(l, _, _)| html::label_matches(l, CONFIRM_LINK))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "the link preview's confirm form ({CONFIRM_LINK:?}):\n{}",
+                browser.page.text()
+            )
+        })
+}
+
+/// WHEN a (possibly altered) offer form is submitted: the link preview request.
+pub fn when_submits_link_offer<'b>(browser: &'b mut Browser, offer: &Form) -> &'b Page {
+    browser.submit(offer, Some(PUBLISH_LINK))
+}
+
+/// GIVEN the owner has spent this hour's GitHub check budget by pressing
+/// Verify until the app refuses (at most `VERIFY_ATTEMPTS_PER_HOUR` + 2 tries).
+pub fn uses_up_the_hours_verify_attempts(browser: &mut Browser, persona: Persona) {
+    let spent = (0..22)
+        .any(|_| when_verifies_github(browser, persona.github_login()).shows(TOO_MANY_ATTEMPTS));
+    assert!(
+        spent,
+        "the verify budget never ran out:\n{}",
+        browser.page.text()
+    );
+}
+
+/// How many requests GitHub has served the app so far.
+pub fn github_requests(world: &ReviewWorld) -> usize {
+    world.github.requests().len()
+}
+
+/// THEN no link confirmation is offered: the request kept no link plan the
+/// owner could confirm (a plan is reachable only through a confirm form; the
+/// app's private store is never read by a step).
+pub fn then_no_link_confirmation_is_offered(page: &Page) {
+    assert!(
+        !page.offers(CONFIRM_LINK),
+        "no link plan may be offered for confirmation:\n{}",
+        page.text()
+    );
 }
 
 /// WHEN the owner confirms the link preview.
 pub fn when_confirms_link(browser: &mut Browser) -> &Page {
-    browser.press("Publish to my repo")
+    browser.press(CONFIRM_LINK)
 }
 
 /// GIVEN `persona` published their verified link through the app (chains

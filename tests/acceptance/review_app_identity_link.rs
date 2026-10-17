@@ -15,20 +15,8 @@
 mod review_app;
 
 use openlore_test_support::WritePosture;
+use review_app::state_delta::{assert_state_delta, Delta};
 use review_app::*;
-
-/// The confirm form on the current link preview.
-fn link_confirm_form(browser: &Browser) -> html::Form {
-    browser
-        .forms()
-        .into_iter()
-        .find(|f| {
-            f.buttons
-                .iter()
-                .any(|(l, _, _)| html::label_matches(l, "Publish to my repo"))
-        })
-        .expect("the link preview's confirm form")
-}
 
 /// RA-1a
 /// ```gherkin
@@ -193,47 +181,64 @@ fn priya_withdraws_her_link_without_erasing_it() {
     );
 }
 
-/// RA-5 (error, infrastructure-failure, table)
+/// RA-5 (error, infrastructure-failure, table; rows 3-4 from the slice-3
+/// roadmap review F-10)
+///
+/// The confirm form is captured on the preview and submitted after the
+/// trouble starts, so the "used up" row can spend the budget on the GitHub
+/// step first.
 /// ```gherkin
-/// @driving_port @real-io @error @infrastructure-failure @adr-085-4 @contract-shape:unbounded-preservation
+/// @driving_port @real-io @error @infrastructure-failure @adr-085-4 @f-10 @contract-shape:unbounded-preservation
 /// Scenario Outline: When GitHub cannot be read while publishing a link, nothing is published
 ///   Given Priya is on her link preview
-///   And GitHub <trouble>
+///   And <trouble>
 ///   When she confirms
 ///   Then she sees "<message>" and "Nothing was published."
 ///   And the app's GitHub token is not on the page
 ///   And nothing is written to her published repo
 ///   Examples:
-///     | trouble                    | message                                    |
-///     | is rate-limiting the app   | GitHub is rate-limiting us                 |
-///     | rejects the app's token    | GitHub did not accept the app's access     |
+///     | trouble                                                  | message                                                  |
+///     | GitHub is rate-limiting the app                          | GitHub is rate-limiting us                               |
+///     | GitHub rejects the app's token                           | GitHub did not accept the app's access                   |
+///     | she has used up this hour's GitHub checks                | Too many verification attempts in the last hour          |
+///     | GitHub no longer has an account "priyaraman"             | We couldn't find a GitHub account at github.com/priyaraman |
 /// ```
 #[test]
 #[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn when_github_cannot_be_read_while_publishing_a_link_nothing_is_published() {
     let rows = [
-        ("rate limited", "GitHub is rate-limiting us"),
-        ("token rejected", "GitHub did not accept the app's access"),
+        ("rate limited", "GitHub is rate-limiting us".to_string()),
+        (
+            "token rejected",
+            "GitHub did not accept the app's access".to_string(),
+        ),
+        ("budget used up", TOO_MANY_ATTEMPTS.to_string()),
+        (
+            "account not found",
+            account_not_found_message(Persona::Priya.github_login()),
+        ),
     ];
     for (row, message) in rows {
         let world = ReviewWorld::new();
         let mut browser = given_github_verified(&world, Persona::Priya);
         when_opens_link_preview(&mut browser);
-        if row == "rate limited" {
-            world.github.rate_limit_for(240);
-        } else {
-            world.github.reject_token(true);
+        let confirm = link_confirm_form(&browser);
+        match row {
+            "rate limited" => world.github.rate_limit_for(240),
+            "token rejected" => world.github.reject_token(true),
+            "budget used up" => uses_up_the_hours_verify_attempts(&mut browser, Persona::Priya),
+            _ => world.github.delete_account(Persona::Priya.github_login()),
         }
 
-        when_confirms_link(&mut browser);
+        browser.submit(&confirm, Some(CONFIRM_LINK));
 
         assert!(
-            browser.page.shows(message),
+            browser.page.shows(&message),
             "[{row}] {}",
             browser.page.text()
         );
         assert!(
-            browser.page.shows("Nothing was published."),
+            browser.page.shows(NOTHING_PUBLISHED),
             "[{row}] the publish itself was refused:\n{}",
             browser.page.text()
         );
@@ -270,7 +275,7 @@ fn a_link_confirmation_that_did_not_come_from_priyas_own_page_is_refused() {
 
     for token in ["", "forged-token"] {
         let forged = Browser::with_field(&confirm, "csrf", token);
-        browser.submit(&forged, Some("Publish to my repo"));
+        browser.submit(&forged, Some(CONFIRM_LINK));
         assert_eq!(browser.page.status, 403, "[{token:?}] refused as forbidden");
     }
     assert!(world.atproto.write_attempts().is_empty());
@@ -331,7 +336,7 @@ fn an_ended_session_at_confirmation_publishes_nothing_and_asks_priya_to_sign_in_
                 // The REVIEW_APP_CLOCK_SKEW_SECS seam: the server's clock runs
                 // past the 30-day session; the browser keeps its cookie.
                 let world = world.restart_app_later(THIRTY_ONE_DAYS);
-                browser.submit(&confirm, Some("Publish to my repo"));
+                browser.submit(&confirm, Some(CONFIRM_LINK));
                 assert!(
                     browser.page.offers("Sign in with Bluesky"),
                     "[{row}] {}",
@@ -341,7 +346,7 @@ fn an_ended_session_at_confirmation_publishes_nothing_and_asks_priya_to_sign_in_
             }
             "cookie cleared" => {
                 browser.clear_cookies();
-                browser.submit(&confirm, Some("Publish to my repo"));
+                browser.submit(&confirm, Some(CONFIRM_LINK));
                 assert!(
                     browser.page.offers("Sign in with Bluesky"),
                     "[{row}] {}",
@@ -353,7 +358,7 @@ fn an_ended_session_at_confirmation_publishes_nothing_and_asks_priya_to_sign_in_
                 world
                     .atproto
                     .set_write_posture(Persona::Priya.did(), WritePosture::ExpiredSession);
-                browser.submit(&confirm, Some("Publish to my repo"));
+                browser.submit(&confirm, Some(CONFIRM_LINK));
                 assert!(
                     browser.page.shows("Sign in again"),
                     "[{row}] {}",
@@ -367,4 +372,403 @@ fn an_ended_session_at_confirmation_publishes_nothing_and_asks_priya_to_sign_in_
             "[{row}] nothing published"
         );
     }
+}
+
+// =============================================================================
+// Slice-3 roadmap review (2026-10-17): RA-9..RA-14. Each fails today at the
+// missing "Publish this link" offer (MISSING_FUNCTIONALITY).
+// =============================================================================
+
+/// RA-9 (guardrail, table; roadmap review F-08)
+/// ```gherkin
+/// @driving_port @real-io @guardrail @f-08 @gdl-d12 @contract-shape:pure-function
+/// Scenario Outline: Only an owner the app has verified is offered "Publish this link"
+///   Given <owner state>
+///   When the GitHub step is opened
+///   Then "Publish this link" is <offered>
+///   Examples:
+///     | owner state                                                           | offered     |
+///     | Priya verified github "priyaraman"                                    | offered     |
+///     | Priya signed in and never verified                                    | not offered |
+///     | Sam's verify of "samortega" was refused (no DID in his bio)           | not offered |
+///     | Priya verified, removed her DID from her bio and pressed Verify again | not offered |
+///     | Priya verified and then signed out                                    | not offered |
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
+fn only_an_owner_the_app_has_verified_is_offered_publish_this_link() {
+    let rows = [
+        ("verified", true),
+        ("never verified", false),
+        ("verify refused", false),
+        ("verification lapsed", false),
+        ("signed out", false),
+    ];
+    for (row, expected) in rows {
+        let world = ReviewWorld::new();
+        let mut browser = match row {
+            "verified" => given_github_verified(&world, Persona::Priya),
+            "never verified" => given_signed_in(&world, Persona::Priya),
+            "verify refused" => {
+                let mut sam = given_signed_in(&world, Persona::Sam);
+                when_verifies_github(&mut sam, Persona::Sam.github_login());
+                sam
+            }
+            "verification lapsed" => {
+                let mut priya = given_github_verified(&world, Persona::Priya);
+                removes_did_from_bio(&world, Persona::Priya);
+                when_verifies_github(&mut priya, Persona::Priya.github_login());
+                priya
+            }
+            _ => {
+                let mut priya = given_github_verified(&world, Persona::Priya);
+                when_signs_out(&mut priya);
+                priya
+            }
+        };
+
+        let offered = browser.open("/github").offers(PUBLISH_LINK);
+
+        assert_eq!(
+            offered,
+            expected,
+            "[{row}] {PUBLISH_LINK:?} offered = {offered}, expected {expected}:\n{}",
+            browser.page.text()
+        );
+    }
+}
+
+/// RA-10 (error, adversarial, table; roadmap review F-01)
+///
+/// The offer form is captured on the GitHub step and replayed with one
+/// thing wrong. "No link plan kept" is observed at the port: the reply
+/// offers nothing to confirm.
+/// ```gherkin
+/// @driving_port @real-io @error @adversarial @f-01 @adr-076-2 @contract-shape:unbounded-preservation
+/// Scenario Outline: A link preview request that fails a guard asks GitHub nothing and keeps nothing
+///   Given Priya verified github "priyaraman" and sees "Publish this link"
+///   And <guard failure>
+///   When the link preview is requested
+///   Then it is refused <how>
+///   And GitHub was asked nothing, no link is offered for confirmation and nothing is written
+///   Examples:
+///     | guard failure                                       | how                                               |
+///     | the request carries no page token                   | as forbidden                                      |
+///     | the request carries a page token Priya never saw    | as forbidden                                      |
+///     | she has used up this hour's GitHub checks           | with "Too many verification attempts in the last hour" |
+///     | the request names the malformed username "-priyaraman-" | with "We couldn't find a GitHub account"      |
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
+fn a_link_preview_request_that_fails_a_guard_asks_github_nothing_and_keeps_nothing() {
+    let rows = [
+        "no page token",
+        "forged page token",
+        "budget used up",
+        "malformed username",
+    ];
+    for row in rows {
+        let world = ReviewWorld::new();
+        let mut browser = given_github_verified(&world, Persona::Priya);
+        let offer = link_offer_form(&mut browser);
+        let request = match row {
+            "no page token" => Browser::with_field(&offer, "csrf", ""),
+            "forged page token" => Browser::with_field(&offer, "csrf", "forged-token"),
+            "budget used up" => {
+                uses_up_the_hours_verify_attempts(&mut browser, Persona::Priya);
+                offer.clone()
+            }
+            _ => Browser::with_field(&offer, LINK_LOGIN_FIELD, "-priyaraman-"),
+        };
+        let asked_before = github_requests(&world);
+
+        when_submits_link_offer(&mut browser, &request);
+
+        match row {
+            "no page token" | "forged page token" => assert_eq!(
+                browser.page.status,
+                403,
+                "[{row}] refused as forbidden:\n{}",
+                browser.page.text()
+            ),
+            "budget used up" => assert!(
+                browser.page.shows(TOO_MANY_ATTEMPTS),
+                "[{row}] {}",
+                browser.page.text()
+            ),
+            _ => assert!(
+                browser.page.shows("We couldn't find a GitHub account"),
+                "[{row}] {}",
+                browser.page.text()
+            ),
+        }
+        assert_eq!(
+            github_requests(&world),
+            asked_before,
+            "[{row}] GitHub is asked nothing: {:?}",
+            world.github.request_paths()
+        );
+        then_no_link_confirmation_is_offered(&browser.page);
+        assert!(
+            world.atproto.write_attempts().is_empty(),
+            "[{row}] nothing written"
+        );
+    }
+}
+
+/// RA-10d (error, infrastructure-failure, table; roadmap review F-01)
+/// ```gherkin
+/// @driving_port @real-io @error @infrastructure-failure @f-01 @adr-085-4 @contract-shape:unbounded-preservation
+/// Scenario Outline: When GitHub cannot be read for a link preview, Priya is refused without seeing the app's token
+///   Given Priya verified github "priyaraman"
+///   And GitHub <trouble>
+///   When she presses "Publish this link"
+///   Then she is refused, the app's GitHub token is not on the page
+///   And no link is offered for confirmation and nothing is written
+///   Examples:
+///     | trouble                    |
+///     | is rate-limiting the app   |
+///     | rejects the app's token    |
+///     | cannot be reached          |
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
+fn when_github_cannot_be_read_for_a_link_preview_priya_is_refused_without_seeing_the_apps_token() {
+    for row in ["rate limited", "token rejected", "offline"] {
+        let world = ReviewWorld::new();
+        let mut browser = given_github_verified(&world, Persona::Priya);
+        let offer = link_offer_form(&mut browser);
+        match row {
+            "rate limited" => world.github.rate_limit_for(240),
+            "token rejected" => world.github.reject_token(true),
+            _ => world.github.set_offline(true),
+        }
+
+        when_submits_link_offer(&mut browser, &offer);
+
+        assert!(
+            !browser.page.html.contains(SERVER_GITHUB_TOKEN),
+            "[{row}] the app's GitHub token is never shown"
+        );
+        then_no_link_confirmation_is_offered(&browser.page);
+        assert!(
+            world.atproto.write_attempts().is_empty(),
+            "[{row}] nothing written"
+        );
+    }
+}
+
+/// RA-11a (error, adversarial; roadmap review F-11)
+/// ```gherkin
+/// @driving_port @real-io @error @adversarial @f-11 @gdl-d3 @c-gdl-1 @contract-shape:unbounded-preservation
+/// Scenario: Sam cannot publish Priya's GitHub account as his own
+///   Given Sam verified his own github "samortega" in the app
+///   When he asks for a link preview naming github "priyaraman"
+///   Then he is refused and no link from his DID to github:priyaraman is shown or offered for confirmation
+///   And nothing is written to anyone's repo
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
+fn sam_cannot_publish_priyas_github_account_as_his_own() {
+    let world = ReviewWorld::new();
+    puts_did_in_bio(&world, Persona::Sam);
+    let mut sam = given_github_verified(&world, Persona::Sam);
+    let offer = link_offer_form(&mut sam);
+    let naming_priya = Browser::with_field(&offer, LINK_LOGIN_FIELD, Persona::Priya.github_login());
+
+    when_submits_link_offer(&mut sam, &naming_priya);
+
+    let stolen = format!(
+        "{} {SAME_AS} {}",
+        Persona::Sam.did(),
+        github_subject(Persona::Priya)
+    );
+    assert!(
+        !sam.page.shows(&stolen),
+        "Sam is never shown a link to Priya's account:\n{}",
+        sam.page.text()
+    );
+    then_no_link_confirmation_is_offered(&sam.page);
+    assert!(
+        world.atproto.write_attempts().is_empty(),
+        "nothing written: {:?}",
+        world.atproto.write_attempts()
+    );
+}
+
+/// RA-11b (error; roadmap review F-11, U-25, AC-002.3)
+/// ```gherkin
+/// @driving_port @real-io @error @f-11 @u-25 @ac-002-3 @contract-shape:unbounded-preservation
+/// Scenario: A bio naming someone else's DID is explained with that DID in full, and nothing is offered
+///   Given Priya verified github "priyaraman" in the app
+///   And her GitHub bio now names Aisha's DID instead of hers
+///   When she presses "Publish this link"
+///   Then she sees that the bio holds a different DID, shown in full
+///   And no link is offered for confirmation and nothing is written
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
+fn a_bio_naming_someone_elses_did_is_explained_with_that_did_in_full_and_nothing_is_offered() {
+    let world = ReviewWorld::new();
+    let mut browser = given_github_verified(&world, Persona::Priya);
+    world.github.set_bio(
+        Persona::Priya.github_login(),
+        Some(&format!("Builder. {}", Persona::Aisha.did())),
+    );
+
+    when_opens_link_preview(&mut browser);
+
+    let text = browser.page.text();
+    assert!(
+        text.contains("different DID") && text.contains(Persona::Aisha.did()),
+        "the refusal names the bio's DID in full ({}):\n{text}",
+        Persona::Aisha.did()
+    );
+    then_no_link_confirmation_is_offered(&browser.page);
+    assert!(world.atproto.write_attempts().is_empty(), "nothing written");
+}
+
+/// RA-12 (error, infrastructure-failure → recovery; roadmap review F-08)
+///
+/// Row 2 of the review finding (the first write landed but its answer was
+/// lost) is not written: `FakeAtprotoNetwork` has no write posture that
+/// stores a record and then answers with an error. See the DISTILL report.
+/// ```gherkin
+/// @driving_port @real-io @error @infrastructure-failure @f-08 @adr-071 @contract-shape:bounded-change
+/// Scenario: After a failed link write, Retry publishes the link exactly once
+///   Given Priya is on her link preview
+///   And her repo host answers every write with a server error
+///   When she confirms
+///   Then she sees "Nothing was published." with a Retry, and her repo holds no link
+///   When her repo host recovers and she presses Retry
+///   Then her repo holds exactly one link and she sees its address
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
+fn after_a_failed_link_write_retry_publishes_the_link_exactly_once() {
+    let world = ReviewWorld::new();
+    let mut browser = given_github_verified(&world, Persona::Priya);
+    when_opens_link_preview(&mut browser);
+    world
+        .atproto
+        .set_write_posture(Persona::Priya.did(), WritePosture::ServerError);
+
+    when_confirms_link(&mut browser);
+
+    assert!(
+        browser.page.shows(NOTHING_PUBLISHED) && browser.page.offers("Retry"),
+        "the failure is explained with a Retry:\n{}",
+        browser.page.text()
+    );
+    assert!(
+        links_in_pds(&world, Persona::Priya).is_empty(),
+        "no link yet"
+    );
+
+    world
+        .atproto
+        .set_write_posture(Persona::Priya.did(), WritePosture::Accept);
+    browser.press("Retry");
+
+    let link = then_pds_holds_self_attested_link(&world, Persona::Priya);
+    then_sees_record_address(&browser.page, &link);
+}
+
+/// RA-13 (edge; user ruling U-27 "hide for now")
+/// ```gherkin
+/// @driving_port @real-io @edge @u-27 @contract-shape:bounded-change
+/// Scenario: Priya's published link stays off her public profile and her share draft
+///   Given Priya published "priyaraman/tidepool embodies dependency-pinning" from the app
+///   And she published her GitHub link from the app
+///   When a visitor opens her profile and she opens "Share on Bluesky…"
+///   Then the profile lists only her dependency-pinning claim and no link
+///   And the share draft quotes her dependency-pinning claim and not her link
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
+fn priyas_published_link_stays_off_her_public_profile_and_her_share_draft() {
+    let world = ReviewWorld::new();
+    let mut browser = given_published(
+        &world,
+        Persona::Priya,
+        &[priya::TIDEPOOL_DEPENDENCY_PINNING],
+    );
+    when_opens_link_preview(&mut browser);
+    when_confirms_link(&mut browser);
+    then_pds_holds_self_attested_link(&world, Persona::Priya);
+    let link_words = [github_subject(Persona::Priya), SAME_AS.to_string()];
+
+    let mut visitor = world.browser();
+    let profile = when_opens_profile(&mut visitor, Persona::Priya).clone();
+    when_opens_share_preview(&mut browser, Persona::Priya);
+
+    assert_eq!(
+        profile.embodies_phrases(),
+        phrases(&[priya::TIDEPOOL_DEPENDENCY_PINNING]),
+        "her other published claim still shows"
+    );
+    assert_eq!(
+        html::elements(&profile.html, "article").len(),
+        1,
+        "one claim card, no link card:\n{}",
+        profile.text()
+    );
+    for word in &link_words {
+        assert!(
+            !profile.text().contains(word.as_str()),
+            "the profile never lists the link ({word}):\n{}",
+            profile.text()
+        );
+    }
+    let draft = browser
+        .forms()
+        .iter()
+        .flat_map(|f| f.fields.clone())
+        .find(|(k, _)| k == "text")
+        .map(|(_, v)| v)
+        .expect("an editable post text");
+    assert!(draft.contains("dependency-pinning"), "{draft}");
+    for word in &link_words {
+        assert!(
+            !draft.contains(word.as_str()),
+            "the share draft never quotes the link ({word}): {draft}"
+        );
+    }
+}
+
+/// RA-14 (error, adversarial; roadmap review F-03, user ruling U-21 B)
+/// ```gherkin
+/// @driving_port @real-io @error @adversarial @f-03 @u-21 @adr-084-4 @contract-shape:unbounded-preservation
+/// Scenario: A link preview confirmed as an ordinary claim publish writes nothing and is used up
+///   Given Priya has pending suggestions and is on her link preview
+///   When its confirmation is sent to the ordinary claim-publish confirmation instead
+///   Then nothing is written, no suggestion leaves her queue and her repo is unchanged
+///   And confirming the link preview afterwards publishes nothing either
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
+fn a_link_preview_confirmed_as_an_ordinary_claim_publish_writes_nothing_and_is_used_up() {
+    let world = ReviewWorld::new();
+    let mut browser = given_pending_suggestions(&world, Persona::Priya);
+    when_opens_link_preview(&mut browser);
+    let confirm = link_confirm_form(&browser);
+    let mut as_claim_publish = confirm.clone();
+    as_claim_publish.action = "/review/publish".to_string();
+    let before = capture(&world, &mut browser, Persona::Priya);
+
+    browser.submit(&as_claim_publish, Some(CONFIRM_LINK));
+
+    let after = capture(&world, &mut browser, Persona::Priya);
+    assert_state_delta(&before, &after, &universe(), &Delta::new());
+    browser.submit(&confirm, Some(CONFIRM_LINK));
+    assert!(
+        links_in_pds(&world, Persona::Priya).is_empty(),
+        "the link plan was used up: nothing published:\n{}",
+        browser.page.text()
+    );
+    assert!(
+        world.atproto.write_attempts().is_empty(),
+        "nothing written: {:?}",
+        world.atproto.write_attempts()
+    );
 }

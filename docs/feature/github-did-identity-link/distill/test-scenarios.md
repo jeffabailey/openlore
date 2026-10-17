@@ -28,10 +28,10 @@ The `.rs` files are the scenario SSOT; this is the map.
 | `identity_link.rs` | 1 — link / verify / forget / composer guard / upgrade / re-link (incl. WS) | 3/4 subprocess | 37 (+1 fixture regenerator, not a scenario; IL-12b, IL-15, IV-11..13 added 2026-10-16 for review D1/D4/D7) | 0 at DISTILL hand-off; the 5 review rows are active |
 | `identity_link_readers.rs` | 2 — association rule, person views, scoring, search label, ADR-084 peer-pull round trip | 3/4 subprocess + viewer + indexer | 23 (IR-19 added 2026-10-16 for F14; IR-16b for U-7; IR-20/IR-20b 2026-10-17 for U-19) | 4 (IR-13, IR-17, IR-19, IR-16b); IR-20/IR-20b ignored pending DELIVER |
 | `identity_link_core.rs` | 1-2 pure core | 2 proptest (256 cases) | 12 (CORE-2x, CORE-3x added for review D1) | 0 at hand-off; CORE-2x/3x active |
-| `review_app_identity_link.rs` | 3 — publish / retract in the review app | 4 HTTP | 9 | 1 (RA-3) |
+| `review_app_identity_link.rs` | 3 — publish / retract in the review app | 4 HTTP | 17 (RA-9..RA-14 and RA-5 rows 3-4 added 2026-10-17 for the slice-3 roadmap review) | 1 (RA-3); the 8 new scenarios are ignored pending DELIVER |
 | `review_app_sign_in_and_ownership.rs` (review D1 rows only) | slice-1 fix — the ownership proof reads strictly | 4 HTTP | 2 (OW-4b, OW-4c) | 2 |
 | `review_app_identity_link_readers.rs` | 3 — the CLI reads app-written links | 4 HTTP + subprocess | 5 | 0 |
-| **Total** | | | **88** | **3 at hand-off (+9 review rows, IR-19 and IR-16b active)** |
+| **Total** | | | **96** | **3 at hand-off (+9 review rows, IR-19 and IR-16b active)** |
 
 Targets: four in `crates/cli/Cargo.toml`, `review_app_identity_link` in `crates/openlore-review-app/Cargo.toml`.
 Vocabulary: `support/identity_links.rs`, `support/review_app/identity_link.rs`; `support/people.rs` `Invocation` gains `github_token`.
@@ -138,10 +138,18 @@ Seeding (review D7): `given_a_check_recorded_seeing` inserts one `identity_link_
 | RA-2 | A link is never published on the strength of an old verification | C-GDL-10, ADR-085 §2 |
 | RA-3 | Verifying GitHub and scanning never publish a link on their own | A-2 |
 | RA-4 | Priya withdraws her link without erasing it | GDL-D5, C-GDL-6 |
-| RA-5 | When GitHub cannot be read while publishing a link, nothing is published (2 rows) | ADR-085 §4 |
+| RA-5 | When GitHub cannot be read while publishing a link, nothing is published (4 rows: rate limit, rejected token, this hour's checks used up, account not found; each ends "Nothing was published." and never shows the app's token) | ADR-085 §4, roadmap review F-10, U-31 |
 | RA-6 | A link confirmation that did not come from Priya's own page is refused (2 rows) | ADR-076 session/CSRF |
 | RA-7 | Leaving the link preview publishes nothing and keeps the offer open | plan-returning preview |
 | RA-8 | An ended session at confirmation publishes nothing and asks Priya to sign in again (3 rows: server-side 30-day expiry via clock skew, cookie cleared, repo-host session) | ADR-073 |
+| RA-9 | Only an owner the app has verified is offered "Publish this link" (5 rows: verified → offered; never verified, verify refused, verification lapsed, signed out → not offered) | roadmap review F-08, GDL-D12 |
+| RA-10 | A link preview request that fails a guard asks GitHub nothing and keeps nothing (4 rows: no page token, forged page token → 403; this hour's checks used up → "Too many verification attempts in the last hour"; malformed username → "We couldn't find a GitHub account"). "Keeps nothing" is observed at the port: no confirm form is offered | roadmap review F-01, ADR-076 §2, U-26 |
+| RA-10d | When GitHub cannot be read for a link preview, Priya is refused without seeing the app's token (3 rows: rate limit, rejected token, unreachable) | roadmap review F-01, ADR-085 §4 |
+| RA-11a | Sam cannot publish Priya's GitHub account as his own (the offer form replayed naming `priyaraman`: no link shown or offered, nothing written) | roadmap review F-11, GDL-D3, C-GDL-1 |
+| RA-11b | A bio naming someone else's DID is explained with that DID in full, and nothing is offered | roadmap review F-11, U-25, AC-002.3 |
+| RA-12 | After a failed link write, Retry publishes the link exactly once (repo host answers 500, then recovers). The lost-answer row (write landed, answer lost) is not written: `FakeAtprotoNetwork` cannot store a record and then answer with an error | roadmap review F-08, ADR-071 |
+| RA-13 | Priya's published link stays off her public profile and her share draft; her dependency-pinning claim still shows | **U-27** (user ruling: hide for now) |
+| RA-14 | A link preview confirmed as an ordinary claim publish writes nothing and is used up (universe unchanged; the link confirm afterwards publishes nothing) | roadmap review F-03, **U-21 B** |
 
 ### review_app_sign_in_and_ownership.rs (review D1 rows; the ownership proof's home)
 
@@ -262,7 +270,7 @@ first observes the rename through the redirect.
 | `peer remove` (soft) | IR-20, IR-20b (Given) |
 | `graph query --weighted` / viewer `/score` | IR-14 / IR-15 |
 | `search` | IR-16 |
-| review app "Publish this link" / "Retract this link" | RA-1a..RA-8, RR-2a/b |
+| review app "Publish this link" / "Retract this link" | RA-1a..RA-14, RR-2a/b |
 
 ## 5. Adapter coverage (Mandate 6)
 
@@ -285,7 +293,7 @@ The default DEVOPS matrix (clean / with-pre-commit / with-stale-config) describe
 | fresh store (clean) | WS-GDL-1 |
 | populated pre-v7 store (upgrade) | IL-13a, IL-13b (frozen fixture `tests/fixtures/identity-link-pre-v7-store/`) |
 | network disabled | IR-11, `identity list` in every scenario (no PDS wired) |
-| GitHub anonymous rate limit / rejected token / unreachable | IL-6, IV-6, RA-5 |
+| GitHub anonymous rate limit / rejected token / unreachable | IL-6, IV-6, RA-5, RA-10d |
 | GitHub chained or cross-host redirect | IV-10 |
 | PDS unreachable | IL-9a |
 | app session expired (server-side and cookie) / repo-host session expired | RA-8 |
