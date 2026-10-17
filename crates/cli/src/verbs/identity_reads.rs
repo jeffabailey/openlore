@@ -12,9 +12,9 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
-    active_link_records, active_links, is_in_scope, link_predicate, link_view, links_to_recheck,
-    listed_links, ClaimFields, GithubObservation, IdentityLink, LatestCheck, LinkLifecycle,
-    LinkRecord, ListedLink, ProofCheck, ReaderLink, RecheckScope, StoredClaim,
+    active_link_records, active_links, is_in_scope, link_predicate, links_to_recheck,
+    listing_in_scope, ClaimFields, GithubObservation, IdentityLink, LatestCheck, LinkRecord,
+    ListedLink, ProofCheck, RecheckScope, StoredClaim,
 };
 use claim_domain::ClaimLineage;
 use ports::{
@@ -82,20 +82,14 @@ fn latest_of(check: LinkCheck) -> LatestCheck {
     }
 }
 
-/// The checks a listing within `scope` needs: one person's, or everyone's.
-fn check_filter_of(scope: &RecheckScope) -> CheckFilter {
-    match scope {
-        RecheckScope::Person(did) => CheckFilter::Subject(claim_domain::bare_did(did).to_string()),
-        RecheckScope::Everyone | RecheckScope::Account(_) => CheckFilter::All,
-    }
-}
-
 /// Every link within `scope` as `identity list` shows it as of `now`,
-/// offline: the stored lineage, this reader's own checks and `link_view`,
-/// with the records stating each. A retracted or superseded link is not
-/// among them (ADR-085 §5, ADR-060). Shared by `identity list` and the person
-/// views. Read-only — no check is written, purged or refreshed; no check is
-/// read when no link is in scope.
+/// offline: the stored lineage, ALL of this reader's own checks and
+/// `listing_in_scope`, with the records stating each. Standings are decided
+/// over every active link before the scope selects lines, so a scope never
+/// changes a standing. A retracted or superseded link is not among them
+/// (ADR-085 §5, ADR-060). Shared by `identity list` and the person views.
+/// Read-only — no check is written, purged or refreshed; no check is read
+/// when no link is stored.
 pub(crate) fn read_listed_links(
     checks: &dyn IdentityLinkCheckReadPort,
     claims: &dyn LinkCandidateReadPort,
@@ -104,23 +98,15 @@ pub(crate) fn read_listed_links(
     now: DateTime<Utc>,
 ) -> Result<Vec<ListedLink>> {
     let records = StoredLinkLineage::read(claims, lineage)?.active_link_records();
-    let links: Vec<ReaderLink> = records
-        .iter()
-        .filter(|record| is_in_scope(scope, &record.link, &record.link.login))
-        .map(|record| ReaderLink {
-            link: record.link.clone(),
-            lifecycle: LinkLifecycle::Active,
-        })
-        .collect();
-    if links.is_empty() {
+    if records.is_empty() {
         return Ok(Vec::new());
     }
     let latest: Vec<LatestCheck> = checks
-        .latest_checks(&check_filter_of(scope), now)?
+        .latest_checks(&CheckFilter::All, now)?
         .into_iter()
         .map(latest_of)
         .collect();
-    Ok(listed_links(link_view(&links, &latest, now), &records))
+    Ok(listing_in_scope(scope, &records, &latest, now))
 }
 
 /// One candidate as the pure projection reads it.

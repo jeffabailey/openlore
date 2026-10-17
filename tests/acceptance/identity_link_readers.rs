@@ -506,7 +506,6 @@ fn jeff_can_list_one_persons_linked_identities() {
 ///   And neither listing shows that person as github:jeffbailey, verified
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: review B1 — pending DELIVER fix"]
 fn listing_one_person_never_hides_that_their_account_is_contested() {
     let mut world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);

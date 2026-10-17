@@ -8,10 +8,11 @@
 //! retracted or superseded is never listed (ADR-085 §5, ADR-060). The read
 //! itself is `identity_reads::read_listed_links`, shared with the person views.
 //!
-//! `--did` narrows the list to one person (F7): links are selected by the
-//! same bare-DID rule `identity verify --did` uses (`is_in_scope`), and only
-//! that subject's checks are read. The scope selects lines; it never changes
-//! a standing.
+//! `--did` narrows the list to one person (F7): every standing is decided
+//! over all active links and all of this reader's checks, and only then are
+//! lines selected by the same bare-DID rule `identity verify --did` uses
+//! (`claim_domain::identity_link::listing_in_scope`). The scope selects
+//! lines; it never changes a standing (a contested account reads contested).
 //!
 //! A person's duplicate records for one account read as one line naming
 //! every record ID, ascending (GDL-D9, U-9).

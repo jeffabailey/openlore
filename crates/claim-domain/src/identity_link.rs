@@ -761,6 +761,51 @@ pub fn is_in_scope(scope: &RecheckScope, link: &IdentityLink, login_last_seen: &
     }
 }
 
+/// The shown lines within `scope`: a line is selected when a record stating
+/// it is within `scope` under the line's last-seen login. Selection only —
+/// every selected line is returned exactly as given, standing included.
+pub fn lines_in_scope(
+    scope: &RecheckScope,
+    lines: Vec<ListedLink>,
+    records: &[LinkRecord],
+) -> Vec<ListedLink> {
+    lines
+        .into_iter()
+        .filter(|line| {
+            let shown = &line.identity.link;
+            records.iter().any(|record| {
+                record.link.did == shown.did
+                    && record.link.user_id == shown.user_id
+                    && is_in_scope(scope, &record.link, &shown.login)
+            })
+        })
+        .collect()
+}
+
+/// What a listing within `scope` shows as of `now` (`identity list`, F7):
+/// every standing is decided over ALL the active link records and ALL of
+/// this reader's checks, and only then does the scope select lines — so
+/// listing one person never hides that their account is contested.
+pub fn listing_in_scope(
+    scope: &RecheckScope,
+    records: &[LinkRecord],
+    checks: &[LatestCheck],
+    now: DateTime<Utc>,
+) -> Vec<ListedLink> {
+    let links: Vec<ReaderLink> = records
+        .iter()
+        .map(|record| ReaderLink {
+            link: record.link.clone(),
+            lifecycle: LinkLifecycle::Active,
+        })
+        .collect();
+    lines_in_scope(
+        scope,
+        listed_links(link_view(&links, checks, now), records),
+        records,
+    )
+}
+
 /// The links one re-check covers: every active link, once per
 /// (DID, numeric id), so each account is read once (ADR-085 §7).
 pub fn links_to_recheck(
@@ -1296,6 +1341,132 @@ mod tests {
             proptest::prop_assert!(of_alice.iter().all(|l| l.identity.link.user_id == 1));
             proptest::prop_assert!(of_bob.iter().all(|l| l.identity.link.user_id == 2));
             proptest::prop_assert_eq!(of_alice.len() + of_bob.len(), shown.len());
+        }
+    }
+
+    /// The listing one scope selects, over a world of link records and checks.
+    fn listing(scope: &RecheckScope, world: &ListingWorld) -> Vec<ListedLink> {
+        listing_in_scope(scope, &world.records, &world.checks, world.now)
+    }
+
+    struct ListingWorld {
+        records: Vec<LinkRecord>,
+        checks: Vec<LatestCheck>,
+        now: DateTime<Utc>,
+    }
+
+    /// Both DIDs verified for one account: listing either one alone still
+    /// reads contested (slice-2 review B1).
+    #[test]
+    fn listing_one_person_still_reads_their_contested_account_as_contested() {
+        let at = instant("2026-10-01T09:00:00Z");
+        let link_of = |did: &str| IdentityLink {
+            did: did.to_string(),
+            login: "jeffbailey".to_string(),
+            user_id: 1,
+        };
+        let world = ListingWorld {
+            records: ["did:plc:a", "did:plc:b"]
+                .iter()
+                .map(|did| LinkRecord {
+                    record_id: format!("bafy-{did}"),
+                    link: link_of(did),
+                })
+                .collect(),
+            checks: ["did:plc:a", "did:plc:b"]
+                .iter()
+                .map(|did| LatestCheck {
+                    subject_did: did.to_string(),
+                    user_id: 1,
+                    login_seen: "jeffbailey".to_string(),
+                    verdict: CheckVerdict::Verified,
+                    checked_at: at,
+                })
+                .collect(),
+            now: at,
+        };
+        for did in ["did:plc:a", "did:plc:b"] {
+            let shown = listing(&RecheckScope::Person(did.to_string()), &world);
+            assert_eq!(shown.len(), 1, "{did}: {shown:?}");
+            assert_eq!(shown[0].identity.link.did, did);
+            assert_eq!(shown[0].identity.standing, LinkStanding::Contested);
+        }
+    }
+
+    proptest::proptest! {
+        /// Universe: link records over two DIDs, two accounts and two logins,
+        /// this reader's checks of any verdict (some dated after `now`), and
+        /// every scope kind (a DID bare or with a fragment, a login in any
+        /// case). F7 / B1: a scope only selects lines — each line it shows is
+        /// the unscoped line for that link, standing and records included;
+        /// a person scope shows exactly that DID's unscoped lines.
+        #[test]
+        fn a_scope_selects_lines_and_never_changes_a_standing(
+            records in proptest::collection::vec(
+                (
+                    proptest::sample::select(vec!["did:plc:a", "did:plc:b"]),
+                    proptest::sample::select(vec!["rachelk", "renamed"]),
+                    1u64..=2,
+                    "bafy[a-c]",
+                ),
+                0..8,
+            ),
+            checks in proptest::collection::vec(
+                (
+                    proptest::sample::select(vec!["did:plc:a", "did:plc:b"]),
+                    1u64..=2,
+                    proptest::sample::select(vec!["rachelk", "renamed"]),
+                    proptest::sample::select(CheckVerdict::ALL.to_vec()),
+                    -2i64..=2,
+                ),
+                0..8,
+            ),
+            scope in proptest::sample::select(vec![
+                RecheckScope::Everyone,
+                RecheckScope::Person("did:plc:a".to_string()),
+                RecheckScope::Person("did:plc:b#org.openlore.application".to_string()),
+                RecheckScope::Account("RACHELK".to_string()),
+                RecheckScope::Account("renamed".to_string()),
+                RecheckScope::Account("nobody".to_string()),
+            ]),
+        ) {
+            let now = instant("2026-10-10T09:00:00Z");
+            let world = ListingWorld {
+                records: records
+                    .into_iter()
+                    .map(|(did, login, user_id, record_id)| LinkRecord {
+                        record_id,
+                        link: IdentityLink { did: did.to_string(), login: login.to_string(), user_id },
+                    })
+                    .collect(),
+                checks: checks
+                    .into_iter()
+                    .map(|(did, user_id, login_seen, verdict, days)| LatestCheck {
+                        subject_did: did.to_string(),
+                        user_id,
+                        login_seen: login_seen.to_string(),
+                        verdict,
+                        checked_at: now + chrono::Duration::days(days),
+                    })
+                    .collect(),
+                now,
+            };
+            let everyone = listing(&RecheckScope::Everyone, &world);
+            let scoped = listing(&scope, &world);
+            for line in &scoped {
+                let unscoped = everyone.iter().find(|shown| {
+                    shown.identity.link.did == line.identity.link.did
+                        && shown.identity.link.user_id == line.identity.link.user_id
+                });
+                proptest::prop_assert_eq!(Some(line), unscoped);
+            }
+            if let RecheckScope::Person(did) = &scope {
+                let of_person: Vec<&ListedLink> = everyone
+                    .iter()
+                    .filter(|shown| shown.identity.link.did == bare_did(did))
+                    .collect();
+                proptest::prop_assert_eq!(scoped.iter().collect::<Vec<_>>(), of_person);
+            }
         }
     }
 
