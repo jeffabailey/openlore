@@ -697,6 +697,46 @@ pub fn listed_links(view: Vec<LinkedIdentity>, records: &[LinkRecord]) -> Vec<Li
         .collect()
 }
 
+/// How a person view's row is matched to the shown links (U-6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PersonKey {
+    /// The row carries GitHub account ids: a link joins on the id alone.
+    AccountIds(BTreeSet<u64>),
+    /// The row carries no account id: a link joins on its last-seen login,
+    /// compared case-insensitively (ADR-064).
+    Login(String),
+}
+
+impl PersonKey {
+    /// A row's key: its account ids when it carries any (account 0 names
+    /// no account), otherwise its login.
+    pub fn of(login: &str, user_ids: impl IntoIterator<Item = u64>) -> Self {
+        let ids: BTreeSet<u64> = user_ids.into_iter().filter(|id| *id != 0).collect();
+        if ids.is_empty() {
+            PersonKey::Login(login.to_string())
+        } else {
+            PersonKey::AccountIds(ids)
+        }
+    }
+
+    /// Does `link` (under its last-seen login) belong to this person?
+    pub fn owns(&self, link: &IdentityLink) -> bool {
+        match self {
+            PersonKey::AccountIds(ids) => ids.contains(&link.user_id),
+            PersonKey::Login(login) => login.eq_ignore_ascii_case(&link.login),
+        }
+    }
+}
+
+/// The shown links that belong to one person (U-6), in shown order.
+pub fn links_of_person(shown: &[ListedLink], person: &PersonKey) -> Vec<ListedLink> {
+    shown
+        .iter()
+        .filter(|listed| person.owns(&listed.identity.link))
+        .cloned()
+        .collect()
+}
+
 /// Which links one re-check covers (`identity verify --did` / `--github`).
 /// A scope only selects links; it never changes a verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1183,6 +1223,69 @@ mod tests {
                 now,
             );
             proptest::prop_assert_eq!(&only_future[0].standing, &LinkStanding::NotChecked);
+        }
+    }
+
+    fn shown_link(did: &str, login: &str, user_id: u64) -> ListedLink {
+        ListedLink {
+            identity: LinkedIdentity {
+                link: IdentityLink {
+                    did: did.to_string(),
+                    login: login.to_string(),
+                    user_id,
+                },
+                standing: LinkStanding::NotChecked,
+            },
+            record_ids: Vec::new(),
+        }
+    }
+
+    proptest::proptest! {
+        /// Universe: a person row with an optional account id (0 = none)
+        /// and a login, and a shown link with its own id and last-seen login
+        /// in any letter case. U-6: a row carrying an id owns exactly the
+        /// links to that id, whatever their login (a rename keeps the join,
+        /// a namesake on another account never joins); a row carrying none
+        /// owns exactly the links last seen under its login, ignoring case.
+        #[test]
+        fn a_link_joins_a_person_by_account_id_else_by_login_ignoring_case(
+            row_id in 0u64..=3,
+            row_login in proptest::sample::select(vec!["BurntSushi", "burnt-old", "rachelk"]),
+            link_id in 1u64..=3,
+            link_login in proptest::sample::select(vec!["BurntSushi", "burntsushi", "BURNT-OLD", "rachelk"]),
+        ) {
+            let person = PersonKey::of(row_login, [row_id]);
+            let shown = [shown_link(DID, link_login, link_id)];
+            let joined = !links_of_person(&shown, &person).is_empty();
+            let expected = if row_id == 0 {
+                row_login.eq_ignore_ascii_case(link_login)
+            } else {
+                row_id == link_id
+            };
+            proptest::prop_assert_eq!(joined, expected);
+        }
+
+        /// Universe: two people on distinct account ids and links to either
+        /// account under either login. A link is never joined to the wrong
+        /// person: each link joins exactly the one whose id it names.
+        #[test]
+        fn a_link_is_never_joined_to_the_wrong_person(
+            links in proptest::collection::vec(
+                (1u64..=2, proptest::sample::select(vec!["alice", "bob"])),
+                0..8,
+            ),
+        ) {
+            let alice = PersonKey::of("alice", [1]);
+            let bob = PersonKey::of("bob", [2]);
+            let shown: Vec<ListedLink> = links
+                .iter()
+                .map(|(id, login)| shown_link(DID, login, *id))
+                .collect();
+            let of_alice = links_of_person(&shown, &alice);
+            let of_bob = links_of_person(&shown, &bob);
+            proptest::prop_assert!(of_alice.iter().all(|l| l.identity.link.user_id == 1));
+            proptest::prop_assert!(of_bob.iter().all(|l| l.identity.link.user_id == 2));
+            proptest::prop_assert_eq!(of_alice.len() + of_bob.len(), shown.len());
         }
     }
 }

@@ -571,7 +571,6 @@ fn a_self_attested_link_pulled_from_a_peer_keeps_its_record_id_and_reads_as_a_li
 ///   Then BurntSushi's entry shows "did:plc:rachel-test is github:BurntSushi (verified today)"
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn the_person_view_shows_a_verified_link_even_with_the_network_off() {
     // One subscribed peer only: `peer pull` resolves every subscription.
     let world = LinkWorld::with(&[BURNTSUSHI_GH]);

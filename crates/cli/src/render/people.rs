@@ -4,9 +4,12 @@
 
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
+use claim_domain::identity_link::ListedLink;
 use ports::ContributionLink;
 
 use super::common::plural_suffix;
+use super::identity::render_linked_identities;
 use scraper_domain::{
     confidence_arithmetic, AlreadySigned, CandidateStatus, InferenceReport, NumberedCandidate,
     PersonCandidate, WeakenedClaim, WeakenedSupport,
@@ -24,6 +27,30 @@ pub fn render_inference_report(report: &InferenceReport) -> String {
     render_flagged_inference_report(report, &BTreeMap::new())
 }
 
+/// The identity links a person view shows, keyed by person subject, and the
+/// instant their check ages count to. People with no link are left out, so
+/// a view with no link renders byte-for-byte as before.
+#[derive(Debug, Clone, Default)]
+pub struct PersonLinkLines {
+    pub by_person: BTreeMap<String, Vec<ListedLink>>,
+    pub now: DateTime<Utc>,
+}
+
+impl PersonLinkLines {
+    /// One person's link lines (the `identity list` line render), each
+    /// indented by `indent`; empty when they have none.
+    fn render_for(&self, person_subject: &str, indent: &str) -> String {
+        self.by_person
+            .get(person_subject)
+            .map_or_else(String::new, |listed| {
+                render_linked_identities(listed, self.now)
+                    .lines()
+                    .map(|line| format!("{indent}{line}\n"))
+                    .collect()
+            })
+    }
+}
+
 /// [`render_inference_report`] with each candidate's possible renames (other
 /// logins recorded with the same GitHub user id, keyed by the candidate's
 /// person subject) flagged under its headline: flagged only, never merged
@@ -32,10 +59,21 @@ pub fn render_flagged_inference_report(
     report: &InferenceReport,
     renames: &BTreeMap<String, Vec<String>>,
 ) -> String {
+    render_linked_inference_report(report, renames, &PersonLinkLines::default())
+}
+
+/// [`render_flagged_inference_report`] with each candidate's published
+/// identity links (as this reader last checked them) under its block
+/// (ADR-085 §6): the same lines `identity list` shows.
+pub fn render_linked_inference_report(
+    report: &InferenceReport,
+    renames: &BTreeMap<String, Vec<String>>,
+    links: &PersonLinkLines,
+) -> String {
     let mut out = if report.candidates.is_empty() && !report.already_signed.is_empty() {
         "No new inferred candidates (every inference here is already signed).\n".to_string()
     } else {
-        render_person_candidates(&report.candidates, &report.weakened, renames)
+        render_person_candidates(&report.candidates, &report.weakened, renames, links)
     };
     for already in &report.already_signed {
         out.push_str(&render_already_signed(already));
@@ -69,6 +107,7 @@ pub fn render_person_candidates(
     candidates: &[NumberedCandidate],
     weakened: &[WeakenedClaim],
     renames: &BTreeMap<String, Vec<String>>,
+    links: &PersonLinkLines,
 ) -> String {
     if candidates.is_empty() {
         return "No inferred candidates (no signed repo claims about recorded contributors).\n"
@@ -79,13 +118,18 @@ pub fn render_person_candidates(
     );
     for (index, candidate) in candidates.iter().enumerate() {
         out.push_str(&render_person_candidate(index + 1, candidate, weakened));
-        let others = renames.get(candidate.candidate.person_subject());
+        let person = candidate.candidate.person_subject();
+        let others = renames.get(person);
         out.push_str(&render_candidate_renames(
             others.map_or(&[][..], Vec::as_slice),
         ));
+        out.push_str(&links.render_for(person, CANDIDATE_INDENT));
     }
     out
 }
+
+/// How deep a candidate block's detail lines are indented.
+const CANDIDATE_INDENT: &str = "        ";
 
 fn render_person_candidate(
     number: usize,
@@ -249,11 +293,30 @@ pub fn render_person_view(
     possible_renames: &[String],
     report: &InferenceReport,
 ) -> String {
+    render_linked_person_view(
+        person_subject,
+        links,
+        possible_renames,
+        &PersonLinkLines::default(),
+        report,
+    )
+}
+
+/// [`render_person_view`] with the person's published identity links (as
+/// this reader last checked them) under their repo links (ADR-085 §6).
+pub fn render_linked_person_view(
+    person_subject: &str,
+    links: &[ContributionLink],
+    possible_renames: &[String],
+    identity_links: &PersonLinkLines,
+    report: &InferenceReport,
+) -> String {
     if links.is_empty() {
         return render_unlinked_person(person_subject);
     }
     let mut out = render_person_links(person_subject, links);
     out.push_str(&render_possible_renames(possible_renames));
+    out.push_str(&identity_links.render_for(person_subject, "  "));
     out.push_str(&render_inference_report(report));
     if has_no_inference(report) {
         out.push_str(HOW_TO_ENABLE_INFERENCE);

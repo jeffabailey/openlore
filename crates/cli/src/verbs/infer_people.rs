@@ -13,10 +13,17 @@
 //! (KPI-5): every read is a local store read. My own adherence claims are read
 //! (`StoragePort::query_by_contributor` + `read_signed_claim`) so pairs I
 //! already signed are shown, never re-proposed (DDD-8).
+//!
+//! Each listed person's published identity links show under their block as
+//! this reader last checked them (ADR-085 §6, C-GDL-7): read through the
+//! check, link-candidate and lineage READ handles only — no check is written,
+//! purged or refreshed, and GitHub is never asked. Which person a link
+//! belongs to is the pure U-6 join (`claim_domain::identity_link`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, Result};
+use claim_domain::identity_link::{links_of_person, ListedLink, PersonKey};
 use claim_domain::{Cid, ClaimReference, ReferenceType};
 use ports::{ContributionLink, LinkFilter, PageRequest, StoreReadError};
 use scraper_domain::{
@@ -25,7 +32,8 @@ use scraper_domain::{
     RepoClaim, ADHERES_TO_PHILOSOPHY,
 };
 
-use crate::render::{render_flagged_inference_report, render_person_derived_from};
+use crate::render::{render_linked_inference_report, render_person_derived_from, PersonLinkLines};
+use crate::verbs::identity_reads::read_shown_links;
 use crate::verbs::sign_batch::{self, SignableCandidate};
 use crate::wiring::Wiring;
 
@@ -58,11 +66,21 @@ pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome
         min_repos: args.min_repos.unwrap_or(0),
     };
     let (report, links) = read_inference(wiring, &filter)?;
+    let people: BTreeSet<&str> = report
+        .candidates
+        .iter()
+        .map(|numbered| numbered.candidate.person_subject())
+        .collect();
+    let identity_links = read_person_link_lines(wiring, people, &links)?;
     let outcome = sign_batch::list_or_sign(
         wiring,
         &person_signables(&report),
         args.sign.as_deref(),
-        render_flagged_inference_report(&report, &candidate_renames(&report, &links)),
+        render_linked_inference_report(
+            &report,
+            &candidate_renames(&report, &links),
+            &identity_links,
+        ),
     )?;
     Ok(InferPeopleOutcome {
         exit_code: outcome.exit_code,
@@ -114,6 +132,67 @@ fn candidate_renames(
         })
         .filter(|(_, others)| !others.is_empty())
         .collect()
+}
+
+/// The published identity links of each of `people` (person subjects), as
+/// this reader last checked them — read offline through the READ handles
+/// only; nothing is read when there is nobody to show. Shared with the
+/// `scrape github <user>` / `scrape person` person view.
+pub(crate) fn read_person_link_lines<'a>(
+    wiring: &Wiring,
+    people: impl IntoIterator<Item = &'a str>,
+    contribution_links: &[ContributionLink],
+) -> Result<PersonLinkLines> {
+    let people: Vec<&str> = people.into_iter().collect();
+    let now = wiring.clock.now_utc();
+    if people.is_empty() {
+        return Ok(PersonLinkLines {
+            by_person: BTreeMap::new(),
+            now,
+        });
+    }
+    let shown = read_shown_links(
+        wiring.identity_link_checks.as_ref(),
+        wiring.link_candidates.as_ref(),
+        wiring.link_lineage.as_ref(),
+        now,
+    )?;
+    Ok(PersonLinkLines {
+        by_person: links_by_person(&people, contribution_links, &shown),
+        now,
+    })
+}
+
+/// Each person's shown links (U-6), keyed by person subject; people with
+/// none are left out. Pure.
+fn links_by_person(
+    people: &[&str],
+    contribution_links: &[ContributionLink],
+    shown: &[ListedLink],
+) -> BTreeMap<String, Vec<ListedLink>> {
+    people
+        .iter()
+        .map(|person| {
+            let key = person_key(person, contribution_links);
+            (person.to_string(), links_of_person(shown, &key))
+        })
+        .filter(|(_, listed)| !listed.is_empty())
+        .collect()
+}
+
+/// A person row's join key: the GitHub account ids its contribution links
+/// carry, else its login (U-6). Pure.
+fn person_key(person_subject: &str, contribution_links: &[ContributionLink]) -> PersonKey {
+    let login = person_subject
+        .strip_prefix("github:")
+        .unwrap_or(person_subject);
+    PersonKey::of(
+        login,
+        contribution_links
+            .iter()
+            .filter(|link| link.person_subject.eq_ignore_ascii_case(person_subject))
+            .map(|link| link.github_user_id),
+    )
 }
 
 /// Every signed claim (own + peer) about each linked repo, in ANY letter case

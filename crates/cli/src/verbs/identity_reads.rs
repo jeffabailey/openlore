@@ -7,12 +7,17 @@
 //! in `claim_domain::identity_link`; this module only reads and adapts.
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
-    active_link_records, active_links, link_predicate, links_to_recheck, ClaimFields,
-    GithubObservation, IdentityLink, LinkLifecycle, LinkRecord, ReaderLink, StoredClaim,
+    active_link_records, active_links, link_predicate, link_view, links_to_recheck, listed_links,
+    ClaimFields, GithubObservation, IdentityLink, LatestCheck, LinkLifecycle, LinkRecord,
+    ListedLink, ReaderLink, StoredClaim,
 };
 use claim_domain::{ClaimLineage, SignedClaim};
-use ports::{GithubAccountProfile, LinkCandidate, LinkCandidateReadPort, LinkLineageReadPort};
+use ports::{
+    CheckFilter, GithubAccountProfile, IdentityLinkCheckReadPort, LinkCandidate,
+    LinkCandidateReadPort, LinkCheck, LinkLineageReadPort,
+};
 
 /// The link candidates in the store and every stored claim referencing one.
 pub struct StoredLinkLineage {
@@ -72,6 +77,42 @@ impl StoredLinkLineage {
         let lineages: Vec<ClaimLineage<'_>> = self.referrers.iter().map(referrer_lineage).collect();
         decision(&stored, &lineages)
     }
+}
+
+/// One recorded check as the pure link view reads it.
+pub(crate) fn latest_of(check: LinkCheck) -> LatestCheck {
+    LatestCheck {
+        subject_did: check.subject_did,
+        user_id: check.github_user_id,
+        login_seen: check.login_seen,
+        verdict: check.verdict,
+        checked_at: check.checked_at,
+    }
+}
+
+/// Every link as `identity list` shows it as of `now`, offline: the stored
+/// lineage, this reader's own checks and `link_view`, with the records
+/// stating each. Read-only — no check is written, purged or refreshed.
+pub(crate) fn read_shown_links(
+    checks: &dyn IdentityLinkCheckReadPort,
+    claims: &dyn LinkCandidateReadPort,
+    lineage: &dyn LinkLineageReadPort,
+    now: DateTime<Utc>,
+) -> Result<Vec<ListedLink>> {
+    let stored = StoredLinkLineage::read(claims, lineage)?;
+    let links = stored.reader_links();
+    if links.is_empty() {
+        return Ok(Vec::new());
+    }
+    let latest: Vec<LatestCheck> = checks
+        .latest_checks(&CheckFilter::All, now)?
+        .into_iter()
+        .map(latest_of)
+        .collect();
+    Ok(listed_links(
+        link_view(&links, &latest, now),
+        &stored.active_link_records(),
+    ))
 }
 
 /// One candidate as the pure projection reads it.

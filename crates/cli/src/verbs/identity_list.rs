@@ -20,28 +20,16 @@ use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
     is_in_scope, link_view, listed_links, LatestCheck, ReaderLink, RecheckScope,
 };
-use ports::{
-    CheckFilter, IdentityLinkCheckReadPort, LinkCandidateReadPort, LinkCheck, LinkLineageReadPort,
-};
+use ports::{CheckFilter, IdentityLinkCheckReadPort, LinkCandidateReadPort, LinkLineageReadPort};
 
 use crate::render::{render_linked_identities, render_no_linked_identities};
-use crate::verbs::identity_reads::StoredLinkLineage;
+use crate::verbs::identity_reads::{latest_of, StoredLinkLineage};
 
 /// The narrow read handles `identity list` holds.
 pub struct IdentityListHandles<'a> {
     pub checks: &'a dyn IdentityLinkCheckReadPort,
     pub claims: &'a dyn LinkCandidateReadPort,
     pub lineage: &'a dyn LinkLineageReadPort,
-}
-
-fn latest_of(check: LinkCheck) -> LatestCheck {
-    LatestCheck {
-        subject_did: check.subject_did,
-        user_id: check.github_user_id,
-        login_seen: check.login_seen,
-        verdict: check.verdict,
-        checked_at: check.checked_at,
-    }
 }
 
 /// The checks a listing within `scope` needs: one person's, or everyone's.

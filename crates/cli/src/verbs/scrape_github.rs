@@ -46,12 +46,12 @@ use scraper_domain::{
 
 use crate::render::{
     plural_suffix, render_auth_report, render_candidate_list, render_contributors_block,
-    render_contributors_not_recorded, render_new_inferred_candidates_hint,
-    render_no_contributors_requested, render_person_view, render_public_data_banner,
-    render_shared_contributors,
+    render_contributors_not_recorded, render_linked_person_view,
+    render_new_inferred_candidates_hint, render_no_contributors_requested,
+    render_public_data_banner, render_shared_contributors,
 };
 use crate::verbs::claim_publish::build_tokio_runtime;
-use crate::verbs::infer_people::{person_signables, read_inference_report};
+use crate::verbs::infer_people::{person_signables, read_inference_report, read_person_link_lines};
 use crate::verbs::sign_batch::{self, SignableCandidate};
 use crate::wiring::Wiring;
 
@@ -184,10 +184,12 @@ pub(crate) fn person_view(
             min_repos: 0,
         },
     )?;
-    out.push_str(&render_person_view(
+    let identity_links = read_person_link_lines(wiring, [person.as_str()], &all_links)?;
+    out.push_str(&render_linked_person_view(
         person.as_str(),
         &links,
         &renames,
+        &identity_links,
         &report,
     ));
     // DDD-12 / DDD-13: the SAME builder + sign batch `infer people --person
