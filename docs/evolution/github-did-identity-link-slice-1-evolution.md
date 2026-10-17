@@ -173,7 +173,7 @@ applies each mutant's diff in a worktree and runs the relevant `cli` tests.
 ## Try it
 
 ```sh
-openlore identity link github <login>          # preview; writes nothing
+openlore identity link github <login>          # preview, then asks; only `y` publishes
 openlore identity link github <login> --yes    # bio must name your DID
 openlore identity list                          # link + latest verdict and age
 openlore identity verify --github <login>       # re-check; appends a check
