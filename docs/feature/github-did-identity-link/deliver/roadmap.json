@@ -2,10 +2,10 @@
   "roadmap": {
     "project_id": "github-did-identity-link",
     "created_at": "2026-10-15T00:00:00Z",
-    "total_steps": 17,
-    "scope": "SLICE 1: claim_domain::identity_link core, identity link/verify/list/forget, v7 checks + read/write/purge ports, GithubPort::read_person_by_id + DD-GDL-11 contract test, reserved-predicate guard (claim counter exempt, D-b), GDL-D13 check-arch rules. SLICE 2 (phase 02): readers — identity list lineage, age hint, record IDs and --did; scorer drops sameAs; infer people and person-scrape link lines (scrape refreshes checks); search label; ADR-084 peer-pull fixture."
+    "total_steps": 22,
+    "scope": "SLICE 1: claim_domain::identity_link core, identity link/verify/list/forget, v7 checks + read/write/purge ports, GithubPort::read_person_by_id + DD-GDL-11 contract test, reserved-predicate guard (claim counter exempt, D-b), GDL-D13 check-arch rules. SLICE 2 (phase 02): readers — identity list lineage, age hint, record IDs and --did; scorer drops sameAs; infer people and person-scrape link lines (scrape refreshes checks); search label; ADR-084 peer-pull fixture. SLICE 3 (phase 03): review app — \"Publish this link\" (preview + confirm, each from its own fresh GitHub read) and \"Retract this link\" as self-attested records; prove_ownership delegates to the shared identity_link core; review-app reserved-predicate guard."
   },
-  "total_steps": 17,
+  "total_steps": 22,
   "conventions": {
     "paradigm": "ADR-007: decisions pure in claim-domain; adapters and cli verbs do I/O only.",
     "test_paradigm": "Acceptance: example-based subprocess. Pure core: proptest against the CORE oracles. Adapters: real DuckDB / real HTTP adapter against FakeGithubAccounts, never mocked.",
@@ -872,13 +872,265 @@
           "prerequisite": "Gate (review N2): the acceptance designer commits network_search_leaves_a_github_row_that_is_not_a_link_unlabelled (IR-16b) before this step's RED; it holds today and is a guard."
         }
       ]
+    },
+    {
+      "id": "03",
+      "name": "Slice-03 — review app: a verified owner publishes and retracts the self-attested link, each publish proven by a fresh read in the request; prove_ownership delegates to the shared core",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "A verified owner is offered \"Publish this link\"; its preview, built from a fresh GitHub read, shows the exact self-attested record and writes nothing; Cancel keeps the offer",
+          "description": "NEW routes/github_link.rs: a same-origin POST preview reads the profile itself, then check_link → ProvenLink → LinkDraft → a pure link plan (review-domain plans.rs), kept in the take-once plan store (U-21). /github shows the offer when github_links is verified (UI state only).",
+          "criteria": [
+            "RA-1a: the preview shows `<did> sameAs github:priyaraman`, the profile URL, the id URI, that the record is public, and that retracting withdraws it but does not erase it; no write attempt reaches the PDS.",
+            "RA-7: Cancel writes nothing and /github offers \"Publish this link\" again.",
+            "A preview whose fresh read does not prove the link builds no plan and stores nothing (review-domain property, literal oracles).",
+            "The link plan's record is the LinkDraft record that self_attested_link_record also returns for the same DID, observation and time; no second encoder.",
+            "check-arch fails when routes/github_link.rs names a GithubLinkPort method (github_link, record_verified_link, mark_link_unverified); a synthetic-violation test proves the rule.",
+            "identity_link_compose_only_via_proven_link passes unchanged: no `sameAs` literal in review-domain or the app."
+          ],
+          "test_file": "tests/acceptance/review_app_identity_link.rs",
+          "scenario_name": "priya_sees_exactly_what_her_link_will_publish_before_anything_is_written",
+          "scenario_fns": [
+            "review_app_identity_link::priya_sees_exactly_what_her_link_will_publish_before_anything_is_written",
+            "review_app_identity_link::leaving_the_link_preview_publishes_nothing_and_keeps_the_offer_open"
+          ],
+          "n_scenarios": [
+            "RA-1a",
+            "RA-7 (companion, U-30)",
+            "RA-3 (active guard)",
+            "review-domain link-plan property",
+            "check-arch synthetic violation"
+          ],
+          "green": [
+            "cargo test -p openlore-review-app --test review_app_identity_link -- priya_sees_exactly leaving_the_link_preview verifying_github_and_scanning",
+            "cargo test -p review-domain",
+            "cargo test -p openlore-review-app",
+            "cargo test -p cli --test identity_link_readers -- a_self_attested_link_pulled_from_a_peer",
+            "cargo test -p xtask",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver RA-1a. RA-7 fails today only at the missing button and needs only this step's offer and Cancel (U-30). The preview is a signed-in, same-origin POST because it reads GitHub and stores a plan. The login comes from the offer's form field; the proof is the fresh read, never the github_links row (C-GDL-10, ADR-085 §2, U-26). Preview and confirm reads spend the existing verify budget (ADR-076 §2). Plan storage per U-21. Preview refusals reuse ownership_message wording. IR-19 guards self_attested_link_record, which keeps its signature and stays a thin wrapper over LinkDraft.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-08"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_identity_link.rs",
+            "crates/review-domain/src/plans.rs",
+            "crates/review-domain/src/views/github.rs",
+            "crates/openlore-review-app/src/main.rs",
+            "crates/openlore-review-app/src/routes/github.rs",
+            "crates/openlore-review-app/src/routes/signin.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "files_to_create": [
+            "crates/openlore-review-app/src/routes/github_link.rs"
+          ],
+          "mutation_note": "Kill: a plan stored after a disproved read; the offer shown for an unverified link; the link route reading the private row (rule test)."
+        },
+        {
+          "id": "03-02",
+          "name": "Confirming re-reads GitHub in the same request and creates exactly the previewed self-attested link, read back by its CID; forged or sessionless confirms write nothing",
+          "description": "POST confirm (routes/github_link.rs) takes the plan once and reads the profile again. A pure review-domain decision admits the plan only when the fresh ProvenLink names its DID, login and account. Execution reuses the executor's create-only write and CID read-back.",
+          "criteria": [
+            "RA-1b: the repo holds one self-attested link (subject = author = Priya's bare DID, evidence [profile URL, id URI], confidence 10000, no signature, record key = recomputed CID); the page shows its exact at:// address; the confirm read the profile again; no forbidden write; logs name no DID, login or bio.",
+            "RA-6: a confirm with no page token or a forged one is 403 and writes nothing.",
+            "RA-8: server-side session expiry and a cleared cookie offer \"Sign in with Bluesky\"; an expired repo-host session shows \"Sign in again\"; no link in the repo.",
+            "RR-1a, RR-1b and RR-3 stay green.",
+            "Plan separation (U-21, U-24): restore_plan refuses any record with a reserved predicate, and the link confirm admits only a record that projects as the owner's link (review-domain property, literal oracles).",
+            "A failed write puts the plan back with its deadline, so Retry creates it once."
+          ],
+          "test_file": "tests/acceptance/review_app_identity_link.rs",
+          "scenario_name": "priyas_verified_github_account_is_publicly_linked_to_her_did_from_the_app",
+          "scenario_fns": [
+            "review_app_identity_link::priyas_verified_github_account_is_publicly_linked_to_her_did_from_the_app",
+            "review_app_identity_link::a_link_confirmation_that_did_not_come_from_priyas_own_page_is_refused",
+            "review_app_identity_link::an_ended_session_at_confirmation_publishes_nothing_and_asks_priya_to_sign_in_again",
+            "review_app_identity_link_readers::priyas_app_published_link_reaches_maria_as_priyas_unchecked_claim",
+            "review_app_identity_link_readers::once_maria_checks_it_herself_priyas_link_shows_as_priyas_github_account",
+            "review_app_identity_link_readers::a_link_of_priyas_found_in_sams_repository_never_links_priya"
+          ],
+          "n_scenarios": [
+            "RA-1b",
+            "RA-6 (companion, U-30)",
+            "RA-8 (companion, U-30)",
+            "RR-1a (guard)",
+            "RR-1b (guard)",
+            "RR-3 (guard)",
+            "review-domain plan-separation property"
+          ],
+          "green": [
+            "cargo test -p openlore-review-app --test review_app_identity_link",
+            "cargo test -p review-domain",
+            "cargo test -p openlore-review-app",
+            "cargo build -p openlore-review-app",
+            "cargo test -p cli --test review_app_identity_link_readers -- priyas_app_published once_maria_checks a_link_of_priyas_found",
+            "cargo test -p xtask",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver RA-1b. RA-6 and RA-8 fail today only at the missing button; they exercise signed_in_post and the executor's failure messages, reused unchanged (U-30). RR-1a/1b/3 passed while ignored (run 2026-10-17); they are un-ignored here as guards of the record shape the app now writes. The confirm decision is pure in review-domain over (plan, check_link result); the handler only reads, writes and renders. Log events `github.link.published` / `github.link.refused` carry labels only (U-29). One executor path: extend executor.rs for the link plan, no second create/read-back.",
+          "estimate_hours": 6,
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_identity_link.rs",
+            "tests/acceptance/review_app_identity_link_readers.rs",
+            "crates/review-domain/src/plans.rs",
+            "crates/review-domain/src/views/github.rs",
+            "crates/openlore-review-app/src/executor.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "crates/openlore-review-app/src/routes/github_link.rs",
+            "crates/openlore-review-app/src/routes/signin.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: executing without the confirm-time read; admitting a fresh proof of another login or account; the reserved-predicate refusal in restore_plan removed; no put-back on a failed write."
+        },
+        {
+          "id": "03-03",
+          "name": "A confirm whose fresh read no longer proves the link says the proof is gone and writes nothing; prove_ownership delegates its account and bio rules to the shared core",
+          "description": "The pure confirm decision maps a Disproved fresh check to a refusal with its own wording. prove_ownership keeps its signature and delegates the account rule (positive id, valid login) and the bio rule to claim_domain::identity_link, as check_link does (ADR-085 §1, U-25).",
+          "criteria": [
+            "RA-2: after the bio drops the DID, confirming says the proof is gone; nothing is written to the repo.",
+            "RR-2a: while GitHub still serves the old bio, the confirm publishes (the accepted ADR-085 §2 window).",
+            "RR-2b: after that window Maria's re-check reports did_missing, her list shows proof gone, and Priya's link is still in her repo, unretracted.",
+            "Every review-domain ownership property and the review_app_sign_in_and_ownership suite (incl. OW-4b, OW-4c) pass unchanged; verify wording is unchanged.",
+            "ownership.rs no longer tests account 0 or the login shape itself."
+          ],
+          "test_file": "tests/acceptance/review_app_identity_link.rs",
+          "scenario_name": "a_link_is_never_published_on_the_strength_of_an_old_verification",
+          "scenario_fns": [
+            "review_app_identity_link::a_link_is_never_published_on_the_strength_of_an_old_verification",
+            "review_app_identity_link_readers::priya_can_publish_her_link_in_the_minute_before_github_shows_her_bio_change",
+            "review_app_identity_link_readers::maria_sees_that_a_link_published_before_github_showed_priyas_bio_change_has_lost_its_proof"
+          ],
+          "n_scenarios": [
+            "RA-2",
+            "RR-2a (guard, U-30)",
+            "RR-2b (guard, U-30)",
+            "ownership properties + OW suite (guards)"
+          ],
+          "green": [
+            "cargo test -p openlore-review-app --test review_app_identity_link",
+            "cargo test -p openlore-review-app --test review_app_sign_in_and_ownership",
+            "cargo test -p openlore-review-app",
+            "cargo test -p review-domain",
+            "cargo test -p claim-domain",
+            "cargo build -p openlore-review-app",
+            "cargo test -p cli --test review_app_identity_link_readers",
+            "cargo test -p cli --test identity_link",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver RA-2. RR-2a/2b fail today only at the missing button and are expected green after 03-02. They are un-ignored here because they pin the other side of this step's rule: the confirm decides from the confirm-time read alone (U-30). U-25: check_link drops the DID a bio names, but the verify message for DifferentDid shows it (AC-002.3). So claim-domain exposes its private account rule (account_named_by), check_link and prove_ownership both call it, and prove_ownership keeps bio_verdict. The linked-id gate stays in prove_ownership. No signature change; the CLI identity suites guard check_link.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_identity_link.rs",
+            "tests/acceptance/review_app_identity_link_readers.rs",
+            "crates/claim-domain/src/identity_link.rs",
+            "crates/review-domain/src/ownership.rs",
+            "crates/review-domain/src/plans.rs",
+            "crates/review-domain/src/views/github.rs",
+            "crates/openlore-review-app/src/routes/github_link.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: confirming on the preview-time proof; a Disproved fresh read publishing; account 0 or an invalid login proving ownership."
+        },
+        {
+          "id": "03-04",
+          "name": "When GitHub cannot be read at confirm, nothing is published and Priya is told which trouble it was, never shown the app's token",
+          "description": "The pure confirm decision maps the read failure (rate limit, rejected token, outage, an answer naming no account) to link refusals with their own wording, each ending \"Nothing was published.\". The verify step's wording is unchanged (U-31).",
+          "criteria": [
+            "RA-5: a rate limit shows \"GitHub is rate-limiting us\" and a rejected token \"GitHub did not accept the app's access\", each with \"Nothing was published.\"; the app's token is not in the page HTML; no write attempt.",
+            "An answer naming no account at confirm publishes nothing (review-domain property over MalformedObservation).",
+            "Verify-step messages are unchanged (OW suites green)."
+          ],
+          "test_file": "tests/acceptance/review_app_identity_link.rs",
+          "scenario_name": "when_github_cannot_be_read_while_publishing_a_link_nothing_is_published",
+          "scenario_fns": [
+            "review_app_identity_link::when_github_cannot_be_read_while_publishing_a_link_nothing_is_published"
+          ],
+          "n_scenarios": [
+            "RA-5",
+            "review-domain unreadable-answer property"
+          ],
+          "green": [
+            "cargo test -p openlore-review-app --test review_app_identity_link",
+            "cargo test -p openlore-review-app --test review_app_sign_in_and_ownership",
+            "cargo test -p review-domain",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver RA-5. The handler passes the GithubError to review-domain unchanged; the mapping and the wording are pure (DD-GDL-13: the token is never echoed). A plan whose confirm read failed is not put back: a new preview proves again (not pinned by a scenario; the simpler path).",
+          "estimate_hours": 3,
+          "depends_on": [
+            "03-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_identity_link.rs",
+            "crates/review-domain/src/plans.rs",
+            "crates/review-domain/src/views/github.rs",
+            "crates/openlore-review-app/src/routes/github_link.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a rate limit read as a disproof; publishing after a 401; the two messages swapped."
+        },
+        {
+          "id": "03-05",
+          "name": "Priya withdraws her published link from the GitHub step: \"Retract this link\" adds one retraction by her and leaves the link record unchanged",
+          "description": "GET /github reads the owner's repo live and finds her Active link records with claim_domain::identity_link::active_link_records (fold, then select; U-22). \"Retract this link\" opens the shipped /retract preview for that record; its confirm adds the retraction (ADR-008, C-GDL-6).",
+          "criteria": [
+            "RA-4: the repo holds one more claim by Priya with a `retracts` reference to the link's record ID; the link record is still there, unchanged; create-only.",
+            "/github offers \"Retract this link\" only for an Active link record of the signed-in owner; a retracted or superseded one is not offered (review-domain property over live records, literal oracles).",
+            "When her repo cannot be read, /github still shows the Verify form and the publish offer, without a retract offer.",
+            "RA-1a..RA-8 stay green."
+          ],
+          "test_file": "tests/acceptance/review_app_identity_link.rs",
+          "scenario_name": "priya_withdraws_her_link_without_erasing_it",
+          "scenario_fns": [
+            "review_app_identity_link::priya_withdraws_her_link_without_erasing_it"
+          ],
+          "n_scenarios": [
+            "RA-4",
+            "review-domain active-link selection property"
+          ],
+          "green": [
+            "cargo test -p openlore-review-app --test review_app_identity_link",
+            "cargo test -p openlore-review-app",
+            "cargo test -p review-domain",
+            "cargo test -p claim-domain",
+            "cargo build -p openlore-review-app",
+            "cargo test -p cli --test review_app_identity_link_readers",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver RA-4. routes/retract.rs is reused unchanged: its live read already refuses a record that is not the owner's live claim; its no-op suggestion state change and its `retract.posted` count are accepted (U-28). The selection sits in review-domain/src/published.rs beside live_claims and calls active_link_records with the ADR-071 self-attested provenance; no second lineage rule (slice-2 lessons 1 and 3). github_step becomes async (resolve_did, list_repo_claims). Slice-3 closure: all 9 RA-* and 5 RR-* active.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_identity_link.rs",
+            "crates/review-domain/src/published.rs",
+            "crates/review-domain/src/views/github.rs",
+            "crates/openlore-review-app/src/routes/github.rs",
+            "crates/openlore-review-app/src/routes/signin.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a retracted link offered for retraction; selecting before folding; another DID's record offered."
+        }
+      ]
     }
   ],
   "deferred_to_later_slices": {
     "identity_link.rs": "none; the fixture regenerator is not a scenario and stays ignored.",
-    "review_app_identity_link.rs": "all 9 RA-* (slice 3); RA-3 stays active.",
-    "review_app_identity_link_readers.rs": "all 5 RR-* (slice 3).",
-    "review_app_suggestion_guard": "ADR-084 §4 review-app guard: slice 3."
+    "review_app_identity_link.rs": "none after 03-05 (all 9 RA-* active).",
+    "review_app_identity_link_readers.rs": "none after 03-03 (all 5 RR-* active).",
+    "review_app_suggestion_guard": "03-02 (U-24).",
+    "review_app_already_linked_offer": "not scheduled; no scenario (U-23).",
+    "review_app_profile_and_share_exclude_links": "not scheduled; no scenario, needs the user (U-27).",
+    "viewer_subject_page_line": "optional slice 4 (design wave-decisions Slices)."
   },
   "implementation_scope": {
     "source_directories": [
@@ -888,6 +1140,7 @@
       "crates/adapter-duckdb/src/",
       "crates/adapter-github/src/",
       "crates/cli/src/",
+      "crates/openlore-review-app/src/",
       "xtask/src/"
     ],
     "test_directories": [
@@ -917,6 +1170,9 @@
       "by": "nw-software-crafter-reviewer (2 rounds) + orchestrator",
       "date": "2026-10-17",
       "note": "Round 2 rejected on N1-N7 (text/file-list); applied by the orchestrator under the max-2 rule, no re-design."
+    },
+    "phase_03": {
+      "status": "pending_review"
     }
   }
 }
