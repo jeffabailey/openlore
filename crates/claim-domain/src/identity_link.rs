@@ -900,4 +900,57 @@ mod tests {
             "GitHub answered without a valid account number and login"
         );
     }
+
+    /// The link a self-attested record projects when its id URI ends in `id`.
+    fn link_naming_id(id: &str) -> Option<IdentityLink> {
+        let evidence = [
+            "https://github.com/priyaraman".to_string(),
+            format!("{ID_URI_PREFIX}{id}"),
+        ];
+        let fields = ClaimFields {
+            author: DID,
+            subject: DID,
+            predicate: LINK_PREDICATE,
+            object: "github:priyaraman",
+            evidence: &evidence,
+        };
+        let provenance = Provenance::SelfAttested {
+            repo_did: Did(DID.to_string()),
+        };
+        project(fields, &provenance)
+    }
+
+    /// An id URI names an account only by plain decimal digits: a signed
+    /// number such as `+5` is malformed, so the record is no link.
+    #[test]
+    fn a_signed_account_number_is_no_link() {
+        assert_eq!(link_naming_id("+5"), None);
+        assert_eq!(link_naming_id("5").map(|link| link.user_id), Some(5));
+    }
+
+    proptest::proptest! {
+        /// Universe: non-empty id-URI tails holding at least one non-digit.
+        #[test]
+        fn an_id_with_a_non_digit_is_no_link(
+            id in "[0-9]{0,6}[^0-9][0-9]{0,6}",
+        ) {
+            proptest::prop_assert_eq!(link_naming_id(&id), None);
+        }
+    }
+
+    /// An account scope covers a renamed link by the login it was signed
+    /// under and by the login last seen, case-insensitively, and no other.
+    #[test]
+    fn an_account_scope_covers_a_renamed_link_by_either_login() {
+        let link = IdentityLink {
+            did: DID.to_string(),
+            login: "oldname".to_string(),
+            user_id: 4_210_001,
+        };
+        let covers =
+            |login: &str| is_in_scope(&RecheckScope::Account(login.to_string()), &link, "newname");
+        assert!(covers("newname"));
+        assert!(covers("OLDNAME"));
+        assert!(!covers("someoneelse"));
+    }
 }
