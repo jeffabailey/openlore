@@ -5,7 +5,8 @@
 //! link-candidate and lineage read handles — never the whole `Wiring`, no
 //! check write or purge, no signing, no GitHub. The link lineage is read as
 //! `identity verify` reads it (`identity_reads`), so a link its author
-//! retracted or superseded is never listed (ADR-085 §5, ADR-060).
+//! retracted or superseded is never listed (ADR-085 §5, ADR-060). The read
+//! itself is `identity_reads::read_listed_links`, shared with the person views.
 //!
 //! `--did` narrows the list to one person (F7): links are selected by the
 //! same bare-DID rule `identity verify --did` uses (`is_in_scope`), and only
@@ -17,13 +18,11 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use claim_domain::identity_link::{
-    is_in_scope, link_view, listed_links, LatestCheck, ReaderLink, RecheckScope,
-};
-use ports::{CheckFilter, IdentityLinkCheckReadPort, LinkCandidateReadPort, LinkLineageReadPort};
+use claim_domain::identity_link::RecheckScope;
+use ports::{IdentityLinkCheckReadPort, LinkCandidateReadPort, LinkLineageReadPort};
 
 use crate::render::{render_linked_identities, render_no_linked_identities};
-use crate::verbs::identity_reads::{latest_of, StoredLinkLineage};
+use crate::verbs::identity_reads::read_listed_links;
 
 /// The narrow read handles `identity list` holds.
 pub struct IdentityListHandles<'a> {
@@ -32,40 +31,15 @@ pub struct IdentityListHandles<'a> {
     pub lineage: &'a dyn LinkLineageReadPort,
 }
 
-/// The checks a listing within `scope` needs: one person's, or everyone's.
-fn check_filter_of(scope: &RecheckScope) -> CheckFilter {
-    match scope {
-        RecheckScope::Person(did) => CheckFilter::Subject(claim_domain::bare_did(did).to_string()),
-        RecheckScope::Everyone | RecheckScope::Account(_) => CheckFilter::All,
-    }
-}
-
 /// Run `identity list` within `scope` as of `now`; returns the stdout to print.
 pub fn run(
     handles: &IdentityListHandles<'_>,
     scope: &RecheckScope,
     now: DateTime<Utc>,
 ) -> Result<String> {
-    let lineage = StoredLinkLineage::read(handles.claims, handles.lineage)?;
-    let links: Vec<ReaderLink> = lineage
-        .reader_links()
-        .into_iter()
-        .filter(|reader| is_in_scope(scope, &reader.link, &reader.link.login))
-        .collect();
-    if links.is_empty() {
+    let listed = read_listed_links(handles.checks, handles.claims, handles.lineage, scope, now)?;
+    if listed.is_empty() {
         return Ok(render_no_linked_identities());
     }
-    let latest: Vec<LatestCheck> = handles
-        .checks
-        .latest_checks(&check_filter_of(scope), now)?
-        .into_iter()
-        .map(latest_of)
-        .collect();
-    Ok(render_linked_identities(
-        &listed_links(
-            link_view(&links, &latest, now),
-            &lineage.active_link_records(),
-        ),
-        now,
-    ))
+    Ok(render_linked_identities(&listed, now))
 }

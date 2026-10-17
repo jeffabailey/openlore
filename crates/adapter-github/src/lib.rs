@@ -444,15 +444,6 @@ impl GithubPort for GithubAdapter {
 }
 
 impl GithubAdapter {
-    /// Issue one PUBLIC GET against `{api_base}{path}`, attaching the
-    /// optional `Authorization: token <PAT>` header (the ONLY path the PAT
-    /// bytes leave the adapter — never logged/echoed; US-SCR-004). The HTTP
-    /// status classifies refusals into the railway-oriented [`GithubError`]
-    /// surface; a 2xx body is returned as parsed JSON for the caller to
-    /// reshape.
-    ///
-    /// `path` is always on the public allowlist (`/repos/...` or
-    /// `/users/...`); there is no private surface (WD-51 / I-SCR-2).
     /// Replace the resolved-user account (`None` clears it).
     fn remember_resolved_account(&self, account: Option<(String, GithubAccountProfile)>) {
         if let Ok(mut resolved) = self.resolved_account.lock() {
@@ -485,6 +476,15 @@ impl GithubAdapter {
         client::parse_account_profile(&body).map_err(GithubError::ApiShape)
     }
 
+    /// Issue one PUBLIC GET against `{api_base}{path}`, attaching the
+    /// optional `Authorization: token <PAT>` header (the ONLY path the PAT
+    /// bytes leave the adapter — never logged/echoed; US-SCR-004). The HTTP
+    /// status classifies refusals into the railway-oriented [`GithubError`]
+    /// surface; a 2xx body is returned as parsed JSON for the caller to
+    /// reshape.
+    ///
+    /// `path` is always on the public allowlist (`/repos/...` or
+    /// `/users/...`); there is no private surface (WD-51 / I-SCR-2).
     async fn get_public(&self, path: &str, target: &str) -> Result<serde_json::Value, GithubError> {
         let url = format!("{}{}", self.api_base, path);
         let response = self.send_get(&url).await?;

@@ -131,6 +131,9 @@ pub fn render_person_candidates(
 /// How deep a candidate block's detail lines are indented.
 const CANDIDATE_INDENT: &str = "        ";
 
+/// How deep a person view's identity-link lines are indented.
+const PERSON_VIEW_INDENT: &str = "  ";
+
 fn render_person_candidate(
     number: usize,
     numbered: &NumberedCandidate,
@@ -313,11 +316,11 @@ pub fn render_linked_person_view(
 ) -> String {
     if links.is_empty() {
         return render_unlinked_person(person_subject)
-            + &identity_links.render_for(person_subject, "  ");
+            + &identity_links.render_for(person_subject, PERSON_VIEW_INDENT);
     }
     let mut out = render_person_links(person_subject, links);
     out.push_str(&render_possible_renames(possible_renames));
-    out.push_str(&identity_links.render_for(person_subject, "  "));
+    out.push_str(&identity_links.render_for(person_subject, PERSON_VIEW_INDENT));
     out.push_str(&render_inference_report(report));
     if has_no_inference(report) {
         out.push_str(HOW_TO_ENABLE_INFERENCE);

@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, Result};
-use claim_domain::identity_link::{links_of_person, ListedLink, PersonKey};
+use claim_domain::identity_link::{links_of_person, ListedLink, PersonKey, RecheckScope};
 use claim_domain::{Cid, ClaimReference, ReferenceType};
 use ports::{ContributionLink, LinkFilter, PageRequest, StoreReadError};
 use scraper_domain::{
@@ -33,7 +33,7 @@ use scraper_domain::{
 };
 
 use crate::render::{render_linked_inference_report, render_person_derived_from, PersonLinkLines};
-use crate::verbs::identity_reads::read_shown_links;
+use crate::verbs::identity_reads::read_listed_links;
 use crate::verbs::sign_batch::{self, SignableCandidate};
 use crate::wiring::Wiring;
 
@@ -151,10 +151,11 @@ pub(crate) fn read_person_link_lines<'a>(
             now,
         });
     }
-    let shown = read_shown_links(
+    let shown = read_listed_links(
         wiring.identity_link_checks.as_ref(),
         wiring.link_candidates.as_ref(),
         wiring.link_lineage.as_ref(),
+        &RecheckScope::Everyone,
         now,
     )?;
     Ok(PersonLinkLines {
