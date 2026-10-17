@@ -1826,13 +1826,20 @@ pub fn scan_identity_verify_holds_no_storage_or_signing_handle(
 /// The review app's link preview route and what it may not name: the stored
 /// GitHub verification (the port and its methods). The proof of a link is
 /// the route's own fresh read, never the `github_links` row (C-GDL-10,
-/// ADR-085 §2, U-26).
+/// ADR-085 §2, U-26). Nor the claim-publish path (F-03, 03-05): the link
+/// confirm admits its plan only through `restore_link_plan`, never
+/// `restore_plan`, the queue's `owner_can_publish` gate, or the suggestion
+/// state change of `mark_published` / `change_state`.
 const LINK_PREVIEW_ROUTE_SOURCE: &str = "crates/openlore-review-app/src/routes/github_link.rs";
 const LINK_PREVIEW_ROUTE_FORBIDDEN_TOKENS: &[&str] = &[
     "GithubLinkPort",
     "github_link",
     "record_verified_link",
     "mark_link_unverified",
+    "restore_plan",
+    "owner_can_publish",
+    "mark_published",
+    "change_state",
 ];
 
 /// Effect shell for `link_preview_proves_from_a_fresh_read`.
@@ -1849,9 +1856,10 @@ pub fn scan_link_preview_proves_from_a_fresh_read(
             .into_iter()
             .map(|finding| {
                 format!(
-                    "{LINK_PREVIEW_ROUTE_SOURCE}: {finding} — the link preview proves the link \
-                     from its own fresh GitHub read and never reads the stored verification \
-                     (link_preview_proves_from_a_fresh_read, C-GDL-10 / U-26)"
+                    "{LINK_PREVIEW_ROUTE_SOURCE}: {finding} — the link preview and confirm \
+                     prove the link from their own fresh GitHub read, never read the stored \
+                     verification and never take the claim-publish path \
+                     (link_preview_proves_from_a_fresh_read, C-GDL-10 / U-26 / F-03)"
                 )
             })
             .collect(),
@@ -4377,7 +4385,12 @@ mod tests {
              use ports::{GithubPort, PublishPlanPort};\n\
              fn row(links: &dyn GithubLinkPort) { links.github_link(\"d\"); }\n\
              fn keep(app: &App) { app.links.record_verified_link(\"d\", \"l\", 1, t); }\n\
-             fn lapse(app: &App) { app.links.mark_link_unverified(\"d\", \"v\"); }\n",
+             fn lapse(app: &App) { app.links.mark_link_unverified(\"d\", \"v\"); }\n\
+             use review_domain::link_plan::restore_link_plan;\n\
+             fn as_claim(d: &str, s: &P) { restore_plan(d, s); }\n\
+             fn gate(app: &App, d: &str, k: &K) -> bool { owner_can_publish(app, d, k) }\n\
+             fn moved(app: &App, p: &P) { mark_published(app, p); }\n\
+             fn state(app: &App) { app.review_write.change_state(a, b, c, d, e); }\n",
         )
         .expect("write");
         let findings = scan_link_preview_proves_from_a_fresh_read(violating.path()).expect("scan");
@@ -4392,7 +4405,7 @@ mod tests {
                 "{token}: {findings:?}"
             );
         }
-        for allowed in ["GithubPort", "PublishPlanPort"] {
+        for allowed in ["GithubPort", "PublishPlanPort", "restore_link_plan"] {
             assert!(
                 !findings.iter().any(|f| f.contains(&format!("`{allowed}`"))),
                 "{allowed} is held by design: {findings:?}"

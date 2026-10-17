@@ -9,7 +9,8 @@
 //! own key.
 
 use ports::claim_domain::identity_link::{
-    check_link, project, ClaimFields, GithubObservation, LinkDraft, ProofCheck, ProvenLink,
+    check_link, project, CheckVerdict, ClaimFields, GithubObservation, LinkDraft,
+    MalformedObservation, ProofCheck, ProvenLink,
 };
 use ports::claim_domain::{
     bare_did, claim_record_json, Did, Provenance, RecordOrigin, SelfAttestedClaim, UnsignedClaim,
@@ -35,6 +36,15 @@ impl LinkPlan {
 
     pub fn claim(&self) -> &UnsignedClaim {
         self.link.unsigned()
+    }
+
+    /// The GitHub login the link names (`github:<login>`): the account a
+    /// confirm reads again.
+    pub fn login(&self) -> &str {
+        self.claim()
+            .object
+            .strip_prefix("github:")
+            .unwrap_or_default()
     }
 
     /// The plan's key: the record's own triple (F-03), the rule
@@ -112,6 +122,40 @@ pub fn link_preview(
         }
     };
     link_plan(owner_did, &proven, composed_at).map_err(|_| OwnershipRefusal::GithubUnavailable)
+}
+
+/// Why a link confirm writes nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkConfirmRefusal {
+    /// The confirm-time read no longer proves the plan's DID.
+    ProofGone(CheckVerdict),
+    /// GitHub's answer named no account: it proves nothing (fail closed).
+    Unreadable,
+    /// The confirm-time proof names another DID, login or account than the
+    /// previewed plan.
+    IdentityChanged,
+}
+
+/// The link confirm (RA-1b, RR-2a, C-GDL-10): admit `plan` only when the
+/// confirm-time check `fresh` proves exactly the plan's DID, login and
+/// account. The decision is the confirm-time read alone; a stored
+/// verification is never consulted. Pure: nothing is written.
+pub fn confirm_link(
+    plan: LinkPlan,
+    fresh: Result<ProofCheck, MalformedObservation>,
+) -> Result<LinkPlan, LinkConfirmRefusal> {
+    match fresh {
+        Ok(ProofCheck::Verified(proven)) if proves_the_plan(&plan, &proven) => Ok(plan),
+        Ok(ProofCheck::Verified(_)) => Err(LinkConfirmRefusal::IdentityChanged),
+        Ok(ProofCheck::Disproved { verdict, .. }) => Err(LinkConfirmRefusal::ProofGone(verdict)),
+        Err(MalformedObservation) => Err(LinkConfirmRefusal::Unreadable),
+    }
+}
+
+/// The fresh proof composes exactly the plan's link: the same DID, login and
+/// account (the one encoder, at the plan's own composition time).
+fn proves_the_plan(plan: &LinkPlan, proven: &ProvenLink) -> bool {
+    LinkDraft::new(proven, &plan.claim().composed_at).claim() == plan.claim()
 }
 
 /// The facts of the fresh read the ownership proof explains a refusal by.
@@ -356,6 +400,67 @@ mod tests {
                 }
                 Err(_) => {}
             }
+        }
+
+        /// Universe: owner DIDs × another DID × two GitHub accounts × the
+        /// confirm-time check (proving the plan's own link, the same account
+        /// for another DID, another login, another account number, a
+        /// disproving bio, an unreadable answer). The confirm admits the
+        /// plan exactly when the fresh proof names its DID, login and
+        /// account; any other proof is IdentityChanged; a disproof or an
+        /// unreadable answer is never admitted.
+        #[test]
+        fn a_link_confirm_admits_the_plan_only_when_the_fresh_read_proves_exactly_its_link(
+            did in arb_did(), other in arb_did(), account in arb_account(),
+            other_account in arb_account(), case in 0usize..6,
+        ) {
+            prop_assume!(did != other);
+            prop_assume!(account.0 != other_account.0 && account.1 != other_account.1);
+            let plan = link_plan(&did, &proven(&did, &account), COMPOSED_AT).expect("link plan");
+            let (login, user_id) = account.clone();
+            let fresh = match case {
+                0 => Ok(ProofCheck::Verified(proven(&did, &account))),
+                1 => Ok(ProofCheck::Verified(proven(&other, &account))),
+                2 => Ok(ProofCheck::Verified(proven(&did, &(other_account.0.clone(), user_id)))),
+                3 => Ok(ProofCheck::Verified(proven(&did, &(login.clone(), other_account.1)))),
+                4 => check_link(&Did(did.clone()), &GithubObservation {
+                    login: login.clone(), user_id, bio: Some("no DID here".into()),
+                }),
+                _ => check_link(&Did(did.clone()), &GithubObservation {
+                    login: login.clone(), user_id: 0, bio: Some(format!("my DID: {did}")),
+                }),
+            };
+
+            let confirmed = confirm_link(plan.clone(), fresh);
+
+            match case {
+                0 => prop_assert_eq!(confirmed, Ok(plan)),
+                1..=3 => prop_assert_eq!(confirmed, Err(LinkConfirmRefusal::IdentityChanged)),
+                4 => prop_assert_eq!(confirmed, Err(LinkConfirmRefusal::ProofGone(CheckVerdict::DidMissing))),
+                _ => prop_assert_eq!(confirmed, Err(LinkConfirmRefusal::Unreadable)),
+            }
+        }
+
+        /// C-6: a stored link plan is never a publish-queue entry. Its key
+        /// carries the reserved link predicate, so no claim draft the queue
+        /// could publish shares it, and neither confirm path for claims
+        /// restores it.
+        #[test]
+        fn a_stored_link_plan_never_stands_for_a_publish_queue_entry(
+            did in arb_did(), account in arb_account(),
+        ) {
+            let plan = link_plan(&did, &proven(&did, &account), COMPOSED_AT).expect("link plan");
+            let stored = plan.stored();
+            let as_queue_entry = ClaimDraft {
+                key: stored.key.clone(),
+                evidence: plan.claim().evidence.clone(),
+                confidence_bp: 10_000,
+            };
+            prop_assert_eq!(
+                publish_plan(&did, &as_queue_entry, COMPOSED_AT).err(),
+                Some(PlanError::ReservedPredicate)
+            );
+            prop_assert!(restore_plan(&did, &stored).is_err());
         }
 
         /// One encoder, no copy: the plan's record is exactly the record

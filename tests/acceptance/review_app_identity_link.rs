@@ -52,7 +52,6 @@ fn priya_sees_exactly_what_her_link_will_publish_before_anything_is_written() {
 ///   And the app's logs name no DID, no login and no bio
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn priyas_verified_github_account_is_publicly_linked_to_her_did_from_the_app() {
     let world = ReviewWorld::new();
     let mut browser = given_github_verified(&world, Persona::Priya);
@@ -265,7 +264,6 @@ fn when_github_cannot_be_read_while_publishing_a_link_nothing_is_published() {
 ///     | a page token Priya never saw   |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_link_confirmation_that_did_not_come_from_priyas_own_page_is_refused() {
     let world = ReviewWorld::new();
     let mut browser = given_github_verified(&world, Persona::Priya);
@@ -692,7 +690,6 @@ fn after_a_failed_link_write_retry_publishes_the_link_exactly_once() {
 ///   And the share draft quotes her dependency-pinning claim and not her link
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn priyas_published_link_stays_off_her_public_profile_and_her_share_draft() {
     let world = ReviewWorld::new();
     let mut browser = given_published(

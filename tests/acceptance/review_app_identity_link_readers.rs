@@ -104,7 +104,6 @@ fn priya_published_inside_the_cache_window(world: &ReviewWorld) -> StoredRecord 
 ///   Then she sees Priya's claim on github:priyaraman, not checked
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn priyas_app_published_link_reaches_maria_as_priyas_unchecked_claim() {
     let (env, _net, github) = maria_pulled_priyas_app_link();
 
@@ -129,7 +128,6 @@ fn priyas_app_published_link_reaches_maria_as_priyas_unchecked_claim() {
 ///   And her linked identities show Priya as github:priyaraman, verified
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn once_maria_checks_it_herself_priyas_link_shows_as_priyas_github_account() {
     let (env, _net, github) = maria_pulled_priyas_app_link();
 
@@ -155,7 +153,6 @@ fn once_maria_checks_it_herself_priyas_link_shows_as_priyas_github_account() {
 ///   Then her repo holds the link
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn priya_can_publish_her_link_in_the_minute_before_github_shows_her_bio_change() {
     let world = ReviewWorld::new();
 
@@ -176,7 +173,6 @@ fn priya_can_publish_her_link_in_the_minute_before_github_shows_her_bio_change()
 ///   And Priya's link is still in her repo, unretracted
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn maria_sees_that_a_link_published_before_github_showed_priyas_bio_change_has_lost_its_proof() {
     let world = ReviewWorld::new();
     let link = priya_published_inside_the_cache_window(&world);
@@ -218,7 +214,6 @@ fn maria_sees_that_a_link_published_before_github_showed_priyas_bio_change_has_l
 ///   Then nothing links Priya to github:priyaraman, and GitHub was never asked
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_link_of_priyas_found_in_sams_repository_never_links_priya() {
     let net = FakeAtprotoNetwork::start(bluesky_accounts());
     seed_claim_record(

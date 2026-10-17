@@ -92,6 +92,10 @@ pub(crate) enum LogEvent<'a> {
     GithubVerified,
     /// A GitHub ownership check did not pass (the refusal's label only).
     GithubVerifyRefused(&'static str),
+    /// An owner's confirmed identity link landed (never whose or which).
+    GithubLinkPublished,
+    /// A link confirm wrote nothing (the reason's label only, U-29).
+    GithubLinkRefused(&'static str),
     ScanFinished(ScanStatus),
     /// A scan was refused before it started (the reason only; never whose).
     ScanRefused(ScanRefused),
@@ -253,6 +257,10 @@ fn describe(event: LogEvent<'_>) -> (Level, &'static str, Vec<(&'static str, Val
             "github.verify_refused",
             vec![("reason", json!(reason))],
         ),
+        LogEvent::GithubLinkPublished => (Info, "github.link.published", vec![]),
+        LogEvent::GithubLinkRefused(reason) => {
+            (Info, "github.link.refused", vec![("reason", json!(reason))])
+        }
         LogEvent::ScanFinished(status) => (
             Info,
             "scan.finished",

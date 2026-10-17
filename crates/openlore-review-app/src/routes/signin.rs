@@ -37,6 +37,7 @@ pub(crate) enum PageRoute {
     GithubStep,
     VerifyGithub,
     PreviewLink,
+    PublishLink,
     StartScan,
     ScanStatus,
     ApproveSuggestion,
@@ -67,6 +68,7 @@ pub(crate) fn page_route(method: &Method, path: &str) -> Option<PageRoute> {
         ("GET", "/github") => Some(PageRoute::GithubStep),
         ("POST", "/github") => Some(PageRoute::VerifyGithub),
         ("POST", "/github/link") => Some(PageRoute::PreviewLink),
+        ("POST", views::LINK_CONFIRM_ACTION) => Some(PageRoute::PublishLink),
         ("POST", "/scan") => Some(PageRoute::StartScan),
         ("GET", "/scan/status") => Some(PageRoute::ScanStatus),
         ("POST", "/review/approve") => Some(PageRoute::ApproveSuggestion),
@@ -96,6 +98,7 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         PageRoute::SignOut if same_origin => sign_out(app, request),
         PageRoute::VerifyGithub if same_origin => github::verify(app, request).await,
         PageRoute::PreviewLink if same_origin => github_link::preview_link(app, request).await,
+        PageRoute::PublishLink if same_origin => github_link::publish_link(app, request).await,
         PageRoute::StartScan if same_origin => scan::start_scan(app, request).await,
         PageRoute::ApproveSuggestion if same_origin => review::approve(app, request),
         PageRoute::EditSuggestion if same_origin => review::edit(app, request),
@@ -116,6 +119,7 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         | PageRoute::SignOut
         | PageRoute::VerifyGithub
         | PageRoute::PreviewLink
+        | PageRoute::PublishLink
         | PageRoute::StartScan
         | PageRoute::ApproveSuggestion
         | PageRoute::EditSuggestion

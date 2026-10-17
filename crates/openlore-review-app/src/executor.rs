@@ -5,6 +5,7 @@
 //! read back is recomputed with claim-domain's canonicalizer (DWD-5).
 
 use ports::{CreatedRecord, RepoWriteError, UserRepoReadPort, UserRepoWritePort};
+use review_domain::link_plan::LinkPlan;
 use review_domain::plans::{read_back_matches, PublishPlan, RetractPlan};
 use review_domain::share::SharePost;
 
@@ -81,6 +82,16 @@ pub(crate) async fn execute_retract(
     write: &dyn UserRepoWritePort,
     read: &dyn UserRepoReadPort,
     plan: &RetractPlan,
+) -> Result<String, PublishFailure> {
+    create_and_read_back(write, read, plan.owner_did(), plan.rkey(), &plan.record()).await
+}
+
+/// Create the owner's confirmed identity link in their own repo (create
+/// only, keyed by its CID) and read it back. Returns its `at://` address.
+pub(crate) async fn execute_link(
+    write: &dyn UserRepoWritePort,
+    read: &dyn UserRepoReadPort,
+    plan: &LinkPlan,
 ) -> Result<String, PublishFailure> {
     create_and_read_back(write, read, plan.owner_did(), plan.rkey(), &plan.record()).await
 }

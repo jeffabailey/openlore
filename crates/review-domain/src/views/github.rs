@@ -19,7 +19,7 @@ pub const GITHUB_LOGIN_FIELD: &str = "github_login";
 pub const LINK_PREVIEW_ACTION: &str = "/github/link";
 
 /// Where the link preview's plan is confirmed (03-05).
-const LINK_CONFIRM_ACTION: &str = "/github/link/publish";
+pub const LINK_CONFIRM_ACTION: &str = "/github/link/publish";
 
 /// What publishing a link means (RA-1a, ADR-084 §5).
 pub const LINK_PUBLIC_NOTICE: &str = "This link is public: anyone can read it in your repo. \
@@ -171,6 +171,88 @@ pub fn link_preview_page(plan: &LinkPlan, csrf_token: &str) -> String {
             p { "Nothing has been published yet." }
             (plan_form(LINK_CONFIRM_ACTION, plan.rkey(), csrf_token, PUBLISH_LABEL))
             p { a href="/github" { (CANCEL_LABEL) } }
+        },
+    )
+}
+
+/// Every link confirm that writes nothing ends with this sentence (U-31).
+pub const NOTHING_PUBLISHED: &str = "Nothing was published.";
+
+/// Why a confirmed link is not in the owner's repo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkNotPublished {
+    /// The preview's deadline passed before the confirm.
+    Expired,
+    /// This hour's GitHub check budget is spent.
+    TooManyAttempts,
+    /// The confirm-time GitHub read did not prove the previewed link.
+    NotProven,
+    /// The repo host session ended: only a fresh sign-in helps.
+    SessionExpired,
+    /// The repo host did not take the record.
+    NotWritten,
+    /// The record was created but did not read back as previewed.
+    NotAsPreviewed,
+}
+
+/// The sentence explaining why the link is not published.
+fn link_not_published_reason(why: LinkNotPublished) -> &'static str {
+    match why {
+        LinkNotPublished::Expired => {
+            "This preview has expired. Press \"Publish this link\" again \
+             for a fresh preview."
+        }
+        LinkNotPublished::TooManyAttempts => {
+            "Too many verification attempts in the last hour. \
+             Please try again later."
+        }
+        LinkNotPublished::NotProven => {
+            "Your GitHub profile did not prove this link when you \
+             confirmed it."
+        }
+        LinkNotPublished::SessionExpired => {
+            "Your Bluesky session has expired. Sign in again, \
+             then publish your link from the GitHub step."
+        }
+        LinkNotPublished::NotWritten => "Your PDS did not take the record.",
+        LinkNotPublished::NotAsPreviewed => {
+            "Your PDS did not return the link exactly as \
+             previewed, so it is not counted as published."
+        }
+    }
+}
+
+/// The confirmed link is in the owner's repo at `at_uri`.
+pub fn link_published_page(at_uri: &str) -> String {
+    page(
+        "Link published",
+        html! {
+            section class="outcome" {
+                h1 { "Your link is published" }
+                p { "Your link is in your own repo at " code { (at_uri) } }
+                p { a href="/github" { "Back to the GitHub step" } }
+            }
+        },
+    )
+}
+
+/// A link confirm that did not publish, and the owner's next step.
+pub fn link_not_published_page(why: LinkNotPublished) -> String {
+    page(
+        "Link not published",
+        html! {
+            section class="outcome" {
+                h1 { "Your link was not published" }
+                p role="alert" { (link_not_published_reason(why)) }
+                @if why != LinkNotPublished::NotAsPreviewed {
+                    p { (NOTHING_PUBLISHED) }
+                }
+                @if why == LinkNotPublished::SessionExpired {
+                    p { a href="/" { (SIGN_IN_LABEL) } }
+                } @else {
+                    p { a href="/github" { "Back to the GitHub step" } }
+                }
+            }
         },
     )
 }
