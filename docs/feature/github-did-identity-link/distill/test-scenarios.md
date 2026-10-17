@@ -26,12 +26,12 @@ The `.rs` files are the scenario SSOT; this is the map.
 | File (`tests/acceptance/`) | Slice | Layer | Scenarios | Active today |
 |---|---|---|---|---|
 | `identity_link.rs` | 1 — link / verify / forget / composer guard / upgrade / re-link (incl. WS) | 3/4 subprocess | 37 (+1 fixture regenerator, not a scenario; IL-12b, IL-15, IV-11..13 added 2026-10-16 for review D1/D4/D7) | 0 at DISTILL hand-off; the 5 review rows are active |
-| `identity_link_readers.rs` | 2 — association rule, person views, scoring, search label, ADR-084 peer-pull round trip | 3/4 subprocess + viewer + indexer | 21 (IR-19 added 2026-10-16 for F14; IR-16b for U-7) | 4 (IR-13, IR-17, IR-19, IR-16b) |
+| `identity_link_readers.rs` | 2 — association rule, person views, scoring, search label, ADR-084 peer-pull round trip | 3/4 subprocess + viewer + indexer | 23 (IR-19 added 2026-10-16 for F14; IR-16b for U-7; IR-20/IR-20b 2026-10-17 for U-19) | 4 (IR-13, IR-17, IR-19, IR-16b); IR-20/IR-20b ignored pending DELIVER |
 | `identity_link_core.rs` | 1-2 pure core | 2 proptest (256 cases) | 12 (CORE-2x, CORE-3x added for review D1) | 0 at hand-off; CORE-2x/3x active |
 | `review_app_identity_link.rs` | 3 — publish / retract in the review app | 4 HTTP | 9 | 1 (RA-3) |
 | `review_app_sign_in_and_ownership.rs` (review D1 rows only) | slice-1 fix — the ownership proof reads strictly | 4 HTTP | 2 (OW-4b, OW-4c) | 2 |
 | `review_app_identity_link_readers.rs` | 3 — the CLI reads app-written links | 4 HTTP + subprocess | 5 | 0 |
-| **Total** | | | **86** | **3 at hand-off (+9 review rows, IR-19 and IR-16b active)** |
+| **Total** | | | **88** | **3 at hand-off (+9 review rows, IR-19 and IR-16b active)** |
 
 Targets: four in `crates/cli/Cargo.toml`, `review_app_identity_link` in `crates/openlore-review-app/Cargo.toml`.
 Vocabulary: `support/identity_links.rs`, `support/review_app/identity_link.rs`; `support/people.rs` `Invocation` gains `github_token`.
@@ -99,6 +99,7 @@ Seeding (review D7): `given_a_check_recorded_seeing` inserts one `identity_link_
 | IR-8b | A link Jeff retracted is no longer re-checked | GDL-D5 |
 | IR-8c | A link its peer author retracted no longer shows or is re-checked (was RED; green since the review fix) | slice-2 review **B2**, GDL-D5, ADR-060 D-RF-D3 |
 | IR-8d | A link its peer author superseded no longer shows (was RED; green since the review fix) | slice-2 review **B2**, GDL-D9, DDD-7 |
+| IR-20 | A link from a peer Jeff removed no longer shows or is re-checked: `identity list` shows no line, `identity verify` says there are none to verify, asks GitHub nothing and records nothing (RED, `#[ignore]` pending DELIVER) | **U-19**, slice-2 re-review F1 |
 | IR-9 | Each link line says how old its check is, with a re-check hint after 30 days (5 rows) | N-3, ADR-085 §5 |
 | IR-10 | Two link records for the same person and account read as one link naming both, at the end of the line as ` (records <id>, <id>)` in ascending order (`records_named`, U-13) | GDL-D9, U-13 |
 | IR-18 | Jeff can list one person's linked identities | `identity list --did`, F7 |
@@ -107,6 +108,7 @@ Seeding (review D7): `given_a_check_recorded_seeing` inserts one `identity_link_
 | IR-12 | Reading a person shows their link has lost its proof, at no extra GitHub cost | UC-8, KPI-GDL-3 |
 | IR-12b | Reading a re-registered login records nothing (active: holds today) | slice-2 review **H2**(1), GDL-D9, A-10, UC-8 |
 | IR-12c | Reading a renamed account refreshes its link once — written to the U-15 login scope: the rename is first seen by a re-check through GitHub's redirect (active: holds today) | slice-2 review **H2**(2), U-15, N-2, UC-8 |
+| IR-20b | Reading a person shows no link from a peer Jeff removed, and records nothing (RED, `#[ignore]` pending DELIVER). Search's soft-removed cache (ADR-057) is out of this ruling and not asserted | **U-19**, UC-8 |
 | IR-13 | Reading a person whose bio names a DID never surfaces or suggests a link | GDL-D12(2), A-2 |
 | IR-17 | A possible rename among inferred people never becomes a link | A-2, GDL-D12, F3 |
 | IR-14 | A link never changes weighted results in the terminal | GDL-D8, ADR-022, KPI-GDL-2 |
@@ -250,13 +252,14 @@ first observes the rename through the redirect.
 | Driving port | Scenario(s) |
 |---|---|
 | `identity link github <login> [--yes]` | WS, IL-2..IL-12b, IL-14, IL-15 |
-| `identity verify [--did \| --github]` | IV-1..IV-13, IL-12b, IR-2, IR-4, RR-1b, RR-2b |
-| `identity list [--did]` | WS, IR-1..IR-18b (`--did`: IR-18, IR-18b) |
+| `identity verify [--did \| --github]` | IV-1..IV-13, IL-12b, IR-2, IR-4, IR-20, RR-1b, RR-2b |
+| `identity list [--did]` | WS, IR-1..IR-18b, IR-20 (`--did`: IR-18, IR-18b) |
 | `identity forget --did` | IF-1a, IF-1b, IF-2 |
 | `claim retract` | IR-8a/b |
 | `claim add`, `claim counter`, `infer people --sign` | IL-8a, IL-8c, IL-8b |
 | `infer people` | IR-11, IR-17 |
-| `scrape github <user>` | IR-12, IR-12b, IR-12c, IR-13 |
+| `scrape github <user>` | IR-12, IR-12b, IR-12c, IR-13, IR-20b |
+| `peer remove` (soft) | IR-20, IR-20b (Given) |
 | `graph query --weighted` / viewer `/score` | IR-14 / IR-15 |
 | `search` | IR-16 |
 | review app "Publish this link" / "Retract this link" | RA-1a..RA-8, RR-2a/b |

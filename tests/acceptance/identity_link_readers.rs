@@ -407,6 +407,53 @@ fn a_link_its_peer_author_superseded_no_longer_shows() {
     );
 }
 
+/// IR-20 (error, lifecycle — U-19; chained on IR-2)
+/// ```gherkin
+/// @driving_port @real-io @error @u-19 @contract-shape:unbounded-preservation
+/// Scenario: A link from a peer Jeff removed no longer shows or is re-checked
+///   Given Jeff followed Rachel, whose link to github "rachelk" he checked and sees as her GitHub account
+///   And Jeff removed Rachel from the people he follows
+///   When Jeff lists linked identities
+///   Then nothing links did:plc:rachel-test to github:rachelk
+///   And when Jeff re-checks his links he is told there are none to verify
+///   And GitHub was not asked anything, and nothing was recorded
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: U-19 — pending DELIVER fix"]
+fn a_link_from_a_peer_jeff_removed_no_longer_shows_or_is_rechecked() {
+    let mut world = LinkWorld::with(&[RACHEL_GH]);
+    bio_names(&world, RACHEL_GH, RACHEL_DID);
+    given_peer_published(
+        &mut world,
+        Peer::Rachel,
+        vec![link_spec(RACHEL_DID, RACHEL_GH)],
+    );
+    given_i_verified(&world, None);
+    let listed_before = when_i_list(&world, None);
+    assert_shown(&listed_before, RACHEL_DID, RACHEL_GH, Shown::Associated);
+    given_i_removed_the_peer(&world, Peer::Rachel);
+    let asked_before = world.github_paths().len();
+    let before = capture_link_universe(&world.env);
+
+    let listed = when_i_list(&world, None);
+
+    assert_eq!(listed.status, 0, "{}\n{}", listed.stdout, listed.stderr);
+    assert_shown(&listed, RACHEL_DID, RACHEL_GH, Shown::Nothing);
+    let checked = when_i_verify(&world, &[]);
+    assert_eq!(checked.status, 0, "{}\n{}", checked.stdout, checked.stderr);
+    assert!(
+        checked.stdout.contains("No identity links to verify"),
+        "a removed peer's link is not re-checked;\n{}",
+        checked.stdout
+    );
+    assert!(
+        world.github_paths_since(asked_before).is_empty(),
+        "GitHub must not be asked about a removed peer's link: {:?}",
+        world.github_paths_since(asked_before)
+    );
+    assert_link_store_unchanged(&before, &world.env);
+}
+
 /// IR-9 (boundary, table)
 /// ```gherkin
 /// @driving_port @real-io @boundary @n-3 @adr-085-5 @contract-shape:pure-function
@@ -833,6 +880,37 @@ fn reading_a_renamed_account_refreshes_its_link_once() {
         JEFF_RENAMED,
         Shown::ProofGone(Verdict::DidMissing),
     );
+}
+
+/// IR-20b (error, person view — U-19; chained on IR-20 and IR-12)
+/// ```gherkin
+/// @driving_port @real-io @error @u-19 @uc-8 @contract-shape:unbounded-preservation
+/// Scenario: Reading a person shows no link from a peer Jeff removed, and records nothing
+///   Given Jeff followed Rachel, whose link to github "rachelk" he checked and sees as her GitHub account
+///   And Jeff removed Rachel from the people he follows
+///   When Jeff reads the person github "rachelk"
+///   Then the person view shows no link from did:plc:rachel-test to github:rachelk
+///   And nothing was recorded
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: U-19 — pending DELIVER fix"]
+fn reading_a_person_shows_no_link_from_a_peer_jeff_removed() {
+    let mut world = LinkWorld::with(&[RACHEL_GH]);
+    bio_names(&world, RACHEL_GH, RACHEL_DID);
+    given_peer_published(
+        &mut world,
+        Peer::Rachel,
+        vec![link_spec(RACHEL_DID, RACHEL_GH)],
+    );
+    given_i_verified(&world, None);
+    given_i_removed_the_peer(&world, Peer::Rachel);
+    let before = capture_link_universe(&world.env);
+
+    let read = when_i_read_the_person(&world, RACHEL_GH);
+
+    assert_eq!(read.status, 0, "{}\n{}", read.stdout, read.stderr);
+    assert_shown(&read, RACHEL_DID, RACHEL_GH, Shown::Nothing);
+    assert_link_store_unchanged(&before, &world.env);
 }
 
 /// IR-13 (guardrail, privacy — ACTIVE regression guard, D-d)

@@ -521,6 +521,16 @@ pub fn given_peer_published(
     }
 }
 
+/// GIVEN: I removed `peer` (soft `peer remove`: `removed_at` set, the pulled
+/// claims stay cached). U-19: a removed peer's links are candidates for no reader.
+pub fn given_i_removed_the_peer(world: &LinkWorld, peer: Peer) {
+    world
+        .peers
+        .get(peer.did())
+        .unwrap_or_else(|| panic!("precondition: {} was followed first", peer.did()))
+        .unsubscribe(&world.env);
+}
+
 /// A well-formed identity link: `subject sameAs github:<login>` (ADR-084 §2).
 pub fn link_spec(subject_did: &str, account: Account) -> PeerClaimSpec {
     PeerClaimSpec {
