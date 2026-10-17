@@ -168,13 +168,17 @@ impl fmt::Display for MalformedObservation {
     }
 }
 
-/// The account an observation names: its positive number and valid login.
-fn account_named_by(
-    observation: &GithubObservation,
+/// The account a GitHub answer names: its positive number and valid login.
+/// Account 0 or an invalid login names no account (ADR-085 §4, fail
+/// closed). The one account rule, shared with the review app's ownership
+/// proof.
+pub fn account_named_by(
+    user_id: u64,
+    login: &str,
 ) -> Result<(NonZeroU64, &str), MalformedObservation> {
-    let user_id = NonZeroU64::new(observation.user_id).ok_or(MalformedObservation)?;
-    is_github_login(&observation.login)
-        .then_some((user_id, observation.login.as_str()))
+    let user_id = NonZeroU64::new(user_id).ok_or(MalformedObservation)?;
+    is_github_login(login)
+        .then_some((user_id, login))
         .ok_or(MalformedObservation)
 }
 
@@ -251,7 +255,7 @@ pub fn check_link(
     author: &Did,
     observation: &GithubObservation,
 ) -> Result<ProofCheck, MalformedObservation> {
-    let (user_id, login) = account_named_by(observation)?;
+    let (user_id, login) = account_named_by(observation.user_id, &observation.login)?;
     Ok(
         match bio_verdict(observation.bio.as_deref(), bare_did(&author.0)) {
             BioVerdict::Verified => ProofCheck::Verified(ProvenLink {
@@ -893,7 +897,8 @@ fn check_linked_account<E>(
     login_read: &str,
     observed: &GithubObservation,
 ) -> Result<ProofCheck, RecheckUnreadable<E>> {
-    let (user_id, _) = account_named_by(observed).map_err(RecheckUnreadable::Malformed)?;
+    let (user_id, _) = account_named_by(observed.user_id, &observed.login)
+        .map_err(RecheckUnreadable::Malformed)?;
     if user_id.get() == link.user_id {
         check_link(&Did(link.did.clone()), observed).map_err(RecheckUnreadable::Malformed)
     } else {
@@ -920,7 +925,9 @@ pub fn recheck_link<E>(
         GithubRead::Profile(observed) if observed.user_id == link.user_id => {
             check_linked_account(link, login_read, &observed)
         }
-        GithubRead::Profile(observed) if account_named_by(&observed).is_err() => {
+        GithubRead::Profile(observed)
+            if account_named_by(observed.user_id, &observed.login).is_err() =>
+        {
             Err(RecheckUnreadable::Malformed(MalformedObservation))
         }
         GithubRead::Profile(_) | GithubRead::NotFound => {
@@ -1678,6 +1685,97 @@ mod tests {
                     proptest::prop_assert_eq!(decided, disproved(CheckVerdict::NoBio));
                 }
             }
+        }
+    }
+
+    /// Literal account rows naming no account (moved from the review app's
+    /// ownership proof, U-25): account 0, an empty login, a leading hyphen,
+    /// a path.
+    const MALFORMED_ACCOUNTS: [(&str, u64); 4] = [
+        ("priyaraman", 0),
+        ("", 4_210_001),
+        ("-priya", 4_210_001),
+        ("priya/raman", 4_210_001),
+    ];
+
+    /// Literal logins GitHub could name, up to the 39-character limit.
+    const ACCEPTED_LOGINS: [&str; 6] = [
+        "priyaraman",
+        "a",
+        "7",
+        "Priya-Raman",
+        "rachel-k-42",
+        "abcdefghijklmnopqrstuvwxyz0123456789abc",
+    ];
+
+    /// Literal text that is no login: empty, a leading hyphen, a path,
+    /// query, fragment, dot, space or underscore, non-ASCII, or 40
+    /// characters long.
+    const REFUSED_LOGINS: [&str; 11] = [
+        "",
+        "-priya",
+        "priya/raman",
+        "priya?raman",
+        "priya#raman",
+        "priya.raman",
+        "priya raman",
+        "priya_raman",
+        "pri\u{fc}ya",
+        "4210001/../x",
+        "abcdefghijklmnopqrstuvwxyz0123456789abcd",
+    ];
+
+    proptest::proptest! {
+        /// Universe: (DID, surrounding words, recorded id, literal malformed
+        /// account). An account numbered 0 or without a GitHub login is
+        /// never proven — even when its bio names the DID — and is refused
+        /// as unreadable, never as a disproving verdict.
+        #[test]
+        fn an_account_github_did_not_name_is_never_proven(
+            words in "[A-Za-z ,!?()]{0,20}",
+            malformed in proptest::sample::select(MALFORMED_ACCOUNTS.to_vec()),
+        ) {
+            let (login, user_id) = malformed;
+            proptest::prop_assert_eq!(account_named_by(user_id, login), Err(MalformedObservation));
+            let observation = GithubObservation {
+                login: login.to_string(),
+                user_id,
+                bio: Some(format!("{words} {DID}")),
+            };
+            proptest::prop_assert_eq!(
+                check_link(&Did(DID.to_string()), &observation),
+                Err(MalformedObservation)
+            );
+            proptest::prop_assert_eq!(
+                check_on_profile(&linked(user_id), &observation),
+                None
+            );
+        }
+
+        /// Universe: typed strings plus the literal login tables. Only
+        /// GitHub-username-shaped text is a login, so a typed login can never
+        /// carry a path or query; an account is named exactly by a login.
+        #[test]
+        fn only_github_username_shaped_text_is_a_login(typed in "[A-Za-z0-9/?#. -]{0,45}") {
+            for login in ACCEPTED_LOGINS {
+                proptest::prop_assert!(is_github_login(login), "{login:?}");
+                proptest::prop_assert_eq!(
+                    account_named_by(4_210_001, login),
+                    Ok((NonZeroU64::new(4_210_001).unwrap(), login))
+                );
+            }
+            for text in REFUSED_LOGINS {
+                proptest::prop_assert!(!is_github_login(text), "{text:?}");
+                proptest::prop_assert_eq!(account_named_by(4_210_001, text), Err(MalformedObservation));
+            }
+            if is_github_login(&typed) {
+                proptest::prop_assert!(!typed.contains(['/', '?', '#', '.', ' ']));
+                proptest::prop_assert!((1..=39).contains(&typed.len()) && !typed.starts_with('-'));
+            }
+            proptest::prop_assert_eq!(
+                account_named_by(4_210_001, &typed).is_ok(),
+                is_github_login(&typed)
+            );
         }
     }
 }

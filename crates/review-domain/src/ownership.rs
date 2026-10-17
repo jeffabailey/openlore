@@ -84,6 +84,8 @@ impl OwnershipRefusal {
 /// The one login rule, shared with the CLI (`claim_domain::identity_link`).
 pub use ports::claim_domain::identity_link::is_github_login;
 
+use ports::claim_domain::identity_link::{account_named_by, MalformedObservation};
+
 /// The capability a scan needs: this DID proved this GitHub account is
 /// theirs. Only [`prove_ownership`] mints it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,22 +114,23 @@ impl VerifiedOwnership {
 /// scan); a different id means the login changed hands. A profile naming no
 /// account (account number 0, or no GitHub login) proves nothing either way:
 /// it is refused as an unreadable GitHub answer (fail closed, ADR-085 §4).
+/// Checked in order: the account (the shared rule, [`account_named_by`]),
+/// then the recorded id, then the bio.
 pub fn prove_ownership(
     session_did: &str,
     account: &GithubAccount<'_>,
     linked_user_id: Option<u64>,
 ) -> Result<VerifiedOwnership, OwnershipRefusal> {
-    if account.user_id == 0 || !is_github_login(account.login) {
-        return Err(OwnershipRefusal::GithubUnavailable);
-    }
-    if linked_user_id.is_some_and(|id| id != account.user_id) {
+    let (user_id, login) = account_named_by(account.user_id, account.login)
+        .map_err(|MalformedObservation| OwnershipRefusal::GithubUnavailable)?;
+    if linked_user_id.is_some_and(|id| id != user_id.get()) {
         return Err(OwnershipRefusal::IdentityChanged);
     }
     match ownership_verdict(account.bio, session_did) {
         OwnershipVerdict::Verified => Ok(VerifiedOwnership {
             owner_did: session_did.to_string(),
-            github_login: account.login.to_string(),
-            github_user_id: account.user_id,
+            github_login: login.to_string(),
+            github_user_id: user_id.get(),
         }),
         OwnershipVerdict::DidMissing => Err(OwnershipRefusal::DidMissing),
         OwnershipVerdict::DifferentDid(found) => Err(OwnershipRefusal::DifferentDid(found)),
@@ -167,44 +170,57 @@ mod tests {
             prop_assert_ne!(verdict(&did[..did.len() - 1]), OwnershipVerdict::Verified);
         }
 
-        /// Universe: (session DID, bio, profile id, recorded id). The
-        /// capability is minted exactly when the bio verifies and the id has
-        /// not changed, and it names the session DID and that account.
+        /// Universe: (session DID, bio built to hold that DID, another DID
+        /// or none, profile id, recorded id). The capability is minted
+        /// exactly when the bio was built holding the session DID and the id
+        /// has not changed, and it names the session DID and that account.
+        /// The expected outcome comes from how the bio was built, never from
+        /// the bio matcher itself (F-14).
         #[test]
         fn the_capability_is_minted_only_for_a_verified_unchanged_account(
             did in did(), other in did(), words in words(),
             holds in prop_oneof![Just(0u8), Just(1), Just(2)],
             user_id in 1u64..1_000, linked in proptest::option::of(1u64..1_000),
         ) {
+            prop_assume!(other != did);
             let bio = match holds {
                 0 => format!("{words} {did}"),
                 1 => format!("{words} {other}"),
                 _ => words.clone(),
             };
+            let id_changed = linked.is_some_and(|id| id != user_id);
+            let expected = match holds {
+                _ if id_changed => Err(OwnershipRefusal::IdentityChanged),
+                0 => Ok(()),
+                1 => Err(OwnershipRefusal::DifferentDid(other.clone())),
+                _ if words.trim().is_empty() => Err(OwnershipRefusal::NoBio),
+                _ => Err(OwnershipRefusal::DidMissing),
+            };
             let account = GithubAccount { login: "priyaraman", user_id, bio: Some(&bio) };
             let proven = prove_ownership(&did, &account, linked);
-            let expected_pass = ownership_verdict(Some(&bio), &did) == OwnershipVerdict::Verified
-                && linked.is_none_or(|id| id == user_id);
-            prop_assert_eq!(proven.is_ok(), expected_pass);
+            prop_assert_eq!(proven.is_ok(), expected.is_ok());
             if let Ok(capability) = proven {
                 prop_assert_eq!(capability.owner_did(), did.as_str());
                 prop_assert_eq!(capability.github_login(), "priyaraman");
                 prop_assert_eq!(capability.github_user_id(), user_id);
-            } else if linked.is_some_and(|id| id != user_id) {
+            } else if id_changed {
                 prop_assert_eq!(proven, Err(OwnershipRefusal::IdentityChanged));
             } else if let Err(refusal) = proven {
                 prop_assert!(refusal.disproves_ownership());
+                prop_assert_eq!(Err(refusal), expected);
             }
         }
 
-        /// Universe: (session DID, bio naming it, recorded id, malformed
-        /// account). An account numbered 0 or without a GitHub login is
-        /// never proven — even when its bio names the session DID — and the
-        /// refusal disproves nothing (the link is not marked unverified).
+        /// Universe: (session DID, any bio, any recorded id, literal
+        /// malformed account). The account rule is claim-domain's
+        /// (`account_named_by`); through `prove_ownership` an account it
+        /// refuses is GithubUnavailable — before the recorded id or the bio
+        /// is consulted — which does not disprove ownership.
         #[test]
-        fn an_account_github_did_not_name_is_never_proven(
-            did in did(), words in words(),
-            linked in proptest::option::of(0u64..1_000),
+        fn a_malformed_account_is_refused_as_unreadable_not_disproved(
+            did in did(), other in did(), words in words(),
+            bio_kind in prop_oneof![Just(0u8), Just(1), Just(2), Just(3)],
+            linked in proptest::option::of(0u64..5_000_000),
             malformed in prop_oneof![
                 Just(("priyaraman", 0u64)),
                 Just(("", 4_210_001)),
@@ -212,25 +228,17 @@ mod tests {
                 Just(("priya/raman", 4_210_001)),
             ],
         ) {
-            let bio = format!("{words} {did}");
+            let bio = match bio_kind {
+                0 => Some(format!("{words} {did}")),
+                1 => Some(format!("{words} {other}")),
+                2 => Some(words.clone()),
+                _ => None,
+            };
             let (login, user_id) = malformed;
-            let account = GithubAccount { login, user_id, bio: Some(&bio) };
+            let account = GithubAccount { login, user_id, bio: bio.as_deref() };
             let refused = prove_ownership(&did, &account, linked);
             prop_assert_eq!(&refused, &Err(OwnershipRefusal::GithubUnavailable));
             prop_assert!(!refused.unwrap_err().disproves_ownership());
-        }
-
-        /// Universe: typed strings. Only GitHub-username-shaped text is
-        /// accepted, so a typed login can never carry a path or query.
-        #[test]
-        fn only_github_username_shaped_text_is_a_login(typed in "[A-Za-z0-9/?#. -]{0,45}") {
-            let shaped = (1..=39).contains(&typed.len())
-                && !typed.starts_with('-')
-                && typed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
-            prop_assert_eq!(is_github_login(&typed), shaped);
-            if is_github_login(&typed) {
-                prop_assert!(!typed.contains(['/', '?', '#', '.', ' ']));
-            }
         }
     }
 }
