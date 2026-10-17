@@ -55,8 +55,11 @@ pub const REJECTED_GITHUB_TOKEN: &str = "ghp_identitylinkfixture0000000000000000
 /// A distinctive bio phrase that must never be repeated by any verb (F2).
 pub const PRIVATE_BIO_PHRASE: &str = "Secret hobby: orchids";
 
-/// Search's one label for `github:` rows, links included (decision D-c,
-/// owner-only-signing UC-7).
+/// Search's one label for link rows (decision D-c, owner-only-signing UC-7).
+/// Slice 2 labels link rows only (U-7); a `github:` row that is not a link
+/// carries no label, and IR-16b pins that. Widening the label to every
+/// `github:` row, as D-c and ADR-085 §8 read, is a follow-up that would
+/// change IR-16b.
 pub const SEARCH_LABEL: &str = "authority not checked here";
 
 /// Pinned clock instants (`OPENLORE_TEST_NOW`).
@@ -637,6 +640,49 @@ pub fn link_line(stdout: &str, did: &str, account: Account) -> Option<String> {
         .lines()
         .find(|l| l.contains(did) && l.contains(&object))
         .map(str::to_string)
+}
+
+/// How an `identity list` line names the records stating its link (U-13,
+/// GDL-D9): ` (record <id>)` for one, ` (records <id>, <id>)` for several, in
+/// ascending record-ID order, at the end of the line after the age and any
+/// re-check hint. No records, no suffix.
+pub fn records_named(record_ids: &[String]) -> String {
+    let mut ids: Vec<&str> = record_ids.iter().map(String::as_str).collect();
+    ids.sort_unstable();
+    match ids.as_slice() {
+        [] => String::new(),
+        [only] => format!(" (record {only})"),
+        many => format!(" (records {})", many.join(", ")),
+    }
+}
+
+/// THEN: `identity list` shows exactly one line for the (did, account) pair,
+/// and that line ends naming every record in `record_ids` in ascending order
+/// ([`records_named`]).
+pub fn assert_one_line_naming_records(
+    outcome: &CliOutcome,
+    did: &str,
+    account: Account,
+    record_ids: &[String],
+) {
+    let associated = format!("{did} is {}", account.subject());
+    let lines: Vec<&str> = outcome
+        .stdout
+        .lines()
+        .filter(|l| l.contains(&associated))
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "exactly one line shows `{associated}`;{}",
+        context(outcome)
+    );
+    let named = records_named(record_ids);
+    assert!(
+        lines[0].ends_with(&named),
+        "the line ends naming its records as `{named}`;{}",
+        context(outcome)
+    );
 }
 
 /// THEN: the reader shows the (did, account) pair as `shown`.

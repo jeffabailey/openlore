@@ -381,24 +381,7 @@ fn two_link_records_for_the_same_person_and_account_read_as_one_link_naming_both
 
     let listed = when_i_list(&world, None);
 
-    let associated = format!("{RACHEL_DID} is {}", RACHEL_GH.subject());
-    assert_eq!(
-        listed
-            .stdout
-            .lines()
-            .filter(|l| l.contains(&associated))
-            .count(),
-        1,
-        "{}",
-        listed.stdout
-    );
-    for cid in &cids {
-        assert!(
-            listed.stdout.contains(cid.as_str()),
-            "[{cid}] named;\n{}",
-            listed.stdout
-        );
-    }
+    assert_one_line_naming_records(&listed, RACHEL_DID, RACHEL_GH, &cids);
 }
 
 /// IR-18 (edge, F7)

@@ -98,7 +98,7 @@ Seeding (review D7): `given_a_check_recorded_seeing` inserts one `identity_link_
 | IR-8a | A link Jeff retracted no longer shows among his identities | GDL-D5, ADR-060 |
 | IR-8b | A link Jeff retracted is no longer re-checked | GDL-D5 |
 | IR-9 | Each link line says how old its check is, with a re-check hint after 30 days (5 rows) | N-3, ADR-085 §5 |
-| IR-10 | Two link records for the same person and account read as one link naming both | GDL-D9 |
+| IR-10 | Two link records for the same person and account read as one link naming both, at the end of the line as ` (records <id>, <id>)` in ascending order (`records_named`, U-13) | GDL-D9, U-13 |
 | IR-18 | Jeff can list one person's linked identities | `identity list --did`, F7 |
 | IR-11 | The person view shows a verified link even with the network off | C-GDL-7 |
 | IR-12 | Reading a person shows their link has lost its proof, at no extra GitHub cost | UC-8, KPI-GDL-3 |
@@ -107,7 +107,7 @@ Seeding (review D7): `given_a_check_recorded_seeing` inserts one `identity_link_
 | IR-14 | A link never changes weighted results in the terminal | GDL-D8, ADR-022, KPI-GDL-2 |
 | IR-15 | A link never changes a contributor's score page | GDL-D8, KPI-GDL-2 |
 | IR-16 | Network search lists a link as "authority not checked here" | GDL-D11, C-GDL-8, D-c |
-| IR-16b | Network search leaves a GitHub row that is not a link unlabelled (active guard: holds today and after 02-08) | U-7, D-c, F11 |
+| IR-16b | Network search leaves a GitHub row that is not a link unlabelled (active guard: holds today and after 02-08). Slice 2 labels link rows only; widening `SEARCH_LABEL` to every `github:` row is a follow-up that would change this scenario | U-7, D-c, F11 |
 | IR-19 | A self-attested link pulled from a peer keeps its record id and reads as a link (active: holds today) | ADR-084 Earned Trust, F14, U-11 |
 
 ### identity_link_core.rs (layer 2)
