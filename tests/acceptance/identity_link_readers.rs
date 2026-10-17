@@ -17,7 +17,7 @@
 //!
 //! Layer 3/4 — example-only (Mandate 9). PRIMARY Thens through driving ports;
 //! the store universe is a secondary guardrail (D-e). All `#[ignore]`d except
-//! IR-13, IR-17 and IR-19 (F14), regression guards that hold today (D-d).
+//! IR-13, IR-17, IR-19 (F14) and IR-16b (U-7), regression guards that hold today (D-d).
 
 mod support;
 
@@ -865,4 +865,76 @@ fn network_search_lists_a_link_as_not_checked_here() {
         found.stdout
     );
     assert!(found.stdout.contains(SEARCH_LABEL), "{}", found.stdout);
+}
+
+/// The lines of `author`'s group in network search output: its `author:`
+/// header and every row under it, up to the next author's header.
+fn search_group_of<'a>(stdout: &'a str, author: &str) -> Vec<&'a str> {
+    let header = format!("author: {author}");
+    stdout
+        .lines()
+        .skip_while(|l| !l.starts_with(&header))
+        .enumerate()
+        .take_while(|(i, l)| *i == 0 || !l.starts_with("author:"))
+        .map(|(_, l)| l)
+        .collect()
+}
+
+/// IR-16b (guardrail, U-7 — ACTIVE regression guard, D-d; chained on IR-16)
+/// ```gherkin
+/// @driving_port @real-io @guardrail @u-7 @d-c @adr-085-8 @contract-shape:unbounded-preservation
+/// Scenario: Network search leaves a GitHub row that is not a link unlabelled
+///   Given the network index holds Priya's link to github "priyaraman"
+///   And Sven's claim that github "rust-lang/regex" is maintained by github "priyaraman"
+///   When Jeff searches the network for github:priyaraman
+///   Then both rows are listed
+///   And Sven's row is not labelled "authority not checked here"
+/// ```
+#[test]
+fn network_search_leaves_a_github_row_that_is_not_a_link_unlabelled() {
+    let env = TestEnv::initialized();
+    let priya = Account {
+        login: "priyaraman",
+        id: 4_210_001,
+    };
+    let link = openlore_test_support::RawRecordSpec {
+        predicate: SAME_AS.to_string(),
+        evidence: vec![priya.profile_url(), priya.id_uri()],
+        ..openlore_test_support::RawRecordSpec::valid(
+            openlore_test_support::PRIYA_DID,
+            openlore_test_support::PRIYA_DID,
+            &priya.subject(),
+            1.0,
+        )
+    };
+    let not_a_link = openlore_test_support::RawRecordSpec {
+        predicate: "maintainedBy".to_string(),
+        ..openlore_test_support::RawRecordSpec::valid(
+            openlore_test_support::SVEN_DID,
+            "github:rust-lang/regex",
+            &priya.subject(),
+            0.8,
+        )
+    };
+    let indexer = seed_network_index_from_specs(&env, vec![link, not_a_link]);
+
+    let found = run_openlore_search(&env, &["search", "--object", &priya.subject()], &indexer);
+
+    assert_eq!(found.status, 0, "{}\n{}", found.stdout, found.stderr);
+    assert!(
+        found.stdout.contains(openlore_test_support::PRIYA_DID),
+        "precondition: Priya's link is listed;\n{}",
+        found.stdout
+    );
+    let svens = search_group_of(&found.stdout, openlore_test_support::SVEN_DID);
+    assert!(
+        svens.iter().any(|l| l.contains("github:rust-lang/regex")),
+        "Sven's row is listed;\n{}",
+        found.stdout
+    );
+    assert!(
+        svens.iter().all(|l| !l.contains(SEARCH_LABEL)),
+        "a github row that is not a link carries no `{SEARCH_LABEL}` label (U-7);\n{}",
+        found.stdout
+    );
 }
