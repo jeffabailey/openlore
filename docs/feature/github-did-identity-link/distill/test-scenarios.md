@@ -97,12 +97,12 @@ Seeding (review D7): `given_a_check_recorded_seeing` inserts one `identity_link_
 | IR-7 | A link record with a flaw never links anyone (5 rows) | ADR-084 §3, N-4 |
 | IR-8a | A link Jeff retracted no longer shows among his identities | GDL-D5, ADR-060 |
 | IR-8b | A link Jeff retracted is no longer re-checked | GDL-D5 |
-| IR-8c | A link its peer author retracted no longer shows or is re-checked (RED, `#[ignore]` pending DELIVER) | slice-2 review **B2**, GDL-D5, ADR-060 D-RF-D3 |
-| IR-8d | A link its peer author superseded no longer shows (RED, `#[ignore]` pending DELIVER) | slice-2 review **B2**, GDL-D9, DDD-7 |
+| IR-8c | A link its peer author retracted no longer shows or is re-checked (was RED; green since the review fix) | slice-2 review **B2**, GDL-D5, ADR-060 D-RF-D3 |
+| IR-8d | A link its peer author superseded no longer shows (was RED; green since the review fix) | slice-2 review **B2**, GDL-D9, DDD-7 |
 | IR-9 | Each link line says how old its check is, with a re-check hint after 30 days (5 rows) | N-3, ADR-085 §5 |
 | IR-10 | Two link records for the same person and account read as one link naming both, at the end of the line as ` (records <id>, <id>)` in ascending order (`records_named`, U-13) | GDL-D9, U-13 |
 | IR-18 | Jeff can list one person's linked identities | `identity list --did`, F7 |
-| IR-18b | Listing one person never hides that their account is contested (RED, `#[ignore]` pending DELIVER) | slice-2 review **B1**, GDL-D14, A-4, F7 |
+| IR-18b | Listing one person never hides that their account is contested (was RED; green since the review fix) | slice-2 review **B1**, GDL-D14, A-4, F7 |
 | IR-11 | The person view shows a verified link even with the network off | C-GDL-7 |
 | IR-12 | Reading a person shows their link has lost its proof, at no extra GitHub cost | UC-8, KPI-GDL-3 |
 | IR-12b | Reading a re-registered login records nothing (active: holds today) | slice-2 review **H2**(1), GDL-D9, A-10, UC-8 |

@@ -16,9 +16,9 @@
 //! `FakePds`, `FakeIdentity`, `FakeIngestServer`.
 //!
 //! Layer 3/4 — example-only (Mandate 9). PRIMARY Thens through driving ports;
-//! the store universe is a secondary guardrail (D-e). The slice-2 review RED
-//! scenarios IR-8c, IR-8d (B2) and IR-18b (B1) are `#[ignore]`d pending the
-//! DELIVER fix; IR-12b and IR-12c (H2) hold today and run as regression guards.
+//! the store universe is a secondary guardrail (D-e). The slice-2 review
+//! scenarios IR-8c, IR-8d (B2) and IR-18b (B1) were RED and pass since the
+//! review fixes; IR-12b and IR-12c (H2) held already and run as regression guards.
 
 mod support;
 
