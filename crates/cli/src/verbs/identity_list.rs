@@ -1,44 +1,27 @@
 //! `identity list` — show linked identities OFFLINE from the last local
 //! check (ADR-085 §6/§7).
 //!
-//! A reader by construction (C-GDL-9): the verb receives only the check-read
-//! and link-candidate read handles — never the whole `Wiring`, no check write
-//! or purge, no signing, no GitHub. Candidate rows are selected with the
-//! `claim_domain::identity_link` predicate API (Q-RM-5); the projection
-//! decides what is a link.
+//! A reader by construction (C-GDL-9): the verb receives only the check-read,
+//! link-candidate and lineage read handles — never the whole `Wiring`, no
+//! check write or purge, no signing, no GitHub. The link lineage is read as
+//! `identity verify` reads it (`identity_reads`), so a link its author
+//! retracted or superseded is never listed (ADR-085 §5, ADR-060).
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use claim_domain::identity_link::{
-    link_predicate, link_view, project, ClaimFields, LatestCheck, LinkLifecycle, ReaderLink,
-};
+use claim_domain::identity_link::{link_view, LatestCheck, ReaderLink};
 use ports::{
-    CheckFilter, IdentityLinkCheckReadPort, LinkCandidate, LinkCandidateReadPort, LinkCheck,
+    CheckFilter, IdentityLinkCheckReadPort, LinkCandidateReadPort, LinkCheck, LinkLineageReadPort,
 };
 
 use crate::render::{render_linked_identities, render_no_linked_identities};
+use crate::verbs::identity_reads::StoredLinkLineage;
 
 /// The narrow read handles `identity list` holds.
 pub struct IdentityListHandles<'a> {
     pub checks: &'a dyn IdentityLinkCheckReadPort,
     pub claims: &'a dyn LinkCandidateReadPort,
-}
-
-/// A stored candidate as a link, if it is one, under the provenance the row
-/// was stored with (own: app-signed; peer: `peer_claims.provenance`). The
-/// list holds no lineage reads: every projected link is shown as active.
-fn projected(candidate: &LinkCandidate) -> Option<ReaderLink> {
-    let fields = ClaimFields {
-        author: &candidate.author_did,
-        subject: &candidate.subject,
-        predicate: &candidate.predicate,
-        object: &candidate.object,
-        evidence: &candidate.evidence,
-    };
-    project(fields, &candidate.provenance).map(|link| ReaderLink {
-        link,
-        lifecycle: LinkLifecycle::Active,
-    })
+    pub lineage: &'a dyn LinkLineageReadPort,
 }
 
 fn latest_of(check: LinkCheck) -> LatestCheck {
@@ -53,12 +36,8 @@ fn latest_of(check: LinkCheck) -> LatestCheck {
 
 /// Run `identity list` as of `now`; returns the stdout to print.
 pub fn run(handles: &IdentityListHandles<'_>, now: DateTime<Utc>) -> Result<String> {
-    let links: Vec<ReaderLink> = handles
-        .claims
-        .link_candidates(link_predicate())?
-        .iter()
-        .filter_map(projected)
-        .collect();
+    let links: Vec<ReaderLink> =
+        StoredLinkLineage::read(handles.claims, handles.lineage)?.reader_links();
     if links.is_empty() {
         return Ok(render_no_linked_identities());
     }

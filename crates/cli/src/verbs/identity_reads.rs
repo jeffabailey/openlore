@@ -9,7 +9,7 @@
 use anyhow::Result;
 use claim_domain::identity_link::{
     active_links, link_predicate, links_to_recheck, ClaimFields, GithubObservation, IdentityLink,
-    StoredClaim,
+    LinkLifecycle, ReaderLink, StoredClaim,
 };
 use claim_domain::{ClaimLineage, SignedClaim};
 use ports::{GithubAccountProfile, LinkCandidate, LinkCandidateReadPort, LinkLineageReadPort};
@@ -43,6 +43,18 @@ impl StoredLinkLineage {
     /// The active links (every active link claim).
     pub fn active_links(&self) -> Vec<IdentityLink> {
         self.decide(active_links)
+    }
+
+    /// The active links as a reader holds them: a retracted or superseded
+    /// link is not among them (ADR-085 §5, ADR-060).
+    pub fn reader_links(&self) -> Vec<ReaderLink> {
+        self.active_links()
+            .into_iter()
+            .map(|link| ReaderLink {
+                link,
+                lifecycle: LinkLifecycle::Active,
+            })
+            .collect()
     }
 
     /// The active links, once per (DID, account id).

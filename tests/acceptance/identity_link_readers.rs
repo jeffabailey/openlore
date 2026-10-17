@@ -42,7 +42,6 @@ use support::*;
 ///   And GitHub was not asked anything
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn rachels_link_reads_as_her_claim_until_jeff_checks_it_himself() {
     let mut world = LinkWorld::with(&[RACHEL_GH]);
     bio_names(&world, RACHEL_GH, RACHEL_DID);
@@ -74,7 +73,6 @@ fn rachels_link_reads_as_her_claim_until_jeff_checks_it_himself() {
 ///   And his linked identities show "did:plc:rachel-test is github:rachelk (verified today)"
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn once_jeff_has_checked_rachels_link_himself_it_shows_as_her_github_account() {
     let mut world = LinkWorld::with(&[RACHEL_GH]);
     bio_names(&world, RACHEL_GH, RACHEL_DID);
@@ -115,7 +113,6 @@ fn once_jeff_has_checked_rachels_link_himself_it_shows_as_her_github_account() {
 ///   And Rachel's link reads only as her unchecked claim, and the account is not contested
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_strangers_unchecked_link_to_jeffs_account_never_displaces_jeff() {
     let mut world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);
@@ -143,7 +140,6 @@ fn a_strangers_unchecked_link_to_jeffs_account_never_displaces_jeff() {
 ///   And his linked identities show Rachel's link as "proof gone", Jeff still verified, nothing contested
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_strangers_disproved_link_to_jeffs_account_never_displaces_jeff() {
     let mut world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);
@@ -178,7 +174,6 @@ fn a_strangers_disproved_link_to_jeffs_account_never_displaces_jeff() {
 ///   Then github:jeffbailey is shown as contested, naming both DIDs, and neither as its owner
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn an_account_whose_bio_names_two_people_who_both_linked_it_reads_as_contested() {
     let mut world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);
@@ -208,7 +203,6 @@ fn an_account_whose_bio_names_two_people_who_both_linked_it_reads_as_contested()
 ///   And GitHub was never asked about "tobiasw"
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn rachel_cannot_link_tobiass_github_account_to_tobias() {
     let mut world = LinkWorld::with(&[TOBIAS_GH]);
     bio_names(&world, TOBIAS_GH, TOBIAS_DID);
@@ -247,7 +241,6 @@ fn rachel_cannot_link_tobiass_github_account_to_tobias() {
 ///     | predicate is "SameAs" rather than "sameAs"        |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_link_record_with_a_flaw_never_links_anyone() {
     for flaw in LinkFlaw::ALL {
         let mut world = LinkWorld::with(&[RACHEL_GH]);
@@ -291,7 +284,6 @@ fn a_link_record_with_a_flaw_never_links_anyone() {
 ///   Then nothing links him to github:jeffbailey
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_link_jeff_retracted_no_longer_shows_among_his_identities() {
     let world = LinkWorld::with(&[JEFF_GH]);
     let cid = given_i_linked(&world, JEFF_GH, None);
@@ -312,7 +304,6 @@ fn a_link_jeff_retracted_no_longer_shows_among_his_identities() {
 ///   Then he is told there are no identity links to verify, and GitHub was not asked
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_link_jeff_retracted_is_no_longer_rechecked() {
     let world = LinkWorld::with(&[JEFF_GH]);
     let cid = given_i_linked(&world, JEFF_GH, None);

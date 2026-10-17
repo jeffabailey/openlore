@@ -797,6 +797,7 @@ pub fn dispatch(cli: Cli) -> i32 {
                 &verbs::identity_list::IdentityListHandles {
                     checks: wiring.identity_link_checks.as_ref(),
                     claims: wiring.link_candidates.as_ref(),
+                    lineage: wiring.link_lineage.as_ref(),
                 },
                 wiring.clock.now_utc(),
             ),
