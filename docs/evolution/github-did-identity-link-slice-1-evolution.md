@@ -140,7 +140,8 @@ applies each mutant's diff in a worktree and runs the relevant `cli` tests.
   `MalformedObservation`, never an account. `ProvenLink.user_id` is `NonZeroU64`.
 - **Id-keyed**: links pin the numeric account; renames and re-registrations are
   told apart by account number, never by login.
-- **Display-only**: `score(F) == score(F \ sameAs rows)`; no subject merging.
+- **Display-only (intended)**: `score(F) == score(F \ sameAs rows)`; no subject merging.
+  Not yet enforced after slice 1: the scorer drop (CORE-6/6x) lands in slice 2, step 02-03.
 - **Append-only checks**: `identity_link_checks` is insert-only; the latest check
   is a read query; only `identity forget --did` purges, through its own port.
 - **Narrow capabilities**: `identity verify` holds read-only lineage and the check
