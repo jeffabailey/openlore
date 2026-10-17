@@ -748,7 +748,6 @@ fn rachels_store(with_link: bool) -> LinkWorld {
 ///   And github:rachelk has no weighted row in either
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_link_never_changes_weighted_results_in_the_terminal() {
     let without = rachels_store(false);
     let with = rachels_store(true);
@@ -794,7 +793,6 @@ fn a_link_never_changes_weighted_results_in_the_terminal() {
 ///   Then the scored results are identical, and github:rachelk is not scored
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_link_never_changes_a_contributors_score_page() {
     let path = format!("/score?contributor={RACHEL_DID}");
     let render = |world: &LinkWorld| {

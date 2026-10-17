@@ -120,9 +120,10 @@ pub struct WeightedView {
 /// (WD-77; `data-models.md` §"The scoring formula") is closed-form, no-ML, and
 /// reproducible.
 pub fn score(claims: &[AttributedClaim], cfg: &ScoringConfig) -> WeightedView {
-    let triangulated = triangulated_author_objects(claims);
+    let scorable = without_identity_links(claims);
+    let triangulated = triangulated_author_objects(&scorable);
 
-    let mut ranked: Vec<WeightedPairing> = group_by_pairing(claims)
+    let mut ranked: Vec<WeightedPairing> = group_by_pairing(&scorable)
         .into_iter()
         .filter_map(|((subject, object), pairing_claims)| {
             score_pairing(&subject, &object, &pairing_claims, cfg, &triangulated)
@@ -142,13 +143,24 @@ pub fn score(claims: &[AttributedClaim], cfg: &ScoringConfig) -> WeightedView {
     WeightedView { ranked }
 }
 
+/// Drop every identity-link row before grouping AND before triangulation
+/// (ADR-085 §6, GDL-D8): a link is display-only, so it never forms a pairing
+/// and never counts toward an author's cross-project span. The predicate comes
+/// from `claim_domain::identity_link` (Q-RM-5); the match is exact (CORE-7).
+fn without_identity_links(claims: &[AttributedClaim]) -> Vec<&AttributedClaim> {
+    claims
+        .iter()
+        .filter(|claim| !claim_domain::identity_link::is_reserved_predicate(&claim.predicate))
+        .collect()
+}
+
 /// Group the flat attributed-claim feed into one bucket per `(subject, object)`
 /// pairing. `BTreeMap` keeps the grouping deterministic (no HashMap order leak).
-fn group_by_pairing(
-    claims: &[AttributedClaim],
-) -> BTreeMap<(String, String), Vec<&AttributedClaim>> {
-    let mut grouped: BTreeMap<(String, String), Vec<&AttributedClaim>> = BTreeMap::new();
-    for claim in claims {
+fn group_by_pairing<'a>(
+    claims: &[&'a AttributedClaim],
+) -> BTreeMap<(String, String), Vec<&'a AttributedClaim>> {
+    let mut grouped: BTreeMap<(String, String), Vec<&'a AttributedClaim>> = BTreeMap::new();
+    for &claim in claims {
         grouped
             .entry((claim.subject.clone(), claim.object.clone()))
             .or_default()
@@ -161,7 +173,7 @@ fn group_by_pairing(
 /// object on `>= 2` distinct subjects — i.e. cross-project triangulation
 /// (WD-77). Computed once over the WHOLE feed (triangulation is a global
 /// property of an author's reach, not local to one pairing).
-fn triangulated_author_objects(claims: &[AttributedClaim]) -> BTreeSet<(String, String)> {
+fn triangulated_author_objects(claims: &[&AttributedClaim]) -> BTreeSet<(String, String)> {
     let mut subjects_per_author_object: BTreeMap<(String, String), BTreeSet<String>> =
         BTreeMap::new();
     for claim in claims {
@@ -317,5 +329,60 @@ pub fn weight_bucket(
         WeightBucket::Moderate
     } else {
         WeightBucket::Sparse
+    }
+}
+
+#[cfg(test)]
+mod identity_link_drop_tests {
+    use chrono::{TimeZone, Utc};
+    use claim_domain::identity_link::link_predicate;
+    use claim_domain::{Cid, Did};
+    use ports::AuthorRelationship;
+
+    use super::*;
+
+    fn claim(cid: &str, subject: &str, predicate: &str, object: &str) -> AttributedClaim {
+        AttributedClaim {
+            author_did: Did("did:plc:rachel".to_string()),
+            cid: Cid(cid.to_string()),
+            subject: subject.to_string(),
+            predicate: predicate.to_string(),
+            object: object.to_string(),
+            confidence: 0.6,
+            composed_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            relationship: AuthorRelationship::SubscribedPeer,
+        }
+    }
+
+    /// A link row sharing an author and object with a real claim must not
+    /// lift that claim into cross-project triangulation (drop before
+    /// triangulation, ADR-085 §6).
+    #[test]
+    fn a_link_never_counts_toward_cross_project_triangulation() {
+        let real = claim(
+            "bafy-claim",
+            "github:rust-lang/regex",
+            "embodiesPhilosophy",
+            "x",
+        );
+        let link = claim("bafy-link", "did:plc:rachel", link_predicate(), "x");
+        let view = score(&[real.clone(), link], &ScoringConfig::DEFAULT);
+        assert_eq!(view, score(&[real], &ScoringConfig::DEFAULT));
+        assert_eq!(view.ranked[0].cross_project_span, 1);
+    }
+
+    /// Only the exact link predicate is dropped; a near-miss is scored (CORE-7).
+    #[test]
+    fn a_near_miss_predicate_is_still_scored() {
+        let near_misses = [
+            link_predicate().to_lowercase(),
+            link_predicate().to_uppercase(),
+            format!(" {}", link_predicate()),
+        ];
+        for predicate in near_misses {
+            let row = claim("bafy-near", "did:plc:rachel", &predicate, "github:rachelk");
+            let view = score(&[row], &ScoringConfig::DEFAULT);
+            assert_eq!(view.ranked.len(), 1, "{predicate:?} must be scored");
+        }
     }
 }

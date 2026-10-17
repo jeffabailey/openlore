@@ -952,7 +952,6 @@ proptest! {
 
     /// CORE-6 (@property @adr-085-6 @gdl-d8 @kpi-gdl-2 @contract-shape:unbounded-preservation)
     #[test]
-    #[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
     fn core6_identity_links_never_change_a_weighted_view(
         feed in arb_feed(),
         links in arb_same_as_rows(),
@@ -1105,7 +1104,6 @@ fn core1x_the_bio_lie_catalogue() {
 /// appears and every other pairing is untouched.
 /// (@adr-085-6 @kpi-gdl-2 @contract-shape:unbounded-preservation)
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn core6x_a_link_beside_a_claim_adds_no_pairing() {
     let at = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
     let claim = AttributedClaim {
