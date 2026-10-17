@@ -2,10 +2,10 @@
   "roadmap": {
     "project_id": "github-did-identity-link",
     "created_at": "2026-10-15T00:00:00Z",
-    "total_steps": 15,
+    "total_steps": 17,
     "scope": "SLICE 1: claim_domain::identity_link core, identity link/verify/list/forget, v7 checks + read/write/purge ports, GithubPort::read_person_by_id + DD-GDL-11 contract test, reserved-predicate guard (claim counter exempt, D-b), GDL-D13 check-arch rules. SLICE 2 (phase 02): readers — identity list lineage, age hint, record IDs and --did; scorer drops sameAs; infer people and person-scrape link lines (scrape refreshes checks); search label; ADR-084 peer-pull fixture."
   },
-  "total_steps": 15,
+  "total_steps": 17,
   "conventions": {
     "paradigm": "ADR-007: decisions pure in claim-domain; adapters and cli verbs do I/O only.",
     "test_paradigm": "Acceptance: example-based subprocess. Pure core: proptest against the CORE oracles. Adapters: real DuckDB / real HTTP adapter against FakeGithubAccounts, never mocked.",
@@ -511,12 +511,12 @@
         {
           "id": "02-01",
           "name": "A retracted link leaves `identity list`; peers' links read as claims until this reader checks them; a peer-pulled self-attested link keeps its record ID and projects intact",
-          "description": "`identity list` reads lineage through the read-only LinkLineageReadPort and shows Active links only (ADR-085 §5, ADR-060), sharing the identity_reads lineage read with `identity verify`. The association, squatter and flaw scenarios, already green while ignored, become guards here. Adds the ADR-084 Earned Trust peer-pull fixture (F14).",
+          "description": "`identity list` reads lineage through the read-only LinkLineageReadPort and shows Active links only (ADR-085 §5, ADR-060), sharing the identity_reads lineage read with `identity verify`. The association, squatter and flaw scenarios, already green while ignored, become guards here, beside the already-active ADR-084 peer-pull fixture IR-19 (F14).",
           "criteria": [
             "IR-8a: after Jeff retracts his link, `identity list` shows no line linking him to github:jeffbailey.",
             "IR-8b: a retracted link is not re-checked; verify says there are none and GitHub is not asked.",
             "IR-1..IR-7: a peer's link reads `claims … — not checked` until this reader verifies it; squatters never displace or contest; third-party and flawed records never link; GitHub is never asked about them.",
-            "F14: a self-attested link pulled through `peer pull` is stored under CID == rkey and `identity list` projects the same DID, login and account.",
+            "IR-19 stays green: a peer-pulled self-attested link is kept under its own record ID and lists as `claims … — not checked`.",
             "identity_list.rs still names no check-write, purge, store, IdentityPort, GithubPort or Wiring (check-arch passes unchanged)."
           ],
           "test_file": "tests/acceptance/identity_link_readers.rs",
@@ -531,7 +531,7 @@
             "identity_link_readers::an_account_whose_bio_names_two_people_who_both_linked_it_reads_as_contested",
             "identity_link_readers::rachel_cannot_link_tobiass_github_account_to_tobias",
             "identity_link_readers::a_link_record_with_a_flaw_never_links_anyone",
-            "identity_link_readers::a_self_attested_link_pulled_from_a_peer_keeps_its_record_id_and_reads_as_a_link (NOT YET WRITTEN)"
+            "identity_link_readers::a_self_attested_link_pulled_from_a_peer_keeps_its_record_id_and_reads_as_a_link"
           ],
           "n_scenarios": [
             "IR-8a",
@@ -543,7 +543,7 @@
             "IR-5",
             "IR-6",
             "IR-7",
-            "F14 peer-pull fixture"
+            "IR-19 (guard, F14)"
           ],
           "green": [
             "cargo test -p cli --test identity_link_readers",
@@ -552,7 +552,7 @@
             "cargo test -p xtask",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "RED driver is IR-8a. IR-1..IR-7 and IR-8b passed while ignored (run 2026-10-16), so they are un-ignored here as guards of the changed read path, not as separate steps. F14 has no test yet: route authoring to nw-acceptance-designer BEFORE this step's RED. It should use the production self_attested_link_record, a FakeAtprotoNetwork PDS and the unchanged peer add/pull path. RR-1a (slice 3) is close but uses a test-side record shape and does not assert CID == rkey. peer_pull.rs already refuses an rkey/CID mismatch, so F14 may pass on arrival.",
+          "implementation_notes": "The RED driver is IR-8a. IR-1..IR-7 and IR-8b passed while ignored (run 2026-10-16), so they are un-ignored here as guards of the changed read path, not as separate steps. IR-19 (the ADR-084 Earned Trust peer-pull fixture, F14; U-11 closed) is already active and passing. It is a guard only: no test edit.",
           "estimate_hours": 4,
           "depends_on": [
             "01-09"
@@ -568,25 +568,56 @@
         },
         {
           "id": "02-02",
-          "name": "Each link line gives its check age with a re-check hint past 30 days, names its record IDs once per person and account, and `identity list --did` narrows to one person",
-          "description": "Render completes ADR-085 §5 (age, hint after 30 days, future checks ignored) and GDL-D9 (duplicates: one line listing every record ID). link_view carries each link's record IDs. `identity list --did` filters through CheckFilter::Subject and a subject filter on links (F7).",
+          "name": "`identity list --did` narrows the list to one person's links",
+          "description": "F7: `identity list` gains an optional `--did`. Links are filtered by bare subject DID and checks are read with CheckFilter::Subject. The filter only selects lines and never changes a standing.",
           "criteria": [
-            "IR-9: lines read `verified today`, `12 days ago`, `30 days ago` without a hint; `31 days ago` with `re-check with openlore identity verify`; before the check was made the link reads `not checked`.",
-            "IR-10: two records for the same DID and account show as exactly one `did:plc:rachel-test is github:rachelk` line naming both record IDs.",
             "IR-18: `identity list --did did:plc:rachel-test` shows Rachel as github:rachelk and nothing about Jeff.",
-            "Every identity_link.rs scenario still passes."
+            "Without `--did`, every identity_link.rs and identity_link_readers.rs scenario shows the same lines as before."
           ],
           "test_file": "tests/acceptance/identity_link_readers.rs",
-          "scenario_name": "each_link_line_says_how_old_its_check_is_and_suggests_a_recheck_after_thirty_days",
+          "scenario_name": "jeff_can_list_one_persons_linked_identities",
           "scenario_fns": [
-            "identity_link_readers::each_link_line_says_how_old_its_check_is_and_suggests_a_recheck_after_thirty_days",
-            "identity_link_readers::two_link_records_for_the_same_person_and_account_read_as_one_link_naming_both",
             "identity_link_readers::jeff_can_list_one_persons_linked_identities"
           ],
           "n_scenarios": [
-            "IR-9",
-            "IR-10",
             "IR-18"
+          ],
+          "green": [
+            "cargo test -p cli --test identity_link_readers",
+            "cargo test -p cli --test identity_link",
+            "cargo test -p openlore-review-app --test review_app_identity_link",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "The person filter reuses claim_domain::identity_link RecheckScope::Person / is_in_scope (bare-DID comparison); no second rule. The clap surface and the dispatch live in cli/src/lib.rs.",
+          "estimate_hours": 2,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/identity_link_readers.rs",
+            "crates/cli/src/verbs/identity_list.rs",
+            "crates/cli/src/lib.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: --did ignored; the filter comparing non-bare DIDs; the filter changing a standing."
+        },
+        {
+          "id": "02-03",
+          "name": "Duplicate link records for one person and account read as one line naming every record ID",
+          "description": "GDL-D9: links are grouped by (subject DID, numeric id) and each group's record IDs are collected. Grouping is a pure function in claim_domain::identity_link over (record ID, link) pairs; render/identity.rs only formats the IDs.",
+          "criteria": [
+            "IR-10: two records for one DID and account show as exactly one `did:plc:rachel-test is github:rachelk` line naming both record IDs.",
+            "Record IDs on a line are in ascending record-ID order; choosing the newest composedAt is deferred.",
+            "A link with one record names that one record ID."
+          ],
+          "test_file": "tests/acceptance/identity_link_readers.rs",
+          "scenario_name": "two_link_records_for_the_same_person_and_account_read_as_one_link_naming_both",
+          "scenario_fns": [
+            "identity_link_readers::two_link_records_for_the_same_person_and_account_read_as_one_link_naming_both"
+          ],
+          "n_scenarios": [
+            "IR-10",
+            "claim-domain grouping property"
           ],
           "green": [
             "cargo test -p cli --test identity_link_readers",
@@ -595,25 +626,63 @@
             "cargo test -p claim-domain",
             "cargo test -p openlore-review-app --test review_app_identity_link"
           ],
-          "implementation_notes": "Wording follows support/identity_links.rs (DD-GDL-7). The hint condition is age > 30 whole days. Record IDs come from LinkCandidate.cid and are carried through ReaderLink/LinkedIdentity. CORE-5/5b must keep passing through sut_link_view, so map the new field without adding logic to the binding (DD-GDL-16).",
-          "estimate_hours": 4,
+          "implementation_notes": "DD-GDL-16: sut_link_view in identity_link_core.rs builds IdentityLink, ReaderLink and LatestCheck literally and calls link_view(links, checks, now). Editing it is outside test_edit_allow_list, so keep those types and that signature unchanged. Carry record IDs through a new pure function beside link_view. If CORE-5/5b would need a binding change, stop and route it to nw-acceptance-designer. Record IDs come from LinkCandidate.cid. LinkCandidate has no composedAt (U-9), so the ordering is ascending by record ID.",
+          "estimate_hours": 3,
           "depends_on": [
-            "02-01"
+            "02-02"
           ],
           "files_to_modify": [
             "tests/acceptance/identity_link_readers.rs",
             "crates/claim-domain/src/identity_link.rs",
             "crates/cli/src/verbs/identity_list.rs",
-            "crates/cli/src/render/identity.rs",
-            "crates/cli/src/lib.rs"
+            "crates/cli/src/render/identity.rs"
           ],
           "files_to_create": [],
-          "mutation_note": "Kill: hint at >= 30 days; a future check deciding; duplicates printed twice or one record ID dropped; --did ignored."
+          "mutation_note": "Kill: duplicates printed twice; one record ID dropped; IDs unordered; grouping by login instead of numeric id."
         },
         {
-          "id": "02-03",
+          "id": "02-04",
+          "name": "Each link line gives its check age; a verified line past 30 days adds the re-check hint",
+          "description": "ADR-085 §5, N-3. Pure functions in claim_domain::identity_link decide the age in whole days and whether the hint shows. The hint shows only for Verified, and only when age > 30 whole days (U-8). The deciding check is the latest non-future one (Q-RM-3). render/identity.rs only formats.",
+          "criteria": [
+            "IR-9: `verified today`, `12 days ago` and `30 days ago` carry no hint; `31 days ago` carries `re-check with openlore identity verify`.",
+            "Boundary: exactly 30 whole days gives no hint; 31 whole days gives the hint (claim-domain property over ages).",
+            "A check dated after now is ignored; with no earlier check the link reads `not checked` (IR-9 last row).",
+            "A proof-gone line never carries the re-check hint, at any age."
+          ],
+          "test_file": "tests/acceptance/identity_link_readers.rs",
+          "scenario_name": "each_link_line_says_how_old_its_check_is_and_suggests_a_recheck_after_thirty_days",
+          "scenario_fns": [
+            "identity_link_readers::each_link_line_says_how_old_its_check_is_and_suggests_a_recheck_after_thirty_days"
+          ],
+          "n_scenarios": [
+            "IR-9",
+            "claim-domain age/hint property"
+          ],
+          "green": [
+            "cargo test -p cli --test identity_link_readers",
+            "cargo test -p cli --test identity_link",
+            "cargo test -p cli --test identity_link_core",
+            "cargo test -p claim-domain",
+            "cargo test -p openlore-review-app --test review_app_identity_link"
+          ],
+          "implementation_notes": "Wording follows support/identity_links.rs (DD-GDL-7). As in 02-03, link_view, LinkedIdentity and the sut_link_view binding stay unchanged (DD-GDL-16): the hint is a separate pure function of (standing, checked_at, now). The age-in-days rule moves out of render/identity.rs into claim-domain.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/identity_link_readers.rs",
+            "crates/claim-domain/src/identity_link.rs",
+            "crates/cli/src/render/identity.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: hint at >= 30 days; hint on a proof-gone line; a future check deciding; age rounded up."
+        },
+        {
+          "id": "02-05",
           "name": "Scoring drops every identity link: weighted results and the viewer score page are identical with or without a link",
-          "description": "scoring::score removes every row whose predicate is the link predicate before grouping and triangulation (ADR-085 §6, GDL-D8, unbounded preservation). The predicate comes through the claim_domain::identity_link API (Q-RM-4), never the literal. One choke point covers `graph query --weighted` and viewer `/score`.",
+          "description": "scoring::score removes every row whose predicate is the link predicate before grouping and triangulation (ADR-085 §6, GDL-D8, unbounded preservation). The predicate comes through the claim_domain::identity_link API (Q-RM-5), never the literal. One choke point covers `graph query --weighted` and viewer `/score`.",
           "criteria": [
             "CORE-6: for every feed F and every set S of sameAs rows, score(F ∪ S) == score(F), appended or prepended.",
             "CORE-6x: a link beside a claim adds no pairing; no ranked pairing has the link's DID subject.",
@@ -644,10 +713,10 @@
             "cargo test -p openlore-review-app --test review_app_identity_link",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "CORE-6/6x before IR-14 (DD-GDL-14). sut_score already binds the REAL scoring::score, so it is not edited. Owner-only-signing's score_attested / authority::kind does not exist yet. When it lands, re-point sut_score in the same commit (DD-GDL-16). Drop the rows before triangulated_author_objects, otherwise a link still counts toward an author's cross-project span.",
+          "implementation_notes": "CORE-6/6x before IR-14 (DD-GDL-14). sut_score already binds the REAL scoring::score, so it is not edited. Owner-only-signing's score_attested / authority::kind does not exist yet. When it lands, re-point sut_score in the same commit (DD-GDL-16, U-3). Drop the rows before triangulated_author_objects, otherwise a link still counts toward an author's cross-project span. Order: this step does not depend on 02-01..02-04 in code. It is kept serial only because every slice-2 step un-ignores tests in identity_link_readers.rs.",
           "estimate_hours": 3,
           "depends_on": [
-            "01-09"
+            "02-04"
           ],
           "files_to_modify": [
             "tests/acceptance/identity_link_core.rs",
@@ -658,11 +727,13 @@
           "mutation_note": "Kill: drop removed; drop applied after triangulation; case-insensitive match dropping near-miss predicates (CORE-6 generator vs CORE-7)."
         },
         {
-          "id": "02-04",
+          "id": "02-06",
           "name": "`infer people` shows a person's published links offline, from this reader's last checks, and a rename flag still never becomes a link",
-          "description": "The infer people person view gains the linked-identity / assertion lines of the people it lists (ADR-085 §6, C-GDL-7). It reads checks, link candidates and lineage only, holds no check write or purge, and stays offline. Lines come from the same link_view and render as `identity list`.",
+          "description": "The infer people person view gains the linked-identity and assertion lines of the people it lists (ADR-085 §6, C-GDL-7). It reads checks, link candidates and lineage only, holds no check write or purge, and stays offline. Lines come from the same link_view and line render as `identity list`.",
           "criteria": [
             "IR-11: with the network disabled, BurntSushi's candidate block shows `did:plc:rachel-test is github:BurntSushi` verified today.",
+            "U-6 join: a link joins a person row on github_user_id when the row carries one (contribution_links), otherwise on the case-insensitive last-seen login.",
+            "Login differs, id matches: the link is still joined to that person (claim-domain property).",
             "IR-17 stays green: the possible-rename flag yields no `did:… is/claims github:…` line; GitHub is not asked; nothing recorded.",
             "check-arch: infer_people.rs names no check-write or purge port, method or slot (rule unchanged, still green)."
           ],
@@ -673,7 +744,8 @@
           ],
           "n_scenarios": [
             "IR-11",
-            "IR-17 (guard)"
+            "IR-17 (guard)",
+            "claim-domain join property"
           ],
           "green": [
             "cargo test -p cli --test identity_link_readers",
@@ -682,10 +754,11 @@
             "cargo test -p xtask",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "Which person a link belongs to is a pure decision in claim-domain::identity_link. It matches the person subject's login, case-insensitive (ADR-064), against the link's last-seen login. See the gap note on joining by account number. The CPI infer_people suites must keep their output byte-for-byte when no link exists.",
+          "implementation_notes": "Which person a link belongs to is a pure decision in claim_domain::identity_link (U-6). The numeric id comes from contribution_links.github_user_id (architecture-design.md Reuse Analysis); the login fallback is case-insensitive (ADR-064). The CPI infer_people suites must keep their output byte-for-byte when no link exists. It depends on 02-04 because it reuses that step's line render (age and hint) over link_view. It also follows 02-05 only to keep the edits to identity_link_readers.rs serial.",
           "estimate_hours": 4,
           "depends_on": [
-            "02-02"
+            "02-04",
+            "02-05"
           ],
           "files_to_modify": [
             "tests/acceptance/identity_link_readers.rs",
@@ -698,65 +771,81 @@
           "mutation_note": "Kill: a link shown under the wrong person; an unchecked link shown as associated; a GitHub or check-write call from infer people."
         },
         {
-          "id": "02-05",
+          "id": "02-07",
           "name": "Reading a person with `scrape github <user>` refreshes the check of that login's published links from the one profile read and shows a lost proof",
-          "description": "UC-8: the `/users/{user}` response that `scrape github <user>` already reads is surfaced as a strict account observation (ports TargetKind::User, adapter-github resolve_target). The pure core decides one check per already-published Active link of that login; the verb appends it and the person view renders link lines. No extra request; never creates or suggests a link (GDL-D12).",
+          "description": "UC-8 / U-4: the `/users/{user}` body `resolve_target` already fetched is parsed strictly with client::parse_account_profile and returned through a separate GithubPort path; TargetKind::User is not widened. show_person decides each check with check_link, appends it, then calls person_view. No extra request, no new link (GDL-D12).",
           "criteria": [
-            "IR-12: after the bio drops Tobias's DID, the person view shows `did:plc:tobias-test claims github:BurntSushi — proof gone (did_missing)`; GitHub is asked once for the profile; one did_missing check is added; `identity list` shows the same.",
+            "IR-12: after the bio drops Tobias's DID, the person view shows `… claims github:BurntSushi — proof gone (did_missing)`; one GitHub profile read; one did_missing check added; `identity list` agrees.",
             "IR-13 stays green: a bio DID with no published link never surfaces, is never suggested, and nothing is recorded.",
-            "A resolve body without a positive id or a login records no check (strict reshape, ADR-085 §3 D1 amendment); adapter-github unit test.",
-            "Rate limit or outage on the resolve records nothing."
+            "U-5: a profile whose id differs from the link's id records nothing; the link's standing is unchanged (claim-domain property).",
+            "github_profile_contract (fake server): a `/users/{user}` body without a positive id or a login yields no account observation, and a scrape records no check.",
+            "CORE-2x and CORE-3x stay green; a rate limit or outage on the resolve records nothing.",
+            "check-arch: adapter-github names neither IdentityLinkCheckWritePort nor IdentityLinkCheckPurgePort; a synthetic-violation test proves the ban."
           ],
           "test_file": "tests/acceptance/identity_link_readers.rs",
           "scenario_name": "reading_a_person_shows_their_link_has_lost_its_proof_at_no_extra_github_cost",
           "scenario_fns": [
-            "identity_link_readers::reading_a_person_shows_their_link_has_lost_its_proof_at_no_extra_github_cost"
+            "identity_link_readers::reading_a_person_shows_their_link_has_lost_its_proof_at_no_extra_github_cost",
+            "identity_link_core::core2x_an_answer_naming_no_account_records_nothing",
+            "identity_link_core::core3x_a_link_naming_account_zero_is_no_link"
           ],
           "n_scenarios": [
             "IR-12",
             "IR-13 (guard)",
-            "strict-resolve unit test"
+            "CORE-2x (guard)",
+            "CORE-3x (guard)",
+            "U-5 id-mismatch property",
+            "github_profile_contract strict-resolve case",
+            "check-arch synthetic violation"
           ],
           "green": [
             "cargo test -p cli --test identity_link_readers",
             "cargo test -p cli --test identity_link",
+            "cargo test -p cli --test identity_link_core -- core2x core3x",
+            "cargo test -p claim-domain",
             "cargo test -p adapter-github --lib",
             "cargo test -p adapter-github --test github_profile_contract",
             "cargo test -p cli --test scrape_github --test scrape_person",
             "cargo test -p openlore-review-app --test review_app_identity_link",
+            "cargo test -p xtask",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "Today TargetKind::User carries only the login and the resolve body is dropped. Carry the strict account (or MalformedObservation) without a second request. Refresh only when the profile's id equals the link's id. A different id or a malformed body records nothing and leaves re-reads to `identity verify` (gap note). `scrape person` renders the same lines but does not refresh in this slice.",
-          "estimate_hours": 5,
+          "implementation_notes": "F2: add a GithubPort method that returns the strict account of the last resolved user from the cached body, never a request. Give it a default body so other GithubPort impls compile unchanged. adapter-http-viewer is untouched. F3: use parse_account_profile only; never read_account (a second GET) or parse_person_profile (lenient). Decide with check_link (no second rule). F6: the refresh runs in show_person (scrape_github.rs) before person_view; person_view and `scrape person` stay read-only (U-10). Ban list: STORAGE_AND_IDENTITY_PORTS in xtask/src/check_arch.rs.",
+          "estimate_hours": 6,
           "depends_on": [
-            "02-04"
+            "02-06"
           ],
           "files_to_modify": [
             "tests/acceptance/identity_link_readers.rs",
-            "crates/ports/src/github.rs",
+            "crates/ports/src/lib.rs",
             "crates/adapter-github/src/lib.rs",
+            "crates/adapter-github/tests/github_profile_contract.rs",
             "crates/claim-domain/src/identity_link.rs",
             "crates/cli/src/verbs/scrape_github.rs",
-            "crates/cli/src/render/people.rs"
+            "crates/cli/src/render/people.rs",
+            "xtask/src/check_arch.rs"
           ],
           "files_to_create": [],
-          "mutation_note": "Kill: a check recorded for an unpublished link or a different id; a check from a malformed body; a second GitHub request."
+          "mutation_note": "Kill: a check for an unpublished link or a different id; a check from a malformed body; a second GitHub request; the lenient parser used; the port ban removed."
         },
         {
-          "id": "02-06",
+          "id": "02-08",
           "name": "Network search labels a link `authority not checked here`, still listed and attributed to its author",
           "description": "D-c / ADR-085 §8: search rows that are identity links carry the one label `authority not checked here`. Link rows are selected through the claim_domain::identity_link API, never the literal. The indexer is unchanged and gains no GitHub capability (C-GDL-8).",
           "criteria": [
             "IR-16: `search --object github:priyaraman` lists Priya's link, attributed to her DID, with `authority not checked here`.",
+            "A non-link `github:` row carries no authority label (U-7, slice 2).",
             "Existing search suites pass unchanged for rows that are not links."
           ],
           "test_file": "tests/acceptance/identity_link_readers.rs",
           "scenario_name": "network_search_lists_a_link_as_not_checked_here",
           "scenario_fns": [
-            "identity_link_readers::network_search_lists_a_link_as_not_checked_here"
+            "identity_link_readers::network_search_lists_a_link_as_not_checked_here",
+            "identity_link_readers::network_search_leaves_a_github_row_that_is_not_a_link_unlabelled (NOT YET WRITTEN: route to nw-acceptance-designer)"
           ],
           "n_scenarios": [
-            "IR-16"
+            "IR-16",
+            "non-link github: guard (to be written)"
           ],
           "green": [
             "cargo test -p cli --test identity_link_readers",
@@ -764,10 +853,10 @@
             "cargo test -p openlore-review-app --test review_app_identity_link",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "Slice 2 closes all 19 IR-* plus CORE-6/6x. Label scope is an open question (gap note): link rows only here. Every `github:`-subject row belongs to owner-only-signing.",
+          "implementation_notes": "Slice 2 closes all 19 IR-* plus CORE-6/6x; IR-19 is already active. U-7: label link rows only (selected with the identity_link API, Q-RM-5); widening to every `github:` row is a follow-up. The non-link guard has no test yet; the acceptance designer writes it before RED. Order: no code dependency on 02-01..02-07; kept last only so edits to identity_link_readers.rs stay serial.",
           "estimate_hours": 2,
           "depends_on": [
-            "01-09"
+            "02-07"
           ],
           "files_to_modify": [
             "tests/acceptance/identity_link_readers.rs",
