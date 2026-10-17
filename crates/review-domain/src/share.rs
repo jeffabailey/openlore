@@ -2,7 +2,8 @@
 //! Bluesky post that announces the owner's published claims.
 //!
 //! - The draft names only the philosophies of LIVE published claims (the
-//!   caller passes `views::published_claims`, already minus retractions).
+//!   caller passes `views::published_claims`, already minus retractions
+//!   and identity-link records, U-27), so a linked account is never named.
 //! - A post is at most [`MAX_POST_GRAPHEMES`] grapheme clusters (Bluesky's
 //!   limit); a longer one is refused before anything is sent.
 //! - The link to the owner's profile is an `app.bsky.richtext.facet#link`

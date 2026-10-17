@@ -3,6 +3,7 @@
 //! self-attested by the owner, minus retractions and what they retract.
 //! Pure: the shell lists the repo and computes the record origin.
 
+use ports::claim_domain::identity_link::is_reserved_predicate;
 use ports::claim_domain::{
     decode_claim_record, is_self_retracted, provenance_verdict, ClaimLineage, Did, Provenance,
     RecordOrigin, ReferenceType, UnsignedClaim,
@@ -45,7 +46,9 @@ pub struct PublishedClaim {
 /// The claims a profile shows (pure): records of the owner's own repo whose
 /// ADR-071 verdict is self-attested (author is the repo DID, rkey is the
 /// claim's CID, fetched from the owner's own PDS), minus self-retracted
-/// claims and the retraction records themselves, in a deterministic order.
+/// claims, the retraction records themselves and identity-link records
+/// (U-27: links are hidden from the profile and so from the share draft),
+/// in a deterministic order.
 pub fn published_claims(
     owner_did: &str,
     records: &[RepoRecord],
@@ -53,6 +56,7 @@ pub fn published_claims(
 ) -> Vec<PublishedClaim> {
     let mut shown: Vec<PublishedClaim> = live_claims(owner_did, records, origin)
         .iter()
+        .filter(|(_, claim)| !is_reserved_predicate(&claim.predicate))
         .map(|(rkey, claim)| shown_claim(rkey, claim))
         .collect();
     shown.sort();
@@ -60,7 +64,7 @@ pub fn published_claims(
 }
 
 /// The owner's live published claim under `rkey` — the only claim a
-/// retraction may be built for (US-BRA-011). `None` once it is retracted,
+/// retraction may be built for (US-BRA-011), identity links included (03-09). `None` once it is retracted,
 /// or if it is not the owner's own self-attested claim.
 pub fn live_published_claim(
     owner_did: &str,
@@ -292,6 +296,149 @@ mod tests {
                 Some(ProfileSubject::Handle(handle)) => prop_assert!(handle.contains('.')),
                 None => {}
             }
+        }
+    }
+
+    /// Universe for the link properties: the owner's own repo read from the
+    /// owner's PDS, holding ordinary claims (one per philosophy slot, some
+    /// under a case variant of the reserved predicate) interleaved with the
+    /// owner's link records, built by the production link encoder.
+    const PHILOSOPHIES: [&str; 3] = ["memory-safety", "test-first", "small-commits"];
+    const SHARE_PROFILE_URL: &str = "https://review.example/@priya.example";
+
+    fn arb_account() -> impl Strategy<Value = (String, u64)> {
+        ("[a-z][a-z0-9-]{0,15}", 1u64..=u64::from(u32::MAX))
+    }
+
+    /// The owner's link record for the GitHub `account`, from the production
+    /// encoder (the bio names the owner's DID, so the link is proven).
+    fn link_record((login, user_id): &(String, u64)) -> RepoRecord {
+        let observation = ports::claim_domain::identity_link::GithubObservation {
+            login: login.clone(),
+            user_id: *user_id,
+            bio: Some(format!("my DID: {OWNER}")),
+        };
+        let body = ports::claim_domain::identity_link::self_attested_link_record(
+            OWNER,
+            &observation,
+            "2026-10-17T09:30:00Z",
+        )
+        .expect("the bio names the DID, so the link is proven");
+        repo_record(body, owner_shape(10_000))
+    }
+
+    fn owner_shape(confidence_bp: u16) -> RecordShape {
+        RecordShape {
+            in_owner_repo: true,
+            author: 0,
+            signed: false,
+            rkey_is_cid: true,
+            confidence_bp,
+        }
+    }
+
+    /// An ordinary claim of the owner naming `PHILOSOPHIES[philosophy]`,
+    /// under the reserved predicate's upper-cased spelling when `case_variant`.
+    fn ordinary_record(
+        index: usize,
+        philosophy: usize,
+        case_variant: bool,
+        confidence_bp: u16,
+    ) -> RepoRecord {
+        let mut body = claim_body(index, owner_shape(confidence_bp), None);
+        body["object"] = serde_json::json!(format!(
+            "org.openlore.philosophy.{}",
+            PHILOSOPHIES[philosophy]
+        ));
+        if case_variant {
+            body["predicate"] = serde_json::json!(
+                ports::claim_domain::identity_link::link_predicate().to_uppercase()
+            );
+        }
+        repo_record(body, owner_shape(confidence_bp))
+    }
+
+    fn arb_ordinary() -> impl Strategy<Value = (usize, bool, u16)> {
+        (0usize..PHILOSOPHIES.len(), any::<bool>(), 0u16..=10_000)
+    }
+
+    proptest! {
+        /// For any mix of ordinary claims and link records, the profile list
+        /// is the list of the ordinary claims alone, and the share draft
+        /// built from it never names a linked account yet names every
+        /// ordinary philosophy (U-27).
+        #[test]
+        fn a_link_record_never_reaches_the_profile_list_or_the_share_draft(
+            ordinary in proptest::collection::vec(arb_ordinary(), 0..5),
+            accounts in proptest::collection::vec(arb_account(), 1..4),
+            link_slots in proptest::collection::vec(0usize..6, 1..4),
+        ) {
+            let mut records: Vec<RepoRecord> = ordinary
+                .iter()
+                .enumerate()
+                .map(|(i, (philosophy, variant, bp))| ordinary_record(i, *philosophy, *variant, *bp))
+                .collect();
+            let mut expected: Vec<PublishedClaim> = ordinary
+                .iter()
+                .zip(&records)
+                .enumerate()
+                .map(|(i, ((philosophy, _, bp), record))| PublishedClaim {
+                    subject: format!("github:priyaraman/repo{i}"),
+                    object: format!("org.openlore.philosophy.{}", PHILOSOPHIES[*philosophy]),
+                    confidence_bp: *bp,
+                    rkey: record.rkey.clone(),
+                })
+                .collect();
+            expected.sort();
+            for (account, slot) in accounts.iter().zip(link_slots.iter().cycle()) {
+                records.insert((*slot).min(records.len()), link_record(account));
+            }
+
+            let published = published_claims(OWNER, &records, RecordOrigin::AuthorPds);
+            prop_assert_eq!(&published, &expected);
+
+            let draft = match crate::share::share_post_plan(SHARE_PROFILE_URL, &published) {
+                Ok(plan) => plan.draft().text().to_string(),
+                Err(_) => {
+                    prop_assert!(ordinary.is_empty(), "only an empty profile has nothing to share");
+                    crate::share::share_draft(SHARE_PROFILE_URL, &published)
+                        .expect("the bare draft")
+                        .draft()
+                        .text()
+                        .to_string()
+                }
+            };
+            for (login, _) in &accounts {
+                let linked = format!("github:{login}");
+                prop_assert!(!draft.contains(&linked), "draft {:?} names {}", draft, linked);
+            }
+            for (philosophy, _, _) in &ordinary {
+                prop_assert!(draft.contains(PHILOSOPHIES[*philosophy]), "draft {:?} omits {}", draft, PHILOSOPHIES[*philosophy]);
+            }
+        }
+
+        /// A live link record stays reachable under its own key, so /retract
+        /// can retract it (03-09), whatever ordinary claims surround it.
+        #[test]
+        fn a_live_link_record_can_still_be_retracted(
+            ordinary in proptest::collection::vec(arb_ordinary(), 0..4),
+            account in arb_account(),
+            slot in 0usize..5,
+        ) {
+            let mut records: Vec<RepoRecord> = ordinary
+                .iter()
+                .enumerate()
+                .map(|(i, (philosophy, variant, bp))| ordinary_record(i, *philosophy, *variant, *bp))
+                .collect();
+            let link = link_record(&account);
+            let rkey = link.rkey.clone();
+            records.insert(slot.min(records.len()), link);
+
+            let live = live_published_claim(OWNER, &records, RecordOrigin::AuthorPds, &rkey);
+            let live = live.expect("the live link is found under its key");
+            prop_assert_eq!(&live.subject, &OWNER.to_string());
+            prop_assert_eq!(&live.object, &format!("github:{}", account.0));
+            prop_assert!(ports::claim_domain::identity_link::is_reserved_predicate(&live.predicate));
         }
     }
 }
