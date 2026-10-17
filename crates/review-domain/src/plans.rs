@@ -7,6 +7,7 @@
 //! points (ADR-070), and its record key is the claim's canonical CID
 //! (claim-domain's one canonicalizer) — the SPIKE-1 wire shape.
 
+use ports::claim_domain::identity_link::is_reserved_predicate;
 use ports::claim_domain::{
     decode_claim_record, Cid, ClaimError, ClaimRecord, ClaimReference, Confidence, Did,
     ReferenceType, SelfAttestedClaim, UnsignedClaim,
@@ -45,6 +46,9 @@ pub enum PlanError {
     /// A stored plan no longer is the self-attested record of its owner
     /// under its own key (tampered or corrupted): it is never executed.
     NotTheOwnersRecord,
+    /// The record's predicate is reserved for identity links: a link is
+    /// never built or restored as a claim publish (F-02, ADR-084 §4).
+    ReservedPredicate,
 }
 
 impl From<ClaimError> for PlanError {
@@ -116,6 +120,7 @@ pub fn publish_edited_plan(
     edit: &ClaimEdit,
     composed_at: &str,
 ) -> Result<PublishPlan, PlanError> {
+    refuse_reserved_predicate(&draft.key.predicate)?;
     let unsigned = UnsignedClaim {
         subject: draft.key.subject.clone(),
         predicate: draft.key.predicate.clone(),
@@ -134,11 +139,22 @@ pub fn publish_edited_plan(
     })
 }
 
+/// A claim publish never carries a predicate reserved for identity links:
+/// a link is published only as a [`crate::link_plan::LinkPlan`] (F-02).
+fn refuse_reserved_predicate(predicate: &str) -> Result<(), PlanError> {
+    if is_reserved_predicate(predicate) {
+        Err(PlanError::ReservedPredicate)
+    } else {
+        Ok(())
+    }
+}
+
 /// Restore a stored plan for `owner_did`, admitting it only if its record
 /// still is a self-attested claim authored by the owner whose recomputed
-/// CID is its plan id.
+/// CID is its plan id, and is not an identity link.
 pub fn restore_plan(owner_did: &str, stored: &StoredPublishPlan) -> Result<PublishPlan, PlanError> {
     let claim = owners_stored_claim(owner_did, stored, PlanKind::Publish)?;
+    refuse_reserved_predicate(&claim.unsigned().predicate)?;
     // A publish creates a fresh claim: a record that references another
     // (a retraction above all) is never published through this confirm.
     if !claim.unsigned().references.is_empty() {
@@ -545,6 +561,63 @@ mod tests {
                 };
                 prop_assert_eq!(admitted, kind == label && label == confirm, "{:?} labelled {:?} confirmed as {:?}", kind, label, confirm);
             }
+        }
+    }
+
+    proptest! {
+        /// Universe: owner DIDs × GitHub accounts × kind labels × look-alike
+        /// predicates. The record the production link encoder composes is
+        /// never built or restored as a claim publish, whatever its label;
+        /// a predicate that merely resembles the reserved one (another case,
+        /// surrounding whitespace) still builds and restores as a claim.
+        #[test]
+        fn a_reserved_predicate_record_is_never_built_or_restored_as_a_claim_publish(
+            (did, ordinary) in arb_draft(),
+            login in "[a-z][a-z0-9-]{0,15}",
+            user_id in 1u64..=u64::from(u32::MAX),
+            label in proptest::sample::select(PlanKind::ALL.to_vec()),
+            look_alike in 0usize..4,
+        ) {
+            use ports::claim_domain::identity_link::{check_link, link_predicate, GithubObservation, LinkDraft, ProofCheck};
+            let observation = GithubObservation { login, user_id, bio: Some(did.clone()) };
+            let Ok(ProofCheck::Verified(proven)) = check_link(&Did(did.clone()), &observation) else {
+                panic!("the bio names the DID");
+            };
+            let composed_at = "2026-10-17T09:30:00Z";
+            let link = LinkDraft::new(&proven, composed_at).into_unsigned();
+            let key = SuggestionKey {
+                subject: link.subject.clone(),
+                predicate: link.predicate.clone(),
+                object: link.object.clone(),
+            };
+            let draft = ClaimDraft { key: key.clone(), evidence: link.evidence.clone(), confidence_bp: 10_000 };
+            let edit = ClaimEdit { object: link.object.clone(), confidence_bp: 10_000 };
+            prop_assert_eq!(publish_plan(&did, &draft, composed_at), Err(PlanError::ReservedPredicate));
+            prop_assert_eq!(publish_edited_plan(&did, &draft, &edit, composed_at), Err(PlanError::ReservedPredicate));
+
+            let record = claim_record_json(&link);
+            let stored = StoredPublishPlan {
+                plan_id: SelfAttestedClaim::new(link.clone()).expect("canonical").cid().0.clone(),
+                kind: label,
+                key,
+                record_json: record.to_string(),
+            };
+            prop_assert!(restore_plan(&did, &stored).is_err(), "labelled {:?}", label);
+            prop_assert!(restore_plan(&did, &StoredPublishPlan { kind: PlanKind::Publish, ..stored }).is_err(), "refused");
+
+            let reserved = link_predicate();
+            let predicate = [
+                reserved.to_lowercase(),
+                reserved.to_uppercase(),
+                format!("{reserved} "),
+                format!(" {reserved}"),
+            ][look_alike].clone();
+            let resembling = ClaimDraft {
+                key: SuggestionKey { predicate, ..ordinary.key.clone() },
+                ..ordinary
+            };
+            let plan = publish_plan(&did, &resembling, composed_at).expect("a look-alike is an ordinary claim");
+            prop_assert_eq!(&restore_plan(&did, &plan.stored()), &Ok(plan.clone()));
         }
     }
 

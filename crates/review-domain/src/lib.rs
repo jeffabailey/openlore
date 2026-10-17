@@ -11,6 +11,7 @@ pub mod budget;
 pub mod edits;
 pub mod kpi;
 pub mod lifecycle;
+pub mod link_plan;
 pub mod ownership;
 pub mod plans;
 pub mod published;

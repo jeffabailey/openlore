@@ -106,7 +106,7 @@ fn live_claims<'r>(
 }
 
 /// The record's claim, if its provenance verdict is self-attested by `owner`.
-fn self_attested<'r>(
+pub(crate) fn self_attested<'r>(
     record: &'r RepoRecord,
     owner: &Did,
     origin: RecordOrigin,
