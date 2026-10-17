@@ -419,7 +419,6 @@ fn a_link_its_peer_author_superseded_no_longer_shows() {
 ///   And GitHub was not asked anything, and nothing was recorded
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: U-19 — pending DELIVER fix"]
 fn a_link_from_a_peer_jeff_removed_no_longer_shows_or_is_rechecked() {
     let mut world = LinkWorld::with(&[RACHEL_GH]);
     bio_names(&world, RACHEL_GH, RACHEL_DID);
@@ -893,7 +892,6 @@ fn reading_a_renamed_account_refreshes_its_link_once() {
 ///   And nothing was recorded
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: U-19 — pending DELIVER fix"]
 fn reading_a_person_shows_no_link_from_a_peer_jeff_removed() {
     let mut world = LinkWorld::with(&[RACHEL_GH]);
     bio_names(&world, RACHEL_GH, RACHEL_DID);

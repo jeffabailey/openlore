@@ -43,12 +43,22 @@ const LATEST_CHECKS_SQL: &str = "
     WHERE recency = 1
     ORDER BY subject_did, github_user_id";
 
+/// Every link candidate any reader sees (list, verify, person views): Jeff's
+/// own links plus the links cached from peers he has not removed (U-19). A
+/// soft-removed peer keeps its cached rows (ADR-057) but contributes no
+/// candidate; a re-added peer's links are candidates again.
 const LINK_CANDIDATES_SQL: &str = "
     SELECT cid, author_did, subject, predicate, object, 'app-signed' AS provenance
     FROM claims WHERE predicate = ?
     UNION ALL
     SELECT cid, author_did, subject, predicate, object, COALESCE(provenance, 'app-signed')
-    FROM peer_claims WHERE predicate = ?
+    FROM peer_claims
+    WHERE predicate = ?
+      AND NOT EXISTS (
+          SELECT 1 FROM peer_subscriptions
+          WHERE peer_subscriptions.peer_did = peer_claims.author_did
+            AND peer_subscriptions.removed_at IS NOT NULL
+      )
     ORDER BY cid";
 
 /// The evidence of one candidate, in signed order (own or peer claim).
