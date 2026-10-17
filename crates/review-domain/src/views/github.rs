@@ -3,10 +3,27 @@
 use maud::html;
 
 use super::*;
+use crate::link_plan::LinkPlan;
 use crate::ownership::OwnershipRefusal;
 
 /// The label of the button that checks the bio.
 pub const VERIFY_LABEL: &str = "Verify";
+
+/// The verified owner's offer to publish the link (Q-GDL-D1).
+pub const PUBLISH_LINK_LABEL: &str = "Publish this link";
+
+/// The form field naming the GitHub account to check or link (U-26).
+pub const GITHUB_LOGIN_FIELD: &str = "github_login";
+
+/// Where the offer asks for the link preview.
+pub const LINK_PREVIEW_ACTION: &str = "/github/link";
+
+/// Where the link preview's plan is confirmed (03-05).
+const LINK_CONFIRM_ACTION: &str = "/github/link/publish";
+
+/// What publishing a link means (RA-1a, ADR-084 §5).
+pub const LINK_PUBLIC_NOTICE: &str = "This link is public: anyone can read it in your repo. \
+     Retracting this link later withdraws it but does not erase it.";
 
 /// What happened when the person pressed Verify.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +98,17 @@ pub fn github_page(
     csrf_token: &str,
     notice: Option<(OwnershipOutcome<'_>, &str)>,
 ) -> String {
+    github_step_page(session_did, csrf_token, notice, None)
+}
+
+/// The GitHub step, offering "Publish this link" for `verified_login` — the
+/// account the app has verified for this owner, if any (RA-9).
+pub fn github_step_page(
+    session_did: &str,
+    csrf_token: &str,
+    notice: Option<(OwnershipOutcome<'_>, &str)>,
+    verified_login: Option<&str>,
+) -> String {
     page(
         "Prove your GitHub account",
         html! {
@@ -99,11 +127,50 @@ pub fn github_page(
             form method="post" action="/github" {
                 (csrf_field(csrf_token))
                 label for="github_login" { "GitHub username" }
-                input id="github_login" name="github_login" type="text" required;
+                input id="github_login" name=(GITHUB_LOGIN_FIELD) type="text" required;
                 button type="submit" { (VERIFY_LABEL) }
+            }
+            @if let Some(login) = verified_login {
+                (link_offer(login, csrf_token))
             }
             (back_to_queue())
             script src="/assets/copy.js" {}
+        },
+    )
+}
+
+/// The offer to preview the link to the verified account `login`.
+fn link_offer(login: &str, csrf_token: &str) -> Markup {
+    html! {
+        form method="post" action=(LINK_PREVIEW_ACTION) {
+            (csrf_field(csrf_token))
+            input type="hidden" name=(GITHUB_LOGIN_FIELD) value=(login);
+            button type="submit" { (PUBLISH_LINK_LABEL) }
+        }
+    }
+}
+
+/// The link preview: the exact record a confirm adds to the owner's repo,
+/// that it is public, and what retracting it does. Nothing is written here.
+pub fn link_preview_page(plan: &LinkPlan, csrf_token: &str) -> String {
+    let claim = plan.claim();
+    page(
+        "Publish this link?",
+        html! {
+            h1 { "Publish this link?" }
+            p { "This record will be added to your repo:" }
+            p { code { (claim.subject) " " (claim.predicate) " " (claim.object) } }
+            p { "Evidence:" }
+            ul {
+                @for evidence in &claim.evidence {
+                    li { code { (evidence) } }
+                }
+            }
+            p { strong { (LINK_PUBLIC_NOTICE) } }
+            p { "It will be added at " code { (plan.at_uri()) } "." }
+            p { "Nothing has been published yet." }
+            (plan_form(LINK_CONFIRM_ACTION, plan.rkey(), csrf_token, PUBLISH_LABEL))
+            p { a href="/github" { (CANCEL_LABEL) } }
         },
     )
 }

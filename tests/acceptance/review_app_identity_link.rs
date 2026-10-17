@@ -28,7 +28,6 @@ use review_app::*;
 ///   And nothing has been written to her repo
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn priya_sees_exactly_what_her_link_will_publish_before_anything_is_written() {
     let world = ReviewWorld::new();
     let mut browser = given_github_verified(&world, Persona::Priya);
@@ -290,7 +289,6 @@ fn a_link_confirmation_that_did_not_come_from_priyas_own_page_is_refused() {
 ///   Then nothing is written and "Publish this link" is offered again
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn leaving_the_link_preview_publishes_nothing_and_keeps_the_offer_open() {
     let world = ReviewWorld::new();
     let mut browser = given_github_verified(&world, Persona::Priya);
@@ -395,7 +393,6 @@ fn an_ended_session_at_confirmation_publishes_nothing_and_asks_priya_to_sign_in_
 ///     | Priya verified and then signed out                                    | not offered |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn only_an_owner_the_app_has_verified_is_offered_publish_this_link() {
     let rows = [
         ("verified", true),
@@ -459,7 +456,6 @@ fn only_an_owner_the_app_has_verified_is_offered_publish_this_link() {
 ///     | the request names the malformed username "-priyaraman-" | with "We couldn't find a GitHub account"      |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_link_preview_request_that_fails_a_guard_asks_github_nothing_and_keeps_nothing() {
     let rows = [
         "no page token",
@@ -532,7 +528,6 @@ fn a_link_preview_request_that_fails_a_guard_asks_github_nothing_and_keeps_nothi
 ///     | cannot be reached          |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn when_github_cannot_be_read_for_a_link_preview_priya_is_refused_without_seeing_the_apps_token() {
     for row in ["rate limited", "token rejected", "offline"] {
         let world = ReviewWorld::new();
@@ -568,7 +563,6 @@ fn when_github_cannot_be_read_for_a_link_preview_priya_is_refused_without_seeing
 ///   And nothing is written to anyone's repo
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn sam_cannot_publish_priyas_github_account_as_his_own() {
     let world = ReviewWorld::new();
     puts_did_in_bio(&world, Persona::Sam);
@@ -607,7 +601,6 @@ fn sam_cannot_publish_priyas_github_account_as_his_own() {
 ///   And no link is offered for confirmation and nothing is written
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_bio_naming_someone_elses_did_is_explained_with_that_did_in_full_and_nothing_is_offered() {
     let world = ReviewWorld::new();
     let mut browser = given_github_verified(&world, Persona::Priya);
@@ -760,7 +753,6 @@ fn priyas_published_link_stays_off_her_public_profile_and_her_share_draft() {
 ///   And confirming the link preview afterwards publishes nothing either
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn a_link_preview_confirmed_as_an_ordinary_claim_publish_writes_nothing_and_is_used_up() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);

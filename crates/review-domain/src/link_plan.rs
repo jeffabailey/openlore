@@ -8,13 +8,16 @@
 //! stored plan restores only as the owner's own projecting link under its
 //! own key.
 
-use ports::claim_domain::identity_link::{project, ClaimFields, LinkDraft, ProvenLink};
+use ports::claim_domain::identity_link::{
+    check_link, project, ClaimFields, GithubObservation, LinkDraft, ProofCheck, ProvenLink,
+};
 use ports::claim_domain::{
     bare_did, claim_record_json, Did, Provenance, RecordOrigin, SelfAttestedClaim, UnsignedClaim,
 };
 use ports::{PlanKind, RepoRecord, StoredPublishPlan, SuggestionKey};
 use serde_json::Value;
 
+use crate::ownership::{prove_ownership, GithubAccount, OwnershipRefusal};
 use crate::plans::{at_uri, PlanError};
 use crate::published::self_attested;
 
@@ -90,6 +93,34 @@ pub fn link_plan(
         owner_did: owner_did.to_string(),
         link: SelfAttestedClaim::new(link)?,
     })
+}
+
+/// The link preview (RA-1a, RA-11): the plan publishing `owner_did`'s link
+/// to the account `observation` read just now, or why that read does not
+/// prove it. The proof is this fresh read, never a stored verification
+/// (C-GDL-10). Pure: nothing is written.
+pub fn link_preview(
+    owner_did: &str,
+    observation: &GithubObservation,
+    composed_at: &str,
+) -> Result<LinkPlan, OwnershipRefusal> {
+    prove_ownership(owner_did, &account_observed(observation), None)?;
+    let proven = match check_link(&Did(owner_did.to_string()), observation) {
+        Ok(ProofCheck::Verified(proven)) => proven,
+        Ok(ProofCheck::Disproved { .. }) | Err(_) => {
+            return Err(OwnershipRefusal::GithubUnavailable)
+        }
+    };
+    link_plan(owner_did, &proven, composed_at).map_err(|_| OwnershipRefusal::GithubUnavailable)
+}
+
+/// The facts of the fresh read the ownership proof explains a refusal by.
+fn account_observed(observation: &GithubObservation) -> GithubAccount<'_> {
+    GithubAccount {
+        login: &observation.login,
+        user_id: observation.user_id,
+        bio: observation.bio.as_deref(),
+    }
 }
 
 /// Restore a stored link plan for `owner_did`, admitting it only if it is a
@@ -279,6 +310,52 @@ mod tests {
 
             // The link plan is never a claim publish (F-02).
             prop_assert!(restore_plan(&did, &stored).is_err());
+        }
+
+        /// Universe: owner DIDs × another DID × GitHub answers (a real or a
+        /// malformed account) × literal bios. `link_preview` builds a plan
+        /// exactly when the fresh read names a real account and its bio
+        /// names the signed-in DID as a token; the plan links that DID to
+        /// that account, is the owner's own link plan, and is never a claim
+        /// publish (`restore_plan` refuses it on both confirm paths).
+        #[test]
+        fn a_link_preview_builds_a_plan_exactly_when_the_fresh_read_proves_the_signed_in_did(
+            did in arb_did(), other in arb_did(), account in arb_account(),
+            bio_kind in 0usize..6, real_account in any::<bool>(),
+        ) {
+            prop_assume!(did != other);
+            let (login, user_id) = account;
+            let (bio, names_did) = match bio_kind {
+                0 => (Some(format!("my DID: {did}")), true),
+                1 => (Some(format!("Builder. {did}.")), true),
+                2 => (Some(format!("Builder. {other}")), false),
+                3 => (Some(format!("my DID: {did}x")), false),
+                4 => (Some("no DID here".to_string()), false),
+                _ => (None, false),
+            };
+            let observation = GithubObservation {
+                login: login.clone(),
+                user_id: if real_account { user_id } else { 0 },
+                bio,
+            };
+
+            let preview = link_preview(&did, &observation, COMPOSED_AT);
+
+            prop_assert_eq!(preview.is_ok(), names_did && real_account, "{:?}", preview);
+            match preview {
+                Ok(plan) => {
+                    prop_assert_eq!(plan.owner_did(), did.as_str());
+                    prop_assert_eq!(&plan.claim().subject, &did);
+                    prop_assert_eq!(&plan.claim().object, &format!("github:{login}"));
+                    prop_assert_eq!(&restore_link_plan(&did, &plan.stored()), &Ok(plan.clone()));
+                    prop_assert!(restore_plan(&did, &plan.stored()).is_err());
+                }
+                // RA-11b: a bio naming another DID is explained with that DID.
+                Err(refusal) if real_account && bio_kind == 2 => {
+                    prop_assert_eq!(refusal, OwnershipRefusal::DifferentDid(other));
+                }
+                Err(_) => {}
+            }
         }
 
         /// One encoder, no copy: the plan's record is exactly the record

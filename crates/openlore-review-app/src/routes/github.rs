@@ -25,7 +25,7 @@ pub(crate) struct VerifyAttempts(Mutex<HashMap<String, Vec<Instant>>>);
 
 impl VerifyAttempts {
     /// Count an attempt by `owner_did` if the hourly budget allows it.
-    fn try_spend(&self, owner_did: &str) -> bool {
+    pub(crate) fn try_spend(&self, owner_did: &str) -> bool {
         let Ok(mut attempts) = self.0.lock() else {
             return false;
         };
@@ -58,10 +58,11 @@ pub(crate) fn github_step_of(link: Option<&GithubLink>) -> GithubStep<'_> {
     }
 }
 
-/// `GET /github`: the exact DID, where to put it, and the Verify form.
+/// `GET /github`: the exact DID, where to put it, the Verify form and, for
+/// a verified owner, the offer to publish the link.
 pub(crate) fn github_step(app: &App, request: &PageRequest) -> Reply {
     match current_session(app, request) {
-        Some((cookie_value, session)) => github_page(&session, &cookie_value, None),
+        Some((cookie_value, session)) => github_page(app, &session, &cookie_value, None),
         None => to_landing(),
     }
 }
@@ -86,7 +87,7 @@ pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
         }
     };
     let message = views::ownership_message(shown, &login, &session.owner_did, &session.handle);
-    github_page(&session, &cookie_value, Some((shown, &message)))
+    github_page(app, &session, &cookie_value, Some((shown, &message)))
 }
 
 /// Read the profile, prove ownership and record the link. Returns the login
@@ -168,13 +169,27 @@ pub(crate) fn refusal_of(error: &GithubError) -> OwnershipRefusal {
     }
 }
 
-fn github_page(
+/// The GitHub step page; "Publish this link" is offered only while the
+/// owner's stored link is verified (RA-9). The offer is all the row
+/// decides: the link itself is proven by the preview's own fresh read.
+pub(crate) fn github_page(
+    app: &App,
     session: &WebSession,
     cookie_value: &str,
     notice: Option<(OwnershipOutcome<'_>, &str)>,
 ) -> Reply {
+    let link = app.links.github_link(&session.owner_did).ok().flatten();
+    let verified_login = link
+        .as_ref()
+        .filter(|link| link.verified)
+        .map(|link| link.github_login.as_str());
     Reply::page(
         StatusCode::OK,
-        views::github_page(&session.owner_did, &csrf_token_for(cookie_value), notice),
+        views::github_step_page(
+            &session.owner_did,
+            &csrf_token_for(cookie_value),
+            notice,
+            verified_login,
+        ),
     )
 }

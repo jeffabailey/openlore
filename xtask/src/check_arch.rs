@@ -1823,6 +1823,41 @@ pub fn scan_identity_verify_holds_no_storage_or_signing_handle(
         .collect())
 }
 
+/// The review app's link preview route and what it may not name: the stored
+/// GitHub verification (the port and its methods). The proof of a link is
+/// the route's own fresh read, never the `github_links` row (C-GDL-10,
+/// ADR-085 §2, U-26).
+const LINK_PREVIEW_ROUTE_SOURCE: &str = "crates/openlore-review-app/src/routes/github_link.rs";
+const LINK_PREVIEW_ROUTE_FORBIDDEN_TOKENS: &[&str] = &[
+    "GithubLinkPort",
+    "github_link",
+    "record_verified_link",
+    "mark_link_unverified",
+];
+
+/// Effect shell for `link_preview_proves_from_a_fresh_read`.
+pub fn scan_link_preview_proves_from_a_fresh_read(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let path = workspace_root.join(LINK_PREVIEW_ROUTE_SOURCE);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let source = std::fs::read_to_string(&path)?;
+    Ok(
+        reader_findings(&source, LINK_PREVIEW_ROUTE_FORBIDDEN_TOKENS)
+            .into_iter()
+            .map(|finding| {
+                format!(
+                    "{LINK_PREVIEW_ROUTE_SOURCE}: {finding} — the link preview proves the link \
+                     from its own fresh GitHub read and never reads the stored verification \
+                     (link_preview_proves_from_a_fresh_read, C-GDL-10 / U-26)"
+                )
+            })
+            .collect(),
+    )
+}
+
 /// The purge capability's names: the port, its one method and the composition
 /// root's slot holding it.
 const IDENTITY_LINK_PURGE_TOKENS: &[&str] = &[
@@ -2957,6 +2992,7 @@ pub fn run() -> anyhow::Result<i32> {
         scan_identity_link_purge_only_in_forget_verb(&workspace_root)?;
     let identity_verify_findings =
         scan_identity_verify_holds_no_storage_or_signing_handle(&workspace_root)?;
+    let link_preview_findings = scan_link_preview_proves_from_a_fresh_read(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -2980,6 +3016,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(identity_link_compose_findings);
     rendered.extend(identity_link_purge_findings);
     rendered.extend(identity_verify_findings);
+    rendered.extend(link_preview_findings);
 
     if rendered.is_empty() {
         println!(
@@ -4322,6 +4359,51 @@ mod tests {
                 .expect("scan real tree"),
             Vec::<String>::new(),
             "the real verify verb holds the narrow handles only"
+        );
+    }
+
+    // --- link_preview_proves_from_a_fresh_read (C-GDL-10, U-26) -------------
+
+    #[test]
+    fn link_preview_scan_reports_the_stored_verification_and_passes_the_real_tree() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let routes = violating
+            .path()
+            .join("crates/openlore-review-app/src/routes");
+        std::fs::create_dir_all(&routes).expect("mkdir");
+        std::fs::write(
+            routes.join("github_link.rs"),
+            "// the github_link row is never the proof\n\
+             use ports::{GithubPort, PublishPlanPort};\n\
+             fn row(links: &dyn GithubLinkPort) { links.github_link(\"d\"); }\n\
+             fn keep(app: &App) { app.links.record_verified_link(\"d\", \"l\", 1, t); }\n\
+             fn lapse(app: &App) { app.links.mark_link_unverified(\"d\", \"v\"); }\n",
+        )
+        .expect("write");
+        let findings = scan_link_preview_proves_from_a_fresh_read(violating.path()).expect("scan");
+        assert_eq!(
+            findings.len(),
+            LINK_PREVIEW_ROUTE_FORBIDDEN_TOKENS.len(),
+            "{findings:?}"
+        );
+        for token in LINK_PREVIEW_ROUTE_FORBIDDEN_TOKENS {
+            assert!(
+                findings.iter().any(|f| f.contains(&format!("`{token}`"))),
+                "{token}: {findings:?}"
+            );
+        }
+        for allowed in ["GithubPort", "PublishPlanPort"] {
+            assert!(
+                !findings.iter().any(|f| f.contains(&format!("`{allowed}`"))),
+                "{allowed} is held by design: {findings:?}"
+            );
+        }
+
+        assert_eq!(
+            scan_link_preview_proves_from_a_fresh_read(real_workspace_root())
+                .expect("scan real tree"),
+            Vec::<String>::new(),
+            "the real link preview route proves from its own fresh read"
         );
     }
 
