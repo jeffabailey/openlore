@@ -11,10 +11,15 @@
 //! same bare-DID rule `identity verify --did` uses (`is_in_scope`), and only
 //! that subject's checks are read. The scope selects lines; it never changes
 //! a standing.
+//!
+//! A person's duplicate records for one account read as one line naming
+//! every record ID, ascending (GDL-D9, U-9).
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use claim_domain::identity_link::{is_in_scope, link_view, LatestCheck, ReaderLink, RecheckScope};
+use claim_domain::identity_link::{
+    is_in_scope, link_view, listed_links, LatestCheck, ReaderLink, RecheckScope,
+};
 use ports::{
     CheckFilter, IdentityLinkCheckReadPort, LinkCandidateReadPort, LinkCheck, LinkLineageReadPort,
 };
@@ -53,7 +58,8 @@ pub fn run(
     scope: &RecheckScope,
     now: DateTime<Utc>,
 ) -> Result<String> {
-    let links: Vec<ReaderLink> = StoredLinkLineage::read(handles.claims, handles.lineage)?
+    let lineage = StoredLinkLineage::read(handles.claims, handles.lineage)?;
+    let links: Vec<ReaderLink> = lineage
         .reader_links()
         .into_iter()
         .filter(|reader| is_in_scope(scope, &reader.link, &reader.link.login))
@@ -68,7 +74,10 @@ pub fn run(
         .map(latest_of)
         .collect();
     Ok(render_linked_identities(
-        &link_view(&links, &latest, now),
+        &listed_links(
+            link_view(&links, &latest, now),
+            &lineage.active_link_records(),
+        ),
         now,
     ))
 }

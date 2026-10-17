@@ -8,8 +8,8 @@
 
 use anyhow::Result;
 use claim_domain::identity_link::{
-    active_links, link_predicate, links_to_recheck, ClaimFields, GithubObservation, IdentityLink,
-    LinkLifecycle, ReaderLink, StoredClaim,
+    active_link_records, active_links, link_predicate, links_to_recheck, ClaimFields,
+    GithubObservation, IdentityLink, LinkLifecycle, LinkRecord, ReaderLink, StoredClaim,
 };
 use claim_domain::{ClaimLineage, SignedClaim};
 use ports::{GithubAccountProfile, LinkCandidate, LinkCandidateReadPort, LinkLineageReadPort};
@@ -62,10 +62,12 @@ impl StoredLinkLineage {
         self.decide(links_to_recheck)
     }
 
-    fn decide(
-        &self,
-        decision: fn(&[StoredClaim<'_>], &[ClaimLineage<'_>]) -> Vec<IdentityLink>,
-    ) -> Vec<IdentityLink> {
+    /// The records stating an active link, each named by its record ID.
+    pub fn active_link_records(&self) -> Vec<LinkRecord> {
+        self.decide(active_link_records)
+    }
+
+    fn decide<T>(&self, decision: fn(&[StoredClaim<'_>], &[ClaimLineage<'_>]) -> Vec<T>) -> Vec<T> {
         let stored: Vec<StoredClaim<'_>> = self.candidates.iter().map(stored_claim).collect();
         let lineages: Vec<ClaimLineage<'_>> = self.referrers.iter().map(referrer_lineage).collect();
         decision(&stored, &lineages)

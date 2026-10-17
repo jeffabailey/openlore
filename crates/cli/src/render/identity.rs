@@ -1,7 +1,9 @@
 //! `openlore identity list` — the reader's linked identities (ADR-085 §5).
 
 use chrono::{DateTime, Utc};
-use claim_domain::identity_link::{link_predicate, CheckVerdict, LinkStanding, LinkedIdentity};
+use claim_domain::identity_link::{
+    link_predicate, CheckVerdict, LinkStanding, LinkedIdentity, ListedLink,
+};
 use claim_domain::UnsignedClaim;
 
 /// The empty state of `identity list` (Q-GDL-D1, content-frozen wording).
@@ -45,11 +47,26 @@ fn render_linked_identity(identity: &LinkedIdentity, now: DateTime<Utc>) -> Stri
     }
 }
 
-/// Render `identity list`: one line per linked identity.
-pub fn render_linked_identities(identities: &[LinkedIdentity], now: DateTime<Utc>) -> String {
-    identities
+/// The record IDs a line names: `record <id>` or `records <id>, <id>`.
+fn render_record_ids(record_ids: &[String]) -> String {
+    match record_ids {
+        [] => String::new(),
+        [only] => format!(" (record {only})"),
+        many => format!(" (records {})", many.join(", ")),
+    }
+}
+
+/// Render `identity list`: one line per linked identity, naming its records.
+pub fn render_linked_identities(listed: &[ListedLink], now: DateTime<Utc>) -> String {
+    listed
         .iter()
-        .map(|identity| format!("{}\n", render_linked_identity(identity, now)))
+        .map(|link| {
+            format!(
+                "{}{}\n",
+                render_linked_identity(&link.identity, now),
+                render_record_ids(&link.record_ids)
+            )
+        })
         .collect()
 }
 

@@ -369,7 +369,6 @@ fn each_link_line_says_how_old_its_check_is_and_suggests_a_recheck_after_thirty_
 ///   Then exactly one line shows "did:plc:rachel-test is github:rachelk", naming both records
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn two_link_records_for_the_same_person_and_account_read_as_one_link_naming_both() {
     let mut world = LinkWorld::with(&[RACHEL_GH]);
     bio_names(&world, RACHEL_GH, RACHEL_DID);

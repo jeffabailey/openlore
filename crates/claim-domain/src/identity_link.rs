@@ -7,7 +7,7 @@
 //! predicate readers select candidate rows with (Q-RM-4/Q-RM-5: the predicate
 //! literal appears nowhere else).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroU64;
 
@@ -604,10 +604,74 @@ pub fn active_links(
     stored: &[StoredClaim<'_>],
     referrers: &[ClaimLineage<'_>],
 ) -> Vec<IdentityLink> {
+    active_link_records(stored, referrers)
+        .into_iter()
+        .map(|record| record.link)
+        .collect()
+}
+
+/// A link as one stored record states it, named by the record's ID (its
+/// claim CID).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkRecord {
+    pub record_id: String,
+    pub link: IdentityLink,
+}
+
+/// The records stating a link that its own author has neither retracted nor
+/// superseded.
+pub fn active_link_records(
+    stored: &[StoredClaim<'_>],
+    referrers: &[ClaimLineage<'_>],
+) -> Vec<LinkRecord> {
     stored
         .iter()
         .filter(|claim| lifecycle_of(claim, referrers) == LinkLifecycle::Active)
-        .filter_map(|claim| project(claim.fields, claim.provenance))
+        .filter_map(|claim| {
+            project(claim.fields, claim.provenance).map(|link| LinkRecord {
+                record_id: claim.lineage.cid.to_string(),
+                link,
+            })
+        })
+        .collect()
+}
+
+/// The IDs of the records stating each link, grouped by (DID, account id) —
+/// never by login (GDL-D9) — each group in ascending record-ID order (U-9).
+pub fn record_ids_per_link(records: &[LinkRecord]) -> BTreeMap<(String, u64), Vec<String>> {
+    records
+        .iter()
+        .fold(BTreeMap::new(), |mut groups, record| {
+            groups
+                .entry((record.link.did.clone(), record.link.user_id))
+                .or_insert_with(BTreeSet::new)
+                .insert(record.record_id.clone());
+            groups
+        })
+        .into_iter()
+        .map(|(key, ids)| (key, ids.into_iter().collect()))
+        .collect()
+}
+
+/// One shown link and the IDs of every record stating it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedLink {
+    pub identity: LinkedIdentity,
+    pub record_ids: Vec<String>,
+}
+
+/// Each shown link with the IDs of the records stating it (GDL-D9): a
+/// person's duplicate records for one account read as one line.
+pub fn listed_links(view: Vec<LinkedIdentity>, records: &[LinkRecord]) -> Vec<ListedLink> {
+    let record_ids = record_ids_per_link(records);
+    view.into_iter()
+        .map(|identity| ListedLink {
+            record_ids: record_ids
+                .get(&(identity.link.did.clone(), identity.link.user_id))
+                .cloned()
+                .unwrap_or_default(),
+            identity,
+        })
         .collect()
 }
 
@@ -952,5 +1016,78 @@ mod tests {
         assert!(covers("newname"));
         assert!(covers("OLDNAME"));
         assert!(!covers("someoneelse"));
+    }
+
+    proptest::proptest! {
+        /// Universe: link records over two DIDs, two account ids, two logins
+        /// and a handful of record IDs, in any order with repeats.
+        /// GDL-D9 / U-9: one group per (DID, account id) — a login never
+        /// splits or merges one — naming every record ID once, ascending.
+        #[test]
+        fn link_records_group_by_person_and_account_naming_every_record_id_ascending(
+            records in proptest::collection::vec(
+                (
+                    proptest::sample::select(vec!["did:plc:a", "did:plc:b"]),
+                    proptest::sample::select(vec!["rachelk", "renamed"]),
+                    1u64..=2,
+                    "bafy[a-e]{1,2}",
+                ),
+                0..12,
+            ),
+        ) {
+            let records: Vec<LinkRecord> = records
+                .into_iter()
+                .map(|(did, login, user_id, record_id)| LinkRecord {
+                    record_id,
+                    link: IdentityLink { did: did.to_string(), login: login.to_string(), user_id },
+                })
+                .collect();
+            let groups = record_ids_per_link(&records);
+            let expected: BTreeMap<(String, u64), BTreeSet<String>> =
+                records.iter().fold(BTreeMap::new(), |mut expected, record| {
+                    expected
+                        .entry((record.link.did.clone(), record.link.user_id))
+                        .or_default()
+                        .insert(record.record_id.clone());
+                    expected
+                });
+            proptest::prop_assert_eq!(
+                groups.keys().collect::<Vec<_>>(),
+                expected.keys().collect::<Vec<_>>()
+            );
+            for (key, ids) in &groups {
+                proptest::prop_assert!(ids.windows(2).all(|pair| pair[0] < pair[1]), "{ids:?}");
+                proptest::prop_assert_eq!(
+                    &ids.iter().cloned().collect::<BTreeSet<_>>(),
+                    &expected[key]
+                );
+            }
+        }
+    }
+
+    /// A shown link names its own records, and a link with one record names
+    /// that one record ID.
+    #[test]
+    fn a_shown_link_names_the_records_stating_it() {
+        let record = |record_id: &str, user_id: u64| LinkRecord {
+            record_id: record_id.to_string(),
+            link: linked(user_id),
+        };
+        let shown = |user_id: u64| LinkedIdentity {
+            link: linked(user_id),
+            standing: LinkStanding::NotChecked,
+        };
+        let listed = listed_links(
+            vec![shown(1), shown(2)],
+            &[record("bafyb", 1), record("bafyc", 2), record("bafya", 1)],
+        );
+        let named: Vec<&[String]> = listed.iter().map(|l| l.record_ids.as_slice()).collect();
+        assert_eq!(
+            named,
+            vec![
+                &["bafya".to_string(), "bafyb".to_string()][..],
+                &["bafyc".to_string()][..]
+            ]
+        );
     }
 }
