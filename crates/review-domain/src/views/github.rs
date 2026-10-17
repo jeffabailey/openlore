@@ -236,8 +236,9 @@ pub fn link_published_page(at_uri: &str) -> String {
     )
 }
 
-/// A link confirm that did not publish, and the owner's next step.
-pub fn link_not_published_page(why: LinkNotPublished) -> String {
+/// A link confirm that did not publish, and the owner's next step: Retry
+/// re-submits the kept plan to the link confirm (never the claim publish).
+pub fn link_not_published_page(why: LinkNotPublished, retry: Option<PublishRetry<'_>>) -> String {
     page(
         "Link not published",
         html! {
@@ -247,12 +248,65 @@ pub fn link_not_published_page(why: LinkNotPublished) -> String {
                 @if why != LinkNotPublished::NotAsPreviewed {
                     p { (NOTHING_PUBLISHED) }
                 }
-                @if why == LinkNotPublished::SessionExpired {
-                    p { a href="/" { (SIGN_IN_LABEL) } }
-                } @else {
-                    p { a href="/github" { "Back to the GitHub step" } }
+                @match (why, retry) {
+                    (LinkNotPublished::SessionExpired, _) => {
+                        p { a href="/" { (SIGN_IN_LABEL) } }
+                    }
+                    (_, Some(retry)) => {
+                        (plan_form(LINK_CONFIRM_ACTION, retry.plan_id, retry.csrf_token, RETRY_LABEL))
+                        p { a href="/github" { "Back to the GitHub step" } }
+                    }
+                    (_, None) => {
+                        p { a href="/github" { "Back to the GitHub step" } }
+                    }
                 }
             }
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    //! Universe: every way a link confirm ends without publishing × a kept
+    //! plan or none. The page offers Retry exactly when the plan was kept and
+    //! the session still holds; the Retry posts the plan to the link confirm.
+    use super::*;
+    use proptest::prelude::*;
+
+    const PLAN_ID: &str = "bafylinkplan";
+    const CSRF: &str = "csrf-token-7";
+
+    fn arb_why() -> impl Strategy<Value = LinkNotPublished> {
+        prop::sample::select(vec![
+            LinkNotPublished::Expired,
+            LinkNotPublished::TooManyAttempts,
+            LinkNotPublished::NotProven,
+            LinkNotPublished::SessionExpired,
+            LinkNotPublished::NotWritten,
+            LinkNotPublished::NotAsPreviewed,
+        ])
+    }
+
+    proptest! {
+        #[test]
+        fn a_kept_link_plan_is_retried_through_the_link_confirm_only(
+            why in arb_why(), kept in any::<bool>(),
+        ) {
+            let retry = kept.then_some(PublishRetry { plan_id: PLAN_ID, csrf_token: CSRF });
+
+            let html = link_not_published_page(why, retry);
+
+            let retry_form = format!(r#"<form method="post" action="{LINK_CONFIRM_ACTION}">"#);
+            let offers_retry = kept && why != LinkNotPublished::SessionExpired;
+            prop_assert_eq!(html.contains(&retry_form), offers_retry, "{}", html);
+            prop_assert_eq!(html.contains(&format!(">{RETRY_LABEL}</button>")), offers_retry, "{}", html);
+            prop_assert_eq!(html.contains(&format!(r#"name="plan" value="{PLAN_ID}""#)), offers_retry, "{}", html);
+            prop_assert!(!html.contains("/review/publish"), "{}", html);
+            prop_assert_eq!(
+                html.contains(SIGN_IN_LABEL),
+                why == LinkNotPublished::SessionExpired,
+                "{}", html
+            );
+        }
+    }
 }

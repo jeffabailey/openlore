@@ -21,6 +21,7 @@ use serde_json::Value;
 use crate::ownership::{prove_ownership, GithubAccount, OwnershipRefusal};
 use crate::plans::{at_uri, PlanError};
 use crate::published::self_attested;
+use crate::views::LinkNotPublished;
 
 /// The exact link record a confirm will create in the owner's own repo.
 #[derive(Debug, Clone, PartialEq)]
@@ -156,6 +157,15 @@ pub fn confirm_link(
 /// account (the one encoder, at the plan's own composition time).
 fn proves_the_plan(plan: &LinkPlan, proven: &ProvenLink) -> bool {
     LinkDraft::new(proven, &plan.claim().composed_at).claim() == plan.claim()
+}
+
+/// Whether a link confirm that ended `why` puts its plan back, unchanged,
+/// for one Retry (RA-12). Only a write the repo host did not take: the
+/// record key is the link's CID, so a Retry of a create that did land reads
+/// "already exists" as success (ADR-071, U-34). A refusal before the write,
+/// an ended session or a read-back mismatch keeps nothing.
+pub fn keeps_plan_for_retry(why: LinkNotPublished) -> bool {
+    why == LinkNotPublished::NotWritten
 }
 
 /// The facts of the fresh read the ownership proof explains a refusal by.
@@ -461,6 +471,24 @@ mod tests {
                 Some(PlanError::ReservedPredicate)
             );
             prop_assert!(restore_plan(&did, &stored).is_err());
+        }
+
+        /// Universe: every way a link confirm can end without publishing.
+        /// The plan is put back for Retry exactly when the repo host did not
+        /// take the write; an expired preview, a spent budget, an unproven
+        /// read, an ended session and a read-back mismatch keep nothing.
+        #[test]
+        fn a_link_confirm_keeps_its_plan_only_for_a_failed_write(
+            why in prop::sample::select(vec![
+                LinkNotPublished::Expired,
+                LinkNotPublished::TooManyAttempts,
+                LinkNotPublished::NotProven,
+                LinkNotPublished::SessionExpired,
+                LinkNotPublished::NotWritten,
+                LinkNotPublished::NotAsPreviewed,
+            ]),
+        ) {
+            prop_assert_eq!(keeps_plan_for_retry(why), why == LinkNotPublished::NotWritten, "{:?}", why);
         }
 
         /// One encoder, no copy: the plan's record is exactly the record

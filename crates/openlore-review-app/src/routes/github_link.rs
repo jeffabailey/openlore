@@ -9,22 +9,27 @@
 //! The confirm (03-05) takes the kind-publish plan once, admits it only as
 //! the owner's link (`restore_link_plan`), spends the budget, reads the
 //! profile again and writes only what `confirm_link` admits from that read.
+//! A failed write puts the plan back under its id with its unchanged
+//! deadline (03-06); its Retry is a full confirm through this same route.
 
 use hyper::StatusCode;
 use ports::claim_domain::identity_link::{check_link, GithubObservation};
 use ports::claim_domain::Did;
 use ports::{GithubAccountProfile, PlanKind, WebSession};
 use review_domain::link_plan::{
-    confirm_link, link_preview, restore_link_plan, LinkConfirmRefusal, LinkPlan,
+    confirm_link, keeps_plan_for_retry, link_preview, restore_link_plan, LinkConfirmRefusal,
+    LinkPlan,
 };
 use review_domain::ownership::{is_github_login, OwnershipRefusal};
 use review_domain::plans::{plan_expires_at, rfc3339_utc};
-use review_domain::views::{self, LinkNotPublished, OwnershipOutcome, GITHUB_LOGIN_FIELD};
+use review_domain::views::{
+    self, LinkNotPublished, OwnershipOutcome, PublishRetry, GITHUB_LOGIN_FIELD,
+};
 
 use crate::executor::{execute_link, PublishFailure};
 use crate::http::{App, PageRequest, Reply};
 use crate::limiter::unix_now_secs;
-use crate::routes::confirm::take_confirmed_plan;
+use crate::routes::confirm::{take_confirmed_plan, ConfirmedPlan};
 use crate::routes::github::{github_page, refusal_of};
 use crate::routes::review::not_found;
 use crate::routes::signin::{csrf_token_for, field, signed_in_post};
@@ -107,7 +112,7 @@ pub(crate) async fn publish_link(app: &App, request: &PageRequest) -> Reply {
         return not_published(StatusCode::GONE, LinkNotPublished::Expired, "expired");
     }
     match proven_again(app, plan).await {
-        Ok(plan) => write_link(app, &plan).await,
+        Ok(plan) => write_link(app, &plan, &confirmed).await,
         Err((why, label)) => not_published(StatusCode::CONFLICT, why, label),
     }
 }
@@ -142,8 +147,8 @@ fn label_of(refusal: &LinkConfirmRefusal) -> &'static str {
 }
 
 /// The create-only write and its read-back; the page names the record's
-/// exact address.
-async fn write_link(app: &App, plan: &LinkPlan) -> Reply {
+/// exact address. A write the host did not take keeps the plan for Retry.
+async fn write_link(app: &App, plan: &LinkPlan, confirmed: &ConfirmedPlan) -> Reply {
     match execute_link(app.repo_write.as_ref(), app.repo_read.as_ref(), plan).await {
         Ok(at_uri) => {
             emit(LogEvent::GithubLinkPublished);
@@ -151,9 +156,26 @@ async fn write_link(app: &App, plan: &LinkPlan) -> Reply {
         }
         Err(failure) => {
             let (why, label) = write_failure(&failure);
-            not_published(StatusCode::BAD_GATEWAY, why, label)
+            let retry = (keeps_plan_for_retry(why) && put_back(app, plan, confirmed)).then_some(
+                PublishRetry {
+                    plan_id: plan.rkey(),
+                    csrf_token: &confirmed.csrf_token,
+                },
+            );
+            emit(LogEvent::GithubLinkRefused(label));
+            Reply::page(
+                StatusCode::BAD_GATEWAY,
+                views::link_not_published_page(why, retry),
+            )
         }
     }
+}
+
+/// Keep the plan under its own id with the preview's unchanged deadline.
+fn put_back(app: &App, plan: &LinkPlan, confirmed: &ConfirmedPlan) -> bool {
+    app.plans
+        .put_publish_plan(plan.owner_did(), &plan.stored(), confirmed.expires_at)
+        .is_ok()
 }
 
 fn write_failure(failure: &PublishFailure) -> (LinkNotPublished, &'static str) {
@@ -168,5 +190,5 @@ fn write_failure(failure: &PublishFailure) -> (LinkNotPublished, &'static str) {
 
 fn not_published(status: StatusCode, why: LinkNotPublished, label: &'static str) -> Reply {
     emit(LogEvent::GithubLinkRefused(label));
-    Reply::page(status, views::link_not_published_page(why))
+    Reply::page(status, views::link_not_published_page(why, None))
 }
