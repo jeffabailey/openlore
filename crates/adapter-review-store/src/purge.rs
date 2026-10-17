@@ -111,6 +111,7 @@ mod tests {
                     handle: format!("{}.test", &owner[8..]),
                     pds_endpoint: "https://pds.test".into(),
                 },
+                1_700_000_000,
                 KpiTally::NONE,
             )
             .unwrap();

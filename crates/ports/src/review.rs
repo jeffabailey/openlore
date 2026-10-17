@@ -224,16 +224,23 @@ pub struct WebSession {
     pub csrf_hash: String,
 }
 
-/// Browser sessions (create, resolve, end).
+/// Browser sessions (create, resolve, end). Time is the caller's: `now` is
+/// the app's clock in unix seconds, so a session starts and expires by it.
 pub trait SessionPort: Send + Sync {
+    /// Start a session at `now`; it expires 30 days later (ADR-073).
     fn start_session(
         &self,
         session: &NewWebSession,
+        now: i64,
         tally: KpiTally<'_>,
     ) -> Result<(), ReviewStoreError>;
 
-    /// The live session whose cookie hashes to `session_hash`.
-    fn resolve_session(&self, session_hash: &str) -> Result<Option<WebSession>, ReviewStoreError>;
+    /// The session whose cookie hashes to `session_hash`, if still live at `now`.
+    fn resolve_session(
+        &self,
+        session_hash: &str,
+        now: i64,
+    ) -> Result<Option<WebSession>, ReviewStoreError>;
 
     fn end_session(&self, session_hash: &str, owner_did: &str) -> Result<(), ReviewStoreError>;
 }

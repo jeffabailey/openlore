@@ -16,6 +16,7 @@ use review_domain::views;
 use sha2::{Digest, Sha256};
 
 use crate::http::{App, PageRequest, Reply};
+use crate::limiter::unix_now_secs;
 use crate::routes::{
     github, github_link, profile, publish, retract, review, scan, settings, share,
 };
@@ -226,7 +227,10 @@ fn start_session(app: &App, identity: &ports::ResolvedIdentity) -> Reply {
         pds_endpoint: identity.pds_endpoint.clone(),
     };
     let counted = Counted::of(&LogEvent::SignInCompleted);
-    match app.sessions.start_session(&session, counted.tally()) {
+    match app
+        .sessions
+        .start_session(&session, unix_now_secs(), counted.tally())
+    {
         Ok(()) => {
             emit(LogEvent::SignInCompleted);
             Reply::Redirect {
@@ -277,7 +281,7 @@ pub(crate) fn current_session(
     let cookie_value = field(&request.cookies, SESSION_COOKIE)?;
     let session = app
         .sessions
-        .resolve_session(&sha256_hex(&cookie_value))
+        .resolve_session(&sha256_hex(&cookie_value), unix_now_secs())
         .ok()??;
     Some((cookie_value, session))
 }

@@ -32,8 +32,9 @@ pub(crate) const SCAN_CONCURRENCY_VAR: &str = "OPENLORE_REVIEW_SCAN_CONCURRENCY"
 /// The test seam that runs a development build's clock ahead, in seconds.
 pub(crate) const CLOCK_SKEW_VAR: &str = "REVIEW_APP_CLOCK_SKEW_SECS";
 
-/// How far ahead the clock seam may run: up to a week.
-const CLOCK_SKEW_RANGE: RangeInclusive<u64> = 0..=7 * 24 * 3600;
+/// How far ahead the clock seam may run: up to 60 days, past ADR-073's
+/// 30-day server-side session expiry (U-38).
+const CLOCK_SKEW_RANGE: RangeInclusive<u64> = 0..=60 * 24 * 3600;
 const SCAN_CONCURRENCY_RANGE: RangeInclusive<u64> = 1..=4;
 /// The production sizes (architecture-design §3): 48 MiB, one thread.
 const DEFAULT_DB_MEMORY_LIMIT_MB: u64 = 48;
@@ -571,10 +572,10 @@ mod tests {
         }
 
         /// A release build refuses the clock seam whatever else is set; a
-        /// development build runs ahead by exactly the seconds given, up to a
-        /// week.
+        /// development build runs ahead by exactly the seconds given, up to
+        /// 60 days.
         #[test]
-        fn only_a_development_build_takes_the_clock_seam(mut env in env(), secs in 0u64..=8 * 24 * 3600) {
+        fn only_a_development_build_takes_the_clock_seam(mut env in env(), secs in 0u64..=61 * 24 * 3600) {
             prop_assume!(env.get("REVIEW_APP_ALLOW_LOOPBACK_HTTP").map(|v| v.trim()) != Some("1"));
             let unset = parse_config(&env, BuildProfile::Development).map(|c| c.clock_skew_secs);
             prop_assert!(matches!(unset, Ok(0) | Err(_)));

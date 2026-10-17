@@ -189,6 +189,7 @@ mod tests {
                     handle: "priya.test".into(),
                     pds_endpoint: "https://pds.test".into(),
                 },
+                1_700_000_000,
                 tally(&["signin.completed"]),
             )
             .unwrap();

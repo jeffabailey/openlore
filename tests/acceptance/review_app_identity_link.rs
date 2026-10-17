@@ -314,7 +314,6 @@ fn leaving_the_link_preview_publishes_nothing_and_keeps_the_offer_open() {
 ///     | her repo host session expired                                    |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn an_ended_session_at_confirmation_publishes_nothing_and_asks_priya_to_sign_in_again() {
     const THIRTY_ONE_DAYS: u64 = 31 * 24 * 60 * 60;
     for row in [
