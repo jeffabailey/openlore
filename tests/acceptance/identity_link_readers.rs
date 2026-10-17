@@ -339,7 +339,6 @@ fn a_link_jeff_retracted_is_no_longer_rechecked() {
 ///     | before the check was made    | -           | reads "not checked"        |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn each_link_line_says_how_old_its_check_is_and_suggests_a_recheck_after_thirty_days() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, Some(LINKED_AT));

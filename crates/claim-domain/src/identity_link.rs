@@ -458,6 +458,28 @@ pub struct LinkedIdentity {
     pub standing: LinkStanding,
 }
 
+/// Past this many whole days a verified line suggests a re-check (U-8).
+pub const RECHECK_AFTER_DAYS: u64 = 30;
+
+/// How old a check is as of `now`, in whole elapsed days: never rounded up,
+/// and a check dated after `now` is 0 days old.
+pub fn check_age_days(checked_at: DateTime<Utc>, now: DateTime<Utc>) -> u64 {
+    u64::try_from((now - checked_at).num_days()).unwrap_or(0)
+}
+
+/// Whether a line suggests a re-check as of `now`: only a verified line, and
+/// only once its check is more than [`RECHECK_AFTER_DAYS`] whole days old (U-8).
+pub fn suggests_recheck(standing: &LinkStanding, now: DateTime<Utc>) -> bool {
+    match standing {
+        LinkStanding::Associated { checked_at } => {
+            check_age_days(*checked_at, now) > RECHECK_AFTER_DAYS
+        }
+        LinkStanding::NotChecked | LinkStanding::ProofGone { .. } | LinkStanding::Contested => {
+            false
+        }
+    }
+}
+
 /// Where a stored link stands in its author's own lineage (ADR-060).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkLifecycle {
@@ -1089,5 +1111,78 @@ mod tests {
                 &["bafyc".to_string()][..]
             ]
         );
+    }
+
+    fn instant(rfc3339: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(rfc3339)
+            .expect("a valid instant")
+            .with_timezone(&Utc)
+    }
+
+    proptest::proptest! {
+        /// Universe: a check instant and an elapsed time from -2 days to
+        /// 60 days, to the second. N-3 / U-8: the age is the whole days
+        /// elapsed, never rounded up (a future check is 0 days old); a
+        /// verified line suggests a re-check iff that age exceeds 30 days;
+        /// a proof-gone, not-checked or contested line never does.
+        #[test]
+        fn a_verified_line_suggests_a_recheck_only_past_thirty_whole_days(
+            elapsed_seconds in -2 * 86_400i64..=60 * 86_400,
+            verdict in proptest::sample::select(CheckVerdict::ALL.to_vec()),
+        ) {
+            let checked_at = instant("2026-10-01T09:00:00Z");
+            let now = checked_at + chrono::Duration::seconds(elapsed_seconds);
+            let whole_days = u64::try_from(elapsed_seconds.max(0) / 86_400).expect("non-negative");
+            proptest::prop_assert_eq!(check_age_days(checked_at, now), whole_days);
+            proptest::prop_assert_eq!(
+                suggests_recheck(&LinkStanding::Associated { checked_at }, now),
+                whole_days > 30
+            );
+            let proof_gone = LinkStanding::ProofGone { verdict, checked_at };
+            proptest::prop_assert!(!suggests_recheck(&proof_gone, now));
+            proptest::prop_assert!(!suggests_recheck(&LinkStanding::NotChecked, now));
+            proptest::prop_assert!(!suggests_recheck(&LinkStanding::Contested, now));
+        }
+
+        /// Universe: one verified check, and a later failed check dated
+        /// before or after `now`. Q-RM-3: a check dated after `now` never
+        /// decides; the earlier verified check does, with its own age.
+        #[test]
+        fn a_check_dated_after_now_never_decides_the_line(
+            later_by_seconds in 1i64..=40 * 86_400,
+            verdict in proptest::sample::select(vec![
+                CheckVerdict::DidMissing,
+                CheckVerdict::DifferentDid,
+                CheckVerdict::NoBio,
+                CheckVerdict::AccountNotFound,
+            ]),
+        ) {
+            let verified_at = instant("2026-10-01T09:00:00Z");
+            let now = verified_at + chrono::Duration::days(31);
+            let failed_at = now + chrono::Duration::seconds(later_by_seconds);
+            let check = |verdict, checked_at| LatestCheck {
+                subject_did: DID.to_string(),
+                user_id: 1,
+                login_seen: "priyaraman".to_string(),
+                verdict,
+                checked_at,
+            };
+            let view = link_view(
+                &[ReaderLink { link: linked(1), lifecycle: LinkLifecycle::Active }],
+                &[check(CheckVerdict::Verified, verified_at), check(verdict, failed_at)],
+                now,
+            );
+            proptest::prop_assert_eq!(
+                &view[0].standing,
+                &LinkStanding::Associated { checked_at: verified_at }
+            );
+            proptest::prop_assert!(suggests_recheck(&view[0].standing, now));
+            let only_future = link_view(
+                &[ReaderLink { link: linked(1), lifecycle: LinkLifecycle::Active }],
+                &[check(CheckVerdict::Verified, failed_at)],
+                now,
+            );
+            proptest::prop_assert_eq!(&only_future[0].standing, &LinkStanding::NotChecked);
+        }
     }
 }

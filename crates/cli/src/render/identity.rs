@@ -2,7 +2,8 @@
 
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
-    link_predicate, CheckVerdict, LinkStanding, LinkedIdentity, ListedLink,
+    check_age_days, link_predicate, suggests_recheck, CheckVerdict, LinkStanding, LinkedIdentity,
+    ListedLink,
 };
 use claim_domain::UnsignedClaim;
 
@@ -16,8 +17,8 @@ pub fn render_no_linked_identities() -> String {
 
 /// How long ago a check ran, in whole days (`today`, `1 day ago`, `N days ago`).
 fn check_age(checked_at: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    match (now - checked_at).num_days() {
-        days if days <= 0 => "today".to_string(),
+    match check_age_days(checked_at, now) {
+        0 => "today".to_string(),
         1 => "1 day ago".to_string(),
         days => format!("{days} days ago"),
     }
@@ -47,6 +48,15 @@ fn render_linked_identity(identity: &LinkedIdentity, now: DateTime<Utc>) -> Stri
     }
 }
 
+/// The re-check hint a line carries, if any (U-8).
+fn render_recheck_hint(identity: &LinkedIdentity, now: DateTime<Utc>) -> &'static str {
+    if suggests_recheck(&identity.standing, now) {
+        "; re-check with `openlore identity verify`"
+    } else {
+        ""
+    }
+}
+
 /// The record IDs a line names: `record <id>` or `records <id>, <id>`.
 fn render_record_ids(record_ids: &[String]) -> String {
     match record_ids {
@@ -62,8 +72,9 @@ pub fn render_linked_identities(listed: &[ListedLink], now: DateTime<Utc>) -> St
         .iter()
         .map(|link| {
             format!(
-                "{}{}\n",
+                "{}{}{}\n",
                 render_linked_identity(&link.identity, now),
+                render_recheck_hint(&link.identity, now),
                 render_record_ids(&link.record_ids)
             )
         })
