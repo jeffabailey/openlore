@@ -10,7 +10,7 @@
     "paradigm": "ADR-007: decisions pure in claim-domain; adapters and cli verbs do I/O only.",
     "test_paradigm": "Acceptance: example-based subprocess. Pure core: proptest against the CORE oracles. Adapters: real DuckDB / real HTTP adapter against FakeGithubAccounts, never mocked.",
     "scenario_fns": "`<cargo test target>::<fn>` (identity_link = tests/acceptance/identity_link.rs, identity_link_core = tests/acceptance/identity_link_core.rs), in activation order.",
-    "test_edit_allow_list": "Test-file edits limited to: removing the #[ignore] of a named scenario_fn; replacing the named sut_* body with ONE real call plus view mapping (DD-GDL-16). Forbidden: assertions, oracles, strategies, universe slots, helpers, test names. The GREEN diff must match.",
+    "test_edit_allow_list": "Test-file edits limited to: removing the #[ignore] of a named scenario_fn; replacing the named sut_* body with ONE real call plus view mapping (DD-GDL-16). Forbidden: assertions, oracles, strategies, universe slots, helpers, test names. The GREEN diff must match. Carve-out (U-12, review N3): crafter-owned tests in their owning crates (adapter contract tests such as crates/adapter-github/tests/github_profile_contract.rs, xtask check-arch rule tests, claim-domain unit/property tests) may be added; tests/acceptance stays under this allow-list.",
     "test_runs": "Scoped targets only, never the workspace. libtest runs tests matching ANY positional filter (library/test/src/cli.rs), so `-- f1 f2` is used.",
     "check_arch": "`cargo xtask check-arch` (.cargo/config.toml alias) + `cargo test -p xtask`; each new rule ships a synthetic-violation test.",
     "wording": "DISTILL-owned in tests/acceptance/support/identity_links.rs (DD-GDL-7, Q-GDL-D1).",
@@ -257,7 +257,8 @@
             "identity_link::a_hand_written_same_as_claim_is_refused_and_jeff_is_pointed_to_the_link_command",
             "identity_link::editing_an_inferred_claim_into_same_as_is_refused_at_signing",
             "identity_link_core::core3_only_the_owners_well_formed_record_projects_as_a_link",
-            "identity_link::jeff_can_publicly_dispute_rachels_link_and_his_dispute_is_never_read_as_a_link"
+            "identity_link::jeff_can_publicly_dispute_rachels_link_and_his_dispute_is_never_read_as_a_link",
+            "identity_link_core::core7x_only_exact_same_as_is_reserved_not_its_look_alikes"
           ],
           "n_scenarios": [
             "CORE-7",
@@ -626,7 +627,7 @@
             "cargo test -p claim-domain",
             "cargo test -p openlore-review-app --test review_app_identity_link"
           ],
-          "implementation_notes": "DD-GDL-16: sut_link_view in identity_link_core.rs builds IdentityLink, ReaderLink and LatestCheck literally and calls link_view(links, checks, now). Editing it is outside test_edit_allow_list, so keep those types and that signature unchanged. Carry record IDs through a new pure function beside link_view. If CORE-5/5b would need a binding change, stop and route it to nw-acceptance-designer. Record IDs come from LinkCandidate.cid. LinkCandidate has no composedAt (U-9), so the ordering is ascending by record ID.",
+          "implementation_notes": "DD-GDL-16: sut_link_view in identity_link_core.rs builds IdentityLink, ReaderLink and LatestCheck literally and calls link_view(links, checks, now). Editing it is outside test_edit_allow_list, so keep those types and that signature unchanged. Carry record IDs through a new pure function beside link_view. If CORE-5/5b would need a binding change, stop and route it to nw-acceptance-designer. Record IDs come from LinkCandidate.cid. LinkCandidate has no composedAt (U-9), so the ordering is ascending by record ID. depends_on is serialization-only (shared files), not a code dependency (review N7).",
           "estimate_hours": 3,
           "depends_on": [
             "02-02"
@@ -666,7 +667,7 @@
             "cargo test -p claim-domain",
             "cargo test -p openlore-review-app --test review_app_identity_link"
           ],
-          "implementation_notes": "Wording follows support/identity_links.rs (DD-GDL-7). As in 02-03, link_view, LinkedIdentity and the sut_link_view binding stay unchanged (DD-GDL-16): the hint is a separate pure function of (standing, checked_at, now). The age-in-days rule moves out of render/identity.rs into claim-domain.",
+          "implementation_notes": "Wording follows support/identity_links.rs (DD-GDL-7). As in 02-03, link_view, LinkedIdentity and the sut_link_view binding stay unchanged (DD-GDL-16): the hint is a separate pure function of (standing, checked_at, now). The age-in-days rule moves out of render/identity.rs into claim-domain. depends_on is serialization-only (shared files), not a code dependency (review N7).",
           "estimate_hours": 3,
           "depends_on": [
             "02-03"
@@ -713,7 +714,7 @@
             "cargo test -p openlore-review-app --test review_app_identity_link",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "CORE-6/6x before IR-14 (DD-GDL-14). sut_score already binds the REAL scoring::score, so it is not edited. Owner-only-signing's score_attested / authority::kind does not exist yet. When it lands, re-point sut_score in the same commit (DD-GDL-16, U-3). Drop the rows before triangulated_author_objects, otherwise a link still counts toward an author's cross-project span. Order: this step does not depend on 02-01..02-04 in code. It is kept serial only because every slice-2 step un-ignores tests in identity_link_readers.rs.",
+          "implementation_notes": "CORE-6/6x before IR-14 (DD-GDL-14). sut_score already binds the REAL scoring::score, so it is not edited. Owner-only-signing's score_attested / authority::kind does not exist yet. When it lands, re-point sut_score in the same commit (DD-GDL-16, U-3). Drop the rows before triangulated_author_objects, otherwise a link still counts toward an author's cross-project span. Order: this step does not depend on 02-01..02-04 in code. It is kept serial only because every slice-2 step un-ignores tests in identity_link_readers.rs. depends_on is serialization-only (shared files), not a code dependency (review N7).",
           "estimate_hours": 3,
           "depends_on": [
             "02-04"
@@ -735,7 +736,8 @@
             "U-6 join: a link joins a person row on github_user_id when the row carries one (contribution_links), otherwise on the case-insensitive last-seen login.",
             "Login differs, id matches: the link is still joined to that person (claim-domain property).",
             "IR-17 stays green: the possible-rename flag yields no `did:… is/claims github:…` line; GitHub is not asked; nothing recorded.",
-            "check-arch: infer_people.rs names no check-write or purge port, method or slot (rule unchanged, still green)."
+            "check-arch: infer_people.rs names no check-write or purge port, method or slot (rule unchanged, still green).",
+            "`scrape person` shows the same link lines and never refreshes a check (U-10)."
           ],
           "test_file": "tests/acceptance/identity_link_readers.rs",
           "scenario_name": "the_person_view_shows_a_verified_link_even_with_the_network_off",
@@ -780,7 +782,8 @@
             "U-5: a profile whose id differs from the link's id records nothing; the link's standing is unchanged (claim-domain property).",
             "github_profile_contract (fake server): a `/users/{user}` body without a positive id or a login yields no account observation, and a scrape records no check.",
             "CORE-2x and CORE-3x stay green; a rate limit or outage on the resolve records nothing.",
-            "check-arch: adapter-github names neither IdentityLinkCheckWritePort nor IdentityLinkCheckPurgePort; a synthetic-violation test proves the ban."
+            "check-arch: adapter-github names neither IdentityLinkCheckWritePort nor IdentityLinkCheckPurgePort; a synthetic-violation test proves the ban.",
+            "After a repo resolve (or no resolve), the strict-account method returns None and nothing is recorded (contract case in github_profile_contract.rs)."
           ],
           "test_file": "tests/acceptance/identity_link_readers.rs",
           "scenario_name": "reading_a_person_shows_their_link_has_lost_its_proof_at_no_extra_github_cost",
@@ -810,7 +813,7 @@
             "cargo test -p xtask",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "F2: add a GithubPort method that returns the strict account of the last resolved user from the cached body, never a request. Give it a default body so other GithubPort impls compile unchanged. adapter-http-viewer is untouched. F3: use parse_account_profile only; never read_account (a second GET) or parse_person_profile (lenient). Decide with check_link (no second rule). F6: the refresh runs in show_person (scrape_github.rs) before person_view; person_view and `scrape person` stay read-only (U-10). Ban list: STORAGE_AND_IDENTITY_PORTS in xtask/src/check_arch.rs.",
+          "implementation_notes": "F2: add a GithubPort method that returns the strict account of the last resolved user from the cached body, never a request. Give it a default body so other GithubPort impls compile unchanged. adapter-http-viewer is untouched. F3: use parse_account_profile only; never read_account (a second GET) or parse_person_profile (lenient). Decide with check_link (no second rule). F6: the refresh runs in show_person (scrape_github.rs) before person_view; person_view and `scrape person` stay read-only (U-10). Ban list: STORAGE_AND_IDENTITY_PORTS in xtask/src/check_arch.rs. N1: no second copy of the re-check glue. The private per-link helpers in verbs/identity_verify.rs (active_links_in_store, check_of, recheck, login_to_read) move into verbs/identity_reads.rs as pub(crate); identity verify and show_person both call them, and the decision stays claim_domain::identity_link (links_to_recheck with RecheckScope::Account(login), check_link). identity verify behaviour is unchanged (its scenarios stay green). N4: the cached strict account is written only by resolve_target for a User target and cleared on every resolve; the method returns None (not observed) when no user body is cached; the trait default returns None, so other impls fail closed and record nothing.",
           "estimate_hours": 6,
           "depends_on": [
             "02-06"
@@ -823,7 +826,9 @@
             "crates/claim-domain/src/identity_link.rs",
             "crates/cli/src/verbs/scrape_github.rs",
             "crates/cli/src/render/people.rs",
-            "xtask/src/check_arch.rs"
+            "xtask/src/check_arch.rs",
+            "crates/cli/src/verbs/identity_verify.rs",
+            "crates/cli/src/verbs/identity_reads.rs"
           ],
           "files_to_create": [],
           "mutation_note": "Kill: a check for an unpublished link or a different id; a check from a malformed body; a second GitHub request; the lenient parser used; the port ban removed."
@@ -841,7 +846,7 @@
           "scenario_name": "network_search_lists_a_link_as_not_checked_here",
           "scenario_fns": [
             "identity_link_readers::network_search_lists_a_link_as_not_checked_here",
-            "identity_link_readers::network_search_leaves_a_github_row_that_is_not_a_link_unlabelled (NOT YET WRITTEN: route to nw-acceptance-designer)"
+            "identity_link_readers::network_search_leaves_a_github_row_that_is_not_a_link_unlabelled"
           ],
           "n_scenarios": [
             "IR-16",
@@ -853,7 +858,7 @@
             "cargo test -p openlore-review-app --test review_app_identity_link",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "Slice 2 closes all 19 IR-* plus CORE-6/6x; IR-19 is already active. U-7: label link rows only (selected with the identity_link API, Q-RM-5); widening to every `github:` row is a follow-up. The non-link guard has no test yet; the acceptance designer writes it before RED. Order: no code dependency on 02-01..02-07; kept last only so edits to identity_link_readers.rs stay serial.",
+          "implementation_notes": "Slice 2 closes all 19 IR-* plus CORE-6/6x; IR-19 is already active. U-7: label link rows only (selected with the identity_link API, Q-RM-5); widening to every `github:` row is a follow-up. Order: no code dependency on 02-01..02-07; kept last only so edits to identity_link_readers.rs stay serial.",
           "estimate_hours": 2,
           "depends_on": [
             "02-07"
@@ -863,7 +868,8 @@
             "crates/cli/src/render/search.rs"
           ],
           "files_to_create": [],
-          "mutation_note": "Kill: the label missing on a link row; the label on a non-link row."
+          "mutation_note": "Kill: the label missing on a link row; the label on a non-link row.",
+          "prerequisite": "Gate (review N2): the acceptance designer commits network_search_leaves_a_github_row_that_is_not_a_link_unlabelled (IR-16b) before this step's RED; it holds today and is a guard."
         }
       ]
     }
@@ -905,6 +911,12 @@
     "open_decisions": {
       "Q-RM-5": "RULED (orchestrator, 2026-10-15): claim_domain::identity_link exposes the link predicate through its API; readers select candidate rows with it; project() decides."
     },
-    "approved_note": "Orchestrator-verified 2026-10-15 after review iteration 2 (text-only blockers R1-R7 applied; 2472 words)"
+    "approved_note": "Orchestrator-verified 2026-10-15 after review iteration 2 (text-only blockers R1-R7 applied; 2472 words)",
+    "phase_02": {
+      "status": "approved",
+      "by": "nw-software-crafter-reviewer (2 rounds) + orchestrator",
+      "date": "2026-10-17",
+      "note": "Round 2 rejected on N1-N7 (text/file-list); applied by the orchestrator under the max-2 rule, no re-design."
+    }
   }
 }
