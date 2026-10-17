@@ -26,12 +26,12 @@ The `.rs` files are the scenario SSOT; this is the map.
 | File (`tests/acceptance/`) | Slice | Layer | Scenarios | Active today |
 |---|---|---|---|---|
 | `identity_link.rs` | 1 — link / verify / forget / composer guard / upgrade / re-link (incl. WS) | 3/4 subprocess | 37 (+1 fixture regenerator, not a scenario; IL-12b, IL-15, IV-11..13 added 2026-10-16 for review D1/D4/D7) | 0 at DISTILL hand-off; the 5 review rows are active |
-| `identity_link_readers.rs` | 2 — association rule, person views, scoring, search label | 3/4 subprocess + viewer + indexer | 19 | 2 (IR-13, IR-17) |
+| `identity_link_readers.rs` | 2 — association rule, person views, scoring, search label, ADR-084 peer-pull round trip | 3/4 subprocess + viewer + indexer | 20 (IR-19 added 2026-10-16 for F14) | 3 (IR-13, IR-17, IR-19) |
 | `identity_link_core.rs` | 1-2 pure core | 2 proptest (256 cases) | 12 (CORE-2x, CORE-3x added for review D1) | 0 at hand-off; CORE-2x/3x active |
 | `review_app_identity_link.rs` | 3 — publish / retract in the review app | 4 HTTP | 9 | 1 (RA-3) |
 | `review_app_sign_in_and_ownership.rs` (review D1 rows only) | slice-1 fix — the ownership proof reads strictly | 4 HTTP | 2 (OW-4b, OW-4c) | 2 |
 | `review_app_identity_link_readers.rs` | 3 — the CLI reads app-written links | 4 HTTP + subprocess | 5 | 0 |
-| **Total** | | | **84** | **3 at hand-off (+9 review rows active)** |
+| **Total** | | | **85** | **3 at hand-off (+9 review rows and IR-19 active)** |
 
 Targets: four in `crates/cli/Cargo.toml`, `review_app_identity_link` in `crates/openlore-review-app/Cargo.toml`.
 Vocabulary: `support/identity_links.rs`, `support/review_app/identity_link.rs`; `support/people.rs` `Invocation` gains `github_token`.
@@ -107,6 +107,7 @@ Seeding (review D7): `given_a_check_recorded_seeing` inserts one `identity_link_
 | IR-14 | A link never changes weighted results in the terminal | GDL-D8, ADR-022, KPI-GDL-2 |
 | IR-15 | A link never changes a contributor's score page | GDL-D8, KPI-GDL-2 |
 | IR-16 | Network search lists a link as "authority not checked here" | GDL-D11, C-GDL-8, D-c |
+| IR-19 | A self-attested link pulled from a peer keeps its record id and reads as a link (active: holds today) | ADR-084 Earned Trust, F14, U-11 |
 
 ### identity_link_core.rs (layer 2)
 

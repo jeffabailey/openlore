@@ -17,7 +17,7 @@
 //!
 //! Layer 3/4 — example-only (Mandate 9). PRIMARY Thens through driving ports;
 //! the store universe is a secondary guardrail (D-e). All `#[ignore]`d except
-//! IR-13 and IR-17, regression guards that hold today (D-d).
+//! IR-13, IR-17 and IR-19 (F14), regression guards that hold today (D-d).
 
 mod support;
 
@@ -438,6 +438,135 @@ fn jeff_can_list_one_persons_linked_identities() {
     assert_eq!(listed.status, 0, "{}\n{}", listed.stdout, listed.stderr);
     assert_shown(&listed, RACHEL_DID, RACHEL_GH, Shown::Associated);
     assert_shown(&listed, MY_DID, JEFF_GH, Shown::Nothing);
+}
+
+// =============================================================================
+// ADR-084 Earned Trust: a link survives the peer-pull wire (F14, U-11)
+// =============================================================================
+
+/// When Rachel's self-attested link was composed (the production encoder's input).
+const SELF_ATTESTED_AT: &str = "2026-10-01T09:00:00Z";
+
+/// Binding seam (Mandate 7): ONE call into the PRODUCTION encoder
+/// `claim_domain::identity_link::self_attested_link_record` — the record the
+/// review app writes to its owner's repo — never a test-built shape.
+fn sut_self_attested_link_record(did: &str, account: Account) -> serde_json::Value {
+    let observation = claim_domain::identity_link::GithubObservation {
+        login: account.login.to_string(),
+        user_id: account.id,
+        bio: Some(bio_naming(did)),
+    };
+    claim_domain::identity_link::self_attested_link_record(did, &observation, SELF_ATTESTED_AT)
+        .expect("a bio naming the DID proves the link")
+}
+
+/// The record key a self-attested record is published under: its own CID,
+/// computed by the production codec (decode → canonicalize → CID).
+fn record_key_of(record: &serde_json::Value) -> String {
+    claim_domain::decode_claim_record(record, "")
+        .expect("the encoder's record decodes as a claim")
+        .cid()
+        .0
+        .clone()
+}
+
+/// GIVEN: `peer`'s own repo holds the self-attested link the production
+/// encoder wrote for `account`, under its CID as record key, and Jeff
+/// subscribed and pulled it (real `peer add` + `peer pull`). Returns the
+/// record key and the pull's outcome.
+fn given_peer_self_attested_and_jeff_pulled(
+    world: &LinkWorld,
+    peer: Peer,
+    seed: [u8; 32],
+    account: Account,
+) -> (String, CliOutcome) {
+    let record = sut_self_attested_link_record(peer.did(), account);
+    let rkey = record_key_of(&record);
+    let pds = PeerPds::for_peer(
+        peer.did(),
+        vec![openlore_test_support::FakePeerRecord::claim(
+            rkey.clone(),
+            record,
+        )],
+    );
+    let added = run_openlore_with_peer_resolver(
+        &world.env,
+        &["peer", "add", peer.did()],
+        peer.did(),
+        pds.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "precondition: peer add;\n{}\n{}",
+        added.stdout, added.stderr
+    );
+    let (_, _, pubkey) = peer_records(peer.did(), seed, &[]);
+    let pulled = run_openlore_pull(
+        &world.env,
+        &["peer", "pull"],
+        peer.did(),
+        pds.endpoint_url(),
+        &pubkey,
+    );
+    (rkey, pulled)
+}
+
+/// The CIDs `peer_claims` holds for `author` (secondary store observation).
+fn stored_peer_claim_cids(env: &TestEnv, author: &str) -> Vec<String> {
+    let conn = duckdb::Connection::open(env.duckdb_path()).expect("open DuckDB");
+    let mut stmt = conn
+        .prepare("SELECT cid FROM peer_claims WHERE author_did = ? ORDER BY cid")
+        .expect("peer_claims");
+    stmt.query_map([author], |r| r.get(0))
+        .expect("query peer_claims")
+        .map(|r| r.expect("cid"))
+        .collect()
+}
+
+/// IR-19 (F14, ADR-084 Earned Trust)
+/// ```gherkin
+/// @driving_port @real-io @adapter-integration @adr-084-earned-trust @f14 @gdl-d11 @contract-shape:bounded-change
+/// Scenario: A self-attested link pulled from a peer keeps its record id and reads as a link
+///   Given Rachel's repo holds the self-attested link to github "rachelk" that openlore writes, filed under its own record id
+///   When Jeff pulls Rachel's claims
+///   Then the pull keeps the link, and it is kept under the very record id Rachel filed it under
+///   And Jeff's linked identities show "did:plc:rachel-test claims github:rachelk — not checked"
+///   And GitHub was not asked anything
+/// ```
+#[test]
+fn a_self_attested_link_pulled_from_a_peer_keeps_its_record_id_and_reads_as_a_link() {
+    let world = LinkWorld::with(&[RACHEL_GH]);
+    bio_names(&world, RACHEL_GH, RACHEL_DID);
+
+    let (rkey, pulled) =
+        given_peer_self_attested_and_jeff_pulled(&world, Peer::Rachel, RACHEL_SEED, RACHEL_GH);
+
+    assert_eq!(
+        pulled.status, 0,
+        "the pull succeeds;\n{}\n{}",
+        pulled.stdout, pulled.stderr
+    );
+    assert!(
+        !pulled.stdout.contains("integrity check failed")
+            && !pulled.stderr.contains("integrity check failed"),
+        "the link's content hashes to its record id;\n{}\n{}",
+        pulled.stdout,
+        pulled.stderr
+    );
+    assert_eq!(
+        stored_peer_claim_cids(&world.env, RACHEL_DID),
+        vec![rkey.clone()],
+        "the stored claim's CID is the record key;\n{}",
+        pulled.stdout
+    );
+    let listed = when_i_list(&world, None);
+    assert_eq!(listed.status, 0, "{}\n{}", listed.stdout, listed.stderr);
+    assert_shown(&listed, RACHEL_DID, RACHEL_GH, Shown::NotChecked);
+    assert!(
+        world.github_paths().is_empty(),
+        "{:?}",
+        world.github_paths()
+    );
 }
 
 // =============================================================================
