@@ -17,8 +17,8 @@ use ports::claim_domain::identity_link::{check_link, GithubObservation};
 use ports::claim_domain::Did;
 use ports::{GithubAccountProfile, PlanKind, WebSession};
 use review_domain::link_plan::{
-    confirm_link, keeps_plan_for_retry, link_preview, restore_link_plan, LinkConfirmRefusal,
-    LinkPlan,
+    confirm_link, keeps_plan_for_retry, link_preview, link_refusal_of, restore_link_plan,
+    LinkConfirmRefusal, LinkPlan, LinkRefusal, BUDGET_SPENT,
 };
 use review_domain::ownership::{is_github_login, OwnershipRefusal};
 use review_domain::plans::{plan_expires_at, rfc3339_utc};
@@ -108,34 +108,52 @@ pub(crate) async fn publish_link(app: &App, request: &PageRequest) -> Reply {
     let Ok(plan) = restore_link_plan(&confirmed.owner_did, &confirmed.stored) else {
         return not_found();
     };
+    let login = plan.login().to_string();
     if confirmed.expired() {
-        return not_published(StatusCode::GONE, LinkNotPublished::Expired, "expired");
+        return not_published(
+            StatusCode::GONE,
+            &LinkNotPublished::Expired,
+            &login,
+            "expired",
+        );
     }
     match proven_again(app, plan).await {
         Ok(plan) => write_link(app, &plan, &confirmed).await,
-        Err((why, label)) => not_published(StatusCode::CONFLICT, why, label),
+        Err((why, label)) => not_published(StatusCode::CONFLICT, &why, &login, label),
     }
 }
 
 /// Spend the budget, read the profile again and admit the plan only if that
-/// confirm-time read proves exactly its link (C-GDL-10).
+/// confirm-time read proves exactly its link (C-GDL-10). A spent budget or a
+/// failed read is refused as `review_domain` maps it; the plan is not kept.
 async fn proven_again(
     app: &App,
     plan: LinkPlan,
 ) -> Result<LinkPlan, (LinkNotPublished, &'static str)> {
     if !app.verify_attempts.try_spend(plan.owner_did()) {
-        return Err((LinkNotPublished::TooManyAttempts, "too_many_attempts"));
+        return Err(refused(BUDGET_SPENT));
     }
     let profile = app
         .github
         .read_account(plan.login())
         .await
-        .map_err(|_| (LinkNotPublished::NotProven, "github_unavailable"))?;
+        .map_err(|error| refused(link_refusal_of(&error)))?;
     let fresh = check_link(
         &Did(plan.owner_did().to_string()),
         &observation_of(&profile),
     );
     confirm_link(plan, fresh).map_err(|refusal| (refusal.not_published(), label_of(&refusal)))
+}
+
+fn refused(refusal: LinkRefusal) -> (LinkNotPublished, &'static str) {
+    let label = match &refusal {
+        LinkRefusal::TokenRejected => "token_rejected",
+        LinkRefusal::Ownership(OwnershipRefusal::TooManyAttempts) => "too_many_attempts",
+        LinkRefusal::Ownership(OwnershipRefusal::RateLimited) => "rate_limited",
+        LinkRefusal::Ownership(OwnershipRefusal::AccountNotFound) => "account_not_found",
+        LinkRefusal::Ownership(_) => "github_unavailable",
+    };
+    (LinkNotPublished::Refused(refusal), label)
 }
 
 fn label_of(refusal: &LinkConfirmRefusal) -> &'static str {
@@ -156,7 +174,7 @@ async fn write_link(app: &App, plan: &LinkPlan, confirmed: &ConfirmedPlan) -> Re
         }
         Err(failure) => {
             let (why, label) = write_failure(&failure);
-            let retry = (keeps_plan_for_retry(why) && put_back(app, plan, confirmed)).then_some(
+            let retry = (keeps_plan_for_retry(&why) && put_back(app, plan, confirmed)).then_some(
                 PublishRetry {
                     plan_id: plan.rkey(),
                     csrf_token: &confirmed.csrf_token,
@@ -165,7 +183,7 @@ async fn write_link(app: &App, plan: &LinkPlan, confirmed: &ConfirmedPlan) -> Re
             emit(LogEvent::GithubLinkRefused(label));
             Reply::page(
                 StatusCode::BAD_GATEWAY,
-                views::link_not_published_page(why, retry),
+                views::link_not_published_page(&why, plan.login(), retry),
             )
         }
     }
@@ -188,7 +206,12 @@ fn write_failure(failure: &PublishFailure) -> (LinkNotPublished, &'static str) {
     }
 }
 
-fn not_published(status: StatusCode, why: LinkNotPublished, label: &'static str) -> Reply {
+fn not_published(
+    status: StatusCode,
+    why: &LinkNotPublished,
+    login: &str,
+    label: &'static str,
+) -> Reply {
     emit(LogEvent::GithubLinkRefused(label));
-    Reply::page(status, views::link_not_published_page(why, None))
+    Reply::page(status, views::link_not_published_page(why, login, None))
 }

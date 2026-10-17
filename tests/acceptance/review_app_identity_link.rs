@@ -201,7 +201,6 @@ fn priya_withdraws_her_link_without_erasing_it() {
 ///     | GitHub no longer has an account "priyaraman"             | We couldn't find a GitHub account at github.com/priyaraman |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn when_github_cannot_be_read_while_publishing_a_link_nothing_is_published() {
     let rows = [
         ("rate limited", "GitHub is rate-limiting us".to_string()),

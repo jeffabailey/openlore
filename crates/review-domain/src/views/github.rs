@@ -3,7 +3,7 @@
 use maud::html;
 
 use super::*;
-use crate::link_plan::LinkPlan;
+use crate::link_plan::{LinkPlan, LinkRefusal};
 use crate::ownership::OwnershipRefusal;
 
 /// The label of the button that checks the bio.
@@ -179,12 +179,12 @@ pub fn link_preview_page(plan: &LinkPlan, csrf_token: &str) -> String {
 pub const NOTHING_PUBLISHED: &str = "Nothing was published.";
 
 /// Why a confirmed link is not in the owner's repo.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkNotPublished {
     /// The preview's deadline passed before the confirm.
     Expired,
-    /// This hour's GitHub check budget is spent.
-    TooManyAttempts,
+    /// The budget was spent, or GitHub could not be read at confirm (F-10).
+    Refused(LinkRefusal),
     /// The confirm-time GitHub read did not prove the previewed link.
     NotProven,
     /// The confirm-time GitHub read disproves the link: the bio no longer
@@ -198,16 +198,14 @@ pub enum LinkNotPublished {
     NotAsPreviewed,
 }
 
-/// The sentence explaining why the link is not published.
-fn link_not_published_reason(why: LinkNotPublished) -> &'static str {
-    match why {
+/// The sentence explaining why the link to github.com/`login` is not
+/// published.
+fn link_not_published_reason(why: &LinkNotPublished, login: &str) -> String {
+    let reason = match why {
+        LinkNotPublished::Refused(refusal) => return link_refusal_reason(refusal, login),
         LinkNotPublished::Expired => {
             "This preview has expired. Press \"Publish this link\" again \
              for a fresh preview."
-        }
-        LinkNotPublished::TooManyAttempts => {
-            "Too many verification attempts in the last hour. \
-             Please try again later."
         }
         LinkNotPublished::NotProven => {
             "Your GitHub profile did not prove this link when you \
@@ -226,6 +224,56 @@ fn link_not_published_reason(why: LinkNotPublished) -> &'static str {
             "Your PDS did not return the link exactly as \
              previewed, so it is not counted as published."
         }
+    };
+    reason.to_string()
+}
+
+/// The link confirm's own wording for a refusal (U-31): the verify step's
+/// sentences stay as they are, these name "Publish this link" as the fix.
+/// The app's token is never part of any of them.
+fn link_refusal_reason(refusal: &LinkRefusal, login: &str) -> String {
+    let ownership = match refusal {
+        LinkRefusal::TokenRejected => {
+            return "GitHub did not accept the app's access, so your link could not be \
+                    checked. Please try again later."
+                .to_string()
+        }
+        LinkRefusal::Ownership(ownership) => ownership,
+    };
+    match ownership {
+        OwnershipRefusal::DidMissing => format!(
+            "We couldn't find your DID in the bio of github.com/{login}. Add it back, then \
+             press \"Publish this link\" for a fresh preview."
+        ),
+        OwnershipRefusal::NoBio => format!(
+            "We couldn't find a public bio on github.com/{login}. Add your DID to it, then \
+             press \"Publish this link\" for a fresh preview."
+        ),
+        OwnershipRefusal::DifferentDid(found) => format!(
+            "The bio of github.com/{login} holds a different DID ({found}). Replace it with \
+             your DID, then press \"Publish this link\" for a fresh preview."
+        ),
+        OwnershipRefusal::IdentityChanged => format!(
+            "github.com/{login} now belongs to a different GitHub account than the one you \
+             previewed. Please verify again."
+        ),
+        OwnershipRefusal::AccountNotFound => format!(
+            "We couldn't find a GitHub account at github.com/{login}. Check that it still \
+             exists, then verify it again."
+        ),
+        OwnershipRefusal::RateLimited => "GitHub is rate-limiting us right now. Please wait a \
+             few minutes, then press \"Publish this link\" again."
+            .to_string(),
+        OwnershipRefusal::GithubUnavailable => "GitHub could not be reached. Please wait a few \
+             minutes, then press \"Publish this link\" again."
+            .to_string(),
+        OwnershipRefusal::LinkedToAnotherAccount => format!(
+            "github.com/{login} is already verified for another Bluesky account, so it cannot \
+             be linked to this one."
+        ),
+        OwnershipRefusal::TooManyAttempts => "Too many verification attempts in the last hour. \
+             Please try again later."
+            .to_string(),
     }
 }
 
@@ -243,16 +291,21 @@ pub fn link_published_page(at_uri: &str) -> String {
     )
 }
 
-/// A link confirm that did not publish, and the owner's next step: Retry
-/// re-submits the kept plan to the link confirm (never the claim publish).
-pub fn link_not_published_page(why: LinkNotPublished, retry: Option<PublishRetry<'_>>) -> String {
+/// A link confirm to github.com/`login` that did not publish, and the
+/// owner's next step: Retry re-submits the kept plan to the link confirm
+/// (never the claim publish).
+pub fn link_not_published_page(
+    why: &LinkNotPublished,
+    login: &str,
+    retry: Option<PublishRetry<'_>>,
+) -> String {
     page(
         "Link not published",
         html! {
             section class="outcome" {
                 h1 { "Your link was not published" }
-                p role="alert" { (link_not_published_reason(why)) }
-                @if why != LinkNotPublished::NotAsPreviewed {
+                p role="alert" { (link_not_published_reason(why, login)) }
+                @if *why != LinkNotPublished::NotAsPreviewed {
                     p { (NOTHING_PUBLISHED) }
                 }
                 @match (why, retry) {
@@ -282,11 +335,13 @@ mod tests {
 
     const PLAN_ID: &str = "bafylinkplan";
     const CSRF: &str = "csrf-token-7";
+    const LOGIN: &str = "priyaraman";
 
     fn arb_why() -> impl Strategy<Value = LinkNotPublished> {
         prop::sample::select(vec![
             LinkNotPublished::Expired,
-            LinkNotPublished::TooManyAttempts,
+            LinkNotPublished::Refused(crate::link_plan::BUDGET_SPENT),
+            LinkNotPublished::Refused(LinkRefusal::TokenRejected),
             LinkNotPublished::NotProven,
             LinkNotPublished::ProofGone,
             LinkNotPublished::SessionExpired,
@@ -302,7 +357,7 @@ mod tests {
         ) {
             let retry = kept.then_some(PublishRetry { plan_id: PLAN_ID, csrf_token: CSRF });
 
-            let html = link_not_published_page(why, retry);
+            let html = link_not_published_page(&why, LOGIN, retry);
 
             let retry_form = format!(r#"<form method="post" action="{LINK_CONFIRM_ACTION}">"#);
             let offers_retry = kept && why != LinkNotPublished::SessionExpired;

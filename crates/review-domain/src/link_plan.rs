@@ -15,7 +15,7 @@ use ports::claim_domain::identity_link::{
 use ports::claim_domain::{
     bare_did, claim_record_json, Did, Provenance, RecordOrigin, SelfAttestedClaim, UnsignedClaim,
 };
-use ports::{PlanKind, RepoRecord, StoredPublishPlan, SuggestionKey};
+use ports::{GithubError, PlanKind, RepoRecord, StoredPublishPlan, SuggestionKey};
 use serde_json::Value;
 
 use crate::ownership::{prove_ownership, GithubAccount, OwnershipRefusal};
@@ -139,12 +139,47 @@ pub enum LinkConfirmRefusal {
 
 impl LinkConfirmRefusal {
     /// Why the owner is told the link is not published: a disproved fresh
-    /// read says the proof is gone (RA-2); any other refusal says the read
-    /// did not prove the link.
+    /// read says the proof is gone (RA-2); an answer naming no account is
+    /// GitHub being unavailable (fail closed); a proof of another identity
+    /// says the read did not prove the link.
     pub fn not_published(&self) -> LinkNotPublished {
         match self {
             Self::ProofGone(_) => LinkNotPublished::ProofGone,
-            Self::Unreadable | Self::IdentityChanged => LinkNotPublished::NotProven,
+            Self::Unreadable => LinkNotPublished::Refused(LinkRefusal::Ownership(
+                OwnershipRefusal::GithubUnavailable,
+            )),
+            Self::IdentityChanged => LinkNotPublished::NotProven,
+        }
+    }
+}
+
+/// Why a link confirm could not read GitHub, or was not allowed to (F-10,
+/// U-31): the verify step's refusals, plus a rejected app token. The token
+/// itself is never carried (DD-GDL-13).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkRefusal {
+    Ownership(OwnershipRefusal),
+    /// GitHub did not accept the app's access token.
+    TokenRejected,
+}
+
+/// This hour's GitHub check budget is spent: the confirm reads nothing.
+pub const BUDGET_SPENT: LinkRefusal = LinkRefusal::Ownership(OwnershipRefusal::TooManyAttempts);
+
+/// The refusal a failed confirm-time GitHub read stands for. A rate limit, a
+/// rejected token or an outage proves nothing either way; a missing or
+/// private account is not found.
+pub fn link_refusal_of(error: &GithubError) -> LinkRefusal {
+    match error {
+        GithubError::RateLimited { .. } => LinkRefusal::Ownership(OwnershipRefusal::RateLimited),
+        GithubError::TokenRejected => LinkRefusal::TokenRejected,
+        GithubError::NotFound { .. } | GithubError::NotPublic { .. } => {
+            LinkRefusal::Ownership(OwnershipRefusal::AccountNotFound)
+        }
+        GithubError::Network(_)
+        | GithubError::ApiShape(_)
+        | GithubError::ContributorsUnavailable { .. } => {
+            LinkRefusal::Ownership(OwnershipRefusal::GithubUnavailable)
         }
     }
 }
@@ -176,8 +211,8 @@ fn proves_the_plan(plan: &LinkPlan, proven: &ProvenLink) -> bool {
 /// record key is the link's CID, so a Retry of a create that did land reads
 /// "already exists" as success (ADR-071, U-34). A refusal before the write,
 /// an ended session or a read-back mismatch keeps nothing.
-pub fn keeps_plan_for_retry(why: LinkNotPublished) -> bool {
-    why == LinkNotPublished::NotWritten
+pub fn keeps_plan_for_retry(why: &LinkNotPublished) -> bool {
+    *why == LinkNotPublished::NotWritten
 }
 
 /// The facts of the fresh read the ownership proof explains a refusal by.
@@ -493,7 +528,9 @@ mod tests {
         fn a_link_confirm_keeps_its_plan_only_for_a_failed_write(
             why in prop::sample::select(vec![
                 LinkNotPublished::Expired,
-                LinkNotPublished::TooManyAttempts,
+                LinkNotPublished::Refused(BUDGET_SPENT),
+                LinkNotPublished::Refused(LinkRefusal::TokenRejected),
+                LinkNotPublished::Refused(LinkRefusal::Ownership(OwnershipRefusal::RateLimited)),
                 LinkNotPublished::NotProven,
                 LinkNotPublished::ProofGone,
                 LinkNotPublished::SessionExpired,
@@ -501,7 +538,7 @@ mod tests {
                 LinkNotPublished::NotAsPreviewed,
             ]),
         ) {
-            prop_assert_eq!(keeps_plan_for_retry(why), why == LinkNotPublished::NotWritten, "{:?}", why);
+            prop_assert_eq!(keeps_plan_for_retry(&why), why == LinkNotPublished::NotWritten, "{:?}", why);
         }
 
         /// Universe: owner DIDs × another DID × a GitHub account × the
@@ -517,6 +554,7 @@ mod tests {
             prop_assume!(did != other);
             let plan = link_plan(&did, &proven(&did, &account), COMPOSED_AT).expect("link plan");
             let (login, user_id) = account;
+            let login_of_plan = login.clone();
             let (bio, verdict) = match bio_kind {
                 0 => (Some("Builder. Rust, tide models".to_string()), CheckVerdict::DidMissing),
                 1 => (Some(format!("my DID: {other}")), CheckVerdict::DifferentDid),
@@ -528,10 +566,78 @@ mod tests {
 
             prop_assert_eq!(&refusal, &LinkConfirmRefusal::ProofGone(verdict));
             let why = refusal.not_published();
-            prop_assert_eq!(why, LinkNotPublished::ProofGone);
-            prop_assert!(!keeps_plan_for_retry(why));
-            let page = crate::views::link_not_published_page(why, None);
+            prop_assert_eq!(&why, &LinkNotPublished::ProofGone);
+            prop_assert!(!keeps_plan_for_retry(&why));
+            let page = crate::views::link_not_published_page(&why, &login_of_plan, None);
             prop_assert!(page.contains("proof is gone"), "{}", page);
+            prop_assert!(page.contains(crate::views::NOTHING_PUBLISHED), "{}", page);
+        }
+
+        /// F-08, F-10. Universe: every GitHub read failure (each variant,
+        /// arbitrary detail) and a spent budget × logins. Literal oracle:
+        /// a rate limit is RateLimited, a 401 is TokenRejected, a missing or
+        /// private account is AccountNotFound, anything else is
+        /// GithubUnavailable; a rate limit never reads as a disproof. Each
+        /// keeps no plan, says nothing was published and never echoes the
+        /// failure's detail.
+        #[test]
+        fn an_unreadable_link_confirm_publishes_nothing_and_keeps_no_plan(
+            case in 0usize..8, detail in "[a-z]{12,20}", login in "[a-z][a-z0-9-]{0,15}",
+        ) {
+            let (refusal, expected) = match case {
+                0 => (link_refusal_of(&GithubError::RateLimited { authenticated: true }),
+                      LinkRefusal::Ownership(OwnershipRefusal::RateLimited)),
+                1 => (link_refusal_of(&GithubError::RateLimited { authenticated: false }),
+                      LinkRefusal::Ownership(OwnershipRefusal::RateLimited)),
+                2 => (link_refusal_of(&GithubError::TokenRejected), LinkRefusal::TokenRejected),
+                3 => (link_refusal_of(&GithubError::NotFound { target: detail.clone() }),
+                      LinkRefusal::Ownership(OwnershipRefusal::AccountNotFound)),
+                4 => (link_refusal_of(&GithubError::NotPublic { target: detail.clone() }),
+                      LinkRefusal::Ownership(OwnershipRefusal::AccountNotFound)),
+                5 => (link_refusal_of(&GithubError::Network(detail.clone())),
+                      LinkRefusal::Ownership(OwnershipRefusal::GithubUnavailable)),
+                6 => (link_refusal_of(&GithubError::ApiShape(detail.clone())),
+                      LinkRefusal::Ownership(OwnershipRefusal::GithubUnavailable)),
+                _ => (BUDGET_SPENT, LinkRefusal::Ownership(OwnershipRefusal::TooManyAttempts)),
+            };
+            prop_assert_eq!(&refusal, &expected);
+            if let LinkRefusal::Ownership(ownership) = &refusal {
+                prop_assert!(!ownership.disproves_ownership() || case == 3 || case == 4);
+            }
+
+            let why = LinkNotPublished::Refused(refusal);
+
+            prop_assert!(!keeps_plan_for_retry(&why));
+            let page = crate::views::link_not_published_page(&why, &login, None);
+            prop_assert!(page.contains(crate::views::NOTHING_PUBLISHED), "{}", page);
+            prop_assert!(!page.contains(&detail), "{}", page);
+        }
+
+        /// Universe: owner DIDs × GitHub accounts. A confirm-time answer
+        /// naming no account (user id 0) is MalformedObservation: the confirm
+        /// admits nothing, it is GitHub being unavailable, keeps no plan and
+        /// its page says GitHub could not be reached and nothing was published.
+        #[test]
+        fn an_answer_naming_no_account_at_confirm_is_github_unavailable(
+            did in arb_did(), account in arb_account(),
+        ) {
+            let plan = link_plan(&did, &proven(&did, &account), COMPOSED_AT).expect("link plan");
+            let (login, _) = account;
+            let fresh = check_link(&Did(did.clone()), &GithubObservation {
+                login: login.clone(), user_id: 0, bio: Some(format!("my DID: {did}")),
+            });
+
+            let refusal = confirm_link(plan, fresh).expect_err("an unreadable answer admits no plan");
+
+            prop_assert_eq!(&refusal, &LinkConfirmRefusal::Unreadable);
+            let why = refusal.not_published();
+            prop_assert_eq!(
+                &why,
+                &LinkNotPublished::Refused(LinkRefusal::Ownership(OwnershipRefusal::GithubUnavailable))
+            );
+            prop_assert!(!keeps_plan_for_retry(&why));
+            let page = crate::views::link_not_published_page(&why, &login, None);
+            prop_assert!(page.contains("GitHub could not be reached"), "{}", page);
             prop_assert!(page.contains(crate::views::NOTHING_PUBLISHED), "{}", page);
         }
 
