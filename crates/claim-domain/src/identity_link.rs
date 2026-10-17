@@ -1470,48 +1470,80 @@ mod tests {
         }
     }
 
+    /// What one profile read should decide for a link, stated literally.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Bio {
+        NamingTheLinksDid,
+        NamingAnotherDid,
+        ProseWithoutADid,
+        Absent,
+    }
+
+    impl Bio {
+        fn text(self) -> Option<String> {
+            match self {
+                Bio::NamingTheLinksDid => Some(format!("I am {DID}.")),
+                Bio::NamingAnotherDid => Some("did:plc:someoneelseentirelyxyz".to_string()),
+                Bio::ProseWithoutADid => Some("Rust, music and maps".to_string()),
+                Bio::Absent => None,
+            }
+        }
+    }
+
     proptest::proptest! {
         /// Universe: an active link to account 1..=3 and one profile already
-        /// read (by the person scrape's resolve) for an account 0..=3, under a
-        /// valid or invalid login, with a bio naming the link's DID, another
-        /// DID or none. U-5: only a profile of the linked account decides a
-        /// check, and then exactly as `check_link` does; a profile of another
-        /// account, or one naming no account, decides nothing — so nothing is
-        /// recorded and the link's standing is unchanged.
+        /// read (by the person scrape's resolve) for an account 0..=3, under
+        /// a valid or malformed login, with a bio naming the link's DID,
+        /// another DID, no DID, or none. U-5, literal expectations: a profile
+        /// of another account (account 0 included) decides nothing; a
+        /// malformed login decides nothing; the linked account's profile
+        /// with a valid login decides Verified (under that login, for that
+        /// DID and account) iff its bio names the DID, else the matching
+        /// failed verdict.
         #[test]
         fn only_a_profile_of_the_linked_account_decides_a_check(
             link_id in 1u64..=3,
             profile_id in 0u64..=3,
-            login in proptest::sample::select(vec!["BurntSushi", "", "-bad-"]),
+            login in proptest::sample::select(vec!["BurntSushi", "", "-bad-", "a/b"]),
             bio in proptest::sample::select(vec![
-                Some(DID.to_string()),
-                Some("did:plc:someoneelseentirelyxyz".to_string()),
-                None,
+                Bio::NamingTheLinksDid,
+                Bio::NamingAnotherDid,
+                Bio::ProseWithoutADid,
+                Bio::Absent,
             ]),
         ) {
-            let link = linked(link_id);
-            let profile = GithubObservation { login: login.to_string(), user_id: profile_id, bio };
-            let decided = check_on_profile(&link, &profile);
-            let expected = (profile_id == link_id)
-                .then(|| check_link(&Did(DID.to_string()), &profile).ok())
-                .flatten();
-            proptest::prop_assert_eq!(&decided, &expected);
-            if profile_id != link_id {
-                let at = instant("2026-10-01T09:00:00Z");
-                let before = [LatestCheck {
-                    subject_did: DID.to_string(),
-                    user_id: link_id,
-                    login_seen: "priyaraman".to_string(),
-                    verdict: CheckVerdict::Verified,
-                    checked_at: at,
-                }];
-                let reader = [ReaderLink { link: link.clone(), lifecycle: LinkLifecycle::Active }];
-                let now = at + chrono::Duration::days(1);
-                proptest::prop_assert!(decided.is_none());
-                proptest::prop_assert_eq!(
-                    &link_view(&reader, &before, now)[0].standing,
-                    &LinkStanding::Associated { checked_at: at }
-                );
+            let profile = GithubObservation {
+                login: login.to_string(),
+                user_id: profile_id,
+                bio: bio.text(),
+            };
+            let decided = check_on_profile(&linked(link_id), &profile);
+            let valid_login = login == "BurntSushi";
+            let disproved = |verdict| Some(ProofCheck::Disproved {
+                verdict,
+                login_seen: "BurntSushi".to_string(),
+            });
+            match (profile_id == link_id, valid_login, bio) {
+                (false, _, _) | (true, false, _) => proptest::prop_assert_eq!(decided, None),
+                (true, true, Bio::NamingTheLinksDid) => {
+                    let Some(ProofCheck::Verified(proven)) = decided else {
+                        return Err(proptest::test_runner::TestCaseError::fail(format!(
+                            "expected Verified, got {decided:?}"
+                        )));
+                    };
+                    proptest::prop_assert_eq!(proven.login(), "BurntSushi");
+                    proptest::prop_assert_eq!(proven.did(), DID);
+                    proptest::prop_assert_eq!(proven.user_id(), link_id);
+                }
+                (true, true, Bio::NamingAnotherDid) => {
+                    proptest::prop_assert_eq!(decided, disproved(CheckVerdict::DifferentDid));
+                }
+                (true, true, Bio::ProseWithoutADid) => {
+                    proptest::prop_assert_eq!(decided, disproved(CheckVerdict::DidMissing));
+                }
+                (true, true, Bio::Absent) => {
+                    proptest::prop_assert_eq!(decided, disproved(CheckVerdict::NoBio));
+                }
             }
         }
     }
