@@ -125,6 +125,12 @@ pub enum WritePosture {
     /// The PDS-side session has expired: writes answer `401 invalid_token`
     /// and the refresh grant is refused (the user must sign in again).
     ExpiredSession,
+    /// The answer to a write is lost: each create is stored exactly as
+    /// `Accept` would store it, then answered `500`. Holds for every write
+    /// until the posture is changed (not one-shot), so a scenario decides
+    /// when the host "recovers" with `set_write_posture(.., Accept)`; a later
+    /// create of the same record key then answers `400 Record already exists`.
+    StoreThenServerError,
 }
 
 /// A record held in a fake repo.
@@ -1495,6 +1501,10 @@ async fn create_record(state: &NetState, label: &str, req: HttpRequest) -> HttpR
         value: value.clone(),
     };
     state.records.lock().unwrap().push(stored.clone());
+    if account.write == WritePosture::StoreThenServerError {
+        record_attempt(500);
+        return json(500, serde_json::json!({"error": "InternalServerError"}));
+    }
     record_attempt(200);
     json(
         200,
@@ -1907,6 +1917,39 @@ mod tests {
             net.records("did:plc:7x3kq2mzv5rj4w6hbn2tqclp", CLAIM_COLLECTION)
                 .len(),
             1
+        );
+
+        // A lost answer: the create is stored, yet answered 500; once the
+        // host recovers, re-creating the same key answers "already exists".
+        net.set_write_posture(
+            "did:plc:7x3kq2mzv5rj4w6hbn2tqclp",
+            WritePosture::StoreThenServerError,
+        );
+        let lost = serde_json::json!({"repo": "did:plc:7x3kq2mzv5rj4w6hbn2tqclp", "collection": CLAIM_COLLECTION, "rkey": "bafyclaim2", "record": {"subject": "github:priyaraman/quill-docs"}});
+        let (status, _, body) = rt.block_on(post(
+            &format!("{base}/xrpc/com.atproto.repo.createRecord"),
+            "application/json",
+            &lost.to_string(),
+            &auth,
+        ));
+        assert_eq!(status, 500, "the answer is lost: {body}");
+        let stored = net.records("did:plc:7x3kq2mzv5rj4w6hbn2tqclp", CLAIM_COLLECTION);
+        assert_eq!(stored.len(), 2, "the record was stored all the same");
+        assert_eq!(stored[1].rkey, "bafyclaim2");
+        assert_eq!(stored[1].value, lost["record"]);
+        net.set_write_posture("did:plc:7x3kq2mzv5rj4w6hbn2tqclp", WritePosture::Accept);
+        let (status, _, body) = rt.block_on(post(
+            &format!("{base}/xrpc/com.atproto.repo.createRecord"),
+            "application/json",
+            &lost.to_string(),
+            &auth,
+        ));
+        assert_eq!(status, 400, "{body}");
+        assert!(body.contains("Record already exists"), "{body}");
+        assert_eq!(
+            net.records("did:plc:7x3kq2mzv5rj4w6hbn2tqclp", CLAIM_COLLECTION)
+                .len(),
+            2
         );
 
         let (status, _, body) = rt.block_on(post(

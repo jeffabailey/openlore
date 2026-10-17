@@ -35,7 +35,7 @@ The `.rs` files are the scenario SSOT; this is the map.
 
 Targets: four in `crates/cli/Cargo.toml`, `review_app_identity_link` in `crates/openlore-review-app/Cargo.toml`.
 Vocabulary: `support/identity_links.rs`, `support/review_app/identity_link.rs`; `support/people.rs` `Invocation` gains `github_token`.
-Double (test-support only): `FakeGithubAccounts` — `GET /user/{id}`, `OldLogin::{NotFound, Redirects, RedirectsToAnotherHost}`, `rename`, `delete_account`, `register`, `serve_stale_profile`/`end_stale_profile`, `request_paths`, `serve_flawed_profile(ProfileFlaw::{NoId, ZeroId, IdAsText, NoLogin})` (review D1); 5 unit tests.
+Double (test-support only): `FakeAtprotoNetwork` gains `WritePosture::StoreThenServerError` (RA-12 row 2; stores, then answers 500 until the posture changes). `FakeGithubAccounts` — `GET /user/{id}`, `OldLogin::{NotFound, Redirects, RedirectsToAnotherHost}`, `rename`, `delete_account`, `register`, `serve_stale_profile`/`end_stale_profile`, `request_paths`, `serve_flawed_profile(ProfileFlaw::{NoId, ZeroId, IdAsText, NoLogin})` (review D1); 5 unit tests.
 Seeding (review D7): `given_a_check_recorded_seeing` inserts one `identity_link_checks` row directly — the only way to model a stored login that is not a GitHub login, which no verb can now write.
 
 **Mix (75 at DISTILL hand-off, informational only — not a gate; the 9 review rows of 2026-10-16 are all error/guardrail)**: walking skeleton 1 · happy 15 · error 20 · edge 18 · boundary 1 · guardrail 10 · layer-2 property/catalogue 10. Non-happy = 49 / 65 example scenarios (75 %). Counted by the primary category in each doc comment's first line.
@@ -147,7 +147,7 @@ Seeding (review D7): `given_a_check_recorded_seeing` inserts one `identity_link_
 | RA-10d | When GitHub cannot be read for a link preview, Priya is refused without seeing the app's token (3 rows: rate limit, rejected token, unreachable) | roadmap review F-01, ADR-085 §4 |
 | RA-11a | Sam cannot publish Priya's GitHub account as his own (the offer form replayed naming `priyaraman`: no link shown or offered, nothing written) | roadmap review F-11, GDL-D3, C-GDL-1 |
 | RA-11b | A bio naming someone else's DID is explained with that DID in full, and nothing is offered | roadmap review F-11, U-25, AC-002.3 |
-| RA-12 | After a failed link write, Retry publishes the link exactly once (repo host answers 500, then recovers). The lost-answer row (write landed, answer lost) is not written: `FakeAtprotoNetwork` cannot store a record and then answer with an error | roadmap review F-08, ADR-071 |
+| RA-12 | After a failed link write, Retry leaves exactly one link (2 rows: repo host answers 500; repo host stores the link but the answer is lost — `WritePosture::StoreThenServerError` in test-support, Retry's re-create answered "already exists" must read as success). Each row: "Nothing was published." plus Retry, then exactly one link, its address, status 200 | roadmap review F-08, ADR-071 |
 | RA-13 | Priya's published link stays off her public profile and her share draft; her dependency-pinning claim still shows | **U-27** (user ruling: hide for now) |
 | RA-14 | A link preview confirmed as an ordinary claim publish writes nothing and is used up (universe unchanged; the link confirm afterwards publishes nothing) | roadmap review F-03, **U-21 B** |
 

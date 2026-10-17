@@ -628,50 +628,64 @@ fn a_bio_naming_someone_elses_did_is_explained_with_that_did_in_full_and_nothing
     assert!(world.atproto.write_attempts().is_empty(), "nothing written");
 }
 
-/// RA-12 (error, infrastructure-failure → recovery; roadmap review F-08)
+/// RA-12 (error, infrastructure-failure → recovery, table; roadmap review F-08)
 ///
-/// Row 2 of the review finding (the first write landed but its answer was
-/// lost) is not written: `FakeAtprotoNetwork` has no write posture that
-/// stores a record and then answers with an error. See the DISTILL report.
+/// Row 2 uses `WritePosture::StoreThenServerError`: the repo host stores the
+/// link and then answers 500, so the app cannot tell the write landed. Retry
+/// re-creates the same record key (the link's CID, ADR-071), which the host
+/// answers "already exists" — that must read as success, not a duplicate or
+/// an error page.
 /// ```gherkin
 /// @driving_port @real-io @error @infrastructure-failure @f-08 @adr-071 @contract-shape:bounded-change
-/// Scenario: After a failed link write, Retry publishes the link exactly once
+/// Scenario Outline: After a failed link write, Retry leaves exactly one link
 ///   Given Priya is on her link preview
-///   And her repo host answers every write with a server error
+///   And her repo host <fails>
 ///   When she confirms
-///   Then she sees "Nothing was published." with a Retry, and her repo holds no link
+///   Then she sees "Nothing was published." with a Retry
 ///   When her repo host recovers and she presses Retry
-///   Then her repo holds exactly one link and she sees its address
+///   Then her repo holds exactly one link and she sees its address, not an error page
+///   Examples:
+///     | fails                                                         |
+///     | answers every write with a server error                       |
+///     | stores the link but its answer is lost (answers a server error) |
 /// ```
 #[test]
 #[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn after_a_failed_link_write_retry_publishes_the_link_exactly_once() {
-    let world = ReviewWorld::new();
-    let mut browser = given_github_verified(&world, Persona::Priya);
-    when_opens_link_preview(&mut browser);
-    world
-        .atproto
-        .set_write_posture(Persona::Priya.did(), WritePosture::ServerError);
+    let rows = [
+        ("server error", WritePosture::ServerError),
+        ("answer lost", WritePosture::StoreThenServerError),
+    ];
+    for (row, failing) in rows {
+        let world = ReviewWorld::new();
+        let mut browser = given_github_verified(&world, Persona::Priya);
+        when_opens_link_preview(&mut browser);
+        world
+            .atproto
+            .set_write_posture(Persona::Priya.did(), failing);
 
-    when_confirms_link(&mut browser);
+        when_confirms_link(&mut browser);
 
-    assert!(
-        browser.page.shows(NOTHING_PUBLISHED) && browser.page.offers("Retry"),
-        "the failure is explained with a Retry:\n{}",
-        browser.page.text()
-    );
-    assert!(
-        links_in_pds(&world, Persona::Priya).is_empty(),
-        "no link yet"
-    );
+        assert!(
+            browser.page.shows(NOTHING_PUBLISHED) && browser.page.offers("Retry"),
+            "[{row}] the failure is explained with a Retry:\n{}",
+            browser.page.text()
+        );
 
-    world
-        .atproto
-        .set_write_posture(Persona::Priya.did(), WritePosture::Accept);
-    browser.press("Retry");
+        world
+            .atproto
+            .set_write_posture(Persona::Priya.did(), WritePosture::Accept);
+        browser.press("Retry");
 
-    let link = then_pds_holds_self_attested_link(&world, Persona::Priya);
-    then_sees_record_address(&browser.page, &link);
+        assert_eq!(
+            browser.page.status,
+            200,
+            "[{row}] Retry ends on the published page, not an error page:\n{}",
+            browser.page.text()
+        );
+        let link = then_pds_holds_self_attested_link(&world, Persona::Priya);
+        then_sees_record_address(&browser.page, &link);
+    }
 }
 
 /// RA-13 (edge; user ruling U-27 "hide for now")
