@@ -10,7 +10,7 @@
     "paradigm": "ADR-007: decisions pure in claim-domain; adapters and cli verbs do I/O only.",
     "test_paradigm": "Acceptance: example-based subprocess. Pure core: proptest against the CORE oracles. Adapters: real DuckDB / real HTTP adapter against FakeGithubAccounts, never mocked.",
     "scenario_fns": "`<cargo test target>::<fn>` (identity_link = tests/acceptance/identity_link.rs, identity_link_core = tests/acceptance/identity_link_core.rs), in activation order.",
-    "test_edit_allow_list": "Test-file edits limited to: removing the #[ignore] of a named scenario_fn; replacing the named sut_* body with ONE real call plus view mapping (DD-GDL-16). Forbidden: assertions, oracles, strategies, universe slots, helpers, test names. The GREEN diff must match. Carve-out (U-12, review N3): crafter-owned tests in their owning crates (adapter contract tests such as crates/adapter-github/tests/github_profile_contract.rs, xtask check-arch rule tests, claim-domain unit/property tests) may be added; tests/acceptance stays under this allow-list.",
+    "test_edit_allow_list": "Test-file edits limited to: removing the #[ignore] of a named scenario_fn; replacing the named sut_* body with ONE real call plus view mapping (DD-GDL-16). Forbidden: assertions, oracles, strategies, universe slots, helpers, test names. The GREEN diff must match. Carve-out (U-12, review N3): crafter-owned tests in their owning crates (adapter contract tests such as crates/adapter-github/tests/github_profile_contract.rs, xtask check-arch rule tests, claim-domain unit/property tests) may be added; tests/acceptance stays under this allow-list. Review-domain unit/property tests (crates/review-domain/src) are crafter-owned under the same carve-out (slice-3 re-review C-8). Slice-3 exception 03-03 only (C-1): the two properties an_account_github_did_not_name_is_never_proven and only_github_username_shaped_text_is_a_login MOVE unchanged in name and assertions from review-domain ownership.rs to claim-domain identity_link.rs, and the oracle of the_capability_is_minted_only_for_a_verified_unchanged_account is replaced by a literal bio-token oracle (F-14); the commit message records old and new assertions and the assertion count does not decrease. tests/acceptance/support/* stays DISTILL-owned: a crafter never edits it; a needed support change stops the step and goes to the acceptance designer (C-5).",
     "test_runs": "Scoped targets only, never the workspace. libtest runs tests matching ANY positional filter (library/test/src/cli.rs), so `-- f1 f2` is used.",
     "check_arch": "`cargo xtask check-arch` (.cargo/config.toml alias) + `cargo test -p xtask`; each new rule ships a synthetic-violation test.",
     "wording": "DISTILL-owned in tests/acceptance/support/identity_links.rs (DD-GDL-7, Q-GDL-D1).",
@@ -892,9 +892,9 @@
           "test_file": "crates/review-domain/src/link_plan.rs",
           "scenario_name": "a_link_plan_restores_only_as_the_owners_link_under_its_own_key",
           "scenario_fns": [
-            "review-domain (lib)::plans::tests::a_reserved_predicate_record_is_never_built_or_restored_as_a_claim_publish",
-            "review-domain (lib)::link_plan::tests::a_link_plan_restores_only_as_the_owners_link_under_its_own_key",
-            "review-domain (lib)::link_plan::tests::a_link_plans_record_is_the_link_drafts_record"
+            "-p review-domain --lib plans::tests::a_reserved_predicate_record_is_never_built_or_restored_as_a_claim_publish",
+            "-p review-domain --lib link_plan::tests::a_link_plan_restores_only_as_the_owners_link_under_its_own_key",
+            "-p review-domain --lib link_plan::tests::a_link_plans_record_is_the_link_drafts_record"
           ],
           "n_scenarios": [
             "reserved-predicate refusal property (plans.rs)",
@@ -908,14 +908,15 @@
             "cargo test -p xtask",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "Driver: the crafter-owned review-domain properties (U-12 carve-out); no acceptance scenario changes state here, and no tests/acceptance file is edited. This step lands before 03-04, the first step that stores a link plan (F-02). The refusal sits in publish_edited_plan (publish_plan delegates to it) and in restore_plan, so /review/publish and /review/publish-selected (routes/publish.rs, both through restore_plan) refuse a link plan with no edit to routes/publish.rs or routes/review.rs (F-03). Name the new PlanError variant as you like. LinkPlan is a separate type from PublishPlan, so no claim-publish code can receive one (F-16). depends_on 02-08 is serialization-only (slice order), not a code dependency.",
+          "implementation_notes": "Driver: the crafter-owned review-domain properties (U-12 carve-out); no acceptance scenario changes state here, and no tests/acceptance file is edited. This step lands before 03-04, the first step that stores a link plan (F-02). The refusal sits in publish_edited_plan (publish_plan delegates to it) and in restore_plan, so /review/publish and /review/publish-selected (routes/publish.rs, both through restore_plan) refuse a link plan with no edit to routes/publish.rs or routes/review.rs (F-03). Name the new PlanError variant as you like. LinkPlan is a separate type from PublishPlan, so no claim-publish code can receive one (F-16). depends_on 02-08 is serialization-only (slice order), not a code dependency. DISPATCH CONDITIONS (slice-3 re-review, iteration 2): (1) RED must fail on an assertion, not a compile error: land signature stubs (todo!()) for new types/functions first (C-3). (2) Never edit tests/acceptance/support/*; un-ignore only the named fns (C-5). restore_link_plan reuses the private provenance rule `self_attested` in published.rs (make it pub(crate)); never re-implement it (C-4).",
           "estimate_hours": 4,
           "depends_on": [
             "02-08"
           ],
           "files_to_modify": [
             "crates/review-domain/src/plans.rs",
-            "crates/review-domain/src/lib.rs"
+            "crates/review-domain/src/lib.rs",
+            "crates/review-domain/src/published.rs"
           ],
           "files_to_create": [
             "crates/review-domain/src/link_plan.rs"
@@ -935,8 +936,8 @@
           "test_file": "crates/review-domain/src/published.rs",
           "scenario_name": "a_link_record_never_reaches_the_profile_list_or_the_share_draft",
           "scenario_fns": [
-            "review-domain (lib)::published::tests::a_link_record_never_reaches_the_profile_list_or_the_share_draft",
-            "review-domain (lib)::published::tests::a_live_link_record_can_still_be_retracted"
+            "-p review-domain --lib published::tests::a_link_record_never_reaches_the_profile_list_or_the_share_draft",
+            "-p review-domain --lib published::tests::a_live_link_record_can_still_be_retracted"
           ],
           "n_scenarios": [
             "profile/share exclusion property",
@@ -947,7 +948,7 @@
             "cargo test -p openlore-review-app",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "F-06: the exclusion lands before 03-05, the first step that can write a link, so no commit on trunk ever shows a link on the profile or in a share draft. RA-13 cannot go green here because it needs a published link; it stays ignored until 03-05, where it is un-ignored as a guard of this step. Driver: the crafter-owned property (U-12). depends_on 03-01 is serialization-only (review-domain edits kept serial), not a code dependency.",
+          "implementation_notes": "F-06: the exclusion lands before 03-05, the first step that can write a link, so no commit on trunk ever shows a link on the profile or in a share draft. RA-13 cannot go green here because it needs a published link; it stays ignored until 03-05, where it is un-ignored as a guard of this step. Driver: the crafter-owned property (U-12). depends_on 03-01 is serialization-only (review-domain edits kept serial), not a code dependency. DISPATCH CONDITIONS (slice-3 re-review, iteration 2): (1) RED must fail on an assertion, not a compile error: land signature stubs (todo!()) for new types/functions first (C-3). (2) Never edit tests/acceptance/support/*; un-ignore only the named fns (C-5). Accepted gap (C-7): the U-27 exclusion is guarded only by this step's property until RA-13 activates in 03-05.",
           "estimate_hours": 2,
           "depends_on": [
             "03-01"
@@ -962,7 +963,7 @@
         {
           "id": "03-03",
           "name": "Refactor: prove_ownership delegates its account rule to claim-domain",
-          "description": "U-25, refactor only (F-07): no behaviour change, green before and green after. claim-domain's account rule becomes pub account_named_by(user_id: u64, login: &str) -> Result<(NonZeroU64, &str), MalformedObservation>; check_link and prove_ownership both call it. prove_ownership keeps its signature, bio_verdict and its linked-id gate.",
+          "description": "U-25, refactor only (F-07): no behaviour change, green before and green after. claim-domain's account rule becomes pub account_named_by(user_id: u64, login: &str) -> Result<(NonZeroU64, &str), MalformedObservation>; check_link and prove_ownership both call it. prove_ownership keeps its signature, ownership_verdict and its linked-id gate.",
           "criteria": [
             "The full green list passes before any production edit (recorded in the commit message) and again after it, with no tests/acceptance edit.",
             "prove_ownership checks in this order: account (account_named_by) → linked id → bio (F-13). It maps Err(MalformedObservation) to OwnershipRefusal::GithubUnavailable by name, with no wildcard.",
@@ -974,10 +975,10 @@
           "test_file": "crates/review-domain/src/ownership.rs",
           "scenario_name": "the_capability_is_minted_only_for_a_verified_unchanged_account",
           "scenario_fns": [
-            "claim-domain (lib)::identity_link::tests::an_account_github_did_not_name_is_never_named",
-            "claim-domain (lib)::identity_link::tests::only_github_username_shaped_text_is_a_login",
-            "review-domain (lib)::ownership::tests::a_malformed_account_is_refused_as_unreadable_not_disproved",
-            "review-domain (lib)::ownership::tests::the_capability_is_minted_only_for_a_verified_unchanged_account"
+            "-p claim-domain --lib identity_link::tests::an_account_github_did_not_name_is_never_proven",
+            "-p claim-domain --lib identity_link::tests::only_github_username_shaped_text_is_a_login",
+            "-p review-domain --lib ownership::tests::a_malformed_account_is_refused_as_unreadable_not_disproved",
+            "-p review-domain --lib ownership::tests::the_capability_is_minted_only_for_a_verified_unchanged_account"
           ],
           "n_scenarios": [
             "refactor (green before / green after)",
@@ -994,7 +995,7 @@
             "cargo test -p cli --test identity_link_readers",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "Refactor-only commit; mutation-check it with the per-feature run scoped to identity_link.rs::account_named_by and ownership.rs::prove_ownership (kill rate >= 80%). The test moves are crafter-owned (U-12) and land in the same commit. check_link drops a DifferentDid's DID, but the verify message shows it (AC-002.3), so prove_ownership keeps bio_verdict. depends_on 03-02 is serialization-only (keeps review-domain edits serial), not a code dependency.",
+          "implementation_notes": "Refactor-only commit; mutation-check it with the per-feature run scoped to identity_link.rs::account_named_by and ownership.rs::prove_ownership (kill rate >= 80%). The test moves are crafter-owned (U-12) and land in the same commit. check_link drops a DifferentDid's DID, but the verify message shows it (AC-002.3), so prove_ownership keeps ownership_verdict. depends_on 03-02 is serialization-only (keeps review-domain edits serial), not a code dependency. DISPATCH CONDITIONS (slice-3 re-review, iteration 2): (1) RED must fail on an assertion, not a compile error: land signature stubs (todo!()) for new types/functions first (C-3). (2) Never edit tests/acceptance/support/*; un-ignore only the named fns (C-5). (3) Refactor exception to the one-RED rule: no RED; record the green-before list in the commit message; moves and the F-14 oracle change only under the 03-03 carve-out (C-1).",
           "estimate_hours": 3,
           "depends_on": [
             "03-02"
@@ -1016,7 +1017,7 @@
             "RA-7: the link preview's own Cancel (new, F-17) writes nothing, and /github offers \"Publish this link\" again.",
             "RA-10 (F-01): the preview POST is dispatched in signin.rs under `same_origin` and passes signed_in_post. A missing or forged page token gets 403. A spent hourly budget shows \"Too many verification attempts in the last hour\". A malformed login shows \"We couldn't find a GitHub account\". In all four cases GitHub is asked nothing and no plan is stored.",
             "RA-10d: a rate limit, a rejected token or no network refuses the preview; the app's token is never on the page; no plan is stored.",
-            "RA-11a/RA-11b (F-11): a fresh read whose bio does not name the signed-in DID builds no plan. Sam naming priyaraman is refused. A bio naming Aisha's DID is explained as a different DID, shown in full (the DID comes from bio_verdict).",
+            "RA-11a/RA-11b (F-11): a fresh read whose bio does not name the signed-in DID builds no plan. Sam naming priyaraman is refused. A bio naming Aisha's DID is explained as a different DID, shown in full (the DID comes from ownership_verdict).",
             "RA-14 (F-03): this is the first step that stores a link plan. Sending its confirmation to /review/publish takes the plan, restore_plan refuses it (03-01), nothing is written, and no suggestion changes state.",
             "link_preview builds a plan exactly when the fresh read proves the signed-in DID for a real account (review-domain property, literal bio oracles).",
             "check-arch fails when routes/github_link.rs names a GithubLinkPort method (github_link, record_verified_link, mark_link_unverified); a synthetic-violation test proves the rule (U-26)."
@@ -1054,7 +1055,7 @@
             "cargo test -p xtask",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "RED driver: RA-1a. The companions all fail today only at the missing offer (classification U-32). They need only this step's offer, Cancel and preview guards, which reuse signed_in_post, VerifyAttempts (try_spend becomes pub(crate)), is_github_login and ownership_message. The login comes from the offer's form field. The proof is the fresh read, never the github_links row (C-GDL-10, ADR-085 §2, U-26). The offer itself reads the row in routes/github.rs, which may hold GithubLinkPort. Until 03-05 the preview's confirm button posts to a route that does not exist yet: it answers 404 and writes nothing (fail closed; U-35). depends_on: 03-01 is a code dependency (LinkPlan; the reserved refusal before any link plan is storable, F-02). 03-03 is a code dependency (the preview refusal for a malformed answer uses the shared account rule).",
+          "implementation_notes": "RED driver: RA-1a. The companions all fail today only at the missing offer (classification U-32). They need only this step's offer, Cancel and preview guards, which reuse signed_in_post, VerifyAttempts (try_spend becomes pub(crate)), is_github_login and ownership_message. The login comes from the offer's form field. The proof is the fresh read, never the github_links row (C-GDL-10, ADR-085 §2, U-26). The offer itself reads the row in routes/github.rs, which may hold GithubLinkPort. Until 03-05 the preview's confirm button posts to a route that does not exist yet: it answers 404 and writes nothing (fail closed; U-35). depends_on: 03-01 is a code dependency (LinkPlan; the reserved refusal before any link plan is storable, F-02). 03-03 is a code dependency (the preview refusal for a malformed answer uses the shared account rule). DISPATCH CONDITIONS (slice-3 re-review, iteration 2): (1) RED must fail on an assertion, not a compile error: land signature stubs (todo!()) for new types/functions first (C-3). (2) Never edit tests/acceptance/support/*; un-ignore only the named fns (C-5). Name the link_preview property test and list it in scenario_fns (C-7). Add an assertion (review-domain property or a crafter-owned review-app test) that a stored link plan never appears in the publish queue nor is accepted by /review/publish-selected; verify the selected path at routes/publish.rs:145 actually goes through restore_plan before relying on it; state the plan's lifetime after Cancel (C-6).",
           "estimate_hours": 6,
           "depends_on": [
             "03-01",
@@ -1123,7 +1124,7 @@
             "cargo test -p xtask",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "RED driver: RA-1b. RA-6, RA-8, RA-13, RR-2a and RR-2b fail today only at the missing offer and need no behaviour beyond this step's confirm path (U-30, U-32). RR-1a/1b/3 pass while ignored. The confirm decision is pure over (LinkPlan, check_link result); the handler only reads, writes and renders. Log events `github.link.published` and `github.link.refused` carry labels only (U-29). One executor path: an execute_link beside execute_publish over the shared create_and_read_back. F-19: no authority check is needed. ADR-086 §2 classes a `sameAs` record as the IdentityLink non-weight kind, which needs no authority, and §1 scopes authority to `github:` subjects (a link's subject is a DID). claim_domain::authority does not exist yet. When owner-only-signing lands, this execution must take the exempt SigningPermit for kind IdentityLink, never the owner_can_publish gate (U-33). depends_on: 03-04 is a code dependency (preview, plan); 03-02 is a code dependency (exclusion before the first link write, F-06).",
+          "implementation_notes": "RED driver: RA-1b. RA-6, RA-8, RA-13, RR-2a and RR-2b fail today only at the missing offer and need no behaviour beyond this step's confirm path (U-30, U-32). RR-1a/1b/3 pass while ignored. The confirm decision is pure over (LinkPlan, check_link result); the handler only reads, writes and renders. Log events `github.link.published` and `github.link.refused` carry labels only (U-29). One executor path: an execute_link beside execute_publish over the shared create_and_read_back. F-19: no authority check is needed. ADR-086 §2 classes a `sameAs` record as the IdentityLink non-weight kind, which needs no authority, and §1 scopes authority to `github:` subjects (a link's subject is a DID). claim_domain::authority does not exist yet. When owner-only-signing lands, this execution must take the exempt SigningPermit for kind IdentityLink, never the owner_can_publish gate (U-33). depends_on: 03-04 is a code dependency (preview, plan); 03-02 is a code dependency (exclusion before the first link write, F-06). DISPATCH CONDITIONS (slice-3 re-review, iteration 2): (1) RED must fail on an assertion, not a compile error: land signature stubs (todo!()) for new types/functions first (C-3). (2) Never edit tests/acceptance/support/*; un-ignore only the named fns (C-5). Deploy hold: do not deploy the review app from 03-04 through 03-06 (U-35 extended, C-2): until 03-06 a stored-then-failed write says 'Nothing was published.'",
           "estimate_hours": 6,
           "depends_on": [
             "03-04",
@@ -1170,7 +1171,7 @@
             "cargo test -p adapter-atproto-oauth",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "RED driver: RA-12. adapter-atproto-oauth/src/write.rs already treats a create answered \"already exists\" as success (already_exists at :57-63, used at :166; ADR-073), and the fake's StoreThenServerError answers exactly that (test-support fake_atproto.rs:1490). So write.rs is not edited and its suite is a guard (U-34). If row 2 fails there, stop and raise it, do not widen the match silently. depends_on 03-05 is a code dependency (the confirm path).",
+          "implementation_notes": "RED driver: RA-12. adapter-atproto-oauth/src/write.rs already treats a create answered \"already exists\" as success (already_exists at :57-63, used at :166; ADR-073), and the fake's StoreThenServerError answers exactly that (test-support fake_atproto.rs:133 (variant) / :1504 (handling)). So write.rs is not edited and its suite is a guard (U-34). If row 2 fails there, stop and raise it, do not widen the match silently. depends_on 03-05 is a code dependency (the confirm path). DISPATCH CONDITIONS (slice-3 re-review, iteration 2): (1) RED must fail on an assertion, not a compile error: land signature stubs (todo!()) for new types/functions first (C-3). (2) Never edit tests/acceptance/support/*; un-ignore only the named fns (C-5).",
           "estimate_hours": 3,
           "depends_on": [
             "03-05"
@@ -1212,7 +1213,7 @@
             "cargo test -p cli --test review_app_identity_link_readers",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "RED driver: RA-2, the only RED here; RR-2a/2b were un-ignored in 03-05 (F-09). Depends on the 03-03 refactor having landed before this behaviour (F-07). depends_on: 03-06 is serialization-only (same files); 03-03 is a code dependency (the delegated account rule).",
+          "implementation_notes": "RED driver: RA-2, the only RED here; RR-2a/2b were un-ignored in 03-05 (F-09). Depends on the 03-03 refactor having landed before this behaviour (F-07). depends_on: 03-06 is serialization-only (same files); 03-03 is a code dependency (the delegated account rule). DISPATCH CONDITIONS (slice-3 re-review, iteration 2): (1) RED must fail on an assertion, not a compile error: land signature stubs (todo!()) for new types/functions first (C-3). (2) Never edit tests/acceptance/support/*; un-ignore only the named fns (C-5).",
           "estimate_hours": 3,
           "depends_on": [
             "03-06",
@@ -1255,7 +1256,7 @@
             "cargo test -p review-domain",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "RED driver: RA-5. The handler passes the GithubError to review-domain unchanged; the token is never echoed (DD-GDL-13). The confirm spends the verify budget before reading (ADR-076 §2, U-26). depends_on 03-07 is a code dependency (it extends the same refusal mapping).",
+          "implementation_notes": "RED driver: RA-5. The handler passes the GithubError to review-domain unchanged; the token is never echoed (DD-GDL-13). The confirm spends the verify budget before reading (ADR-076 §2, U-26). depends_on 03-07 is a code dependency (it extends the same refusal mapping). DISPATCH CONDITIONS (slice-3 re-review, iteration 2): (1) RED must fail on an assertion, not a compile error: land signature stubs (todo!()) for new types/functions first (C-3). (2) Never edit tests/acceptance/support/*; un-ignore only the named fns (C-5).",
           "estimate_hours": 3,
           "depends_on": [
             "03-07"
@@ -1296,7 +1297,7 @@
             "cargo test -p cli --test review_app_identity_link_readers",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "RED driver: RA-4. routes/retract.rs is reused unchanged. It retracts through live_published_claim, which still admits link records (03-02). Its no-op suggestion state change and its `retract.posted` count are accepted (U-28). The selection sits in review-domain/src/published.rs and calls active_link_records with the ADR-071 self-attested provenance; there is no second lineage rule. github_step becomes async (resolve_did, list_repo_claims), so its dispatch in signin.rs changes. Slice-3 closure: all 17 RA-* scenario fns (RA-1a..RA-14) and all 5 RR-* active. depends_on: 03-08 is serialization-only (shared files); the code dependency is 03-05 (a published link).",
+          "implementation_notes": "RED driver: RA-4. routes/retract.rs is reused unchanged. It retracts through live_published_claim, which still admits link records (03-02). Its no-op suggestion state change and its `retract.posted` count are accepted (U-28). The selection sits in review-domain/src/published.rs and calls active_link_records with the ADR-071 self-attested provenance; there is no second lineage rule. github_step becomes async (resolve_did, list_repo_claims), so its dispatch in signin.rs changes. Slice-3 closure: all 17 RA-* scenario fns (RA-1a..RA-14) and all 5 RR-* active. depends_on: 03-08 is serialization-only (shared files); the code dependency is 03-05 (a published link). DISPATCH CONDITIONS (slice-3 re-review, iteration 2): (1) RED must fail on an assertion, not a compile error: land signature stubs (todo!()) for new types/functions first (C-3). (2) Never edit tests/acceptance/support/*; un-ignore only the named fns (C-5).",
           "estimate_hours": 4,
           "depends_on": [
             "03-08"
@@ -1364,8 +1365,9 @@
       "note": "Round 2 rejected on N1-N7 (text/file-list); applied by the orchestrator under the max-2 rule, no re-design."
     },
     "phase_03": {
-      "status": "pending_review",
-      "iteration": 2
+      "status": "approved",
+      "iteration": 2,
+      "note": "Re-review iteration 2 rejected only on B-1 (closure traceability, text-only); closed by the orchestrator in upstream-issues.md U-36 closure table; C-1..C-9 applied as conventions, file and note amendments and dispatch conditions. 2026-10-17."
     }
   }
 }

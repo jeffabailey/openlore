@@ -64,3 +64,29 @@ The rows below are updated to match it.
 | U-35 | Between 03-04 and 03-05 the link preview's confirm button posts to a route that is not there yet | step split | It answers 404 and writes nothing (fail closed). Do not deploy the review app between 03-04 and 03-05 | 03-04 |
 
 **User rulings 2026-10-17 (slice 3):** U-21 → **B**: link plans are stored under kind `publish`, no review-store migration; the roadmap review's conditions F-02 (reserved-predicate refusal in `restore_plan` lands before any link plan is storable), F-03 (link plan key, no `mark_published`/`owner_can_publish` on the link path, a link plan confirmed through `/review/publish` writes nothing) and F-08 bind. U-27 → **hide for now**: link records are excluded from the public profile list and the share draft through the `identity_link` API, pinned by a new scenario in slice 3; showing them is a later decision.
+
+**U-36 — slice-3 roadmap review closure (orchestrator, 2026-10-17).** Iteration 2 rejected only on B-1 (no traceable closure for F-05, F-12, F-18). Closure table:
+
+| Finding | Closed by |
+|---|---|
+| F-01 preview guards | 03-04 companions RA-10, RA-10d; preview POST via `signin.rs` same-origin dispatch |
+| F-02 guard before storable | 03-01 (`restore_plan` reserved-predicate refusal, `restore_link_plan`) before 03-04 |
+| F-03 link plan key / no suggestion bookkeeping | 03-01 `LinkPlan` keyed by the record triple; 03-05 check-arch rule; RA-14 in 03-04 |
+| F-04 keep account-rule properties | 03-03 moves both to claim-domain (conventions carve-out C-1) |
+| F-05 U-21 needs the user | User ruling U-21 = B: no migration step; conditions F-02, F-03, F-08 bind |
+| F-06 U-27 exposure | User ruling hide; exclusion in 03-02 before the first link write (03-05); RA-13 in 03-05 |
+| F-07 split | 03-01 pure guard, 03-03 refactor-only, RA-2 alone in 03-07 |
+| F-08 unpinned criteria | RA-9 (03-04), RA-12 two rows (03-06), keeps-no-plan property (03-08) |
+| F-09 RR-2a/b placement | un-ignored in 03-05; U-30 corrected |
+| F-10 refusal coverage | exhaustive `OwnershipRefusal` match, RA-5 four rows (03-08) |
+| F-11 owner binding | RA-11a/b in 03-04 |
+| F-12 regression scope | `cargo test -p openlore-review-app` and `cargo test -p cli --test identity_link_core` in the green lists of 03-03 and 03-07 (verified) |
+| F-13 account_named_by signature | 03-03 notes |
+| F-14 circular oracle | 03-03 literal bio-token oracle; RA-11b pins the full DID |
+| F-15 classification by name | U-32 |
+| F-16 guarded constructors | 03-01 notes name `publish_plan`, `publish_edited_plan`, `link_plan`, `restore_link_plan` |
+| F-17 Cancel is new | U-30 corrected; built in 03-04 |
+| F-18 serialization-only deps | labelled in the notes of 03-01, 03-02, 03-03, 03-07, 03-09 (verified); 03-04..03-06 and 03-08 have code dependencies |
+| F-19 owner-only signing | U-33: no authority check now; the exempt IdentityLink permit when ADR-086/087 lands |
+
+Iteration-2 conditions C-1..C-9 are applied in roadmap.json (conventions carve-outs for review-domain tests and the 03-03 move; `published.rs` added to 03-01; scenario_fns in cargo form; name and line corrections; dispatch conditions in every step's notes; deploy hold 03-04..03-06). Phase 03 approved.
