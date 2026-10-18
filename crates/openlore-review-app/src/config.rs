@@ -130,17 +130,15 @@ pub(crate) struct AppConfig {
     pub(crate) secrets_dir: PathBuf,
     pub(crate) oauth_scopes: String,
     pub(crate) github_api_base: String,
-    /// PLC directory base (identity resolution lands with sign-in, 01-02).
-    #[allow(dead_code)]
+    /// PLC directory base for sign-in's DID lookups.
     pub(crate) plc_url: String,
-    /// `resolveHandle` base (identity resolution lands with sign-in, 01-02).
-    #[allow(dead_code)]
+    /// `resolveHandle` base for sign-in's handle lookups.
     pub(crate) handle_resolver_url: String,
     /// The SSRF guard on reads of a signed-in owner's own PDS, whose URL
     /// comes from their DID document (F-6), and on sign-in's identity
     /// lookups: the handle resolver, the PLC directory and any `did:web`
     /// host (U-49).
-    pub(crate) pds_read_policy: AddressPolicy,
+    pub(crate) atproto_address_policy: AddressPolicy,
 }
 
 /// Parse the environment (pure, total).
@@ -205,14 +203,15 @@ pub(crate) fn parse_config(
         github_api_base: url("OPENLORE_GITHUB_API_BASE", "https://api.github.com")?,
         plc_url: url("REVIEW_APP_PLC_URL", "https://plc.directory")?,
         handle_resolver_url: url("REVIEW_APP_HANDLE_RESOLVER_URL", "https://bsky.social")?,
-        pds_read_policy: pds_read_policy(policy),
+        atproto_address_policy: atproto_address_policy(policy),
     })
 }
 
-/// The address policy for PDS reads (pure): production refuses private,
+/// The address policy for every AT Protocol host the app reads (pure): the
+/// owner's PDS and sign-in's identity lookups. Production refuses private,
 /// loopback and link-local addresses, not only plain HTTP; the loopback test
 /// seam admits loopback HTTP and nothing else private.
-fn pds_read_policy(policy: TransportPolicy) -> AddressPolicy {
+fn atproto_address_policy(policy: TransportPolicy) -> AddressPolicy {
     match policy {
         TransportPolicy::HttpsOnly => AddressPolicy::HttpsPublicOnly,
         TransportPolicy::HttpsOrLoopbackHttp => AddressPolicy::HttpsOrLoopbackHttp,
@@ -620,11 +619,11 @@ mod tests {
             }
         }
 
-        /// Every accepted config guards PDS reads against private addresses;
-        /// only a development build that opted into loopback HTTP admits
-        /// loopback (F-6).
+        /// Every accepted config guards AT Protocol reads against private
+        /// addresses; only a development build that opted into loopback HTTP
+        /// admits loopback (F-6, U-49).
         #[test]
-        fn every_accepted_config_guards_pds_reads(env in env(), profile in profile()) {
+        fn every_accepted_config_guards_atproto_reads(env in env(), profile in profile()) {
             let opted_in = env.get("REVIEW_APP_ALLOW_LOOPBACK_HTTP").map(|v| v.trim()) == Some("1");
             if let Ok(config) = parse_config(&env, profile) {
                 let expected = if opted_in && profile == BuildProfile::Development {
@@ -632,7 +631,7 @@ mod tests {
                 } else {
                     AddressPolicy::HttpsPublicOnly
                 };
-                prop_assert_eq!(config.pds_read_policy, expected);
+                prop_assert_eq!(config.atproto_address_policy, expected);
             }
         }
 

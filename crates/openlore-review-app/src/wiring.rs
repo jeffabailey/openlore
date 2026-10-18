@@ -478,7 +478,7 @@ fn wire(env: &BTreeMap<String, String>) -> Result<Wired, Refusal> {
     let identity = Arc::new(IdentityLookup::guarded_for_sign_in(
         &config.handle_resolver_url,
         &config.plc_url,
-        config.pds_read_policy,
+        config.atproto_address_policy,
     ));
     Ok(Wired {
         config,
@@ -622,7 +622,7 @@ fn app(wired: Wired) -> App {
         repo_read: wired.oauth.clone(),
         repo_listing: Arc::new(AtProtoIngestAdapter::guarded_for_page_loads(
             "",
-            wired.config.pds_read_policy,
+            wired.config.atproto_address_policy,
         )),
         oauth: wired.oauth,
         sessions: wired.store.clone(),
