@@ -1853,9 +1853,11 @@ pub fn scan_link_preview_proves_from_a_fresh_read(
     let mut findings = Vec::new();
     for relative in LINK_PREVIEW_ROUTE_SOURCES {
         let path = workspace_root.join(relative);
-        if !path.is_file() {
-            continue;
-        }
+        anyhow::ensure!(
+            path.is_file(),
+            "{relative}: missing — link_preview_proves_from_a_fresh_read scans it; \
+             a moved or renamed source must be renamed in LINK_PREVIEW_ROUTE_SOURCES too"
+        );
         let source = std::fs::read_to_string(&path)?;
         findings.extend(
             reader_findings(&source, LINK_PREVIEW_ROUTE_FORBIDDEN_TOKENS)
@@ -4400,6 +4402,13 @@ mod tests {
              fn state(app: &App) { app.review_write.change_state(a, b, c, d, e); }\n",
         )
         .expect("write");
+        std::fs::write(
+            violating
+                .path()
+                .join("crates/openlore-review-app/src/executor.rs"),
+            "",
+        )
+        .expect("write");
         let findings = scan_link_preview_proves_from_a_fresh_read(violating.path()).expect("scan");
         assert_eq!(
             findings.len(),
@@ -4431,7 +4440,8 @@ mod tests {
     fn link_preview_scan_holds_the_link_executor_to_the_same_rule() {
         let violating = tempfile::tempdir().expect("tempdir");
         let src = violating.path().join("crates/openlore-review-app/src");
-        std::fs::create_dir_all(&src).expect("mkdir");
+        std::fs::create_dir_all(src.join("routes")).expect("mkdir");
+        std::fs::write(src.join("routes/github_link.rs"), "").expect("write");
         std::fs::write(
             src.join("executor.rs"),
             "use review_domain::link_plan::LinkPlan;\n\
@@ -4454,6 +4464,27 @@ mod tests {
         assert!(
             !findings.iter().any(|f| f.contains("`LinkPlan`")),
             "{findings:?}"
+        );
+    }
+
+    /// N5: a scanned source that is missing is an error, never a silent pass.
+    #[test]
+    fn link_preview_scan_refuses_a_missing_source() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let routes = workspace
+            .path()
+            .join("crates/openlore-review-app/src/routes");
+        std::fs::create_dir_all(&routes).expect("mkdir");
+        std::fs::write(routes.join("github_link.rs"), "").expect("write");
+
+        let error = scan_link_preview_proves_from_a_fresh_read(workspace.path())
+            .expect_err("a missing source is an error");
+
+        assert!(
+            error
+                .to_string()
+                .contains("crates/openlore-review-app/src/executor.rs: missing"),
+            "{error}"
         );
     }
 
