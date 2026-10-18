@@ -619,7 +619,10 @@ fn app(wired: Wired) -> App {
         identity: wired.identity,
         repo_write: wired.oauth.clone(),
         repo_read: wired.oauth.clone(),
-        repo_listing: Arc::new(AtProtoIngestAdapter::new("")),
+        repo_listing: Arc::new(AtProtoIngestAdapter::guarded_for_page_loads(
+            "",
+            wired.config.pds_read_policy,
+        )),
         oauth: wired.oauth,
         sessions: wired.store.clone(),
         github: Arc::new(github),

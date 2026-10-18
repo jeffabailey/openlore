@@ -9,6 +9,7 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use ports::duckdb_caps::DuckDbCap;
+use ports::net_policy::TransportPolicy as AddressPolicy;
 use review_domain::budget::DEFAULT_CONCURRENT_SCANS;
 
 /// The granular scope set (ADR-073 / SPIKE-3): claim and post creation only.
@@ -135,6 +136,9 @@ pub(crate) struct AppConfig {
     /// `resolveHandle` base (identity resolution lands with sign-in, 01-02).
     #[allow(dead_code)]
     pub(crate) handle_resolver_url: String,
+    /// The SSRF guard on reads of a signed-in owner's own PDS, whose URL
+    /// comes from their DID document (F-6).
+    pub(crate) pds_read_policy: AddressPolicy,
 }
 
 /// Parse the environment (pure, total).
@@ -199,7 +203,18 @@ pub(crate) fn parse_config(
         github_api_base: url("OPENLORE_GITHUB_API_BASE", "https://api.github.com")?,
         plc_url: url("REVIEW_APP_PLC_URL", "https://plc.directory")?,
         handle_resolver_url: url("REVIEW_APP_HANDLE_RESOLVER_URL", "https://bsky.social")?,
+        pds_read_policy: pds_read_policy(policy),
     })
+}
+
+/// The address policy for PDS reads (pure): production refuses private,
+/// loopback and link-local addresses, not only plain HTTP; the loopback test
+/// seam admits loopback HTTP and nothing else private.
+fn pds_read_policy(policy: TransportPolicy) -> AddressPolicy {
+    match policy {
+        TransportPolicy::HttpsOnly => AddressPolicy::HttpsPublicOnly,
+        TransportPolicy::HttpsOrLoopbackHttp => AddressPolicy::HttpsOrLoopbackHttp,
+    }
 }
 
 /// A DuckDB cap within its shared range, or `default` when unset (pure, total).
@@ -600,6 +615,22 @@ mod tests {
                 prop_assert_eq!(dev.clock_skew_secs, secs);
             } else if unset.is_ok() {
                 prop_assert!(!CLOCK_SKEW_RANGE.contains(&secs));
+            }
+        }
+
+        /// Every accepted config guards PDS reads against private addresses;
+        /// only a development build that opted into loopback HTTP admits
+        /// loopback (F-6).
+        #[test]
+        fn every_accepted_config_guards_pds_reads(env in env(), profile in profile()) {
+            let opted_in = env.get("REVIEW_APP_ALLOW_LOOPBACK_HTTP").map(|v| v.trim()) == Some("1");
+            if let Ok(config) = parse_config(&env, profile) {
+                let expected = if opted_in && profile == BuildProfile::Development {
+                    AddressPolicy::HttpsOrLoopbackHttp
+                } else {
+                    AddressPolicy::HttpsPublicOnly
+                };
+                prop_assert_eq!(config.pds_read_policy, expected);
             }
         }
 

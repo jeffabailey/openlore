@@ -43,9 +43,7 @@ use ports::{
 const CLAIM_COLLECTION: &str = "org.openlore.claim";
 
 /// How long a `listRecords` request may take: to connect, and in all
-/// (connect, send and read the body). A PDS that does not answer in time is
-/// unreachable, never a hung page load (the review app's GET /github reads
-/// the owner's repo on every visit). `request: None` leaves the overall
+/// (connect, send and read the body). `request: None` leaves the overall
 /// bound to the caller.
 #[derive(Debug, Clone, Copy)]
 struct ListingTimeouts {
@@ -53,8 +51,9 @@ struct ListingTimeouts {
     request: Option<std::time::Duration>,
 }
 
-/// The review app's bounds; the connect bound mirrors
-/// `adapter-atproto-pds::peer_read`.
+/// The review app's bounds: a PDS that does not answer in time is
+/// unreachable, never a hung page load (GET /github reads the owner's repo on
+/// every visit). The connect bound mirrors `adapter-atproto-pds::peer_read`.
 const LISTING_TIMEOUTS: ListingTimeouts = ListingTimeouts {
     connect: std::time::Duration::from_secs(10),
     request: Some(std::time::Duration::from_secs(30)),
@@ -74,54 +73,53 @@ const GUARDED_LISTING_TIMEOUTS: ListingTimeouts = ListingTimeouts {
 /// READ-ONLY by construction (I-AV-5): holds NO signing identity and no local
 /// store handle. Holds a `reqwest` client + the configured source base URL the
 /// `enumerate` default reads when no explicit source is passed.
+///
+/// Every adapter is SSRF-guarded (ADR-077 §4, DD-IPF-5): there is no
+/// unguarded constructor (F-6).
 pub struct AtProtoIngestAdapter {
     client: reqwest::Client,
     /// The configured source base URL (a PDS / relay hosting `listRecords`).
     source: String,
-    /// The transport policy every request obeys; `None` = unguarded (the
-    /// review app's reader, never the indexer — xtask `indexer_guarded_clients_only`).
-    policy: Option<TransportPolicy>,
+    /// The transport policy every request obeys.
+    policy: TransportPolicy,
+    timeouts: ListingTimeouts,
 }
 
 impl AtProtoIngestAdapter {
-    /// Construct the UNGUARDED ingest adapter pointed at `source` (a base URL
-    /// hosting the public `com.atproto.repo.listRecords` surface). Redirects
-    /// are never followed (ADR-078): a 3xx is a failed listing, its target is
-    /// not contacted.
-    pub fn new(source: &str) -> Self {
-        Self::unguarded(source, LISTING_TIMEOUTS)
-    }
-
-    /// [`Self::new`] bounded by `timeouts` (the slow-PDS test seam).
-    fn unguarded(source: &str, timeouts: ListingTimeouts) -> Self {
-        let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
-        Self::with_client(client, source, None, timeouts)
-    }
-
     /// The SSRF-guarded adapter the indexer wires (ADR-077 §4, DD-IPF-5):
     /// every URL is pre-checked against `policy`, hostnames resolve through
     /// [`GuardedResolver`] (refused addresses dropped, the connection goes to
-    /// a checked address), no proxy, redirects never followed.
+    /// a checked address), no proxy, redirects never followed (ADR-078: a
+    /// 3xx is a failed listing, its target is not contacted). No overall
+    /// request bound: the indexer's per-author limit bounds each listing.
     pub fn guarded(source: &str, policy: TransportPolicy) -> Self {
         Self::guarded_with_lookup(source, policy, system_lookup())
     }
 
     /// [`Self::guarded`] over an injected DNS lookup (the rebinding test seam).
     pub fn guarded_with_lookup(source: &str, policy: TransportPolicy, lookup: HostLookup) -> Self {
+        Self::guarded_within(source, policy, lookup, GUARDED_LISTING_TIMEOUTS)
+    }
+
+    /// The review app's reader (F-6): the same SSRF guard as
+    /// [`Self::guarded`], and every listing also bounded in all (10 s to
+    /// connect, 30 s overall), so a silent PDS never hangs a page load.
+    pub fn guarded_for_page_loads(source: &str, policy: TransportPolicy) -> Self {
+        Self::guarded_within(source, policy, system_lookup(), LISTING_TIMEOUTS)
+    }
+
+    /// The guarded client bounded by `timeouts` (the slow-PDS test seam).
+    fn guarded_within(
+        source: &str,
+        policy: TransportPolicy,
+        lookup: HostLookup,
+        timeouts: ListingTimeouts,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
-            .dns_resolver(Arc::new(GuardedResolver::with_lookup(policy, lookup)));
-        Self::with_client(client, source, Some(policy), GUARDED_LISTING_TIMEOUTS)
-    }
-
-    fn with_client(
-        client: reqwest::ClientBuilder,
-        source: &str,
-        policy: Option<TransportPolicy>,
-        timeouts: ListingTimeouts,
-    ) -> Self {
-        let client = client.connect_timeout(timeouts.connect);
+            .dns_resolver(Arc::new(GuardedResolver::with_lookup(policy, lookup)))
+            .connect_timeout(timeouts.connect);
         let client = match timeouts.request {
             Some(request) => client.timeout(request),
             None => client,
@@ -130,12 +128,19 @@ impl AtProtoIngestAdapter {
             client: client.build().unwrap_or_else(|_| reqwest::Client::new()),
             source: source.to_string(),
             policy,
+            timeouts,
         }
     }
 
     /// The configured source base URL.
     pub fn source(&self) -> &str {
         &self.source
+    }
+
+    /// How long one listing may take in all; `None` leaves the bound to the
+    /// caller (the indexer's per-author limit).
+    pub fn overall_bound(&self) -> Option<std::time::Duration> {
+        self.timeouts.request
     }
 }
 
@@ -151,11 +156,7 @@ impl IngestSourcePort for AtProtoIngestAdapter {
         // names. A configured source must be an absolute http(s) base URL —
         // and, for a guarded adapter, pass the transport-policy pre-check —
         // or the fallback could never be listed.
-        let readiness = match self.policy {
-            Some(policy) => guarded_source_readiness(&self.source, policy),
-            None => source_readiness(&self.source),
-        };
-        match readiness {
+        match guarded_source_readiness(&self.source, self.policy) {
             Ok(()) => ProbeOutcome::Ok,
             Err(detail) => ProbeOutcome::Refused {
                 reason: ports::ProbeRefusalReason::PdsTlsHandshakeFailed,
@@ -320,9 +321,12 @@ impl AtProtoIngestAdapter {
         if let Some(cursor) = cursor {
             url.query_pairs_mut().append_pair("cursor", cursor);
         }
-        if let Some(policy) = self.policy.filter(|policy| !url_admissible(&url, *policy)) {
+        if !url_admissible(&url, self.policy) {
             return Err(IngestError::AddressRefused {
-                message: format!("{base} is refused by the transport policy {policy:?}"),
+                message: format!(
+                    "{base} is refused by the transport policy {:?}",
+                    self.policy
+                ),
             });
         }
         let response = self
@@ -687,13 +691,54 @@ mod tests {
         assert_eq!(connections(&listener), 1);
     }
 
+    // bypass: closed-world examples + a real socket and stub DNS (adapter
+    // integration) — the review app's reader under its production policy.
+    #[tokio::test]
+    async fn the_review_app_reader_never_contacts_a_private_address_in_production() {
+        let reader =
+            AtProtoIngestAdapter::guarded_for_page_loads("", TransportPolicy::HttpsPublicOnly);
+        for base in [
+            "https://10.0.0.1",
+            "https://169.254.169.254",
+            "https://[::1]",
+            "http://127.0.0.1:8080",
+        ] {
+            let refused = reader.list_repo_claims(base, "did:plc:x").await;
+            assert!(
+                matches!(refused, Err(IngestError::AddressRefused { .. })),
+                "{base}: {refused:?}"
+            );
+        }
+
+        let (listener, port) = loopback_listener();
+        let rebinding = AtProtoIngestAdapter::guarded_within(
+            "",
+            TransportPolicy::HttpsPublicOnly,
+            rebinding_lookup(),
+            LISTING_TIMEOUTS,
+        );
+        let base = format!("https://pds.rebind.test:{port}");
+        let refused = rebinding.list_repo_claims(&base, "did:plc:x").await;
+        assert!(
+            matches!(refused, Err(IngestError::AddressRefused { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(
+            connections(&listener),
+            0,
+            "a refused address is never contacted"
+        );
+    }
+
     // bypass: a real socket that accepts and never answers (adapter integration).
     #[tokio::test]
     async fn a_pds_that_never_answers_is_unreachable_once_the_request_times_out() {
         let silent = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let base = format!("http://{}", silent.local_addr().expect("addr"));
-        let adapter = AtProtoIngestAdapter::unguarded(
+        let adapter = AtProtoIngestAdapter::guarded_within(
             "",
+            TransportPolicy::HttpsOrLoopbackHttp,
+            system_lookup(),
             ListingTimeouts {
                 connect: std::time::Duration::from_millis(500),
                 request: Some(std::time::Duration::from_millis(300)),
@@ -725,6 +770,19 @@ mod tests {
             std::time::Duration::from_secs(10)
         );
         assert_eq!(GUARDED_LISTING_TIMEOUTS.request, None);
+    }
+
+    #[test]
+    fn only_the_review_app_reader_bounds_a_listing_in_all() {
+        let policy = TransportPolicy::HttpsPublicOnly;
+        assert_eq!(
+            AtProtoIngestAdapter::guarded_for_page_loads("", policy).overall_bound(),
+            Some(std::time::Duration::from_secs(30))
+        );
+        assert_eq!(
+            AtProtoIngestAdapter::guarded("", policy).overall_bound(),
+            None
+        );
     }
 
     // bypass: closed-world pre-check examples (no DNS involved), one per refusal kind.
