@@ -137,7 +137,9 @@ pub(crate) struct AppConfig {
     #[allow(dead_code)]
     pub(crate) handle_resolver_url: String,
     /// The SSRF guard on reads of a signed-in owner's own PDS, whose URL
-    /// comes from their DID document (F-6).
+    /// comes from their DID document (F-6), and on sign-in's identity
+    /// lookups: the handle resolver, the PLC directory and any `did:web`
+    /// host (U-49).
     pub(crate) pds_read_policy: AddressPolicy,
 }
 

@@ -475,9 +475,10 @@ fn wire(env: &BTreeMap<String, String>) -> Result<Wired, Refusal> {
     )
     .map(Arc::new)
     .map_err(|e| refusal(Probe::OAuthClient)(e.to_string()))?;
-    let identity = Arc::new(IdentityLookup::new(
+    let identity = Arc::new(IdentityLookup::guarded_for_sign_in(
         &config.handle_resolver_url,
         &config.plc_url,
+        config.pds_read_policy,
     ));
     Ok(Wired {
         config,

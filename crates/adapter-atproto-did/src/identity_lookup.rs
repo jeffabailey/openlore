@@ -19,49 +19,52 @@ use serde_json::Value;
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Resolves handles against a resolver service and a PLC directory.
+///
+/// Every lookup is SSRF-guarded (ADR-077 §4, DD-IPF-5): there is no
+/// unguarded constructor (U-49).
 pub struct IdentityLookup {
     client: reqwest::Client,
     handle_resolver_url: String,
     plc_url: String,
-    /// The transport policy every lookup obeys; `None` = unguarded (the
-    /// review app's sign-in, never the indexer).
-    policy: Option<TransportPolicy>,
+    /// The transport policy every lookup obeys.
+    policy: TransportPolicy,
 }
 
 impl IdentityLookup {
-    /// The UNGUARDED lookup (the review app's sign-in).
-    pub fn new(handle_resolver_url: &str, plc_url: &str) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(LOOKUP_TIMEOUT)
-            .user_agent("openlore-review-app")
-            .build()
-            .unwrap_or_default();
-        Self::with_client(client, handle_resolver_url, plc_url, None)
-    }
-
     /// The SSRF-guarded lookup the indexer wires (ADR-077 §4, DD-IPF-5): every
     /// directory / `did:web` URL is pre-checked against `policy`, hostnames
     /// resolve through [`GuardedResolver`] (refused addresses dropped, the
     /// connection goes to a checked address), no proxy, redirects not followed.
     /// A refused lookup is `Unavailable` (the DID is then unresolvable).
     pub fn guarded(handle_resolver_url: &str, plc_url: &str, policy: TransportPolicy) -> Self {
+        Self::guarded_as("openlore-indexer", handle_resolver_url, plc_url, policy)
+    }
+
+    /// The review app's sign-in lookup (U-49): the same SSRF guard as
+    /// [`Self::guarded`], so a handle resolver, PLC directory or `did:web`
+    /// host on a private, loopback or link-local address is never contacted.
+    pub fn guarded_for_sign_in(
+        handle_resolver_url: &str,
+        plc_url: &str,
+        policy: TransportPolicy,
+    ) -> Self {
+        Self::guarded_as("openlore-review-app", handle_resolver_url, plc_url, policy)
+    }
+
+    fn guarded_as(
+        user_agent: &str,
+        handle_resolver_url: &str,
+        plc_url: &str,
+        policy: TransportPolicy,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(LOOKUP_TIMEOUT)
-            .user_agent("openlore-indexer")
+            .user_agent(user_agent)
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .dns_resolver(Arc::new(GuardedResolver::new(policy)))
             .build()
             .unwrap_or_default();
-        Self::with_client(client, handle_resolver_url, plc_url, Some(policy))
-    }
-
-    fn with_client(
-        client: reqwest::Client,
-        handle_resolver_url: &str,
-        plc_url: &str,
-        policy: Option<TransportPolicy>,
-    ) -> Self {
         Self {
             client,
             handle_resolver_url: handle_resolver_url.trim_end_matches('/').to_string(),
@@ -71,9 +74,9 @@ impl IdentityLookup {
     }
 
     async fn get_json(&self, url: url::Url) -> Result<Lookup, IdentityLookupError> {
-        if let Some(policy) = self.policy.filter(|policy| !url_admissible(&url, *policy)) {
+        if !url_admissible(&url, self.policy) {
             return Err(IdentityLookupError::Unavailable {
-                detail: format!("{url} is refused by the transport policy {policy:?}"),
+                detail: format!("{url} is refused by the transport policy {:?}", self.policy),
             });
         }
         let response = self.client.get(url).send().await.map_err(unavailable)?;
@@ -346,7 +349,7 @@ mod tests {
             .expect("runtime");
         for (status, body, expected) in cases {
             let plc = fake_plc(status, body);
-            let lookup = IdentityLookup::new(&plc, &plc);
+            let lookup = IdentityLookup::guarded(&plc, &plc, TransportPolicy::HttpsOrLoopbackHttp);
             assert_eq!(
                 runtime.block_on(lookup.resolve_pds(did)),
                 expected,
@@ -354,7 +357,7 @@ mod tests {
             );
         }
         let plc = fake_plc(503, String::new());
-        let lookup = IdentityLookup::new(&plc, &plc);
+        let lookup = IdentityLookup::guarded(&plc, &plc, TransportPolicy::HttpsOrLoopbackHttp);
         assert!(
             matches!(
                 runtime.block_on(lookup.resolve_pds(did)),
@@ -408,6 +411,58 @@ mod tests {
         assert_eq!(
             runtime.block_on(lookup.resolve_pds("did:plc:abc")),
             Ok("https://pds.example".to_string())
+        );
+    }
+
+    // bypass: wiring over real sockets — the review app's sign-in lookup under
+    // its production policy refuses a private resolver, directory or did:web
+    // host (IP literal and a name resolving to loopback) without connecting.
+    #[test]
+    fn the_sign_in_lookup_never_contacts_a_private_address_in_production() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind tripwire");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let port = listener.local_addr().expect("tripwire address").port();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let refused = |outcome: Result<ResolvedIdentity, IdentityLookupError>| {
+            matches!(outcome, Err(IdentityLookupError::Unavailable { .. }))
+        };
+        for upstream in [
+            format!("http://127.0.0.1:{port}"),
+            format!("https://127.0.0.1:{port}"),
+            format!("https://localhost:{port}"),
+            "https://10.0.0.1".to_string(),
+            "https://169.254.169.254".to_string(),
+            "https://[::1]".to_string(),
+        ] {
+            let lookup = IdentityLookup::guarded_for_sign_in(
+                &upstream,
+                &upstream,
+                TransportPolicy::HttpsPublicOnly,
+            );
+            assert!(
+                refused(runtime.block_on(lookup.resolve_identity("priya.example"))),
+                "resolver {upstream}"
+            );
+            assert!(
+                refused(runtime.block_on(lookup.resolve_did("did:plc:abc"))),
+                "directory {upstream}"
+            );
+        }
+        let lookup = IdentityLookup::guarded_for_sign_in(
+            "https://bsky.social",
+            "https://plc.directory",
+            TransportPolicy::HttpsPublicOnly,
+        );
+        for did in ["did:web:localhost", "did:web:127.0.0.1", "did:web:10.0.0.1"] {
+            assert!(refused(runtime.block_on(lookup.resolve_did(did))), "{did}");
+        }
+        assert_eq!(
+            std::iter::from_fn(|| listener.accept().ok()).count(),
+            0,
+            "a refused address is never contacted"
         );
     }
 }
