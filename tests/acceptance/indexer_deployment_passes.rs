@@ -159,14 +159,18 @@ fn search_keeps_answering_within_a_second_while_a_pass_runs() {
 ///   Then the pass completes with exit 0 and indexes all 40 authors
 ///   And every search answers within 1 second
 /// ```
+///
+/// Searches go through one warm client, as in PS-10, so the budget times the
+/// index's answer and not a client build or a new connection.
 #[test]
 fn a_pass_is_never_refused_because_search_is_busy() {
     let (_world, live) = given_a_crowd_index_with_a_long_write_heavy_pass();
+    let index = live.warm_searcher();
 
     let pending = live.timer_fires_in_background();
     let mut slow_or_failed = Vec::new();
     for i in 0..100 {
-        let (status, _, took) = live.public_search("object", REPRODUCIBLE_BUILDS);
+        let (status, _, took) = index.search("object", REPRODUCIBLE_BUILDS);
         if status != 200 || took > SEARCH_BUDGET {
             slow_or_failed.push((i, status, took));
         }
@@ -190,18 +194,21 @@ fn a_pass_is_never_refused_because_search_is_busy() {
 ///   When the timer fires and searches run back to back until the pass has ended
 ///   Then every search answers within 1 second, including those during the pass's final save
 /// ```
+///
+/// One warm client, as in PS-10 and PS-11.
 #[test]
 fn searches_overlapping_the_end_of_a_pass_still_answer_within_a_second() {
     let (_world, live) = given_a_crowd_index_with_a_long_write_heavy_pass_deployed(
         // Back to back from one client: the rate limit is raised out of the way.
         Deployment::with_rate_limit_raised,
     );
+    let index = live.warm_searcher();
 
     let pending = live.timer_fires_in_background();
     let mut timings: Vec<(Instant, Duration, u16)> = Vec::new();
     while !pending.is_finished() {
         let started = Instant::now();
-        let (status, _, took) = live.public_search("object", REPRODUCIBLE_BUILDS);
+        let (status, _, took) = index.search("object", REPRODUCIBLE_BUILDS);
         timings.push((started, took, status));
     }
     let pass_ended = Instant::now();
