@@ -58,6 +58,12 @@ pub const LINK_LOGIN_FIELD: &str = "github_login";
 /// Every refused link publish ends with this sentence (U-31, RA-5).
 pub const NOTHING_PUBLISHED: &str = "Nothing was published.";
 
+/// After a link write fails with a server error the app cannot tell "not
+/// stored" from "stored, answer lost", so it says the link may have been
+/// saved and that Retry will confirm (U-42, RA-12). It never says
+/// `NOTHING_PUBLISHED` there.
+pub const MAY_HAVE_BEEN_SAVED: &str = "may have been saved";
+
 /// The refusal once the hourly verify budget is spent (ADR-076 §2, U-26).
 pub const TOO_MANY_ATTEMPTS: &str = "Too many verification attempts in the last hour";
 

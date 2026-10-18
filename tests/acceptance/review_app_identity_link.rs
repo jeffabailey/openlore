@@ -615,20 +615,24 @@ fn a_bio_naming_someone_elses_did_is_explained_with_that_did_in_full_and_nothing
     assert!(world.atproto.write_attempts().is_empty(), "nothing written");
 }
 
-/// RA-12 (error, infrastructure-failure → recovery, table; roadmap review F-08)
+/// RA-12 (error, infrastructure-failure → recovery, table; roadmap review F-08;
+/// wording per user ruling U-42)
 ///
-/// Row 2 uses `WritePosture::StoreThenServerError`: the repo host stores the
+/// After a server error the app cannot tell "not stored" from "stored, answer
+/// lost", so both rows say the link may have been saved and that Retry will
+/// confirm — never "Nothing was published." (U-42). Row 2 uses `WritePosture::StoreThenServerError`: the repo host stores the
 /// link and then answers 500, so the app cannot tell the write landed. Retry
 /// re-creates the same record key (the link's CID, ADR-071), which the host
 /// answers "already exists" — that must read as success, not a duplicate or
 /// an error page.
 /// ```gherkin
-/// @driving_port @real-io @error @infrastructure-failure @f-08 @adr-071 @contract-shape:bounded-change
+/// @driving_port @real-io @error @infrastructure-failure @f-08 @adr-071 @u-42 @contract-shape:bounded-change
 /// Scenario Outline: After a failed link write, Retry leaves exactly one link
 ///   Given Priya is on her link preview
 ///   And her repo host <fails>
 ///   When she confirms
-///   Then she sees "Nothing was published." with a Retry
+///   Then she sees that her link may have been saved and that Retry will confirm
+///   And she does not see "Nothing was published."
 ///   When her repo host recovers and she presses Retry
 ///   Then her repo holds exactly one link and she sees its address, not an error page
 ///   Examples:
@@ -637,6 +641,7 @@ fn a_bio_naming_someone_elses_did_is_explained_with_that_did_in_full_and_nothing
 ///     | stores the link but its answer is lost (answers a server error) |
 /// ```
 #[test]
+#[ignore = "DISTILL github-did-identity-link: pending U-42 wording fix"]
 fn after_a_failed_link_write_retry_publishes_the_link_exactly_once() {
     let rows = [
         ("server error", WritePosture::ServerError),
@@ -653,8 +658,18 @@ fn after_a_failed_link_write_retry_publishes_the_link_exactly_once() {
         when_confirms_link(&mut browser);
 
         assert!(
-            browser.page.shows(NOTHING_PUBLISHED) && browser.page.offers("Retry"),
-            "[{row}] the failure is explained with a Retry:\n{}",
+            browser.page.shows(MAY_HAVE_BEEN_SAVED),
+            "[{row}] the page says the link may have been saved (U-42):\n{}",
+            browser.page.text()
+        );
+        assert!(
+            !browser.page.shows(NOTHING_PUBLISHED),
+            "[{row}] the page never claims nothing was published (U-42):\n{}",
+            browser.page.text()
+        );
+        assert!(
+            browser.page.offers("Retry"),
+            "[{row}] Retry is offered to confirm:\n{}",
             browser.page.text()
         );
 
