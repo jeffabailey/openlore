@@ -234,7 +234,9 @@ impl LinkNotPublished {
     }
 
     /// The variant after this one. Exhaustive, no wildcard: a new variant
-    /// does not compile until it is placed in the chain.
+    /// does not compile until it has an arm here. The compiler cannot see
+    /// that the arm links it into the chain;
+    /// `one_of_each_holds_every_variant_once` pins how many it holds.
     fn next_variant(&self) -> Option<Self> {
         match self {
             Self::PreviewNotSaved => Some(Self::Expired),
@@ -553,6 +555,20 @@ mod tests {
                 "{}", html
             );
         }
+    }
+
+    /// N4: the chain holds each variant exactly once — 9 variants today.
+    /// A new variant must raise this count and join the chain.
+    #[test]
+    fn one_of_each_holds_every_variant_once() {
+        let variants: Vec<_> = LinkNotPublished::one_of_each()
+            .iter()
+            .map(std::mem::discriminant)
+            .collect();
+        let distinct: std::collections::HashSet<_> = variants.iter().collect();
+
+        assert_eq!(variants.len(), 9, "{variants:?}");
+        assert_eq!(distinct.len(), variants.len(), "{variants:?}");
     }
 
     /// U-43: a write the repo host definitely did not take says nothing was
