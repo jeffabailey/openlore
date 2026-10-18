@@ -5,6 +5,8 @@
 
 use ports::{Suggestion, SuggestionKey};
 
+use crate::failed_write::FailedWrite;
+
 /// The form field each ticked card submits.
 pub const SELECTION_FIELD: &str = "selected";
 
@@ -61,9 +63,9 @@ pub fn chosen_suggestions(pending: Vec<Suggestion>, values: &[String]) -> Vec<Su
 pub enum PlanResult {
     /// The record landed at this `at://` address.
     Published(String),
-    /// Nothing was written; `kept_plan` names the plan put back for Retry.
+    /// The write failed; `kept_plan` names the plan put back for Retry.
     Failed {
-        reason: String,
+        failure: BatchFailure,
         needs_sign_in: bool,
         kept_plan: Option<String>,
     },
@@ -73,11 +75,19 @@ pub enum PlanResult {
     Skipped,
 }
 
+/// One write of a batch that did not succeed: why, and whether the PDS may
+/// still have stored the record (U-45).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchFailure {
+    pub reason: String,
+    pub written: FailedWrite,
+}
+
 /// A confirmed batch, summed up for its result page.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BatchTally {
     pub published: Vec<String>,
-    pub failures: Vec<String>,
+    pub failures: Vec<BatchFailure>,
     pub retry_plan_ids: Vec<String>,
     pub expired: usize,
     /// Any write found the PDS session ended: sign in again before Retry.
@@ -92,11 +102,11 @@ pub fn tally_batch(results: Vec<PlanResult>) -> BatchTally {
             match result {
                 PlanResult::Published(at_uri) => tally.published.push(at_uri),
                 PlanResult::Failed {
-                    reason,
+                    failure,
                     needs_sign_in,
                     kept_plan,
                 } => {
-                    tally.failures.push(reason);
+                    tally.failures.push(failure);
                     tally.needs_sign_in |= needs_sign_in;
                     tally.retry_plan_ids.extend(kept_plan);
                 }

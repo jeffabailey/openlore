@@ -10,7 +10,7 @@ use hyper::StatusCode;
 use ports::{PlanKind, SuggestionState};
 use review_domain::kpi::approval_was_edited;
 use review_domain::plans::{restore_plan, PublishPlan};
-use review_domain::selection::{tally_batch, PlanResult, MAX_SELECTED};
+use review_domain::selection::{tally_batch, BatchFailure, PlanResult, MAX_SELECTED};
 use review_domain::views::{self, BatchOutcome, PublishNextStep, PublishRetry};
 
 use crate::executor::{execute_publish, PublishFailure};
@@ -149,7 +149,10 @@ async fn confirm_one(app: &App, confirmed: &ConfirmedPlan) -> PlanResult {
     match write_plan(app, &plan, confirmed).await {
         Ok(at_uri) => PlanResult::Published(at_uri),
         Err(NotWritten { failure, kept }) => PlanResult::Failed {
-            reason: failure.message().to_string(),
+            failure: BatchFailure {
+                reason: failure.message().to_string(),
+                written: failure.failed_write(),
+            },
             needs_sign_in: failure.needs_sign_in(),
             kept_plan: kept.then(|| plan.rkey().to_string()),
         },

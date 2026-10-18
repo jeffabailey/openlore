@@ -8,6 +8,7 @@ use review_domain::failed_write::FailedWrite;
 use review_domain::lifecycle::Tally;
 use review_domain::ownership::OwnershipRefusal;
 use review_domain::plans::{publish_plan, retract_plan, ClaimDraft, PublishPlan};
+use review_domain::selection::BatchFailure;
 use review_domain::signin::{PermissionMode, SignInFailure};
 use review_domain::views::*;
 
@@ -913,12 +914,44 @@ fn the_batch_preview_shows_every_record_and_confirms_them_all() {
     assert!(html.contains(NOT_AS_TRUTH_NOTICE));
 }
 
+/// U-45 on the batch page: a write the PDS may have stored is never called
+/// "Not published"; it says it may have been saved and that Retry checks.
+#[test]
+fn a_batch_failure_says_not_published_only_when_nothing_was_stored() {
+    let page_for = |written| {
+        batch_published_page(&BatchOutcome {
+            published: &[],
+            failures: &[BatchFailure {
+                reason: "Your PDS did not answer.".to_string(),
+                written,
+            }],
+            retry_plan_ids: &["plan-b".to_string()],
+            expired: 0,
+            needs_sign_in: false,
+            csrf_token: CSRF,
+        })
+    };
+    let maybe = page_for(FailedWrite::MayHaveStored);
+    assert!(maybe.contains(
+        r#"<p role="alert">May have been saved: Your PDS did not answer. Press Retry to check; it never publishes a second copy.</p>"#
+    ), "{maybe}");
+    assert!(!maybe.contains("Not published"), "{maybe}");
+    let definite = page_for(FailedWrite::Definite);
+    assert!(definite.contains(
+        r#"<p role="alert">Not published: Your PDS did not answer. That suggestion is still pending.</p>"#
+    ), "{definite}");
+    assert!(!definite.contains("May have been saved"), "{definite}");
+}
+
 /// The batch result names each landed record; a failure is an alert with
 /// the suggestion still pending, and Retry re-submits only the kept plans.
 #[test]
 fn the_batch_result_names_what_landed_and_offers_retry_for_the_rest() {
     let published = ["at://did:plc:owner/org.openlore.claim/a".to_string()];
-    let failures = ["Your PDS could not be reached.".to_string()];
+    let failures = [BatchFailure {
+        reason: "Your PDS could not be reached.".to_string(),
+        written: FailedWrite::Definite,
+    }];
     let retry = ["plan-b".to_string()];
     let html = batch_published_page(&BatchOutcome {
         published: &published,

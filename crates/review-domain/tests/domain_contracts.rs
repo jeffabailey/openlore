@@ -10,6 +10,7 @@ use review_domain::budget::{
     admit_scan, budget_allows, release_scan, ScanAdmission, ScanBudget, DAY_SECS,
 };
 use review_domain::edits::{parse_confidence, philosophy_choices, vocabulary, ClaimEdit};
+use review_domain::failed_write::FailedWrite;
 use review_domain::kpi::{
     approval_was_edited, rollup_day, seconds_until_next_rollup, sign_in_refusal_event,
     sum_counters, utc_day, KpiEvent,
@@ -22,8 +23,8 @@ use review_domain::plans::{
 use review_domain::published::{live_published_claim, profile_subject, ProfileSubject};
 use review_domain::reconcile::Reconciled;
 use review_domain::selection::{
-    card_id, chosen_suggestions, selection_key, selection_value, tally_batch, BatchTally,
-    PlanResult, MAX_SELECTED,
+    card_id, chosen_suggestions, selection_key, selection_value, tally_batch, BatchFailure,
+    BatchTally, PlanResult, MAX_SELECTED,
 };
 use review_domain::share::{compose_post, share_post_plan, ShareRefusal, MAX_POST_GRAPHEMES};
 use review_domain::signin::SignInFailure;
@@ -492,9 +493,20 @@ fn a_selection_is_capped() {
 #[test]
 fn a_batch_tally_counts_every_outcome() {
     let failed = |reason: &str, needs_sign_in, kept: Option<&str>| PlanResult::Failed {
-        reason: reason.to_string(),
+        failure: BatchFailure {
+            reason: reason.to_string(),
+            written: FailedWrite::Definite,
+        },
         needs_sign_in,
         kept_plan: kept.map(str::to_string),
+    };
+    let lost = PlanResult::Failed {
+        failure: BatchFailure {
+            reason: "lost".to_string(),
+            written: FailedWrite::MayHaveStored,
+        },
+        needs_sign_in: false,
+        kept_plan: Some("plan-d".to_string()),
     };
     let tally = tally_batch(vec![
         PlanResult::Published("at://a".to_string()),
@@ -504,13 +516,25 @@ fn a_batch_tally_counts_every_outcome() {
         PlanResult::Expired,
         failed("gone", false, None),
         PlanResult::Published("at://c".to_string()),
+        lost,
     ]);
+    let definite = |reason: &str| BatchFailure {
+        reason: reason.to_string(),
+        written: FailedWrite::Definite,
+    };
     assert_eq!(
         tally,
         BatchTally {
             published: vec!["at://a".to_string(), "at://c".to_string()],
-            failures: vec!["down".to_string(), "gone".to_string()],
-            retry_plan_ids: vec!["plan-b".to_string()],
+            failures: vec![
+                definite("down"),
+                definite("gone"),
+                BatchFailure {
+                    reason: "lost".to_string(),
+                    written: FailedWrite::MayHaveStored,
+                },
+            ],
+            retry_plan_ids: vec!["plan-b".to_string(), "plan-d".to_string()],
             expired: 2,
             needs_sign_in: false,
         }

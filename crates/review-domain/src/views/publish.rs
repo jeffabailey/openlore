@@ -5,6 +5,7 @@ use maud::html;
 use super::*;
 use crate::failed_write::FailedWrite;
 use crate::plans::PublishPlan;
+use crate::selection::BatchFailure;
 
 /// Where a publish plan is confirmed (or retried).
 const PUBLISH_ACTION: &str = "/review/publish";
@@ -113,7 +114,7 @@ pub fn batch_preview_page(plans: &[PublishPlan], csrf_token: &str) -> String {
 /// had expired.
 pub struct BatchOutcome<'a> {
     pub published: &'a [String],
-    pub failures: &'a [String],
+    pub failures: &'a [BatchFailure],
     /// The plans put back after a failed write: Retry publishes them.
     pub retry_plan_ids: &'a [String],
     pub expired: usize,
@@ -140,8 +141,16 @@ pub fn batch_published_page(outcome: &BatchOutcome<'_>) -> String {
                          a new record in your repo that points at it."
                     }
                 }
-                @for reason in outcome.failures {
-                    p role="alert" { "Not published: " (reason) " That suggestion is still pending." }
+                @for failure in outcome.failures {
+                    @match failure.written {
+                        FailedWrite::Definite => p role="alert" {
+                            "Not published: " (failure.reason) " That suggestion is still pending."
+                        },
+                        FailedWrite::MayHaveStored => p role="alert" {
+                            "May have been saved: " (failure.reason)
+                            " Press Retry to check; it never publishes a second copy."
+                        },
+                    }
                 }
                 @if outcome.expired > 0 {
                     p role="alert" {
