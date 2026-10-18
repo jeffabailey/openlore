@@ -9,6 +9,7 @@
 use hyper::StatusCode;
 use ports::claim_domain::{RecordOrigin, UnsignedClaim};
 use ports::{KpiTally, PlanKind, ResolvedIdentity, SuggestionState};
+use review_domain::failed_write::FailedWrite;
 use review_domain::lifecycle::{retraction_step, OwnerStep};
 use review_domain::plans::{
     plan_expires_at, restore_retract_plan, retract_plan, rfc3339_utc, RetractPlan,
@@ -99,7 +100,9 @@ pub(crate) async fn confirm_retract(app: &App, request: &PageRequest) -> Reply {
             Some(OwnerStep::Move { .. }) => retraction.add().await,
             _ => Reply::page(StatusCode::OK, views::retracted_page(None, &profile_path)),
         },
-        Err(PdsUnreachable) => retraction.not_added(PDS_UNREACHABLE_ON_CONFIRM),
+        Err(PdsUnreachable) => {
+            retraction.not_added(PDS_UNREACHABLE_ON_CONFIRM, FailedWrite::Definite)
+        }
     }
 }
 
@@ -131,13 +134,13 @@ impl Retraction<'_> {
                     views::retracted_page(Some(&at_uri), self.profile_path),
                 )
             }
-            Err(failure) => self.not_added(failure.retract_message()),
+            Err(failure) => self.not_added(failure.retract_message(), failure.failed_write()),
         }
     }
 
-    /// Nothing was retracted: the plan goes back (same deadline) so Retry
-    /// adds the retraction exactly once.
-    fn not_added(&self, reason: &str) -> Reply {
+    /// The retraction did not land (or may have, `written`): the plan goes
+    /// back (same deadline) so Retry adds the retraction exactly once.
+    fn not_added(&self, reason: &str, written: FailedWrite) -> Reply {
         let kept = self
             .app
             .plans
@@ -153,7 +156,7 @@ impl Retraction<'_> {
         });
         Reply::page(
             StatusCode::BAD_GATEWAY,
-            views::retract_failed_page(reason, retry, self.profile_path),
+            views::retract_failed_page(reason, written, retry, self.profile_path),
         )
     }
 }
@@ -185,6 +188,6 @@ fn profile_path(identity: &ResolvedIdentity) -> String {
 fn unavailable(reason: &str, profile_path: &str) -> Reply {
     Reply::page(
         StatusCode::SERVICE_UNAVAILABLE,
-        views::retract_failed_page(reason, None, profile_path),
+        views::retract_failed_page(reason, FailedWrite::Definite, None, profile_path),
     )
 }

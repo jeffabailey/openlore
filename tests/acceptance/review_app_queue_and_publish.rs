@@ -14,7 +14,7 @@
 #[path = "support/review_app/mod.rs"]
 mod review_app;
 
-use openlore_test_support::WritePosture;
+use openlore_test_support::{WritePosture, CLAIM_COLLECTION, POST_COLLECTION};
 use review_app::state_delta::{assert_state_delta, Delta};
 use review_app::*;
 
@@ -420,6 +420,7 @@ fn backing_out_of_the_preview_writes_nothing() {
 ///   Given Priya's PDS <fails>
 ///   When she confirms publishing "priyaraman/tidepool embodies dependency-pinning"
 ///   Then she sees "We couldn't reach your PDS. Nothing was published." (or the matching reason) with a retry
+///        (a server error says the claim may have been saved: U-45)
 ///   And the suggestion is still pending and her repo holds no record
 ///   Examples: | is unreachable | answers with a server error | has expired her session |
 /// ```
@@ -447,7 +448,7 @@ fn a_failed_publish_leaves_the_suggestion_pending_with_no_partial_record() {
                 world
                     .atproto
                     .set_write_posture(Persona::Priya.did(), WritePosture::ServerError);
-                "Nothing was published."
+                MAY_HAVE_BEEN_SAVED
             }
             Failure::ExpiredSession => {
                 world
@@ -471,6 +472,149 @@ fn a_failed_publish_leaves_the_suggestion_pending_with_no_partial_record() {
         assert!(
             pending_on_queue(&mut browser).contains(&priya::TIDEPOOL_DEPENDENCY_PINNING.phrase())
         );
+    }
+}
+
+/// QP-10b (error, infrastructure-failure, table; follow-up NF-1, ruling U-45)
+///
+/// The link pages' rule (U-42/U-43) holds for every claim write: a 5xx or a
+/// lost answer may hide a stored record, so the page says it may have been
+/// saved; a 4xx refusal or a host never reached stored nothing, so the page
+/// says nothing was published, retracted or posted. The lost answer is the
+/// fake's `StoreThenServerError` (stored, then answered 500), as in RA-12.
+/// The retry offer is unchanged in every row.
+/// ```gherkin
+/// @US-BRA-004 @US-BRA-008 @US-BRA-011 @error @infrastructure-failure @u-45 @nf-1 @contract-shape:unbounded-preservation
+/// Scenario Outline: A failed claim write says "may have been saved" only when the PDS may have stored it
+///   Given Priya is on the <write> preview
+///   And her PDS <fails>
+///   When she confirms
+///   Then she sees <wording>
+///   And she can try again
+///   Examples:
+///     | write   | fails                              | wording                       |
+///     | publish | answers a server error             | may have been saved           |
+///     | publish | stores it but its answer is lost   | may have been saved           |
+///     | publish | refuses the record                 | Nothing was published.        |
+///     | publish | cannot be reached                  | Nothing was published.        |
+///     | retract | (the same four)                    | ... / Nothing was retracted.  |
+///     | share   | (the same four)                    | ... / wasn't published        |
+/// ```
+#[test]
+fn a_failed_claim_write_says_may_have_been_saved_only_when_the_pds_may_have_stored_it() {
+    #[derive(Debug, Clone, Copy)]
+    enum Write {
+        Publish,
+        Retract,
+        Share,
+    }
+    #[derive(Debug, Clone, Copy)]
+    enum Failure {
+        ServerError,
+        AnswerLost,
+        Refused,
+        Unreachable,
+    }
+    for write in [Write::Publish, Write::Retract, Write::Share] {
+        for failure in [
+            Failure::ServerError,
+            Failure::AnswerLost,
+            Failure::Refused,
+            Failure::Unreachable,
+        ] {
+            let row = format!("{write:?} / {failure:?}");
+            let world = ReviewWorld::new();
+            let (mut browser, confirm, collection, stored_nothing, try_again) = match write {
+                Write::Publish => {
+                    let mut browser = given_pending_suggestions(&world, Persona::Priya);
+                    when_previews_approval(&mut browser, priya::TIDEPOOL_DEPENDENCY_PINNING);
+                    (
+                        browser,
+                        "Publish to my repo",
+                        CLAIM_COLLECTION,
+                        NOTHING_PUBLISHED,
+                        "Retry",
+                    )
+                }
+                Write::Retract => {
+                    let mut browser =
+                        given_published(&world, Persona::Priya, &[priya::TIDEPOOL_TEST_DRIVEN]);
+                    when_opens_retract_preview(
+                        &mut browser,
+                        Persona::Priya,
+                        priya::TIDEPOOL_TEST_DRIVEN,
+                    );
+                    (
+                        browser,
+                        "Confirm retraction",
+                        CLAIM_COLLECTION,
+                        "Nothing was retracted.",
+                        "Retry",
+                    )
+                }
+                Write::Share => {
+                    let mut browser =
+                        given_published(&world, Persona::Priya, &[priya::TIDEPOOL_MEMORY_SAFETY]);
+                    when_opens_share_preview(&mut browser, Persona::Priya);
+                    (
+                        browser,
+                        "Post to Bluesky",
+                        POST_COLLECTION,
+                        "wasn't published",
+                        "Post to Bluesky",
+                    )
+                }
+            };
+            let may_have_stored = match failure {
+                Failure::ServerError => {
+                    world
+                        .atproto
+                        .set_write_posture(Persona::Priya.did(), WritePosture::ServerError);
+                    true
+                }
+                Failure::AnswerLost => {
+                    world.atproto.set_write_posture(
+                        Persona::Priya.did(),
+                        WritePosture::StoreThenServerError,
+                    );
+                    true
+                }
+                Failure::Refused => {
+                    world.atproto.set_write_posture(
+                        Persona::Priya.did(),
+                        WritePosture::RefuseCollection(collection.to_string()),
+                    );
+                    false
+                }
+                Failure::Unreachable => {
+                    world
+                        .atproto
+                        .set_host_reachable(Persona::Priya.pds_host(), false);
+                    false
+                }
+            };
+
+            browser.press(confirm);
+
+            let page = &browser.page;
+            assert_eq!(
+                page.shows(MAY_HAVE_BEEN_SAVED),
+                may_have_stored,
+                "[{row}] \"{MAY_HAVE_BEEN_SAVED}\" exactly when the PDS may have stored it:\n{}",
+                page.text()
+            );
+            assert_eq!(
+                page.shows(stored_nothing),
+                !may_have_stored,
+                "[{row}] \"{stored_nothing}\" exactly when the PDS stored nothing:\n{}",
+                page.text()
+            );
+            assert!(
+                page.offers(try_again),
+                "[{row}] {try_again:?} is still offered:\n{}",
+                page.text()
+            );
+        }
     }
 }
 

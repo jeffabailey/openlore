@@ -4,6 +4,7 @@
 use maud::html;
 
 use super::*;
+use crate::failed_write::FailedWrite;
 
 /// The owner's way from their profile to the share preview.
 pub const SHARE_LABEL: &str = "Share on Bluesky…";
@@ -68,12 +69,20 @@ pub fn share_posted_page(at_uri: &str, profile_path: &str) -> String {
     )
 }
 
-/// Why a confirmed post did not land, and how to try again.
-pub fn share_failed_notice(reason: &str) -> String {
-    format!(
-        "Your post wasn't published: {reason} Your profile and claims are unchanged. \
-         Press {POST_LABEL} to try again."
-    )
+/// Why a confirmed post did not land, and how to try again. A post the PDS
+/// may have stored (`written`) is never called unpublished (U-45); its key
+/// is the PDS's own, so posting again may post twice.
+pub fn share_failed_notice(reason: &str, written: FailedWrite) -> String {
+    match written {
+        FailedWrite::Definite => format!(
+            "Your post wasn't published: {reason} Your profile and claims are unchanged. \
+             Press {POST_LABEL} to try again."
+        ),
+        FailedWrite::MayHaveStored => format!(
+            "Your post may have been saved: {reason} Your profile and claims are unchanged. \
+             Check Bluesky before you press {POST_LABEL} again, or it may post twice."
+        ),
+    }
 }
 
 /// Nothing to share (no live published claim), or the preview expired.

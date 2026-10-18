@@ -15,7 +15,7 @@ use ports::claim_domain::identity_link::{
 use ports::claim_domain::{
     bare_did, claim_record_json, Did, Provenance, RecordOrigin, SelfAttestedClaim, UnsignedClaim,
 };
-use ports::{GithubError, PlanKind, RepoRecord, RepoWriteError, StoredPublishPlan, SuggestionKey};
+use ports::{GithubError, PlanKind, RepoRecord, StoredPublishPlan, SuggestionKey};
 use serde_json::Value;
 
 use crate::ownership::{prove_ownership, GithubAccount, OwnershipRefusal};
@@ -242,20 +242,6 @@ fn proves_the_plan(plan: &LinkPlan, proven: &ProvenLink) -> bool {
 /// write, an ended session or a read-back mismatch keeps nothing.
 pub fn keeps_plan_for_retry(why: &LinkNotPublished) -> bool {
     *why == LinkNotPublished::NotWritten
-}
-
-/// Whether the repo host may have stored a record whose create failed
-/// (U-43). A server error or an answer lost after the send may hide a
-/// stored record; a 4xx refusal, an ended session or a connection never
-/// made stored nothing. ("Already exists" is success, never a failure.)
-pub fn may_have_stored(failure: &RepoWriteError) -> bool {
-    match failure {
-        RepoWriteError::Refused { status, .. } => !(400..500).contains(status),
-        RepoWriteError::AnswerLost { .. } => true,
-        RepoWriteError::Unreachable { .. }
-        | RepoWriteError::NoSession
-        | RepoWriteError::SessionExpired => false,
-    }
 }
 
 /// The facts of the fresh read the ownership proof explains a refusal by.
@@ -721,42 +707,6 @@ mod tests {
             );
             prop_assert_eq!(plan.record(), claim_record_json(LinkDraft::new(&proven, &composed_at).claim()));
             prop_assert_eq!(plan.at_uri(), crate::plans::at_uri(&did, plan.rkey()));
-        }
-    }
-}
-
-#[cfg(test)]
-mod may_have_stored_tests {
-    //! U-43. Universe: every way a create can fail — refusals with literal
-    //! 4xx and 5xx statuses (and their details), an answer lost after the
-    //! send, a connection never made, and an ended session.
-    use super::*;
-    use proptest::prelude::*;
-
-    const DEFINITE_STATUSES: [u16; 3] = [400, 403, 404];
-    const AMBIGUOUS_STATUSES: [u16; 3] = [500, 502, 503];
-
-    fn arb_failure() -> impl Strategy<Value = (RepoWriteError, bool)> {
-        let detail = "[ -~]{0,24}";
-        prop_oneof![
-            (prop::sample::select(DEFINITE_STATUSES.to_vec()), detail)
-                .prop_map(|(status, detail)| (RepoWriteError::Refused { status, detail }, false)),
-            (prop::sample::select(AMBIGUOUS_STATUSES.to_vec()), detail)
-                .prop_map(|(status, detail)| (RepoWriteError::Refused { status, detail }, true)),
-            detail.prop_map(|detail| (RepoWriteError::AnswerLost { detail }, true)),
-            detail.prop_map(|detail| (RepoWriteError::Unreachable { detail }, false)),
-            Just((RepoWriteError::NoSession, false)),
-            Just((RepoWriteError::SessionExpired, false)),
-        ]
-    }
-
-    proptest! {
-        /// Only a server error or a lost answer may have stored the record.
-        #[test]
-        fn only_a_server_error_or_a_lost_answer_may_have_stored_the_record(
-            (failure, ambiguous) in arb_failure(),
-        ) {
-            prop_assert_eq!(may_have_stored(&failure), ambiguous, "{:?}", failure);
         }
     }
 }

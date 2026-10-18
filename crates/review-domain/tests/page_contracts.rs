@@ -4,6 +4,7 @@
 //! failure, the address of each written record, the way back.
 
 use ports::{ScanCounts, ScanRun, ScanStatus, Suggestion, SuggestionKey};
+use review_domain::failed_write::FailedWrite;
 use review_domain::lifecycle::Tally;
 use review_domain::ownership::OwnershipRefusal;
 use review_domain::plans::{publish_plan, retract_plan, ClaimDraft, PublishPlan};
@@ -369,7 +370,11 @@ fn the_publish_outcome_pages_show_the_record_or_the_reason_and_next_step() {
         csrf_token: CSRF,
     };
     assert_page(
-        &publish_failed_page("PDS refused", PublishNextStep::Retry(retry)),
+        &publish_failed_page(
+            "PDS refused",
+            FailedWrite::Definite,
+            PublishNextStep::Retry(retry),
+        ),
         "<h1>Nothing was published</h1>",
         &[
             "PDS refused",
@@ -380,7 +385,11 @@ fn the_publish_outcome_pages_show_the_record_or_the_reason_and_next_step() {
         ],
     );
     assert_page(
-        &publish_failed_page("session ended", PublishNextStep::SignInAgain),
+        &publish_failed_page(
+            "session ended",
+            FailedWrite::Definite,
+            PublishNextStep::SignInAgain,
+        ),
         "<h1>Nothing was published</h1>",
         &["session ended", SIGN_IN_LABEL],
     );
@@ -438,7 +447,7 @@ fn the_retract_pages_show_the_retraction_and_lead_back_to_the_profile() {
         csrf_token: CSRF,
     };
     assert_page(
-        &retract_failed_page("PDS down", Some(retry), PROFILE_PATH),
+        &retract_failed_page("PDS down", FailedWrite::Definite, Some(retry), PROFILE_PATH),
         "<h1>Nothing was retracted</h1>",
         &[
             "PDS down",
@@ -483,11 +492,60 @@ fn the_share_pages_show_the_draft_the_link_and_the_outcome() {
         "<h1>Nothing to share</h1>",
         &["nothing yet"],
     );
-    let notice = share_failed_notice("PDS refused.");
+    let notice = share_failed_notice("PDS refused.", FailedWrite::Definite);
     assert!(
         notice.contains("PDS refused.") && notice.contains(POST_LABEL),
         "{notice}"
     );
+}
+
+// ------------------------------------------------------------ failed writes
+
+/// U-45 (NF-1). Universe: the claim publish, retraction and share failure
+/// views × what the app knows after the failed write. Each says "may have
+/// been saved" exactly when the PDS may have stored the record, and its
+/// "nothing was ..." sentence exactly when it did not; the way to try again
+/// is offered either way.
+#[test]
+fn a_failed_write_page_says_may_have_been_saved_exactly_when_the_pds_may_have_stored_it() {
+    let retry = PublishRetry {
+        plan_id: "plan-f",
+        csrf_token: CSRF,
+    };
+    for written in [FailedWrite::Definite, FailedWrite::MayHaveStored] {
+        let pages = [
+            (
+                publish_failed_page("PDS trouble.", written, PublishNextStep::Retry(retry)),
+                "Nothing was published",
+                button(RETRY_LABEL),
+            ),
+            (
+                retract_failed_page("PDS trouble.", written, Some(retry), PROFILE_PATH),
+                "Nothing was retracted",
+                button(RETRY_LABEL),
+            ),
+            (
+                share_failed_notice("PDS trouble.", written),
+                "wasn't published",
+                POST_LABEL.to_string(),
+            ),
+        ];
+        let may_have_stored = written == FailedWrite::MayHaveStored;
+        for (html, stored_nothing, try_again) in pages {
+            assert_eq!(
+                html.contains("may have been saved"),
+                may_have_stored,
+                "{written:?}: {html}"
+            );
+            assert_eq!(
+                html.contains(stored_nothing),
+                !may_have_stored,
+                "{written:?}: {html}"
+            );
+            assert!(html.contains("PDS trouble."), "{written:?}: {html}");
+            assert!(html.contains(&try_again), "{written:?}: {html}");
+        }
+    }
 }
 
 // ------------------------------------------------------------ queue
@@ -822,7 +880,11 @@ fn every_publish_outcome_is_one_swappable_region() {
     for html in [
         preview,
         published_page("at://did:plc:owner/org.openlore.claim/x"),
-        publish_failed_page("PDS down.", PublishNextStep::BackToQueue),
+        publish_failed_page(
+            "PDS down.",
+            FailedWrite::MayHaveStored,
+            PublishNextStep::BackToQueue,
+        ),
         plan_expired_page(),
         not_found_page(),
     ] {

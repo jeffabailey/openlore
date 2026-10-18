@@ -50,7 +50,7 @@ async fn publish(app: &App, plan: &PublishPlan, confirmed: &ConfirmedPlan) -> Re
             let next_step = PublishNextStep::after_failure(failure.needs_sign_in(), retry);
             Reply::page(
                 StatusCode::BAD_GATEWAY,
-                views::publish_failed_page(failure.message(), next_step),
+                views::publish_failed_page(failure.message(), failure.failed_write(), next_step),
             )
         }
     }

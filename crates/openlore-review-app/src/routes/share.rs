@@ -139,7 +139,7 @@ impl Share<'_> {
             }
             Err(failure) => self.not_posted(
                 StatusCode::BAD_GATEWAY,
-                &views::share_failed_notice(failure.message()),
+                &views::share_failed_notice(failure.message(), failure.failed_write()),
             ),
         }
     }

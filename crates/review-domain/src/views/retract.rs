@@ -4,6 +4,7 @@
 use maud::html;
 
 use super::*;
+use crate::failed_write::FailedWrite;
 use crate::plans::RetractPlan;
 use ports::claim_domain::identity_link::is_reserved_predicate;
 use ports::claim_domain::UnsignedClaim;
@@ -78,19 +79,44 @@ pub fn retracted_page(at_uri: Option<&str>, profile_path: &str) -> String {
     )
 }
 
-/// A retraction that did not land (AC-011.4): the claim is still active and
-/// the owner can try again (`retry`: the same plan, once).
+/// The heading of a failed retraction: "Nothing was retracted" only when the
+/// app knows it (U-45).
+fn retract_failed_heading(written: FailedWrite) -> &'static str {
+    match written {
+        FailedWrite::Definite => "Nothing was retracted",
+        FailedWrite::MayHaveStored => "Your retraction may have been saved",
+    }
+}
+
+/// What a Retry does after a retraction the PDS may have stored (U-45).
+const RETRACT_RETRY_CHECKS: &str = "Press Retry to check; it never adds a second retraction.";
+
+/// A retraction that did not land (AC-011.4): the owner can try again
+/// (`retry`: the same plan, once). The claim is still active unless the PDS
+/// may have stored the retraction (`written`), which the page then says
+/// (U-45).
 pub fn retract_failed_page(
     reason: &str,
+    written: FailedWrite,
     retry: Option<PublishRetry<'_>>,
     profile_path: &str,
 ) -> String {
+    let heading = retract_failed_heading(written);
     page(
-        "Nothing was retracted",
+        heading,
         html! {
-            h1 { "Nothing was retracted" }
+            h1 { (heading) }
             p role="alert" { (reason) }
-            p { "Your claim is still active and still on your profile." }
+            @match written {
+                FailedWrite::Definite => {
+                    p { "Your claim is still active and still on your profile." }
+                }
+                FailedWrite::MayHaveStored => {
+                    @if retry.is_some() {
+                        p { (RETRACT_RETRY_CHECKS) }
+                    }
+                }
+            }
             @if let Some(retry) = retry {
                 (plan_form(RETRACT_ACTION, retry.plan_id, retry.csrf_token, RETRY_LABEL))
             }

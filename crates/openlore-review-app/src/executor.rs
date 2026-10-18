@@ -5,6 +5,7 @@
 //! read back is recomputed with claim-domain's canonicalizer (DWD-5).
 
 use ports::{CreatedRecord, RepoWriteError, UserRepoReadPort, UserRepoWritePort};
+use review_domain::failed_write::{may_have_stored, FailedWrite};
 use review_domain::link_plan::LinkPlan;
 use review_domain::plans::{read_back_matches, PublishPlan, RetractPlan};
 use review_domain::share::SharePost;
@@ -27,9 +28,20 @@ impl PublishFailure {
         )
     }
 
-    /// What the owner is told (AC-004.6).
+    /// What the app knows the repo holds after this failure (U-45): a
+    /// read-back mismatch is explained by its reason.
+    pub(crate) fn failed_write(&self) -> FailedWrite {
+        match self {
+            Self::NotWritten(error) => FailedWrite::of(error),
+            Self::ReadBackMismatch => FailedWrite::Definite,
+        }
+    }
+
+    /// What the owner is told (AC-004.6). Only a definite failure says
+    /// nothing was published (U-45).
     pub(crate) fn message(&self) -> &'static str {
         match self {
+            Self::NotWritten(error) if may_have_stored(error) => unconfirmed_reason(error),
             Self::NotWritten(
                 RepoWriteError::Unreachable { .. } | RepoWriteError::AnswerLost { .. },
             ) => "We couldn't reach your PDS. Nothing was published.",
@@ -49,6 +61,7 @@ impl PublishFailure {
     /// What the owner is told when a retraction did not land (AC-011.4).
     pub(crate) fn retract_message(&self) -> &'static str {
         match self {
+            Self::NotWritten(error) if may_have_stored(error) => unconfirmed_reason(error),
             Self::NotWritten(
                 RepoWriteError::Unreachable { .. } | RepoWriteError::AnswerLost { .. },
             ) => "We couldn't reach your PDS. Nothing was retracted.",
@@ -63,6 +76,15 @@ impl PublishFailure {
                  counted as retracted."
             }
         }
+    }
+}
+
+/// Why a write the PDS may have stored is unconfirmed (U-45): never
+/// "nothing was published".
+fn unconfirmed_reason(error: &RepoWriteError) -> &'static str {
+    match error {
+        RepoWriteError::AnswerLost { .. } => "Your PDS did not answer.",
+        _ => "Your PDS answered with a server error.",
     }
 }
 

@@ -3,6 +3,7 @@
 use maud::html;
 
 use super::*;
+use crate::failed_write::FailedWrite;
 use crate::plans::PublishPlan;
 
 /// Where a publish plan is confirmed (or retried).
@@ -219,18 +220,39 @@ impl<'a> PublishNextStep<'a> {
     }
 }
 
-/// A publish that did not land (AC-004.6): nothing was written, the
-/// suggestion stays pending, and the owner can try again.
-pub fn publish_failed_page(reason: &str, next_step: PublishNextStep<'_>) -> String {
+/// The heading of a failed publish: "Nothing was published" only when the
+/// app knows it (U-45).
+fn publish_failed_heading(written: FailedWrite) -> &'static str {
+    match written {
+        FailedWrite::Definite => "Nothing was published",
+        FailedWrite::MayHaveStored => "Your claim may have been saved",
+    }
+}
+
+/// What a Retry does after a publish the PDS may have stored (U-45).
+const PUBLISH_RETRY_CHECKS: &str = "Press Retry to check; it never publishes a second copy.";
+
+/// A publish that did not land (AC-004.6): the suggestion stays pending and
+/// the owner can try again. Nothing was written unless the PDS may have
+/// stored it (`written`), which the page then says (U-45).
+pub fn publish_failed_page(
+    reason: &str,
+    written: FailedWrite,
+    next_step: PublishNextStep<'_>,
+) -> String {
+    let heading = publish_failed_heading(written);
     page(
-        "Nothing was published",
+        heading,
         html! {
             section class="outcome" {
-            h1 { "Nothing was published" }
+            h1 { (heading) }
             p role="alert" { (reason) }
             p { "Your suggestion is still pending." }
             @match next_step {
                 PublishNextStep::Retry(retry) => {
+                    @if written == FailedWrite::MayHaveStored {
+                        p { (PUBLISH_RETRY_CHECKS) }
+                    }
                     (plan_form(PUBLISH_ACTION, retry.plan_id, retry.csrf_token, RETRY_LABEL))
                 }
                 PublishNextStep::SignInAgain => {

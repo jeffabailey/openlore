@@ -9,6 +9,7 @@
 
 pub mod budget;
 pub mod edits;
+pub mod failed_write;
 pub mod kpi;
 pub mod lifecycle;
 pub mod link_plan;
