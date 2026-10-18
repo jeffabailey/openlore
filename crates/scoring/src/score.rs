@@ -157,8 +157,9 @@ fn without_identity_links(claims: &[AttributedClaim]) -> Vec<&AttributedClaim> {
         .collect()
 }
 
-/// A row stating no full triple: a reference-only retraction (U-39). An
-/// ordinary retraction restates its claim's triple and is scored as before.
+/// Any row with an empty subject, predicate or object — whatever it is.
+/// A reference-only retraction (U-39) is the expected case; an ordinary
+/// retraction restates its claim's full triple and is scored as before.
 fn is_reference_only(claim: &AttributedClaim) -> bool {
     claim.subject.is_empty() || claim.predicate.is_empty() || claim.object.is_empty()
 }
