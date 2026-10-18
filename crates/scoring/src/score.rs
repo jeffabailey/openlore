@@ -147,11 +147,20 @@ pub fn score(claims: &[AttributedClaim], cfg: &ScoringConfig) -> WeightedView {
 /// (ADR-085 §6, GDL-D8): a link is display-only, so it never forms a pairing
 /// and never counts toward an author's cross-project span. The predicate comes
 /// from `claim_domain::identity_link` (Q-RM-5); the match is exact (CORE-7).
+/// A link's retraction is reference-only (U-39, ADR-008: empty subject,
+/// predicate and object), so it names no pairing and is dropped too.
 fn without_identity_links(claims: &[AttributedClaim]) -> Vec<&AttributedClaim> {
     claims
         .iter()
         .filter(|claim| !claim_domain::identity_link::is_reserved_predicate(&claim.predicate))
+        .filter(|claim| !is_reference_only(claim))
         .collect()
+}
+
+/// A row stating no full triple: a reference-only retraction (U-39). An
+/// ordinary retraction restates its claim's triple and is scored as before.
+fn is_reference_only(claim: &AttributedClaim) -> bool {
+    claim.subject.is_empty() || claim.predicate.is_empty() || claim.object.is_empty()
 }
 
 /// Group the flat attributed-claim feed into one bucket per `(subject, object)`
@@ -369,6 +378,39 @@ mod identity_link_drop_tests {
         let view = score(&[real.clone(), link], &ScoringConfig::DEFAULT);
         assert_eq!(view, score(&[real], &ScoringConfig::DEFAULT));
         assert_eq!(view.ranked[0].cross_project_span, 1);
+    }
+
+    /// A link's retraction (U-39) carries only its `retracts` reference: its
+    /// subject, predicate and object are empty. It never forms a pairing, so
+    /// it never reaches the /score feed, and it changes no other pairing.
+    #[test]
+    fn a_reference_only_link_retraction_is_never_scored() {
+        let real = claim(
+            "bafy-claim",
+            "github:rust-lang/regex",
+            "embodiesPhilosophy",
+            "x",
+        );
+        let retraction = claim("bafy-retraction", "", "", "");
+        assert_eq!(
+            score(std::slice::from_ref(&retraction), &ScoringConfig::DEFAULT),
+            WeightedView::default()
+        );
+        assert_eq!(
+            score(&[real.clone(), retraction], &ScoringConfig::DEFAULT),
+            score(&[real], &ScoringConfig::DEFAULT)
+        );
+        for (subject, predicate, object) in [
+            ("", "embodiesPhilosophy", "x"),
+            ("github:rust-lang/regex", "", "x"),
+            ("github:rust-lang/regex", "embodiesPhilosophy", ""),
+        ] {
+            let partial = claim("bafy-partial", subject, predicate, object);
+            assert!(
+                score(&[partial], &ScoringConfig::DEFAULT).ranked.is_empty(),
+                "{subject:?} {predicate:?} {object:?}"
+            );
+        }
     }
 
     /// Only the exact link predicate is dropped; a near-miss is scored (CORE-7).
