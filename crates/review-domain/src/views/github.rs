@@ -5,12 +5,16 @@ use maud::html;
 use super::*;
 use crate::link_plan::{LinkPlan, LinkRefusal};
 use crate::ownership::OwnershipRefusal;
+use ports::claim_domain::identity_link::LinkRecord;
 
 /// The label of the button that checks the bio.
 pub const VERIFY_LABEL: &str = "Verify";
 
 /// The verified owner's offer to publish the link (Q-GDL-D1).
 pub const PUBLISH_LINK_LABEL: &str = "Publish this link";
+
+/// The owner's offer to retract one of her Active published links (RA-4).
+pub const RETRACT_LINK_LABEL: &str = "Retract this link";
 
 /// The form field naming the GitHub account to check or link (U-26).
 pub const GITHUB_LOGIN_FIELD: &str = "github_login";
@@ -98,16 +102,19 @@ pub fn github_page(
     csrf_token: &str,
     notice: Option<(OwnershipOutcome<'_>, &str)>,
 ) -> String {
-    github_step_page(session_did, csrf_token, notice, None)
+    github_step_page(session_did, csrf_token, notice, None, &[])
 }
 
 /// The GitHub step, offering "Publish this link" for `verified_login` — the
-/// account the app has verified for this owner, if any (RA-9).
+/// account the app has verified for this owner, if any (RA-9) — and
+/// "Retract this link" for each of `active_links`, the owner's Active link
+/// records read live from her repo (RA-4).
 pub fn github_step_page(
     session_did: &str,
     csrf_token: &str,
     notice: Option<(OwnershipOutcome<'_>, &str)>,
     verified_login: Option<&str>,
+    active_links: &[LinkRecord],
 ) -> String {
     page(
         "Prove your GitHub account",
@@ -133,6 +140,9 @@ pub fn github_step_page(
             @if let Some(login) = verified_login {
                 (link_offer(login, csrf_token))
             }
+            @for record in active_links {
+                (retract_link_offer(record))
+            }
             (back_to_queue())
             script src="/assets/copy.js" {}
         },
@@ -146,6 +156,16 @@ fn link_offer(login: &str, csrf_token: &str) -> Markup {
             (csrf_field(csrf_token))
             input type="hidden" name=(GITHUB_LOGIN_FIELD) value=(login);
             button type="submit" { (PUBLISH_LINK_LABEL) }
+        }
+    }
+}
+
+/// The offer to open the retract preview of one published link record.
+fn retract_link_offer(record: &LinkRecord) -> Markup {
+    html! {
+        p {
+            "Published link to github.com/" (record.link.login) ": "
+            a href=(format!("/retract?claim={}", record.record_id)) { (RETRACT_LINK_LABEL) }
         }
     }
 }

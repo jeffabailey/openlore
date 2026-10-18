@@ -137,7 +137,7 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         PageRoute::ForgetMePreview => settings::forget_me_preview(app, request),
         PageRoute::PdsReturn => pds_return(app, request).await,
         PageRoute::Review => review::review(app, request),
-        PageRoute::GithubStep => github::github_step(app, request),
+        PageRoute::GithubStep => github::github_step(app, request).await,
         PageRoute::ScanStatus => scan::scan_status(app, request),
         PageRoute::SharePreview => share::share_preview(app, request).await,
         PageRoute::RetractPreview => retract::retract_preview(app, request).await,

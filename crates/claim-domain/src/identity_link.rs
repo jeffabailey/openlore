@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::{
     bare_did, claim_record_json, is_self_retracted, is_superseded_by_author, ClaimLineage,
-    Confidence, Did, Provenance, UnsignedClaim,
+    Confidence, Did, Provenance, ReferenceType, UnsignedClaim,
 };
 
 /// The reserved predicate of an identity-link claim (ADR-084 §2).
@@ -634,6 +634,14 @@ fn lifecycle_of(claim: &StoredClaim<'_>, referrers: &[ClaimLineage<'_>]) -> Link
     }
 }
 
+/// Does the claim retract another (ADR-008)?
+fn is_retraction(lineage: &ClaimLineage<'_>) -> bool {
+    lineage
+        .references
+        .iter()
+        .any(|reference| reference.ref_type == ReferenceType::Retracts)
+}
+
 /// The links still standing: every stored link its own author has neither
 /// retracted nor superseded.
 pub fn active_links(
@@ -655,13 +663,15 @@ pub struct LinkRecord {
 }
 
 /// The records stating a link that its own author has neither retracted nor
-/// superseded.
+/// superseded. A record carrying a `retracts` reference is a retraction,
+/// never a link, whatever fields it repeats (U-39).
 pub fn active_link_records(
     stored: &[StoredClaim<'_>],
     referrers: &[ClaimLineage<'_>],
 ) -> Vec<LinkRecord> {
     stored
         .iter()
+        .filter(|claim| !is_retraction(&claim.lineage))
         .filter(|claim| lifecycle_of(claim, referrers) == LinkLifecycle::Active)
         .filter_map(|claim| {
             project(claim.fields, claim.provenance).map(|link| LinkRecord {
@@ -1776,6 +1786,83 @@ mod tests {
                 account_named_by(4_210_001, &typed).is_ok(),
                 is_github_login(&typed)
             );
+        }
+    }
+
+    /// One generated link record: its object, evidence, references, CID and
+    /// the link it states.
+    struct ShapedLink {
+        object: String,
+        evidence: Vec<String>,
+        references: Vec<crate::ClaimReference>,
+        cid: String,
+        link: IdentityLink,
+    }
+
+    proptest::proptest! {
+        /// Universe: one well-formed, self-attested link record per account,
+        /// each carrying a reference list drawn from every reference type (to
+        /// a foreign CID, so nothing in the stored set is withdrawn). U-39:
+        /// a record carrying a `retracts` reference never projects as a link
+        /// (another client's retraction may copy the link's fields); every
+        /// other record still projects exactly its link.
+        #[test]
+        fn a_record_carrying_a_retracts_reference_never_projects_as_a_link(
+            records in proptest::collection::vec(
+                (
+                    "[a-z][a-z0-9]{0,11}",
+                    1u64..=u64::from(u32::MAX),
+                    proptest::collection::vec(
+                        proptest::sample::select(vec![
+                            crate::ReferenceType::Retracts,
+                            crate::ReferenceType::Corrects,
+                            crate::ReferenceType::Counters,
+                            crate::ReferenceType::Supersedes,
+                        ]),
+                        0..3,
+                    ),
+                ),
+                0..6,
+            ),
+        ) {
+            let provenance = Provenance::SelfAttested { repo_did: Did(DID.to_string()) };
+            let shaped: Vec<ShapedLink> = records
+                .iter()
+                .enumerate()
+                .map(|(index, (login, user_id, types))| {
+                    let evidence = vec![
+                        format!("{PROFILE_URL_PREFIX}{login}"),
+                        format!("{ID_URI_PREFIX}{user_id}"),
+                    ];
+                    let references = types
+                        .iter()
+                        .map(|ref_type| crate::ClaimReference {
+                            ref_type: *ref_type,
+                            cid: crate::Cid("bafyforeign".to_string()),
+                        })
+                        .collect();
+                    let link = IdentityLink { did: DID.to_string(), login: login.clone(), user_id: *user_id };
+                    ShapedLink { object: format!("github:{login}"), evidence, references, cid: format!("bafylink{index}"), link }
+                })
+                .collect();
+            let stored: Vec<StoredClaim<'_>> = shaped
+                .iter()
+                .map(|ShapedLink { object, evidence, references, cid, .. }| StoredClaim {
+                    fields: ClaimFields { author: DID, subject: DID, predicate: LINK_PREDICATE, object, evidence },
+                    provenance: &provenance,
+                    lineage: ClaimLineage { author_did: DID, cid, references },
+                })
+                .collect();
+            let referrers: Vec<ClaimLineage<'_>> = stored.iter().map(|claim| claim.lineage).collect();
+
+            let expected: Vec<LinkRecord> = shaped
+                .iter()
+                .filter(|ShapedLink { references, .. }| {
+                    !references.iter().any(|reference| reference.ref_type == crate::ReferenceType::Retracts)
+                })
+                .map(|ShapedLink { cid, link, .. }| LinkRecord { record_id: cid.clone(), link: link.clone() })
+                .collect();
+            proptest::prop_assert_eq!(active_link_records(&stored, &referrers), expected);
         }
     }
 }

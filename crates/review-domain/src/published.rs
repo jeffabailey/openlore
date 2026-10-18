@@ -3,7 +3,9 @@
 //! self-attested by the owner, minus retractions and what they retract.
 //! Pure: the shell lists the repo and computes the record origin.
 
-use ports::claim_domain::identity_link::is_reserved_predicate;
+use ports::claim_domain::identity_link::{
+    active_link_records, is_reserved_predicate, ClaimFields, LinkRecord, StoredClaim,
+};
 use ports::claim_domain::{
     decode_claim_record, is_self_retracted, provenance_verdict, ClaimLineage, Did, Provenance,
     RecordOrigin, ReferenceType, UnsignedClaim,
@@ -64,8 +66,9 @@ pub fn published_claims(
 }
 
 /// The owner's live published claim under `rkey` — the only claim a
-/// retraction may be built for (US-BRA-011), identity links included (03-09). `None` once it is retracted,
-/// or if it is not the owner's own self-attested claim.
+/// retraction may be built for (US-BRA-011), identity links included
+/// (03-09). `None` once it is retracted, or if it is not the owner's own
+/// self-attested claim.
 pub fn live_published_claim(
     owner_did: &str,
     records: &[RepoRecord],
@@ -77,6 +80,48 @@ pub fn live_published_claim(
         .find_map(|(key, claim)| (key == rkey).then_some(claim))
 }
 
+/// The owner's identity-link records still standing (U-22), each named by
+/// its record ID: every self-attested claim of the owner's own repo is
+/// folded into the lineage first, then `active_link_records` selects the
+/// links neither retracted nor superseded by the owner. Only the owner's own
+/// links (bare DID) are returned. Pure.
+pub fn active_owner_link_records(
+    owner_did: &str,
+    records: &[RepoRecord],
+    origin: RecordOrigin,
+) -> Vec<LinkRecord> {
+    let provenance = Provenance::SelfAttested {
+        repo_did: Did(owner_did.to_string()),
+    };
+    let accepted = owners_self_attested_claims(owner_did, records, origin);
+    let lineages: Vec<ClaimLineage<'_>> = accepted
+        .iter()
+        .map(|(rkey, claim)| lineage(rkey, claim))
+        .collect();
+    let stored: Vec<StoredClaim<'_>> = accepted
+        .iter()
+        .map(|(rkey, claim)| StoredClaim {
+            fields: claim_fields(claim),
+            provenance: &provenance,
+            lineage: lineage(rkey, claim),
+        })
+        .collect();
+    active_link_records(&stored, &lineages)
+        .into_iter()
+        .filter(|record| record.link.did == owner_did)
+        .collect()
+}
+
+fn claim_fields(claim: &UnsignedClaim) -> ClaimFields<'_> {
+    ClaimFields {
+        author: &claim.author_did.0,
+        subject: &claim.subject,
+        predicate: &claim.predicate,
+        object: &claim.object,
+        evidence: &claim.evidence,
+    }
+}
+
 /// `(rkey, claim)` of the owner's self-attested claims that are neither
 /// retractions nor self-retracted.
 fn live_claims<'r>(
@@ -84,12 +129,7 @@ fn live_claims<'r>(
     records: &'r [RepoRecord],
     origin: RecordOrigin,
 ) -> Vec<(&'r str, UnsignedClaim)> {
-    let owner = Did(owner_did.to_string());
-    let accepted: Vec<(&str, UnsignedClaim)> = records
-        .iter()
-        .filter(|record| record.repo_did == owner_did)
-        .filter_map(|record| self_attested(record, &owner, origin))
-        .collect();
+    let accepted = owners_self_attested_claims(owner_did, records, origin);
     let retracted: Vec<bool> = {
         let lineages: Vec<ClaimLineage<'_>> = accepted
             .iter()
@@ -106,6 +146,21 @@ fn live_claims<'r>(
         .into_iter()
         .zip(retracted)
         .filter_map(|(claim, retracted)| (!retracted).then_some(claim))
+        .collect()
+}
+
+/// `(rkey, claim)` of every record of the owner's own repo whose
+/// provenance verdict is self-attested by the owner (ADR-071).
+fn owners_self_attested_claims<'r>(
+    owner_did: &str,
+    records: &'r [RepoRecord],
+    origin: RecordOrigin,
+) -> Vec<(&'r str, UnsignedClaim)> {
+    let owner = Did(owner_did.to_string());
+    records
+        .iter()
+        .filter(|record| record.repo_did == owner_did)
+        .filter_map(|record| self_attested(record, &owner, origin))
         .collect()
 }
 
@@ -439,6 +494,75 @@ mod tests {
             prop_assert_eq!(&live.subject, &OWNER.to_string());
             prop_assert_eq!(&live.object, &format!("github:{}", account.0));
             prop_assert!(ports::claim_domain::identity_link::is_reserved_predicate(&live.predicate));
+        }
+
+        /// Universe: the owner's link records, one per account, each left
+        /// standing, retracted by the owner (the production retraction),
+        /// superseded by the owner's later link record, or "retracted" by
+        /// someone else's record; plus another DID's link stored in the
+        /// owner's repo and the owner's link stored in another repo, in any
+        /// listing order. /github offers exactly the owner's Active link
+        /// records (U-22: the whole lineage is folded before selecting).
+        #[test]
+        fn only_the_owners_active_link_records_are_offered_for_retraction(
+            links in proptest::collection::vec((arb_account(), 0u8..4), 1..5),
+            reversed in any::<bool>(),
+        ) {
+            let mut records: Vec<RepoRecord> = Vec::new();
+            let mut expected: Vec<String> = Vec::new();
+            for (index, (account, fate)) in links.iter().enumerate() {
+                let account = (format!("{}{index}", account.0), account.1 + index as u64);
+                let link = link_record(&account);
+                let cid = link.rkey.clone();
+                let (_, original) = self_attested(&link, &Did(OWNER.to_string()), RecordOrigin::AuthorPds)
+                    .expect("the owner's link is self-attested");
+                records.push(link.clone());
+                match *fate {
+                    0 => expected.push(cid),
+                    1 => {
+                        let retraction = crate::plans::retract_plan(OWNER, &cid, &original, "2026-10-17T10:00:00Z")
+                            .expect("the owner retracts her own link");
+                        records.push(repo_record(retraction.record(), owner_shape(10_000)));
+                    }
+                    2 => {
+                        let mut successor = link.value.clone();
+                        successor["composedAt"] = serde_json::json!("2026-10-17T11:00:00Z");
+                        successor["references"] = serde_json::json!([{"type": "supersedes", "cid": cid}]);
+                        let successor = repo_record(successor, owner_shape(10_000));
+                        expected.push(successor.rkey.clone());
+                        records.push(successor);
+                    }
+                    _ => {
+                        let foreign = RecordShape { author: 1, ..owner_shape(0) };
+                        records.push(repo_record(claim_body(100 + index, foreign, Some(&cid)), foreign));
+                        expected.push(cid);
+                    }
+                }
+            }
+            let observation = ports::claim_domain::identity_link::GithubObservation {
+                login: "someoneelse".to_string(),
+                user_id: 7,
+                bio: Some("did:plc:someone-else".to_string()),
+            };
+            let others_link = ports::claim_domain::identity_link::self_attested_link_record(
+                "did:plc:someone-else", &observation, "2026-10-17T09:30:00Z",
+            ).expect("proven");
+            records.push(repo_record(others_link, owner_shape(10_000)));
+            let elsewhere = link_record(&("elsewhere".to_string(), 9));
+            records.push(RepoRecord { repo_did: "did:plc:elsewhere".to_string(), ..elsewhere });
+            if reversed {
+                records.reverse();
+            }
+
+            let mut offered: Vec<String> = active_owner_link_records(OWNER, &records, RecordOrigin::AuthorPds)
+                .into_iter()
+                .inspect(|record| assert_eq!(record.link.did, OWNER))
+                .map(|record| record.record_id)
+                .collect();
+            offered.sort();
+            expected.sort();
+            prop_assert_eq!(offered, expected);
+            prop_assert!(active_owner_link_records(OWNER, &records, RecordOrigin::Relay).is_empty());
         }
     }
 }

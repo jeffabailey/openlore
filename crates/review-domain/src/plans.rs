@@ -191,8 +191,9 @@ fn owners_stored_claim(
 
 /// The retraction a confirm will create (US-BRA-011, ADR-008: retracting
 /// ADDS a record, it never deletes or updates one): the retracted claim's
-/// own fields, re-composed by its author, with exactly one `retracts`
-/// reference to the retracted claim's CID. Self-attested, keyed by its CID.
+/// own fields (none for a link, U-39), re-composed by its author, with
+/// exactly one `retracts` reference to the retracted claim's CID.
+/// Self-attested, keyed by its CID.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetractPlan {
     owner_did: String,
@@ -278,12 +279,30 @@ pub fn retract_plan(
             cid: Cid(original_cid.to_string()),
         }],
         reason: None,
-        ..original.clone()
+        ..retracted_fields(original)
     };
     Ok(RetractPlan {
         owner_did: owner_did.to_string(),
         retraction: SelfAttestedClaim::new(retraction)?,
     })
+}
+
+/// The fields a retraction of `original` repeats. A link's retraction is
+/// reference-only (U-39, ADR-008): empty subject, predicate and object and
+/// no evidence, so it never restates the link. Any other claim's
+/// retraction repeats the original's fields.
+fn retracted_fields(original: &UnsignedClaim) -> UnsignedClaim {
+    if is_reserved_predicate(&original.predicate) {
+        UnsignedClaim {
+            subject: String::new(),
+            predicate: String::new(),
+            object: String::new(),
+            evidence: Vec::new(),
+            ..original.clone()
+        }
+    } else {
+        original.clone()
+    }
 }
 
 /// Restore a stored retraction for `owner_did`: only a retract plan whose
@@ -507,6 +526,51 @@ mod tests {
             prop_assert!(read_back_matches(&after, plan.rkey()));
             prop_assert_eq!(&restore_retract_plan(&did, &plan.stored()), &Ok(plan.clone()));
             prop_assert_eq!(restore_retract_plan(&did, &original.stored()), Err(PlanError::NotTheOwnersRecord));
+        }
+
+        /// Universe: owners × GitHub accounts × predicate spellings, over a
+        /// link record from the production encoder. U-39 (ADR-008 shape for
+        /// links only): retracting a claim under the reserved predicate adds
+        /// a record with empty subject, predicate and object, no evidence and
+        /// only the `retracts` reference; under any other spelling the
+        /// retraction is the original's record plus that reference, as for
+        /// every other claim. Either way it reads back under its own CID and
+        /// restores to the same plan.
+        #[test]
+        fn a_link_retraction_is_reference_only_and_any_other_keeps_its_fields(
+            (did, _) in arb_draft(),
+            login in "[a-z][a-z0-9]{0,11}",
+            user_id in 1u64..=u64::from(u32::MAX),
+            predicate in prop::sample::select(vec!["sameAs", "SAMEAS", "sameas", "embodiesPhilosophy"]),
+        ) {
+            let observation = ports::claim_domain::identity_link::GithubObservation {
+                login: login.clone(),
+                user_id,
+                bio: Some(format!("my DID: {did}")),
+            };
+            let mut body = ports::claim_domain::identity_link::self_attested_link_record(
+                &did, &observation, "2026-10-17T09:30:00Z",
+            ).expect("the bio names the DID, so the link is proven");
+            body["predicate"] = json!(predicate);
+            let original = decode_claim_record(&body, "").expect("decodable");
+            let (original_cid, original) = (original.cid().0.clone(), original.unsigned().clone());
+            let composed_at = "2026-10-17T10:00:00Z";
+
+            let plan = retract_plan(&did, &original_cid, &original, composed_at).expect("retraction");
+            let after = plan.record();
+            let reference_only = is_reserved_predicate(predicate);
+            for (field, value) in after.as_object().expect("object") {
+                match field.as_str() {
+                    "composedAt" => prop_assert_eq!(value, &json!(composed_at)),
+                    "references" => prop_assert_eq!(value, &json!([{"type": "retracts", "cid": original_cid}])),
+                    "subject" | "predicate" | "object" if reference_only => prop_assert_eq!(value, &json!("")),
+                    "evidence" if reference_only => prop_assert_eq!(value, &json!([])),
+                    _ => prop_assert_eq!(value, &body[field]),
+                }
+            }
+            prop_assert_eq!(plan.retracted_cid(), original_cid.as_str());
+            prop_assert!(read_back_matches(&after, plan.rkey()));
+            prop_assert_eq!(&restore_retract_plan(&did, &plan.stored()), &Ok(plan.clone()));
         }
 
         /// Universe: owners × claims. Only the claim's author can retract it.

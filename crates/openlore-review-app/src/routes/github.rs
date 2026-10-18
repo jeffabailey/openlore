@@ -8,11 +8,14 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use hyper::StatusCode;
+use ports::claim_domain::identity_link::LinkRecord;
+use ports::claim_domain::RecordOrigin;
 use ports::{GithubAccountProfile, GithubError, GithubLink, LinkRecorded, WebSession};
 use review_domain::budget::{budget_allows, HOUR_SECS, VERIFY_ATTEMPTS_PER_HOUR};
 use review_domain::ownership::{
     is_github_login, prove_ownership, GithubAccount, OwnershipRefusal, VerifiedOwnership,
 };
+use review_domain::published::active_owner_link_records;
 use review_domain::views::{self, GithubStep, OwnershipOutcome};
 
 use crate::http::{App, PageRequest, Reply};
@@ -58,13 +61,32 @@ pub(crate) fn github_step_of(link: Option<&GithubLink>) -> GithubStep<'_> {
     }
 }
 
-/// `GET /github`: the exact DID, where to put it, the Verify form and, for
-/// a verified owner, the offer to publish the link.
-pub(crate) fn github_step(app: &App, request: &PageRequest) -> Reply {
-    match current_session(app, request) {
-        Some((cookie_value, session)) => github_page(app, &session, &cookie_value, None),
-        None => to_landing(),
-    }
+/// `GET /github`: the exact DID, where to put it, the Verify form, for a
+/// verified owner the offer to publish the link and, for each of her Active
+/// published links, the offer to retract it (RA-4).
+pub(crate) async fn github_step(app: &App, request: &PageRequest) -> Reply {
+    let Some((cookie_value, session)) = current_session(app, request) else {
+        return to_landing();
+    };
+    let active_links = published_links(app, &session.owner_did).await;
+    render_github_page(app, &session, &cookie_value, None, &active_links)
+}
+
+/// The owner's Active link records, read live from her own repo (U-22).
+/// A repo that cannot be read offers nothing to retract.
+async fn published_links(app: &App, owner_did: &str) -> Vec<LinkRecord> {
+    let Ok(identity) = app.identity.resolve_did(owner_did).await else {
+        return Vec::new();
+    };
+    let Ok(listing) = app
+        .repo_listing
+        .list_repo_claims(&identity.pds_endpoint, &identity.did)
+        .await
+    else {
+        return Vec::new();
+    };
+    let origin = RecordOrigin::of(&listing.fetched_from, &identity.pds_endpoint);
+    active_owner_link_records(&identity.did, &listing.records, origin)
 }
 
 /// `POST /github`: check the named account's bio for the signed-in DID.
@@ -178,6 +200,16 @@ pub(crate) fn github_page(
     cookie_value: &str,
     notice: Option<(OwnershipOutcome<'_>, &str)>,
 ) -> Reply {
+    render_github_page(app, session, cookie_value, notice, &[])
+}
+
+fn render_github_page(
+    app: &App,
+    session: &WebSession,
+    cookie_value: &str,
+    notice: Option<(OwnershipOutcome<'_>, &str)>,
+    active_links: &[LinkRecord],
+) -> Reply {
     let link = app.links.github_link(&session.owner_did).ok().flatten();
     let verified_login = link
         .as_ref()
@@ -190,6 +222,7 @@ pub(crate) fn github_page(
             &csrf_token_for(cookie_value),
             notice,
             verified_login,
+            active_links,
         ),
     )
 }

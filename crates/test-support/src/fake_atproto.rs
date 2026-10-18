@@ -719,11 +719,23 @@ async fn serve_loop(
         }
         let st = state.clone();
         let rt = route.clone();
+        let up = reachable.clone();
         tokio::spawn(async move {
+            // A host that goes down fails every request, even on a connection
+            // opened while it was up: the error closes the connection.
             let svc = hyper::service::service_fn(move |req| {
                 let st = st.clone();
                 let rt = rt.clone();
-                async move { dispatch(st, rt, req).await }
+                let up = up.clone();
+                async move {
+                    if !up(&st) {
+                        return Err(std::io::Error::from(std::io::ErrorKind::ConnectionReset));
+                    }
+                    Ok::<_, std::io::Error>(match dispatch(st, rt, req).await {
+                        Ok(response) => response,
+                        Err(never) => match never {},
+                    })
+                }
             });
             let _ = http1::Builder::new()
                 .serve_connection(TokioIo::new(stream), svc)

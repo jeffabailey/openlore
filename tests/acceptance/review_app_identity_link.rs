@@ -147,7 +147,6 @@ fn verifying_github_and_scanning_never_publish_a_link_on_their_own() {
 ///   And the link record itself is still there, unchanged
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending DELIVER (one at a time)"]
 fn priya_withdraws_her_link_without_erasing_it() {
     let world = ReviewWorld::new();
     let mut browser = given_link_published(&world, Persona::Priya);
