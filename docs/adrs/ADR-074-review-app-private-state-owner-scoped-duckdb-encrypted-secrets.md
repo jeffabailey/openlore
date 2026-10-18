@@ -52,7 +52,7 @@ one process, co-located on a t4g.micro (ADR-075). The workspace already ships Du
    - Suggestions, declines and the GitHub link are kept until **disconnect** (US-BRA-012), which
      purges every row for the DID in one transaction.
    - Plans expire after 30 minutes. In-flight OAuth requests expire after 10 minutes. Browser
-     sessions expire after 30 idle days.
+     sessions expire 30 days from sign-in.
    - **A declined key is never re-offered in v1**, even with new evidence. The key is
      `(owner_did, subject, predicate, object)`.
 5. **KPI counters (OD-BRA-11)** are `(day, event, count)` rows with **no DID, handle or content
