@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::{
     bare_did, claim_record_json, is_self_retracted, is_superseded_by_author, ClaimLineage,
-    Confidence, Did, Provenance, ReferenceType, UnsignedClaim,
+    Confidence, Did, Provenance, UnsignedClaim,
 };
 
 /// The reserved predicate of an identity-link claim (ADR-084 §2).
@@ -350,6 +350,19 @@ pub struct ClaimFields<'a> {
     pub evidence: &'a [String],
 }
 
+impl<'a> ClaimFields<'a> {
+    /// The fields of `claim` as the projection reads them.
+    pub fn of(claim: &'a UnsignedClaim) -> Self {
+        Self {
+            author: &claim.author_did.0,
+            subject: &claim.subject,
+            predicate: &claim.predicate,
+            object: &claim.object,
+            evidence: &claim.evidence,
+        }
+    }
+}
+
 /// A projected link: (bare DID, login as signed, numeric id).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct IdentityLink {
@@ -634,14 +647,6 @@ fn lifecycle_of(claim: &StoredClaim<'_>, referrers: &[ClaimLineage<'_>]) -> Link
     }
 }
 
-/// Does the claim retract another (ADR-008)?
-fn is_retraction(lineage: &ClaimLineage<'_>) -> bool {
-    lineage
-        .references
-        .iter()
-        .any(|reference| reference.ref_type == ReferenceType::Retracts)
-}
-
 /// The links still standing: every stored link its own author has neither
 /// retracted nor superseded.
 pub fn active_links(
@@ -671,7 +676,7 @@ pub fn active_link_records(
 ) -> Vec<LinkRecord> {
     stored
         .iter()
-        .filter(|claim| !is_retraction(&claim.lineage))
+        .filter(|claim| !claim.lineage.is_retraction())
         .filter(|claim| lifecycle_of(claim, referrers) == LinkLifecycle::Active)
         .filter_map(|claim| {
             project(claim.fields, claim.provenance).map(|link| LinkRecord {

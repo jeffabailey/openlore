@@ -22,6 +22,16 @@ pub struct ClaimLineage<'a> {
     pub references: &'a [ClaimReference],
 }
 
+impl ClaimLineage<'_> {
+    /// True when this claim retracts another (ADR-008): it carries a
+    /// `Retracts` reference, whatever else it repeats.
+    pub fn is_retraction(&self) -> bool {
+        self.references
+            .iter()
+            .any(|reference| reference.ref_type == ReferenceType::Retracts)
+    }
+}
+
 /// True when `marker` is `target`'s OWN retraction marker (D-RF-D3): signed by
 /// the same author and carrying a `Retracts` reference to `target`'s CID.
 pub fn is_own_retraction_marker(marker: &ClaimLineage<'_>, target: &ClaimLineage<'_>) -> bool {

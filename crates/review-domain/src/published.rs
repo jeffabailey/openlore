@@ -8,7 +8,7 @@ use ports::claim_domain::identity_link::{
 };
 use ports::claim_domain::{
     decode_claim_record, is_self_retracted, provenance_verdict, ClaimLineage, Did, Provenance,
-    RecordOrigin, ReferenceType, UnsignedClaim,
+    RecordOrigin, UnsignedClaim,
 };
 use ports::RepoRecord;
 
@@ -101,7 +101,7 @@ pub fn active_owner_link_records(
     let stored: Vec<StoredClaim<'_>> = accepted
         .iter()
         .map(|(rkey, claim)| StoredClaim {
-            fields: claim_fields(claim),
+            fields: ClaimFields::of(claim),
             provenance: &provenance,
             lineage: lineage(rkey, claim),
         })
@@ -110,16 +110,6 @@ pub fn active_owner_link_records(
         .into_iter()
         .filter(|record| record.link.did == owner_did)
         .collect()
-}
-
-fn claim_fields(claim: &UnsignedClaim) -> ClaimFields<'_> {
-    ClaimFields {
-        author: &claim.author_did.0,
-        subject: &claim.subject,
-        predicate: &claim.predicate,
-        object: &claim.object,
-        evidence: &claim.evidence,
-    }
 }
 
 /// `(rkey, claim)` of the owner's self-attested claims that are neither
@@ -138,7 +128,8 @@ fn live_claims<'r>(
         accepted
             .iter()
             .map(|(rkey, claim)| {
-                is_retraction(claim) || is_self_retracted(&lineage(rkey, claim), &lineages)
+                let own = lineage(rkey, claim);
+                own.is_retraction() || is_self_retracted(&own, &lineages)
             })
             .collect()
     };
@@ -183,13 +174,6 @@ fn lineage<'c>(rkey: &'c str, claim: &'c UnsignedClaim) -> ClaimLineage<'c> {
         cid: rkey,
         references: &claim.references,
     }
-}
-
-fn is_retraction(claim: &UnsignedClaim) -> bool {
-    claim
-        .references
-        .iter()
-        .any(|reference| reference.ref_type == ReferenceType::Retracts)
 }
 
 fn shown_claim(rkey: &str, claim: &UnsignedClaim) -> PublishedClaim {

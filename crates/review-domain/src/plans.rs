@@ -230,12 +230,7 @@ impl RetractPlan {
 
     /// The suggestion the retracted claim was published from.
     pub fn key(&self) -> SuggestionKey {
-        let claim = self.claim();
-        SuggestionKey {
-            subject: claim.subject.clone(),
-            predicate: claim.predicate.clone(),
-            object: claim.object.clone(),
-        }
+        triple_of(self.claim())
     }
 
     /// The plan as kept between preview and confirm.
@@ -302,6 +297,15 @@ fn retracted_fields(original: &UnsignedClaim) -> UnsignedClaim {
         }
     } else {
         original.clone()
+    }
+}
+
+/// A record's own triple: the key a plan for it is stored under (F-03).
+pub(crate) fn triple_of(claim: &UnsignedClaim) -> SuggestionKey {
+    SuggestionKey {
+        subject: claim.subject.clone(),
+        predicate: claim.predicate.clone(),
+        object: claim.object.clone(),
     }
 }
 

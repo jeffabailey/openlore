@@ -5,6 +5,8 @@
 //! way to obtain a [`VerifiedOwnership`] — the capability a scan needs — is
 //! [`prove_ownership`] returning it for a passing check.
 
+use ports::claim_domain::identity_link::{account_named_by, MalformedObservation};
+
 // The bio matcher lives in `claim_domain::identity_link` (ADR-085 §1, UC-4):
 // one proof rule for the review app, the CLI and every reader.
 pub use ports::claim_domain::identity_link::did_tokens;
@@ -83,8 +85,6 @@ impl OwnershipRefusal {
 /// with a hyphen. Anything else names no account (and never reaches a URL).
 /// The one login rule, shared with the CLI (`claim_domain::identity_link`).
 pub use ports::claim_domain::identity_link::is_github_login;
-
-use ports::claim_domain::identity_link::{account_named_by, MalformedObservation};
 
 /// The capability a scan needs: this DID proved this GitHub account is
 /// theirs. Only [`prove_ownership`] mints it.

@@ -19,7 +19,7 @@ use ports::{GithubError, PlanKind, RepoRecord, StoredPublishPlan, SuggestionKey}
 use serde_json::Value;
 
 use crate::ownership::{prove_ownership, GithubAccount, OwnershipRefusal};
-use crate::plans::{at_uri, PlanError};
+use crate::plans::{at_uri, triple_of, PlanError};
 use crate::published::self_attested;
 use crate::views::LinkNotPublished;
 
@@ -77,14 +77,6 @@ impl LinkPlan {
             key: self.key(),
             record_json: self.record().to_string(),
         }
-    }
-}
-
-fn triple_of(claim: &UnsignedClaim) -> SuggestionKey {
-    SuggestionKey {
-        subject: claim.subject.clone(),
-        predicate: claim.predicate.clone(),
-        object: claim.object.clone(),
     }
 }
 
@@ -249,22 +241,12 @@ fn owners_link(owner_did: &str, stored: &StoredPublishPlan) -> Option<UnsignedCl
     let owner = Did(owner_did.to_string());
     let (_, claim) = self_attested(&record, &owner, RecordOrigin::AuthorPds)?;
     let provenance = Provenance::SelfAttested { repo_did: owner };
-    let projected = project(claim_fields(&claim), &provenance)?;
+    let projected = project(ClaimFields::of(&claim), &provenance)?;
     let admitted = stored.kind == PlanKind::Publish
         && claim.references.is_empty()
         && projected.did == bare_did(owner_did)
         && stored.key == triple_of(&claim);
     admitted.then_some(claim)
-}
-
-fn claim_fields(claim: &UnsignedClaim) -> ClaimFields<'_> {
-    ClaimFields {
-        author: &claim.author_did.0,
-        subject: &claim.subject,
-        predicate: &claim.predicate,
-        object: &claim.object,
-        evidence: &claim.evidence,
-    }
 }
 
 #[cfg(test)]
