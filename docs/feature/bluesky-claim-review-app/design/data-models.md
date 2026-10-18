@@ -63,7 +63,7 @@ The app stores nothing about the post except an aggregate counter.
 |---|---|---|
 | `oauth_auth_requests` | `state` PK; `owner_did_expected`; `issuer`; `enc_blob` (PKCE verifier, DPoP key, nonce); `created_at`, `expires_at` (+10 min) | Transient. atrium `StateStore` through `SecretStorePort`. |
 | `oauth_sessions` | `owner_did` PK; `issuer`; `granted_scopes`; `enc_blob` (access token, refresh token, DPoP private JWK, expiry); `updated_at` | atrium `SessionStore`. Deleted on sign-out and on purge. |
-| `web_sessions` | `session_hash` PK (SHA-256 of a 256-bit random cookie value); `owner_did`; `csrf_token_hash`; `created_at`, `last_used_at`, `expires_at` (30 days idle) | The cookie is `__Host-ol_session`; HttpOnly; Secure; SameSite=Lax; Path=/. |
+| `web_sessions` | `session_hash` PK (SHA-256 of a 256-bit random cookie value); `owner_did`; `csrf_token_hash`; `created_at`, `last_used_at`, `expires_at` (30 days from sign-in) | The cookie is `__Host-ol_session`; HttpOnly; Secure; SameSite=Lax; Path=/. |
 
 Encryption:
 
