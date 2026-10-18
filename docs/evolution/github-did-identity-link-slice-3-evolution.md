@@ -155,7 +155,7 @@ NF-4/NF-5 went to the backlog.
 | Phase-3 refactor | `65e34cb`, plus the U-37 carry-overs `b9c9a9f`, `c4a3f8f`, `aeb103c` |
 | Phase-4 adversarial review | Iteration 1 rejected (F-1 blocker), revised. Re-review rejected (N1 high, N2), fixed. Final re-review: N1..N8 fixed; NF-1 ruled out of scope (U-44) and sent to the user; NF-2/NF-3 fixed |
 | Phase-5 mutation (per-feature, gate ≥80%) | **182 mutants** over the slice-3 production diff `4164329..6e11436^`: **103 caught, 4 missed, 75 unviable** (`Default::default()` for types with no `Default`). **96.3% of viable mutants caught**. Gate PASSED. The 4 survivors were refusal log labels, now pinned by `6e11436` |
-| Mutation re-run on the N1-fix files | TODO: result of the re-run on the N1-fix files (in progress) |
+| Mutation re-run on the N1-fix files | **23 mutants** over `04cf0d2..6e11436`: **17 caught, 0 missed, 6 unviable**. **100% of viable mutants caught** |
 | check-arch | OK, with the link-route rules (U-26, 03-05) and a missing source file now an error (`af2f1a0`) |
 
 ### Mutation tooling note
@@ -171,8 +171,13 @@ replace a return value with `Default::default()` for types that have no
 - Review app deployed at `bf5e0b7` (steps 03-01..03-06), digest
   `sha256:7a97a1f9...`. Post-deploy checks passed. This respected U-35: no
   deploy between 03-04 and 03-05.
-- The slice-3 tip `ba3531e` is pushed. Its review-app deploy runs after CI.
-  TODO: record the review-app digest for `ba3531e` once deployed.
+- CI failed on the slice-3 tip `ba3531e`. The review fix `949e43b` had given
+  the indexer's guarded reader the review app's fixed 30 s request timeout,
+  which overrode the operator's per-author limit (ADR-080), so PS-19 ended at
+  31 s, not at its 60 s pass deadline. `af206de` keeps the 30 s bound on the
+  review app's reader only.
+  CI passed on `af206de`; the review app is deployed at `af206de`, digest
+  `sha256:c678bc78...`. Post-deploy checks passed.
 
 ## Load-bearing invariants
 
