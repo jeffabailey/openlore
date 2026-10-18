@@ -53,7 +53,7 @@ pub(crate) async fn preview_link(app: &App, request: &PageRequest) -> Reply {
             let refused = OwnershipOutcome::Refused(&refusal);
             let message =
                 views::ownership_message(refused, login, &session.owner_did, &session.handle);
-            github_page(app, &session, &cookie_value, Some((refused, &message)))
+            github_page(app, &session, &cookie_value, Some((refused, &message))).await
         }
         Err(LinkPreviewRefusal::NotSaved) => preview_not_saved(login),
     }

@@ -68,8 +68,7 @@ pub(crate) async fn github_step(app: &App, request: &PageRequest) -> Reply {
     let Some((cookie_value, session)) = current_session(app, request) else {
         return to_landing();
     };
-    let active_links = published_links(app, &session.owner_did).await;
-    render_github_page(app, &session, &cookie_value, None, &active_links)
+    github_page(app, &session, &cookie_value, None).await
 }
 
 /// The owner's Active link records, read live from her own repo (U-22).
@@ -109,7 +108,7 @@ pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
         }
     };
     let message = views::ownership_message(shown, &login, &session.owner_did, &session.handle);
-    github_page(app, &session, &cookie_value, Some((shown, &message)))
+    github_page(app, &session, &cookie_value, Some((shown, &message))).await
 }
 
 /// Read the profile, prove ownership and record the link. Returns the login
@@ -191,25 +190,18 @@ pub(crate) fn refusal_of(error: &GithubError) -> OwnershipRefusal {
     }
 }
 
-/// The GitHub step page; "Publish this link" is offered only while the
-/// owner's stored link is verified (RA-9). The offer is all the row
-/// decides: the link itself is proven by the preview's own fresh read.
-pub(crate) fn github_page(
+/// The GitHub step page, after a GET or a refused or accepted POST alike:
+/// "Publish this link" is offered only while the owner's stored link is
+/// verified (RA-9) — the offer is all the row decides, the link itself is
+/// proven by the preview's own fresh read — and each Active published link
+/// is offered for retraction, read live from her repo every time.
+pub(crate) async fn github_page(
     app: &App,
     session: &WebSession,
     cookie_value: &str,
     notice: Option<(OwnershipOutcome<'_>, &str)>,
 ) -> Reply {
-    render_github_page(app, session, cookie_value, notice, &[])
-}
-
-fn render_github_page(
-    app: &App,
-    session: &WebSession,
-    cookie_value: &str,
-    notice: Option<(OwnershipOutcome<'_>, &str)>,
-    active_links: &[LinkRecord],
-) -> Reply {
+    let active_links = published_links(app, &session.owner_did).await;
     let link = app.links.github_link(&session.owner_did).ok().flatten();
     let verified_login = link
         .as_ref()
@@ -222,7 +214,7 @@ fn render_github_page(
             &csrf_token_for(cookie_value),
             notice,
             verified_login,
-            active_links,
+            &active_links,
         ),
     )
 }
