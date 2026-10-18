@@ -43,7 +43,9 @@ url = { workspace = true }
 # the test process. The HTTP server reuses the `FakePds` state via
 # `Arc` — one source of truth for records across the in-process port
 # trait surface and the subprocess HTTP surface.
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net"] }
+# `sync` (U-43): a watch channel tells each fake server its reachability
+# changed, so an unreachable host closes its listener (refused connect).
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "sync"] }
 hyper = { version = "1", features = ["server", "http1"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["tokio"] }

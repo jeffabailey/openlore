@@ -300,9 +300,44 @@ struct NetState {
     requests: Mutex<Vec<RequestSeen>>,
     in_flight: AtomicU64,
     max_in_flight: AtomicU64,
+    /// Bumped whenever a host or the directory goes up or down, so each
+    /// server re-checks whether to listen (U-43).
+    reachability: tokio::sync::watch::Sender<u64>,
+    /// The last reachability change each server has applied to its listener.
+    servers_applied: Mutex<Vec<Arc<AtomicU64>>>,
 }
 
 impl NetState {
+    /// Tell every server, and return once each has opened or closed its
+    /// listener: a connect right after the change sees the new posture.
+    fn reachability_changed(&self) {
+        self.reachability.send_modify(|changes| *changes += 1);
+        let change = *self.reachability.borrow();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !self.all_servers_applied(change) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "FakeAtprotoNetwork: a server did not apply reachability change {change}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    fn all_servers_applied(&self, change: u64) -> bool {
+        self.servers_applied
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|applied| applied.load(Ordering::SeqCst) >= change)
+    }
+
+    /// A new server's record of the reachability changes it has applied.
+    fn register_server(&self) -> Arc<AtomicU64> {
+        let applied = Arc::new(AtomicU64::new(*self.reachability.borrow()));
+        self.servers_applied.lock().unwrap().push(applied.clone());
+        applied
+    }
+
     fn next(&self) -> u64 {
         self.seq.fetch_add(1, Ordering::SeqCst) + 1
     }
@@ -407,8 +442,9 @@ impl FakeAtprotoNetwork {
             tasks.push(AbortOnDrop(runtime.spawn(serve_loop(
                 listener,
                 Arc::new(move |s: &NetState| s.host(&lbl).map(|h| h.reachable).unwrap_or(false)),
-                st,
+                st.clone(),
                 Route::Host { label, base_url },
+                st.register_server(),
             ))));
         }
 
@@ -418,6 +454,7 @@ impl FakeAtprotoNetwork {
             Arc::new(|s: &NetState| s.directory_reachable.load(Ordering::SeqCst)),
             state.clone(),
             Route::Directory,
+            state.register_server(),
         ))));
 
         Self {
@@ -478,6 +515,7 @@ impl FakeAtprotoNetwork {
         if let Some(h) = self.state.hosts.lock().unwrap().get_mut(host) {
             h.reachable = reachable;
         }
+        self.state.reachability_changed();
     }
 
     /// Make the directory (PLC + handle resolution) unreachable / reachable.
@@ -485,6 +523,7 @@ impl FakeAtprotoNetwork {
         self.state
             .directory_reachable
             .store(reachable, Ordering::SeqCst);
+        self.state.reachability_changed();
     }
 
     /// The authorization server on `host` cannot fetch the app's client
@@ -700,48 +739,92 @@ async fn bind() -> (tokio::net::TcpListener, String) {
     (listener, format!("http://{addr}"))
 }
 
+/// Serve `route` while it is reachable. An unreachable server closes its
+/// listener, so a new connection is refused before anything is sent, as
+/// with a host that is down (U-43); it listens again on the same address
+/// once reachable. A connection opened while it was up fails every request
+/// once it goes down (U-40).
 async fn serve_loop(
     listener: tokio::net::TcpListener,
+    reachable: Reachable,
+    state: Arc<NetState>,
+    route: Route,
+    applied: Arc<AtomicU64>,
+) {
+    let address = listener
+        .local_addr()
+        .expect("FakeAtprotoNetwork: local_addr");
+    let mut listener = Some(listener);
+    let mut changes = state.reachability.subscribe();
+    loop {
+        let change = *changes.borrow_and_update();
+        if !reachable(&state) {
+            listener = None;
+        } else if listener.is_none() {
+            listener = Some(rebind(address));
+        }
+        applied.store(change, Ordering::SeqCst);
+        let Some(open) = &listener else {
+            if changes.changed().await.is_err() {
+                return;
+            }
+            continue;
+        };
+        tokio::select! {
+            accepted = open.accept() => match accepted {
+                Ok((stream, _)) => serve_connection(stream, reachable.clone(), state.clone(), route.clone()),
+                Err(_) => return,
+            },
+            changed = changes.changed() => if changed.is_err() {
+                return;
+            },
+        }
+    }
+}
+
+/// Listen again on the address an unreachable server gave up.
+fn rebind(address: std::net::SocketAddr) -> tokio::net::TcpListener {
+    let socket = tokio::net::TcpSocket::new_v4().expect("FakeAtprotoNetwork: socket");
+    socket
+        .set_reuseaddr(true)
+        .expect("FakeAtprotoNetwork: SO_REUSEADDR");
+    socket
+        .bind(address)
+        .unwrap_or_else(|error| panic!("FakeAtprotoNetwork: rebind {address}: {error}"));
+    socket
+        .listen(1024)
+        .unwrap_or_else(|error| panic!("FakeAtprotoNetwork: listen on {address}: {error}"))
+}
+
+fn serve_connection(
+    stream: tokio::net::TcpStream,
     reachable: Reachable,
     state: Arc<NetState>,
     route: Route,
 ) {
     use hyper::server::conn::http1;
     use hyper_util::rt::TokioIo;
-    loop {
-        let (stream, _) = match listener.accept().await {
-            Ok(io) => io,
-            Err(_) => return,
-        };
-        if !reachable(&state) {
-            drop(stream);
-            continue;
-        }
-        let st = state.clone();
-        let rt = route.clone();
-        let up = reachable.clone();
-        tokio::spawn(async move {
-            // A host that goes down fails every request, even on a connection
-            // opened while it was up: the error closes the connection.
-            let svc = hyper::service::service_fn(move |req| {
-                let st = st.clone();
-                let rt = rt.clone();
-                let up = up.clone();
-                async move {
-                    if !up(&st) {
-                        return Err(std::io::Error::from(std::io::ErrorKind::ConnectionReset));
-                    }
-                    Ok::<_, std::io::Error>(match dispatch(st, rt, req).await {
-                        Ok(response) => response,
-                        Err(never) => match never {},
-                    })
+    tokio::spawn(async move {
+        // A host that goes down fails every request, even on a connection
+        // opened while it was up: the error closes the connection.
+        let svc = hyper::service::service_fn(move |req| {
+            let st = state.clone();
+            let rt = route.clone();
+            let up = reachable.clone();
+            async move {
+                if !up(&st) {
+                    return Err(std::io::Error::from(std::io::ErrorKind::ConnectionReset));
                 }
-            });
-            let _ = http1::Builder::new()
-                .serve_connection(TokioIo::new(stream), svc)
-                .await;
+                Ok::<_, std::io::Error>(match dispatch(st, rt, req).await {
+                    Ok(response) => response,
+                    Err(never) => match never {},
+                })
+            }
         });
-    }
+        let _ = http1::Builder::new()
+            .serve_connection(TokioIo::new(stream), svc)
+            .await;
+    });
 }
 
 /// Decrements the network's in-flight count when a request ends — including
@@ -1715,6 +1798,31 @@ mod tests {
         );
         assert!(net.write_attempts().is_empty());
         assert!(net.forbidden_write_attempts().is_empty());
+    }
+
+    /// U-43: an unreachable host refuses the connection itself, so a client
+    /// sends nothing; once reachable it answers again at the same address.
+    #[test]
+    fn an_unreachable_host_refuses_connections_until_it_is_back() {
+        let net = FakeAtprotoNetwork::start(vec![priya()]);
+        let base = net.host_url("bsky-social");
+        let address = base.trim_start_matches("http://").to_string();
+        let rt = net.runtime.as_ref().unwrap();
+
+        net.set_host_reachable("bsky-social", false);
+        let refused = rt.block_on(tokio::net::TcpStream::connect(address.clone()));
+        assert_eq!(
+            refused.map(|_| ()).map_err(|error| error.kind()),
+            Err(std::io::ErrorKind::ConnectionRefused),
+            "an unreachable host refuses the connection"
+        );
+
+        net.set_host_reachable("bsky-social", true);
+        let (status, _) = get(
+            &net,
+            &format!("{base}/.well-known/oauth-protected-resource"),
+        );
+        assert_eq!(status, 200, "the host answers again once reachable");
     }
 
     #[test]
