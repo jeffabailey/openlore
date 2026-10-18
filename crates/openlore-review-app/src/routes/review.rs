@@ -3,10 +3,13 @@
 //! suggestion named by anyone else's form is simply not found.
 
 use hyper::StatusCode;
-use ports::{KpiTally, Suggestion, SuggestionKey, SuggestionState, WebSession};
+use ports::{
+    GithubLink, GithubLinkPort, KpiTally, ReviewStateRead, Suggestion, SuggestionKey,
+    SuggestionState, WebSession,
+};
 use review_domain::edits::{edit_claim, philosophy_choices};
 use review_domain::lifecycle::{
-    owner_step, tally, visible_and_approvable, LifecycleEvent, OwnerStep,
+    owner_step, tally, visible_and_approvable, LifecycleEvent, OwnerStep, Tally,
 };
 use review_domain::plans::{
     plan_expires_at, publish_edited_plan, publish_plan, rfc3339_utc, ClaimDraft, PlanError,
@@ -42,19 +45,14 @@ pub(crate) fn queue_page(
     status: StatusCode,
     notice: Option<QueueNotice<'_>>,
 ) -> Reply {
-    let link = app.links.github_link(&session.owner_did).ok().flatten();
-    let verified = link.as_ref().is_some_and(|link| link.verified);
-    let pending = verified
-        .then(|| app.review_read.pending_suggestions(&session.owner_did).ok())
-        .flatten()
-        .unwrap_or_default();
-    let tally = tally(
-        verified
-            .then(|| app.review_read.suggestion_states(&session.owner_did).ok())
-            .flatten()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(_, state)| state),
+    let OwnerQueue {
+        link,
+        pending,
+        tally,
+    } = owner_queue(
+        app.links.as_ref(),
+        app.review_read.as_ref(),
+        &session.owner_did,
     );
     let latest_scan = app.scans.latest_scan(&session.owner_did).ok().flatten();
     let csrf_token = csrf_token_for(cookie_value);
@@ -70,6 +68,42 @@ pub(crate) fn queue_page(
             notice,
         }),
     )
+}
+
+/// What the owner's queue page lists: the GitHub link, the pending
+/// suggestions (only while that link is verified) and their tally.
+pub(crate) struct OwnerQueue {
+    pub(crate) link: Option<GithubLink>,
+    pub(crate) pending: Vec<Suggestion>,
+    pub(crate) tally: Tally,
+}
+
+/// The queue composition `queue_page` renders, read from the owner's links
+/// and review state.
+pub(crate) fn owner_queue(
+    links: &dyn GithubLinkPort,
+    review_read: &dyn ReviewStateRead,
+    owner_did: &str,
+) -> OwnerQueue {
+    let link = links.github_link(owner_did).ok().flatten();
+    let verified = link.as_ref().is_some_and(|link| link.verified);
+    let pending = verified
+        .then(|| review_read.pending_suggestions(owner_did).ok())
+        .flatten()
+        .unwrap_or_default();
+    let tally = tally(
+        verified
+            .then(|| review_read.suggestion_states(owner_did).ok())
+            .flatten()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, state)| state),
+    );
+    OwnerQueue {
+        link,
+        pending,
+        tally,
+    }
 }
 
 /// `POST /review/approve`: the exact-record preview of one of the owner's
@@ -371,16 +405,22 @@ pub(crate) fn not_found() -> Reply {
 #[cfg(test)]
 mod tests {
     //! C-6 (U-37): a stored link plan never appears in the review queue. The
-    //! queue is read from the real store exactly as `queue_page` reads it.
+    //! queue is composed by `owner_queue`, the function `queue_page` renders.
+    use super::{owner_queue, OwnerQueue};
+    use crate::routes::github::github_step_of;
     use adapter_review_store::{DataKey, ReviewStore};
     use ports::claim_domain::identity_link::{link_predicate, GithubObservation};
-    use ports::{PublishPlanPort, ReviewStateRead, ReviewStateWrite, Suggestion, SuggestionKey};
+    use ports::{
+        GithubLinkPort, KpiTally, LinkRecorded, PublishPlanPort, ReviewStateWrite, Suggestion,
+        SuggestionKey,
+    };
     use review_domain::lifecycle::tally;
     use review_domain::link_plan::link_preview;
-    use review_domain::views::{self, GithubStep, QueueView};
+    use review_domain::views::{self, QueueView};
 
     const OWNER: &str = "did:plc:priyaraman7777777777777777";
     const LINKED_LOGIN: &str = "priyaraman";
+    const LINKED_ID: u64 = 4_210_001;
 
     fn pending_suggestion() -> Suggestion {
         Suggestion {
@@ -399,12 +439,18 @@ mod tests {
     #[test]
     fn a_stored_link_plan_never_appears_in_the_review_queue() {
         let store = ReviewStore::open_in_memory(DataKey::generate()).expect("store");
+        assert_eq!(
+            store
+                .record_verified_link(OWNER, LINKED_LOGIN, LINKED_ID, KpiTally::NONE)
+                .expect("linked"),
+            LinkRecorded::Linked
+        );
         store
             .add_pending(OWNER, &[pending_suggestion()])
             .expect("queued");
         let observation = GithubObservation {
             login: LINKED_LOGIN.to_string(),
-            user_id: 4_210_001,
+            user_id: LINKED_ID,
             bio: Some(format!("my DID: {OWNER}")),
         };
         let plan = link_preview(OWNER, &observation, "2026-10-17T09:30:00Z").expect("proven");
@@ -413,22 +459,20 @@ mod tests {
             .put_publish_plan(OWNER, &plan.stored(), 4_102_444_800)
             .expect("kept");
 
-        let pending = store.pending_suggestions(OWNER).expect("readable");
-        let states = store.suggestion_states(OWNER).expect("readable");
+        let OwnerQueue {
+            link,
+            pending,
+            tally: queue_tally,
+        } = owner_queue(&store, &store, OWNER);
         assert_eq!(pending, vec![pending_suggestion()]);
-        assert!(
-            states.iter().all(|(key, _)| key != &plan.key()),
-            "{states:?}"
-        );
+        assert_eq!(queue_tally, tally([ports::SuggestionState::Pending]));
         let html = views::review_page(&QueueView {
             handle: "priya.example",
             csrf_token: "csrf",
-            github: GithubStep::Verified {
-                login: LINKED_LOGIN,
-            },
+            github: github_step_of(link.as_ref()),
             latest_scan: None,
             pending: &pending,
-            tally: tally(states.into_iter().map(|(_, state)| state)),
+            tally: queue_tally,
             notice: None,
         });
         assert!(html.contains("tideworks/tidepool"), "{html}");
