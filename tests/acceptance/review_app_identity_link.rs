@@ -752,7 +752,6 @@ fn after_a_failed_link_write_retry_publishes_the_link_exactly_once() {
 ///     | cannot be reached             |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending N1 fix"]
 fn when_her_repo_host_definitely_did_not_take_the_link_priya_is_told_nothing_was_published() {
     for row in ["record refused", "host unreachable"] {
         let world = ReviewWorld::new();

@@ -543,8 +543,13 @@ pub struct CreatedRecord {
 pub enum RepoWriteError {
     #[error("no live session for this account")]
     NoSession,
+    /// No connection to the PDS was made, so nothing was sent (U-43).
     #[error("the PDS is unreachable: {detail}")]
     Unreachable { detail: String },
+    /// The request was sent but no answer came back: the PDS may have
+    /// stored it (U-43).
+    #[error("the PDS did not answer: {detail}")]
+    AnswerLost { detail: String },
     #[error("the PDS session has expired")]
     SessionExpired,
     #[error("the PDS refused the request ({status}): {detail}")]

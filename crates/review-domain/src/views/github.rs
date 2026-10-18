@@ -215,8 +215,12 @@ pub enum LinkNotPublished {
     ProofGone,
     /// The repo host session ended: only a fresh sign-in helps.
     SessionExpired,
-    /// The repo host did not take the record.
+    /// The repo host did not confirm the record, which it may have stored
+    /// (U-42): a server error, or an answer lost after the send.
     NotWritten,
+    /// The repo host definitely stored nothing (U-43): it refused the
+    /// record, or no connection to it could be made.
+    WriteRefused,
     /// The record was created but did not read back as previewed.
     NotAsPreviewed,
 }
@@ -239,7 +243,8 @@ impl LinkNotPublished {
             Self::NotProven => Some(Self::ProofGone),
             Self::ProofGone => Some(Self::SessionExpired),
             Self::SessionExpired => Some(Self::NotWritten),
-            Self::NotWritten => Some(Self::NotAsPreviewed),
+            Self::NotWritten => Some(Self::WriteRefused),
+            Self::WriteRefused => Some(Self::NotAsPreviewed),
             Self::NotAsPreviewed => None,
         }
     }
@@ -273,6 +278,10 @@ fn link_not_published_reason(why: &LinkNotPublished, login: &str) -> String {
         LinkNotPublished::NotWritten => {
             "Your PDS did not confirm the record, so your link may have \
              been saved."
+        }
+        LinkNotPublished::WriteRefused => {
+            "Your PDS did not take the record. Press \"Publish this link\" \
+             on the GitHub step to try again."
         }
         LinkNotPublished::NotAsPreviewed => {
             "Your PDS did not return the link exactly as \
@@ -350,8 +359,8 @@ pub fn link_published_page(at_uri: &str) -> String {
 enum WhatWasStored {
     /// Nothing was written.
     Nothing,
-    /// The repo host answered a server error: the record may be stored
-    /// (U-42). Only the Retry can tell.
+    /// The repo host did not confirm the write: the record may be stored
+    /// (U-42). Only a Retry can tell.
     Unknown,
     /// A record was created but did not read back as previewed.
     NotAsPreviewed,
@@ -366,7 +375,8 @@ fn what_was_stored(why: &LinkNotPublished) -> WhatWasStored {
         | LinkNotPublished::Refused(_)
         | LinkNotPublished::NotProven
         | LinkNotPublished::ProofGone
-        | LinkNotPublished::SessionExpired => WhatWasStored::Nothing,
+        | LinkNotPublished::SessionExpired
+        | LinkNotPublished::WriteRefused => WhatWasStored::Nothing,
         LinkNotPublished::NotWritten => WhatWasStored::Unknown,
         LinkNotPublished::NotAsPreviewed => WhatWasStored::NotAsPreviewed,
     }
@@ -449,6 +459,7 @@ mod tests {
             LinkNotPublished::ProofGone,
             LinkNotPublished::SessionExpired,
             LinkNotPublished::NotWritten,
+            LinkNotPublished::WriteRefused,
             LinkNotPublished::NotAsPreviewed,
         ])
     }
@@ -529,6 +540,18 @@ mod tests {
                 "{}", html
             );
         }
+    }
+
+    /// U-43: a write the repo host definitely did not take says nothing was
+    /// published, never that it may have been saved, and names the next step.
+    #[test]
+    fn a_refused_write_says_nothing_was_published_and_how_to_try_again() {
+        let html = link_not_published_page(&LinkNotPublished::WriteRefused, LOGIN, None);
+
+        assert!(html.contains("Your PDS did not take the record."), "{html}");
+        assert!(html.contains(NOTHING_PUBLISHED), "{html}");
+        assert!(!html.contains("may have been saved"), "{html}");
+        assert!(html.contains(PUBLISH_LINK_LABEL), "{html}");
     }
 
     /// U-42: the exact words of a write that may have been stored.

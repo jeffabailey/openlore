@@ -30,9 +30,9 @@ impl PublishFailure {
     /// What the owner is told (AC-004.6).
     pub(crate) fn message(&self) -> &'static str {
         match self {
-            Self::NotWritten(RepoWriteError::Unreachable { .. }) => {
-                "We couldn't reach your PDS. Nothing was published."
-            }
+            Self::NotWritten(
+                RepoWriteError::Unreachable { .. } | RepoWriteError::AnswerLost { .. },
+            ) => "We couldn't reach your PDS. Nothing was published.",
             Self::NotWritten(RepoWriteError::SessionExpired | RepoWriteError::NoSession) => {
                 "Your Bluesky session has expired. Sign in again; nothing was published."
             }
@@ -49,9 +49,9 @@ impl PublishFailure {
     /// What the owner is told when a retraction did not land (AC-011.4).
     pub(crate) fn retract_message(&self) -> &'static str {
         match self {
-            Self::NotWritten(RepoWriteError::Unreachable { .. }) => {
-                "We couldn't reach your PDS. Nothing was retracted."
-            }
+            Self::NotWritten(
+                RepoWriteError::Unreachable { .. } | RepoWriteError::AnswerLost { .. },
+            ) => "We couldn't reach your PDS. Nothing was retracted.",
             Self::NotWritten(RepoWriteError::SessionExpired | RepoWriteError::NoSession) => {
                 "Your Bluesky session has expired. Sign in again; nothing was retracted."
             }

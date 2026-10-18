@@ -17,8 +17,8 @@ use ports::claim_domain::identity_link::{check_link, GithubObservation};
 use ports::claim_domain::Did;
 use ports::{GithubAccountProfile, PlanKind, PublishPlanPort, WebSession};
 use review_domain::link_plan::{
-    confirm_link, keeps_plan_for_retry, link_preview, link_refusal_of, restore_link_plan, LinkPlan,
-    LinkPreviewRefusal, LinkRefusal, BUDGET_SPENT,
+    confirm_link, keeps_plan_for_retry, link_preview, link_refusal_of, may_have_stored,
+    restore_link_plan, LinkPlan, LinkPreviewRefusal, LinkRefusal, BUDGET_SPENT,
 };
 use review_domain::ownership::{is_github_login, OwnershipRefusal};
 use review_domain::plans::{plan_expires_at, rfc3339_utc};
@@ -208,7 +208,10 @@ fn write_failure(failure: &PublishFailure) -> (LinkNotPublished, &'static str) {
         PublishFailure::ReadBackMismatch => {
             (LinkNotPublished::NotAsPreviewed, "read_back_mismatch")
         }
-        PublishFailure::NotWritten(_) => (LinkNotPublished::NotWritten, "not_written"),
+        PublishFailure::NotWritten(error) if may_have_stored(error) => {
+            (LinkNotPublished::NotWritten, "not_written")
+        }
+        PublishFailure::NotWritten(_) => (LinkNotPublished::WriteRefused, "write_refused"),
     }
 }
 

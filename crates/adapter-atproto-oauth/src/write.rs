@@ -47,10 +47,24 @@ fn repo_error(failure: XrpcFailure) -> RepoWriteError {
             detail: format!("{:?}", response.error),
         },
         atrium_xrpc::Error::Authentication(_) => RepoWriteError::SessionExpired,
-        other => RepoWriteError::Unreachable {
+        atrium_xrpc::Error::HttpClient(source) if never_connected(source.as_ref()) => {
+            RepoWriteError::Unreachable {
+                detail: source.to_string(),
+            }
+        }
+        other => RepoWriteError::AnswerLost {
             detail: other.to_string(),
         },
     }
+}
+
+/// U-43: the transport never reached the PDS (TCP connect or TLS handshake
+/// failed), so the request was not sent. Anything else after the send may
+/// have been stored.
+fn never_connected(failure: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(failure), |error| error.source())
+        .filter_map(|error| error.downcast_ref::<reqwest::Error>())
+        .any(reqwest::Error::is_connect)
 }
 
 /// ADR-073 idempotency: a retried create of the same content-addressed key.
@@ -235,6 +249,121 @@ impl UserRepoReadPort for OAuthClientAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atrium_xrpc::error::{XrpcError, XrpcErrorKind};
+    use proptest::prelude::*;
+
+    /// The PDS's error answer with `status` and `message`.
+    fn answered(status: u16, message: &str) -> XrpcFailure {
+        atrium_xrpc::Error::XrpcResponse(XrpcError {
+            status: StatusCode::from_u16(status).expect("status"),
+            error: Some(XrpcErrorKind::Custom(
+                json!({"error": "InvalidRequest", "message": message}),
+            )),
+        })
+    }
+
+    /// What reqwest reports for a GET to `url`, through atrium's boxed
+    /// HttpClient error, optionally wrapped once more (an error source chain).
+    fn transport_failure(url: &str, wrapped: bool) -> XrpcFailure {
+        let failure = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(reqwest::Client::new().get(url).send())
+            .expect_err("the request fails");
+        let boxed: Box<dyn std::error::Error + Send + Sync> = if wrapped {
+            Box::new(Wrapped(failure))
+        } else {
+            Box::new(failure)
+        };
+        atrium_xrpc::Error::HttpClient(boxed)
+    }
+
+    #[derive(Debug)]
+    struct Wrapped(reqwest::Error);
+
+    impl std::fmt::Display for Wrapped {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "session send failed")
+        }
+    }
+
+    impl std::error::Error for Wrapped {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    /// A local address nothing listens on: a connect there is refused.
+    fn closed_address() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("addr");
+        drop(listener);
+        format!("http://{address}/xrpc/{CREATE_RECORD}")
+    }
+
+    /// A local server that takes the connection, reads the request and
+    /// hangs up without answering: the request was sent, the answer lost.
+    fn hangs_up_after_the_request() -> String {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+            }
+        });
+        format!("http://{address}/xrpc/{CREATE_RECORD}")
+    }
+
+    proptest! {
+        /// U-43. Universe: the PDS's literal 4xx and 5xx refusals × their
+        /// messages. Each keeps its status for the domain to classify (a
+        /// 4xx stored nothing, a 5xx may have), and only "already exists"
+        /// is the create's success.
+        #[test]
+        fn a_refusal_keeps_its_status_and_only_already_exists_is_success(
+            status in prop::sample::select(vec![400u16, 403, 404, 500, 502, 503]),
+            message in prop::sample::select(vec![
+                "Record refused by this PDS",
+                "InternalServerError",
+                "Record already exists",
+            ]),
+        ) {
+            let failure = answered(status, message);
+
+            prop_assert_eq!(already_exists(&failure), message == "Record already exists");
+            let error = repo_error(failure);
+            prop_assert!(
+                matches!(error, RepoWriteError::Refused { status: kept, .. } if kept == status),
+                "{:?}", error
+            );
+        }
+
+        /// U-43. Universe: a connection never made × a request sent whose
+        /// answer was lost, each bare or one error source deeper. Only the
+        /// connection never made says nothing was sent.
+        #[test]
+        fn only_a_connection_never_made_is_unreachable(
+            connected in any::<bool>(), wrapped in any::<bool>(),
+        ) {
+            let url = if connected { hangs_up_after_the_request() } else { closed_address() };
+
+            let error = repo_error(transport_failure(&url, wrapped));
+
+            prop_assert_eq!(
+                matches!(error, RepoWriteError::Unreachable { .. }),
+                !connected,
+                "{:?}", error
+            );
+            prop_assert_eq!(
+                matches!(error, RepoWriteError::AnswerLost { .. }),
+                connected,
+                "{:?}", error
+            );
+        }
+    }
 
     // bypass: the at:// shape is a fixed format, one example pins it.
     #[test]
