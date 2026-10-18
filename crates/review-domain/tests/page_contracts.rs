@@ -243,7 +243,13 @@ fn every_page_links_the_one_stylesheet() {
 /// worked. A refusal is an alert; only a verified account is a status.
 #[test]
 fn a_refused_verify_is_an_alert_and_only_success_is_a_status() {
-    let verified = github_page(OWNER, CSRF, Some((OwnershipOutcome::Verified, "Verified")));
+    let verified = github_step_page(
+        OWNER,
+        CSRF,
+        Some((OwnershipOutcome::Verified, "Verified")),
+        None,
+        &[],
+    );
     assert!(
         verified.contains(r#"<p role="status">Verified</p>"#),
         "{verified}"
@@ -254,10 +260,12 @@ fn a_refused_verify_is_an_alert_and_only_success_is_a_status() {
         OwnershipRefusal::DidMissing,
         OwnershipRefusal::RateLimited,
     ] {
-        let refused = github_page(
+        let refused = github_step_page(
             OWNER,
             CSRF,
             Some((OwnershipOutcome::Refused(&refusal), "No")),
+            None,
+            &[],
         );
         assert!(
             refused.contains(r#"<p role="alert">No</p>"#),
@@ -268,16 +276,18 @@ fn a_refused_verify_is_an_alert_and_only_success_is_a_status() {
             "{refusal:?}: {refused}"
         );
     }
-    assert!(!github_page(OWNER, CSRF, None).contains("role="));
+    assert!(!github_step_page(OWNER, CSRF, None, None, &[]).contains("role="));
 }
 
 #[test]
 fn the_github_page_shows_the_did_the_token_and_the_message() {
     assert_page(
-        &github_page(
+        &github_step_page(
             OWNER,
             CSRF,
             Some((OwnershipOutcome::Verified, "Verified: yes")),
+            None,
+            &[],
         ),
         "<h1>Prove your GitHub account is yours</h1>",
         &[

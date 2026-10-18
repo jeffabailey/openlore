@@ -97,15 +97,7 @@ fn outcome_role(outcome: OwnershipOutcome<'_>) -> &'static str {
 
 /// The GitHub step: the exact DID to copy, where to put it, and the form
 /// that checks it. `notice` is the last attempt's outcome and its message.
-pub fn github_page(
-    session_did: &str,
-    csrf_token: &str,
-    notice: Option<(OwnershipOutcome<'_>, &str)>,
-) -> String {
-    github_step_page(session_did, csrf_token, notice, None, &[])
-}
-
-/// The GitHub step, offering "Publish this link" for `verified_login` — the
+/// It offers "Publish this link" for `verified_login` — the
 /// account the app has verified for this owner, if any (RA-9) — and
 /// "Retract this link" for each of `active_links`, the owner's Active link
 /// records read live from her repo (RA-4).
