@@ -398,6 +398,11 @@ const MAY_HAVE_BEEN_SAVED_HEADING: &str = "Your link may have been saved";
 /// What the Retry does after a write that may have been stored (U-42).
 const RETRY_CONFIRMS: &str = "Press Retry to confirm; it never publishes a second copy.";
 
+/// The next step after a write that may have been stored when no Retry
+/// could be kept (N8): a fresh preview checks the repo and tries again.
+const CHECK_AND_TRY_AGAIN: &str =
+    "Press \"Publish this link\" on the GitHub step to check and try again.";
+
 /// A link confirm to github.com/`login` that did not publish, and the
 /// owner's next step: Retry re-submits the kept plan to the link confirm
 /// (never the claim publish).
@@ -429,6 +434,9 @@ pub fn link_not_published_page(
                         p { a href="/github" { "Back to the GitHub step" } }
                     }
                     (_, None) => {
+                        @if stored == WhatWasStored::Unknown {
+                            p { (CHECK_AND_TRY_AGAIN) }
+                        }
                         p { a href="/github" { "Back to the GitHub step" } }
                     }
                 }
@@ -537,6 +545,11 @@ mod tests {
             prop_assert_eq!(
                 html.contains(RETRY_CONFIRMS),
                 not_written && kept,
+                "{}", html
+            );
+            prop_assert_eq!(
+                html.contains(&CHECK_AND_TRY_AGAIN.replace('"', "&quot;")),
+                not_written && !kept,
                 "{}", html
             );
         }
