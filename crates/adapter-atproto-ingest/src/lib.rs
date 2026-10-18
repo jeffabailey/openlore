@@ -42,6 +42,23 @@ use ports::{
 /// The ATProto collection the indexer pulls (public signed claims).
 const CLAIM_COLLECTION: &str = "org.openlore.claim";
 
+/// How long a `listRecords` request may take: to connect, and in all
+/// (connect, send and read the body). A PDS that does not answer in time is
+/// unreachable, never a hung page load (the review app's GET /github reads
+/// the owner's repo on every visit).
+#[derive(Debug, Clone, Copy)]
+struct ListingTimeouts {
+    connect: std::time::Duration,
+    request: std::time::Duration,
+}
+
+/// The bounds every adapter is built with; the connect bound mirrors
+/// `adapter-atproto-pds::peer_read`.
+const LISTING_TIMEOUTS: ListingTimeouts = ListingTimeouts {
+    connect: std::time::Duration::from_secs(10),
+    request: std::time::Duration::from_secs(30),
+};
+
 /// Bounded read-only PULL `IngestSourcePort` adapter over ATProto XRPC
 /// (`listRecords`) — ADR-024.
 ///
@@ -63,8 +80,13 @@ impl AtProtoIngestAdapter {
     /// are never followed (ADR-078): a 3xx is a failed listing, its target is
     /// not contacted.
     pub fn new(source: &str) -> Self {
+        Self::unguarded(source, LISTING_TIMEOUTS)
+    }
+
+    /// [`Self::new`] bounded by `timeouts` (the slow-PDS test seam).
+    fn unguarded(source: &str, timeouts: ListingTimeouts) -> Self {
         let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
-        Self::with_client(client, source, None)
+        Self::with_client(client, source, None, timeouts)
     }
 
     /// The SSRF-guarded adapter the indexer wires (ADR-077 §4, DD-IPF-5):
@@ -81,14 +103,18 @@ impl AtProtoIngestAdapter {
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .dns_resolver(Arc::new(GuardedResolver::with_lookup(policy, lookup)));
-        Self::with_client(client, source, Some(policy))
+        Self::with_client(client, source, Some(policy), LISTING_TIMEOUTS)
     }
 
     fn with_client(
         client: reqwest::ClientBuilder,
         source: &str,
         policy: Option<TransportPolicy>,
+        timeouts: ListingTimeouts,
     ) -> Self {
+        let client = client
+            .connect_timeout(timeouts.connect)
+            .timeout(timeouts.request);
         Self {
             client: client.build().unwrap_or_else(|_| reqwest::Client::new()),
             source: source.to_string(),
@@ -297,13 +323,7 @@ impl AtProtoIngestAdapter {
         if let Some(failure) = listing_status_failure(response.status().as_u16()) {
             return Err(failure);
         }
-        let body: serde_json::Value =
-            response
-                .json()
-                .await
-                .map_err(|err| IngestError::BadResponse {
-                    message: format!("listRecords body is not JSON: {err}"),
-                })?;
+        let body: serde_json::Value = response.json().await.map_err(body_failure)?;
         parse_listed_page(&body)
     }
 }
@@ -317,6 +337,20 @@ fn transport_failure(err: reqwest::Error) -> IngestError {
     } else {
         IngestError::Unreachable {
             message: format!("listRecords transport error: {err}"),
+        }
+    }
+}
+
+/// A body that did not arrive in time is an unreachable source; any other
+/// unreadable body is a bad response.
+fn body_failure(err: reqwest::Error) -> IngestError {
+    if err.is_timeout() {
+        IngestError::Unreachable {
+            message: format!("listRecords body timed out: {err}"),
+        }
+    } else {
+        IngestError::BadResponse {
+            message: format!("listRecords body is not JSON: {err}"),
         }
     }
 }
@@ -640,6 +674,34 @@ mod tests {
         // and the connection reaches the listener.
         let _ = list_through_rebinding_dns(TransportPolicy::HttpsOrLoopbackHttp, port).await;
         assert_eq!(connections(&listener), 1);
+    }
+
+    // bypass: a real socket that accepts and never answers (adapter integration).
+    #[tokio::test]
+    async fn a_pds_that_never_answers_is_unreachable_once_the_request_times_out() {
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let base = format!("http://{}", silent.local_addr().expect("addr"));
+        let adapter = AtProtoIngestAdapter::unguarded(
+            "",
+            ListingTimeouts {
+                connect: std::time::Duration::from_millis(500),
+                request: std::time::Duration::from_millis(300),
+            },
+        );
+        let listing = adapter.list_repo_claims(&base, "did:plc:x");
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), listing)
+            .await
+            .expect("the adapter's own timeout ends the request");
+        assert!(
+            matches!(outcome, Err(IngestError::Unreachable { .. })),
+            "{outcome:?}"
+        );
+    }
+
+    #[test]
+    fn every_listing_is_bounded_in_connecting_and_in_all() {
+        assert_eq!(LISTING_TIMEOUTS.connect, std::time::Duration::from_secs(10));
+        assert_eq!(LISTING_TIMEOUTS.request, std::time::Duration::from_secs(30));
     }
 
     // bypass: closed-world pre-check examples (no DNS involved), one per refusal kind.
