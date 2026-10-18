@@ -732,18 +732,95 @@ enum Route {
 type Reachable = Arc<dyn Fn(&NetState) -> bool + Send + Sync>;
 
 async fn bind() -> (tokio::net::TcpListener, String) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("FakeAtprotoNetwork: bind 127.0.0.1:0");
+    let listener = listen_on(std::net::SocketAddr::from(([127, 0, 0, 1], 0)));
     let addr = listener.local_addr().expect("local_addr");
     (listener, format!("http://{addr}"))
 }
 
-/// Serve `route` while it is reachable. An unreachable server closes its
-/// listener, so a new connection is refused before anything is sent, as
-/// with a host that is down (U-43); it listens again on the same address
-/// once reachable. A connection opened while it was up fails every request
-/// once it goes down (U-40).
+/// How a fake server's port answers a new connection (F-11). The port stays
+/// owned by this process in both postures, so a parallel test is never
+/// handed it while the server is down (NF-4).
+enum PortPosture {
+    /// Up: a listener accepts connections.
+    Accepting(tokio::net::TcpListener),
+    /// Down: nothing listens, so a connect is refused before anything is
+    /// sent, as with a host that is down (U-43).
+    Refusing(ParkedPort),
+}
+
+/// Holds a refusing port: a loopback connection whose local end is bound to
+/// it. A connected socket takes no new connections, so a connect is refused
+/// (a socket that is only bound leaves a connect hanging on macOS), and no
+/// other socket can bind the port meanwhile.
+struct ParkedPort {
+    _local_end: tokio::net::TcpStream,
+    _far_end: tokio::net::TcpStream,
+}
+
+impl PortPosture {
+    /// The posture for `reachable`. Moving between postures never releases
+    /// `address`: the new owner binds it before the old one closes.
+    async fn toward(self, reachable: bool, address: std::net::SocketAddr) -> Self {
+        match (self, reachable) {
+            (Self::Accepting(listener), false) => {
+                let parked = park(address).await;
+                drop(listener);
+                Self::Refusing(parked)
+            }
+            (Self::Refusing(parked), true) => {
+                let listener = listen_on(address);
+                drop(parked);
+                Self::Accepting(listener)
+            }
+            (unchanged, _) => unchanged,
+        }
+    }
+}
+
+/// A port-sharing socket (SO_REUSEPORT), so a listener and a parked
+/// connection can hand one port between them. Neither sets SO_REUSEADDR,
+/// so no socket without SO_REUSEPORT can bind the port while either holds it.
+fn port_sharing_socket() -> tokio::net::TcpSocket {
+    let socket = tokio::net::TcpSocket::new_v4().expect("FakeAtprotoNetwork: socket");
+    socket
+        .set_reuseport(true)
+        .expect("FakeAtprotoNetwork: SO_REUSEPORT");
+    socket
+}
+
+fn listen_on(address: std::net::SocketAddr) -> tokio::net::TcpListener {
+    let socket = port_sharing_socket();
+    socket
+        .bind(address)
+        .unwrap_or_else(|error| panic!("FakeAtprotoNetwork: bind {address}: {error}"));
+    socket
+        .listen(1024)
+        .unwrap_or_else(|error| panic!("FakeAtprotoNetwork: listen on {address}: {error}"))
+}
+
+/// Park `address` on a loopback connection to a throwaway listener, fresh
+/// each time so the connection never repeats a closed one's address pair.
+async fn park(address: std::net::SocketAddr) -> ParkedPort {
+    let far_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("FakeAtprotoNetwork: bind a parking listener");
+    let far_address = far_listener.local_addr().expect("local_addr");
+    let socket = port_sharing_socket();
+    socket
+        .bind(address)
+        .unwrap_or_else(|error| panic!("FakeAtprotoNetwork: park {address}: {error}"));
+    let (local_end, far_end) = tokio::join!(socket.connect(far_address), far_listener.accept());
+    ParkedPort {
+        _local_end: local_end.expect("FakeAtprotoNetwork: park connect"),
+        _far_end: far_end.expect("FakeAtprotoNetwork: park accept").0,
+    }
+}
+
+/// Serve `route` while it is reachable. An unreachable server refuses new
+/// connections ([`PortPosture::Refusing`], U-43) and accepts them again at
+/// the same address once reachable, keeping its port throughout (NF-4). A
+/// connection opened while it was up fails every request once it goes down
+/// (U-40).
 async fn serve_loop(
     listener: tokio::net::TcpListener,
     reachable: Reachable,
@@ -754,24 +831,20 @@ async fn serve_loop(
     let address = listener
         .local_addr()
         .expect("FakeAtprotoNetwork: local_addr");
-    let mut listener = Some(listener);
+    let mut posture = PortPosture::Accepting(listener);
     let mut changes = state.reachability.subscribe();
     loop {
         let change = *changes.borrow_and_update();
-        if !reachable(&state) {
-            listener = None;
-        } else if listener.is_none() {
-            listener = Some(rebind(address));
-        }
+        posture = posture.toward(reachable(&state), address).await;
         applied.store(change, Ordering::SeqCst);
-        let Some(open) = &listener else {
+        let PortPosture::Accepting(listener) = &posture else {
             if changes.changed().await.is_err() {
                 return;
             }
             continue;
         };
         tokio::select! {
-            accepted = open.accept() => match accepted {
+            accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => serve_connection(stream, reachable.clone(), state.clone(), route.clone()),
                 Err(_) => return,
             },
@@ -780,20 +853,6 @@ async fn serve_loop(
             },
         }
     }
-}
-
-/// Listen again on the address an unreachable server gave up.
-fn rebind(address: std::net::SocketAddr) -> tokio::net::TcpListener {
-    let socket = tokio::net::TcpSocket::new_v4().expect("FakeAtprotoNetwork: socket");
-    socket
-        .set_reuseaddr(true)
-        .expect("FakeAtprotoNetwork: SO_REUSEADDR");
-    socket
-        .bind(address)
-        .unwrap_or_else(|error| panic!("FakeAtprotoNetwork: rebind {address}: {error}"));
-    socket
-        .listen(1024)
-        .unwrap_or_else(|error| panic!("FakeAtprotoNetwork: listen on {address}: {error}"))
 }
 
 fn serve_connection(
@@ -1802,27 +1861,40 @@ mod tests {
 
     /// U-43: an unreachable host refuses the connection itself, so a client
     /// sends nothing; once reachable it answers again at the same address.
+    /// NF-4: the port stays the host's while it is down, so no other socket
+    /// can take it, through repeated outages.
     #[test]
     fn an_unreachable_host_refuses_connections_until_it_is_back() {
         let net = FakeAtprotoNetwork::start(vec![priya()]);
         let base = net.host_url("bsky-social");
-        let address = base.trim_start_matches("http://").to_string();
+        let address: std::net::SocketAddr = base.trim_start_matches("http://").parse().unwrap();
         let rt = net.runtime.as_ref().unwrap();
 
-        net.set_host_reachable("bsky-social", false);
-        let refused = rt.block_on(tokio::net::TcpStream::connect(address.clone()));
-        assert_eq!(
-            refused.map(|_| ()).map_err(|error| error.kind()),
-            Err(std::io::ErrorKind::ConnectionRefused),
-            "an unreachable host refuses the connection"
-        );
+        for outage in 1..=2 {
+            net.set_host_reachable("bsky-social", false);
+            let refused = rt.block_on(tokio::net::TcpStream::connect(address));
+            assert_eq!(
+                refused.map(|_| ()).map_err(|error| error.kind()),
+                Err(std::io::ErrorKind::ConnectionRefused),
+                "outage {outage}: an unreachable host refuses the connection"
+            );
+            let taken = tokio::net::TcpSocket::new_v4().unwrap().bind(address);
+            assert_eq!(
+                taken.map_err(|error| error.kind()),
+                Err(std::io::ErrorKind::AddrInUse),
+                "outage {outage}: the down host's port is not free for another socket"
+            );
 
-        net.set_host_reachable("bsky-social", true);
-        let (status, _) = get(
-            &net,
-            &format!("{base}/.well-known/oauth-protected-resource"),
-        );
-        assert_eq!(status, 200, "the host answers again once reachable");
+            net.set_host_reachable("bsky-social", true);
+            let (status, _) = get(
+                &net,
+                &format!("{base}/.well-known/oauth-protected-resource"),
+            );
+            assert_eq!(
+                status, 200,
+                "outage {outage}: the host answers again once reachable"
+            );
+        }
     }
 
     #[test]

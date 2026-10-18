@@ -44,7 +44,7 @@ url = { workspace = true }
 # `Arc` — one source of truth for records across the in-process port
 # trait surface and the subprocess HTTP surface.
 # `sync` (U-43): a watch channel tells each fake server its reachability
-# changed, so an unreachable host closes its listener (refused connect).
+# changed, so an unreachable host refuses connections (U-43, F-11).
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "sync"] }
 hyper = { version = "1", features = ["server", "http1"] }
 http-body-util = "0.1"
