@@ -621,21 +621,14 @@ mod tests {
     /// path triggers uniformly.
     #[tokio::test]
     async fn create_record_returns_unreachable_against_refused_local_port() {
-        // Bind a TcpListener to an OS-assigned localhost port, then
-        // drop it immediately. The kernel reclaims the port but the
-        // brief race window is wide enough — and any subsequent connect
-        // to that port without a listener will be refused fast. This
-        // gives us "Unreachable" classification without depending on a
-        // multi-second network timeout.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let port = listener.local_addr().expect("local_addr").port();
-        drop(listener);
+        // A localhost port nothing listens on, held for the whole test so
+        // a parallel test cannot take it (U-50): a connect there is refused
+        // fast. This gives us "Unreachable" classification without
+        // depending on a multi-second network timeout.
+        let refusing = openlore_test_support::refusing_address();
 
-        let adapter = AtProtoPdsAdapter::with_did(
-            format!("http://127.0.0.1:{port}"),
-            "did:plc:host",
-            "did:plc:test-jeff",
-        );
+        let adapter =
+            AtProtoPdsAdapter::with_did(refusing.http_url(), "did:plc:host", "did:plc:test-jeff");
         let result = adapter
             .create_record(OPENLORE_CLAIM_COLLECTION, "bafy_001", serde_json::json!({}))
             .await;
@@ -664,17 +657,15 @@ mod tests {
     /// `peer_read` body has landed): driving `list_peer_records` through the
     /// `PdsPort` against a refused local port surfaces `PdsError::Unreachable`
     /// — never a panic, never a silently-empty page (the WD-37 / PP-7 fault
-    /// isolation path the verb relies on). Bind+drop a listener to get a
-    /// fast connection-refused without depending on a network timeout.
+    /// isolation path the verb relies on). A held refusing port gives a fast
+    /// connection-refused without depending on a network timeout (U-50).
     #[tokio::test]
     async fn list_peer_records_surfaces_unreachable_against_refused_port() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let port = listener.local_addr().expect("local_addr").port();
-        drop(listener);
+        let refusing = openlore_test_support::refusing_address();
 
         let adapter = AtProtoPdsAdapter::for_endpoint("https://pds.example");
         let peer = Did("did:plc:test-peer".to_string());
-        let endpoint = Url::parse(&format!("http://127.0.0.1:{port}")).expect("url parses");
+        let endpoint = Url::parse(&refusing.http_url()).expect("url parses");
         let result = adapter.list_peer_records(&peer, &endpoint, None).await;
         assert!(
             matches!(result, Err(PdsError::Unreachable { .. })),
@@ -687,13 +678,11 @@ mod tests {
     /// re-pull path's network-failure shape) rather than a panic.
     #[tokio::test]
     async fn get_peer_record_surfaces_unreachable_against_refused_port() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let port = listener.local_addr().expect("local_addr").port();
-        drop(listener);
+        let refusing = openlore_test_support::refusing_address();
 
         let adapter = AtProtoPdsAdapter::for_endpoint("https://pds.example");
         let peer = Did("did:plc:test-peer".to_string());
-        let endpoint = Url::parse(&format!("http://127.0.0.1:{port}")).expect("url parses");
+        let endpoint = Url::parse(&refusing.http_url()).expect("url parses");
         let result = adapter.get_peer_record(&peer, &endpoint, "rkey-001").await;
         assert!(
             matches!(result, Err(PdsError::Unreachable { .. })),

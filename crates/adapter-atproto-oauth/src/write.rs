@@ -295,30 +295,11 @@ mod tests {
     }
 
     /// A local address nothing listens on, so a connect there is refused.
-    /// Its port is the local end of a loopback connection, kept open by the
-    /// returned guard: a connected socket takes no new connections, and no
-    /// parallel test can bind the port while the guard lives (NF-5).
-    fn refusing_address() -> (String, [std::net::TcpStream; 2]) {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .build()
-            .expect("runtime");
-        runtime.block_on(async {
-            let far = tokio::net::TcpListener::bind("127.0.0.1:0")
-                .await
-                .expect("bind");
-            let near = tokio::net::TcpSocket::new_v4().expect("socket");
-            near.bind("127.0.0.1:0".parse().expect("addr"))
-                .expect("bind");
-            let address = near.local_addr().expect("addr");
-            let far_address = far.local_addr().expect("addr");
-            let (near, far) = tokio::join!(near.connect(far_address), far.accept());
-            let held = [
-                near.expect("connect").into_std().expect("std stream"),
-                far.expect("accept").0.into_std().expect("std stream"),
-            ];
-            (format!("http://{address}/xrpc/{CREATE_RECORD}"), held)
-        })
+    /// The returned guard keeps the port, so no parallel test can take it
+    /// while the case runs (NF-5, U-50).
+    fn refusing_address() -> (String, openlore_test_support::RefusingPort) {
+        let port = openlore_test_support::refusing_address();
+        (format!("{}/xrpc/{CREATE_RECORD}", port.http_url()), port)
     }
 
     /// A local server that takes the connection, reads the request and

@@ -137,6 +137,10 @@ pub use fake_atproto::{
     ListingPosture, RequestSeen, RevocationSeen, StoredRecord, TokenPosture, WriteAttempt,
     WritePosture, CLAIM_COLLECTION, POST_COLLECTION,
 };
+// U-50: a loopback address that refuses connections without freeing its
+// port, for tests that need a refused connect (no free-then-connect race).
+pub mod refusing_port;
+pub use refusing_port::{refusing_address, RefusingPort};
 pub mod fake_github_accounts;
 pub use fake_github_accounts::{
     FakeGithubAccounts, GithubAccount, GithubRepo, GithubRequest, OldLogin, ProfileFlaw, RepoFacts,

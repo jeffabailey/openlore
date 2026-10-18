@@ -6781,41 +6781,34 @@ pub fn assert_index_duckdb_written(env: &TestEnv) {
 // cardinal KPI-5 claim is that an unreachable DISCOVERY indexer must not break
 // authoring/publish; the user's own infrastructure is a separate concern.
 
-/// A CLOSED localhost port: a `TcpListener` is bound to `127.0.0.1:0`, the
-/// OS-assigned port is read back, then the listener is DROPPED so the port is
-/// freed. A connect to the (now unbound) port is REFUSED promptly — the
-/// fastest, most deterministic "unreachable indexer" seam (no live serve
-/// process, no hang). Mirrors the slice-05 `IndexerHandle` shape but with NO
-/// running server: `indexer_url()` points at a port nothing listens on.
+/// A CLOSED localhost port: nothing listens on it, so a connect is REFUSED
+/// promptly — the fastest, most deterministic "unreachable indexer" seam (no
+/// live serve process, no hang). Mirrors the slice-05 `IndexerHandle` shape
+/// but with NO running server: `indexer_url()` points at a port nothing
+/// listens on. The port stays held for the handle's lifetime (U-50), so a
+/// parallel test can never be handed it and serve on it.
 ///
 /// The bounded-wall-clock guarantee (DESIGN_CONTEXT 3) lives in the adapter's
 /// connect/request timeout; this seam just guarantees the address is a refused
 /// connect by construction so the AT is deterministic and fast.
 pub struct ClosedIndexerPort {
     url: String,
+    _held: openlore_test_support::RefusingPort,
 }
 
 impl ClosedIndexerPort {
-    /// Reserve then release a localhost port, returning a handle whose
-    /// `indexer_url()` is a `http://127.0.0.1:<freed-port>` that nothing listens
-    /// on (connect refused).
+    /// Reserve a localhost port nothing listens on, returning a handle whose
+    /// `indexer_url()` is a `http://127.0.0.1:<port>` where a connect is
+    /// refused. Keep the handle alive while the CLI may connect.
     pub fn reserve() -> Self {
-        use std::net::TcpListener;
-        let listener =
-            TcpListener::bind("127.0.0.1:0").expect("ClosedIndexerPort: bind 127.0.0.1:0");
-        let port = listener
-            .local_addr()
-            .expect("ClosedIndexerPort: read local_addr")
-            .port();
-        // Drop the listener — the OS frees the port; subsequent connects are
-        // refused (no server is ever started on it).
-        drop(listener);
+        let held = openlore_test_support::refusing_address();
         Self {
-            url: format!("http://127.0.0.1:{port}"),
+            url: held.http_url(),
+            _held: held,
         }
     }
 
-    /// The `http://127.0.0.1:<freed-port>` URL the CLI's `OPENLORE_INDEXER_URL`
+    /// The `http://127.0.0.1:<port>` URL the CLI's `OPENLORE_INDEXER_URL`
     /// is pointed at — a closed port (connect refused).
     pub fn indexer_url(&self) -> &str {
         &self.url

@@ -54,3 +54,5 @@ url = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
+# U-50: refused-connect tests hold their port (no free-then-connect race).
+openlore-test-support = { path = "../test-support" }
