@@ -397,6 +397,20 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    /// A debug build is a development build (loopback HTTP may be allowed).
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_debug_build_is_a_development_build() {
+        assert_eq!(BuildProfile::of_this_build(), BuildProfile::Development);
+    }
+
+    /// A release build is never a development build: loopback HTTP stays off.
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn a_release_build_is_a_release_build() {
+        assert_eq!(BuildProfile::of_this_build(), BuildProfile::Release);
+    }
+
     const NAMES: [&str; 12] = [
         "APP_ORIGIN",
         "LISTEN_ADDR",
