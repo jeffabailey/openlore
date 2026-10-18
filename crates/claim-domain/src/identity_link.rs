@@ -1767,11 +1767,25 @@ mod tests {
             );
         }
 
-        /// Universe: typed strings plus the literal login tables. Only
+        /// Universe: typed strings, generated valid logins (an alphanumeric
+        /// then up to 38 alphanumerics or hyphens) plus the literal login
+        /// tables. Only
         /// GitHub-username-shaped text is a login, so a typed login can never
         /// carry a path or query; an account is named exactly by a login.
         #[test]
-        fn only_github_username_shaped_text_is_a_login(typed in "[A-Za-z0-9/?#. -]{0,45}") {
+        fn only_github_username_shaped_text_is_a_login(
+            typed in "[A-Za-z0-9/?#. -]{0,45}",
+            valid in "[A-Za-z0-9][A-Za-z0-9-]{0,38}",
+        ) {
+            let shaped = (1..=39).contains(&typed.len())
+                && !typed.starts_with('-')
+                && typed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+            proptest::prop_assert_eq!(is_github_login(&typed), shaped);
+            proptest::prop_assert!(is_github_login(&valid), "{valid:?}");
+            proptest::prop_assert_eq!(
+                account_named_by(4_210_001, &valid),
+                Ok((NonZeroU64::new(4_210_001).unwrap(), valid.as_str()))
+            );
             for login in ACCEPTED_LOGINS {
                 proptest::prop_assert!(is_github_login(login), "{login:?}");
                 proptest::prop_assert_eq!(
