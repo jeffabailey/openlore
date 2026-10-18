@@ -94,6 +94,13 @@ mod tests {
     /// passed-in time can decide a session's life.
     const STARTED: i64 = 1_000_000_000;
 
+    /// The policy, spelled out: 30 days of 86 400 seconds (ADR-073), never
+    /// read from the code under test.
+    const THIRTY_DAYS_SECS: i64 = 2_592_000;
+
+    /// 29 days: a session this old is still live.
+    const TWENTY_NINE_DAYS_SECS: i64 = 2_505_600;
+
     fn new_session(session_hash: &str, did: &str) -> NewWebSession {
         NewWebSession {
             session_hash: session_hash.to_string(),
@@ -124,22 +131,28 @@ mod tests {
         /// start plus 30 days — judged by the passed-in time, never the wall
         /// clock (which is decades past `STARTED`).
         #[test]
-        fn a_session_lives_thirty_days_by_the_callers_clock(elapsed in -1_000i64..=2 * SESSION_LIFETIME_SECS) {
+        fn a_session_lives_thirty_days_by_the_callers_clock(elapsed in -1_000i64..=2 * THIRTY_DAYS_SECS) {
             let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
             store.start_session(&new_session("hash", "did:plc:a"), STARTED, KpiTally::NONE).unwrap();
             let live = store.resolve_session("hash", STARTED + elapsed).unwrap().is_some();
-            prop_assert_eq!(live, elapsed < SESSION_LIFETIME_SECS, "elapsed {}", elapsed);
+            prop_assert_eq!(live, elapsed < THIRTY_DAYS_SECS, "elapsed {}", elapsed);
         }
     }
 
-    /// The boundary: live one second before 30 days, ended at 30 days.
+    /// The boundary: live at 29 days and one second before 30 days, ended
+    /// at 30 days (2 592 000 seconds after it started).
     #[test]
     fn a_session_ends_at_exactly_thirty_days() {
+        assert_eq!(SESSION_LIFETIME_SECS, THIRTY_DAYS_SECS);
         let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
         store
             .start_session(&new_session("hash", "did:plc:a"), STARTED, KpiTally::NONE)
             .unwrap();
-        let expires = STARTED + SESSION_LIFETIME_SECS;
+        assert!(store
+            .resolve_session("hash", STARTED + TWENTY_NINE_DAYS_SECS)
+            .unwrap()
+            .is_some());
+        let expires = STARTED + 2_592_000;
         assert!(store
             .resolve_session("hash", expires - 1)
             .unwrap()
