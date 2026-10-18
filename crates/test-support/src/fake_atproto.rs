@@ -750,8 +750,10 @@ enum PortPosture {
 
 /// Holds a refusing port: a loopback connection whose local end is bound to
 /// it. A connected socket takes no new connections, so a connect is refused
-/// (a socket that is only bound leaves a connect hanging on macOS), and no
-/// other socket can bind the port meanwhile.
+/// (a socket that is only bound leaves a connect hanging on macOS). The OS
+/// never hands the held port to a socket asking for a free one (port 0), and
+/// a plain bind of it fails; on macOS a socket that names the port and sets
+/// SO_REUSEADDR could still bind it.
 struct ParkedPort {
     _local_end: tokio::net::TcpStream,
     _far_end: tokio::net::TcpStream,
@@ -778,8 +780,10 @@ impl PortPosture {
 }
 
 /// A port-sharing socket (SO_REUSEPORT), so a listener and a parked
-/// connection can hand one port between them. Neither sets SO_REUSEADDR,
-/// so no socket without SO_REUSEPORT can bind the port while either holds it.
+/// connection can hand one port between them. Neither sets SO_REUSEADDR, so
+/// the port is never handed out as a free one and a plain bind of it fails
+/// while either holds it (on macOS a socket that sets SO_REUSEADDR and names
+/// the port is the exception).
 fn port_sharing_socket() -> tokio::net::TcpSocket {
     let socket = tokio::net::TcpSocket::new_v4().expect("FakeAtprotoNetwork: socket");
     socket
@@ -1861,8 +1865,8 @@ mod tests {
 
     /// U-43: an unreachable host refuses the connection itself, so a client
     /// sends nothing; once reachable it answers again at the same address.
-    /// NF-4: the port stays the host's while it is down, so no other socket
-    /// can take it, through repeated outages.
+    /// NF-4: the port stays the host's while it is down, so a plain bind of
+    /// it fails, through repeated outages.
     #[test]
     fn an_unreachable_host_refuses_connections_until_it_is_back() {
         let net = FakeAtprotoNetwork::start(vec![priya()]);
