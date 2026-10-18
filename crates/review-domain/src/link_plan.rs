@@ -540,24 +540,23 @@ mod tests {
             prop_assert!(restore_plan(&did, &stored).is_err());
         }
 
-        /// Universe: every way a link confirm can end without publishing.
+        /// Universe: every way a link confirm can end without publishing —
+        /// one of each variant (`LinkNotPublished::one_of_each`, an
+        /// exhaustive match beside the enum) plus more refusals.
         /// The plan is put back for Retry exactly when the repo host did not
         /// take the write; an expired preview, a spent budget, an unproven
         /// read, an ended session and a read-back mismatch keep nothing.
         #[test]
         fn a_link_confirm_keeps_its_plan_only_for_a_failed_write(
-            why in prop::sample::select(vec![
-                LinkNotPublished::Expired,
-                LinkNotPublished::PreviewNotSaved,
-                LinkNotPublished::Refused(BUDGET_SPENT),
-                LinkNotPublished::Refused(LinkRefusal::TokenRejected),
-                LinkNotPublished::Refused(LinkRefusal::Ownership(OwnershipRefusal::RateLimited)),
-                LinkNotPublished::NotProven,
-                LinkNotPublished::ProofGone,
-                LinkNotPublished::SessionExpired,
-                LinkNotPublished::NotWritten,
-                LinkNotPublished::NotAsPreviewed,
-            ]),
+            why in prop::sample::select(
+                LinkNotPublished::one_of_each()
+                    .into_iter()
+                    .chain([
+                        LinkNotPublished::Refused(LinkRefusal::TokenRejected),
+                        LinkNotPublished::Refused(LinkRefusal::Ownership(OwnershipRefusal::RateLimited)),
+                    ])
+                    .collect::<Vec<_>>(),
+            ),
         ) {
             prop_assert_eq!(keeps_plan_for_retry(&why), why == LinkNotPublished::NotWritten, "{:?}", why);
         }

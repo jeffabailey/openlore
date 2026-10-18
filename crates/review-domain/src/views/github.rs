@@ -221,6 +221,30 @@ pub enum LinkNotPublished {
     NotAsPreviewed,
 }
 
+#[cfg(test)]
+impl LinkNotPublished {
+    /// One value of every variant, in a fixed order — the universe of the
+    /// properties over every way a link is not published (F-14).
+    pub(crate) fn one_of_each() -> Vec<Self> {
+        std::iter::successors(Some(Self::PreviewNotSaved), Self::next_variant).collect()
+    }
+
+    /// The variant after this one. Exhaustive, no wildcard: a new variant
+    /// does not compile until it is placed in the chain.
+    fn next_variant(&self) -> Option<Self> {
+        match self {
+            Self::PreviewNotSaved => Some(Self::Expired),
+            Self::Expired => Some(Self::Refused(crate::link_plan::BUDGET_SPENT)),
+            Self::Refused(_) => Some(Self::NotProven),
+            Self::NotProven => Some(Self::ProofGone),
+            Self::ProofGone => Some(Self::SessionExpired),
+            Self::SessionExpired => Some(Self::NotWritten),
+            Self::NotWritten => Some(Self::NotAsPreviewed),
+            Self::NotAsPreviewed => None,
+        }
+    }
+}
+
 /// The sentence explaining why the link to github.com/`login` is not
 /// published.
 fn link_not_published_reason(why: &LinkNotPublished, login: &str) -> String {
