@@ -1278,7 +1278,8 @@
             "RA-4: the repo holds one more claim by Priya with a `retracts` reference to the link's record ID; the link record is still there, unchanged; create-only.",
             "/github offers \"Retract this link\" only for an Active link record of the signed-in owner. A retracted or superseded one is not offered (review-domain property over live records, literal oracles).",
             "When her repo cannot be read, /github still shows the Verify form and the publish offer, without a retract offer.",
-            "Every other RA-* and RR-* stays green."
+            "Every other RA-* and RR-* stays green.",
+            "U-39: a link retraction has empty subject, predicate and object and only the `retracts` reference; a record carrying a `retracts` reference never projects as a link (claim-domain property). Other claims' retractions are unchanged."
           ],
           "test_file": "tests/acceptance/review_app_identity_link.rs",
           "scenario_name": "priya_withdraws_her_link_without_erasing_it",
@@ -1295,7 +1296,9 @@
             "cargo test -p review-domain",
             "cargo test -p claim-domain",
             "cargo test -p cli --test review_app_identity_link_readers",
-            "cargo xtask check-arch"
+            "cargo xtask check-arch",
+            "cargo test -p cli --test identity_link_core",
+            "cargo test -p openlore-indexer"
           ],
           "implementation_notes": "RED driver: RA-4. routes/retract.rs is reused unchanged. It retracts through live_published_claim, which still admits link records (03-02). Its no-op suggestion state change and its `retract.posted` count are accepted (U-28). The selection sits in review-domain/src/published.rs and calls active_link_records with the ADR-071 self-attested provenance; there is no second lineage rule. github_step becomes async (resolve_did, list_repo_claims), so its dispatch in signin.rs changes. Slice-3 closure: all 17 RA-* scenario fns (RA-1a..RA-14) and all 5 RR-* active. depends_on: 03-08 is serialization-only (shared files); the code dependency is 03-05 (a published link). DISPATCH CONDITIONS (slice-3 re-review, iteration 2): (1) RED must fail on an assertion, not a compile error: land signature stubs (todo!()) for new types/functions first (C-3). (2) Never edit tests/acceptance/support/*; un-ignore only the named fns (C-5).",
           "estimate_hours": 4,
@@ -1307,7 +1310,9 @@
             "crates/review-domain/src/published.rs",
             "crates/review-domain/src/views/github.rs",
             "crates/openlore-review-app/src/routes/github.rs",
-            "crates/openlore-review-app/src/routes/signin.rs"
+            "crates/openlore-review-app/src/routes/signin.rs",
+            "crates/review-domain/src/plans.rs",
+            "crates/claim-domain/src/identity_link.rs"
           ],
           "files_to_create": [],
           "mutation_note": "Kill: a retracted link offered for retraction; selecting before folding; another DID's record offered."
