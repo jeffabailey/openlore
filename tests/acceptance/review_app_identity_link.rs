@@ -641,7 +641,6 @@ fn a_bio_naming_someone_elses_did_is_explained_with_that_did_in_full_and_nothing
 ///     | stores the link but its answer is lost (answers a server error) |
 /// ```
 #[test]
-#[ignore = "DISTILL github-did-identity-link: pending U-42 wording fix"]
 fn after_a_failed_link_write_retry_publishes_the_link_exactly_once() {
     let rows = [
         ("server error", WritePosture::ServerError),

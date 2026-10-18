@@ -270,7 +270,10 @@ fn link_not_published_reason(why: &LinkNotPublished, login: &str) -> String {
             "Your Bluesky session has expired. Sign in again, \
              then publish your link from the GitHub step."
         }
-        LinkNotPublished::NotWritten => "Your PDS did not take the record.",
+        LinkNotPublished::NotWritten => {
+            "Your PDS did not confirm the record, so your link may have \
+             been saved."
+        }
         LinkNotPublished::NotAsPreviewed => {
             "Your PDS did not return the link exactly as \
              previewed, so it is not counted as published."
@@ -342,6 +345,49 @@ pub fn link_published_page(at_uri: &str) -> String {
     )
 }
 
+/// What the owner's repo holds after a link confirm that did not publish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WhatWasStored {
+    /// Nothing was written.
+    Nothing,
+    /// The repo host answered a server error: the record may be stored
+    /// (U-42). Only the Retry can tell.
+    Unknown,
+    /// A record was created but did not read back as previewed.
+    NotAsPreviewed,
+}
+
+/// Exhaustive, no wildcard: a new reason does not compile until it says
+/// what the repo holds.
+fn what_was_stored(why: &LinkNotPublished) -> WhatWasStored {
+    match why {
+        LinkNotPublished::PreviewNotSaved
+        | LinkNotPublished::Expired
+        | LinkNotPublished::Refused(_)
+        | LinkNotPublished::NotProven
+        | LinkNotPublished::ProofGone
+        | LinkNotPublished::SessionExpired => WhatWasStored::Nothing,
+        LinkNotPublished::NotWritten => WhatWasStored::Unknown,
+        LinkNotPublished::NotAsPreviewed => WhatWasStored::NotAsPreviewed,
+    }
+}
+
+/// The page title and heading for what the repo holds.
+fn link_not_published_heading(stored: WhatWasStored) -> (&'static str, &'static str) {
+    match stored {
+        WhatWasStored::Unknown => (MAY_HAVE_BEEN_SAVED_HEADING, MAY_HAVE_BEEN_SAVED_HEADING),
+        WhatWasStored::Nothing | WhatWasStored::NotAsPreviewed => {
+            ("Link not published", "Your link was not published")
+        }
+    }
+}
+
+/// The heading and title when a link write may have been stored (U-42).
+const MAY_HAVE_BEEN_SAVED_HEADING: &str = "Your link may have been saved";
+
+/// What the Retry does after a write that may have been stored (U-42).
+const RETRY_CONFIRMS: &str = "Press Retry to confirm; it never publishes a second copy.";
+
 /// A link confirm to github.com/`login` that did not publish, and the
 /// owner's next step: Retry re-submits the kept plan to the link confirm
 /// (never the claim publish).
@@ -350,13 +396,15 @@ pub fn link_not_published_page(
     login: &str,
     retry: Option<PublishRetry<'_>>,
 ) -> String {
+    let stored = what_was_stored(why);
+    let (title, heading) = link_not_published_heading(stored);
     page(
-        "Link not published",
+        title,
         html! {
             section class="outcome" {
-                h1 { "Your link was not published" }
+                h1 { (heading) }
                 p role="alert" { (link_not_published_reason(why, login)) }
-                @if *why != LinkNotPublished::NotAsPreviewed {
+                @if stored == WhatWasStored::Nothing {
                     p { (NOTHING_PUBLISHED) }
                 }
                 @match (why, retry) {
@@ -364,6 +412,9 @@ pub fn link_not_published_page(
                         p { a href="/" { (SIGN_IN_LABEL) } }
                     }
                     (_, Some(retry)) => {
+                        @if stored == WhatWasStored::Unknown {
+                            p { (RETRY_CONFIRMS) }
+                        }
                         (plan_form(LINK_CONFIRM_ACTION, retry.plan_id, retry.csrf_token, RETRY_LABEL))
                         p { a href="/github" { "Back to the GitHub step" } }
                     }
@@ -423,6 +474,82 @@ mod tests {
                 "{}", html
             );
         }
+    }
+
+    fn every_reason() -> Vec<LinkNotPublished> {
+        LinkNotPublished::one_of_each()
+            .into_iter()
+            .chain([
+                LinkNotPublished::Refused(LinkRefusal::TokenRejected),
+                LinkNotPublished::Refused(LinkRefusal::Ownership(
+                    OwnershipRefusal::GithubUnavailable,
+                )),
+            ])
+            .collect()
+    }
+
+    proptest! {
+        /// U-42. Universe: every reason (one of each variant plus more
+        /// refusals) × a kept plan or none. A write the repo host answered
+        /// with a server error may have been stored: its page says so, says
+        /// Retry confirms exactly when Retry is offered, and never says
+        /// nothing or "not published". Every reason that wrote nothing says
+        /// NOTHING_PUBLISHED and never "may have been saved"; a record that
+        /// read back wrong says neither.
+        #[test]
+        fn only_a_failed_write_says_the_link_may_have_been_saved(
+            why in prop::sample::select(every_reason()), kept in any::<bool>(),
+        ) {
+            let retry = kept.then_some(PublishRetry { plan_id: PLAN_ID, csrf_token: CSRF });
+
+            let html = link_not_published_page(&why, LOGIN, retry);
+
+            let not_written = why == LinkNotPublished::NotWritten;
+            let wrote_nothing = !not_written && why != LinkNotPublished::NotAsPreviewed;
+            prop_assert_eq!(html.contains("may have been saved"), not_written, "{}", html);
+            prop_assert_eq!(
+                html.contains("<title>Your link may have been saved"),
+                not_written,
+                "{}", html
+            );
+            prop_assert_eq!(
+                html.contains("<h1>Your link may have been saved</h1>"),
+                not_written,
+                "{}", html
+            );
+            prop_assert_eq!(html.contains(NOTHING_PUBLISHED), wrote_nothing, "{}", html);
+            prop_assert_eq!(
+                html.to_lowercase().contains("not published"),
+                !not_written,
+                "{}", html
+            );
+            prop_assert_eq!(
+                html.contains(RETRY_CONFIRMS),
+                not_written && kept,
+                "{}", html
+            );
+        }
+    }
+
+    /// U-42: the exact words of a write that may have been stored.
+    #[test]
+    fn a_failed_write_says_the_pds_did_not_confirm_and_retry_will() {
+        let retry = Some(PublishRetry {
+            plan_id: PLAN_ID,
+            csrf_token: CSRF,
+        });
+
+        let html = link_not_published_page(&LinkNotPublished::NotWritten, LOGIN, retry);
+
+        assert!(
+            html.contains("Your PDS did not confirm the record, so your link may have been saved."),
+            "{html}"
+        );
+        assert!(
+            html.contains("Press Retry to confirm; it never publishes a second copy."),
+            "{html}"
+        );
+        assert!(!html.contains("did not take the record"), "{html}");
     }
 
     /// U-37: a preview that could not be kept says so, says nothing was
