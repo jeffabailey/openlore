@@ -367,3 +367,73 @@ fn key_of(request: &PageRequest, object_field: &str) -> Option<SuggestionKey> {
 pub(crate) fn not_found() -> Reply {
     Reply::page(StatusCode::NOT_FOUND, views::not_found_page())
 }
+
+#[cfg(test)]
+mod tests {
+    //! C-6 (U-37): a stored link plan never appears in the review queue. The
+    //! queue is read from the real store exactly as `queue_page` reads it.
+    use adapter_review_store::{DataKey, ReviewStore};
+    use ports::claim_domain::identity_link::{link_predicate, GithubObservation};
+    use ports::{PublishPlanPort, ReviewStateRead, ReviewStateWrite, Suggestion, SuggestionKey};
+    use review_domain::lifecycle::tally;
+    use review_domain::link_plan::link_preview;
+    use review_domain::views::{self, GithubStep, QueueView};
+
+    const OWNER: &str = "did:plc:priyaraman7777777777777777";
+    const LINKED_LOGIN: &str = "priyaraman";
+
+    fn pending_suggestion() -> Suggestion {
+        Suggestion {
+            key: SuggestionKey {
+                subject: "github:tideworks/tidepool".into(),
+                predicate: "embodiesPhilosophy".into(),
+                object: "org.openlore.philosophy.memory-safety".into(),
+            },
+            confidence_bp: 2500,
+            evidence: vec![],
+            why: vec![],
+            source_repo: "tideworks/tidepool".into(),
+        }
+    }
+
+    #[test]
+    fn a_stored_link_plan_never_appears_in_the_review_queue() {
+        let store = ReviewStore::open_in_memory(DataKey::generate()).expect("store");
+        store
+            .add_pending(OWNER, &[pending_suggestion()])
+            .expect("queued");
+        let observation = GithubObservation {
+            login: LINKED_LOGIN.to_string(),
+            user_id: 4_210_001,
+            bio: Some(format!("my DID: {OWNER}")),
+        };
+        let plan = link_preview(OWNER, &observation, "2026-10-17T09:30:00Z").expect("proven");
+
+        store
+            .put_publish_plan(OWNER, &plan.stored(), 4_102_444_800)
+            .expect("kept");
+
+        let pending = store.pending_suggestions(OWNER).expect("readable");
+        let states = store.suggestion_states(OWNER).expect("readable");
+        assert_eq!(pending, vec![pending_suggestion()]);
+        assert!(
+            states.iter().all(|(key, _)| key != &plan.key()),
+            "{states:?}"
+        );
+        let html = views::review_page(&QueueView {
+            handle: "priya.example",
+            csrf_token: "csrf",
+            github: GithubStep::Verified {
+                login: LINKED_LOGIN,
+            },
+            latest_scan: None,
+            pending: &pending,
+            tally: tally(states.into_iter().map(|(_, state)| state)),
+            notice: None,
+        });
+        assert!(html.contains("tideworks/tidepool"), "{html}");
+        for link_part in [plan.claim().object.as_str(), link_predicate(), plan.rkey()] {
+            assert!(!html.contains(link_part), "{link_part}: {html}");
+        }
+    }
+}
