@@ -201,6 +201,9 @@ pub const NOTHING_PUBLISHED: &str = "Nothing was published.";
 /// Why a confirmed link is not in the owner's repo.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkNotPublished {
+    /// The preview proved the link but could not be kept for the confirm
+    /// (U-37): nothing was published, and GitHub is not to blame.
+    PreviewNotSaved,
     /// The preview's deadline passed before the confirm.
     Expired,
     /// The budget was spent, or GitHub could not be read at confirm (F-10).
@@ -223,6 +226,10 @@ pub enum LinkNotPublished {
 fn link_not_published_reason(why: &LinkNotPublished, login: &str) -> String {
     let reason = match why {
         LinkNotPublished::Refused(refusal) => return link_refusal_reason(refusal, login),
+        LinkNotPublished::PreviewNotSaved => {
+            "We could not save this preview. Press \"Publish this link\" \
+             to try again."
+        }
         LinkNotPublished::Expired => {
             "This preview has expired. Press \"Publish this link\" again \
              for a fresh preview."
@@ -359,6 +366,7 @@ mod tests {
 
     fn arb_why() -> impl Strategy<Value = LinkNotPublished> {
         prop::sample::select(vec![
+            LinkNotPublished::PreviewNotSaved,
             LinkNotPublished::Expired,
             LinkNotPublished::Refused(crate::link_plan::BUDGET_SPENT),
             LinkNotPublished::Refused(LinkRefusal::TokenRejected),
@@ -391,5 +399,21 @@ mod tests {
                 "{}", html
             );
         }
+    }
+
+    /// U-37: a preview that could not be kept says so, says nothing was
+    /// published, and never blames GitHub.
+    #[test]
+    fn a_preview_that_could_not_be_saved_says_so_and_never_blames_github() {
+        let html = link_not_published_page(&LinkNotPublished::PreviewNotSaved, LOGIN, None);
+
+        assert!(html.contains("We could not save this preview."), "{html}");
+        assert!(html.contains(NOTHING_PUBLISHED), "{html}");
+        assert!(html.contains(PUBLISH_LINK_LABEL), "{html}");
+        assert!(!html.contains("GitHub could not be reached"), "{html}");
+        assert!(
+            !html.contains(&format!(">{RETRY_LABEL}</button>")),
+            "{html}"
+        );
     }
 }

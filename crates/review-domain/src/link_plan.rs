@@ -98,23 +98,40 @@ pub fn link_plan(
     })
 }
 
+/// Why the link preview offers no plan to confirm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkPreviewRefusal {
+    /// The fresh read does not prove the link, GitHub could not be read, or
+    /// it was not asked: the GitHub step explains it as Verify does.
+    Ownership(OwnershipRefusal),
+    /// The fresh read proved the link, but no plan could be built or kept
+    /// for the confirm (U-37). Nothing was published; GitHub is not to blame.
+    NotSaved,
+}
+
+impl From<OwnershipRefusal> for LinkPreviewRefusal {
+    fn from(refusal: OwnershipRefusal) -> Self {
+        Self::Ownership(refusal)
+    }
+}
+
 /// The link preview (RA-1a, RA-11): the plan publishing `owner_did`'s link
 /// to the account `observation` read just now, or why that read does not
 /// prove it. The proof is this fresh read, never a stored verification
-/// (C-GDL-10). Pure: nothing is written.
+/// (C-GDL-10). Once `prove_ownership` passes, the link check and the plan
+/// cannot disagree with it; if they ever did, no plan is offered, as
+/// [`LinkPreviewRefusal::NotSaved`]. Pure: nothing is written.
 pub fn link_preview(
     owner_did: &str,
     observation: &GithubObservation,
     composed_at: &str,
-) -> Result<LinkPlan, OwnershipRefusal> {
+) -> Result<LinkPlan, LinkPreviewRefusal> {
     prove_ownership(owner_did, &account_observed(observation), None)?;
-    let proven = match check_link(&Did(owner_did.to_string()), observation) {
-        Ok(ProofCheck::Verified(proven)) => proven,
-        Ok(ProofCheck::Disproved { .. }) | Err(_) => {
-            return Err(OwnershipRefusal::GithubUnavailable)
-        }
+    let Ok(ProofCheck::Verified(proven)) = check_link(&Did(owner_did.to_string()), observation)
+    else {
+        return Err(LinkPreviewRefusal::NotSaved);
     };
-    link_plan(owner_did, &proven, composed_at).map_err(|_| OwnershipRefusal::GithubUnavailable)
+    link_plan(owner_did, &proven, composed_at).map_err(|_| LinkPreviewRefusal::NotSaved)
 }
 
 /// Why a link confirm writes nothing.
@@ -130,6 +147,15 @@ pub enum LinkConfirmRefusal {
 }
 
 impl LinkConfirmRefusal {
+    /// The operator-facing name (logs only).
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::ProofGone(_) => "proof_gone",
+            Self::Unreadable => "unreadable",
+            Self::IdentityChanged => "identity_changed",
+        }
+    }
+
     /// Why the owner is told the link is not published: a disproved fresh
     /// read says the proof is gone (RA-2); an answer naming no account is
     /// GitHub being unavailable (fail closed); a proof of another identity
@@ -153,6 +179,16 @@ pub enum LinkRefusal {
     Ownership(OwnershipRefusal),
     /// GitHub did not accept the app's access token.
     TokenRejected,
+}
+
+impl LinkRefusal {
+    /// The operator-facing name (logs only); never carries the token.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::TokenRejected => "token_rejected",
+            Self::Ownership(ownership) => ownership.label(),
+        }
+    }
 }
 
 /// This hour's GitHub check budget is spent: the confirm reads nothing.
@@ -435,9 +471,11 @@ mod tests {
                 }
                 // RA-11b: a bio naming another DID is explained with that DID.
                 Err(refusal) if real_account && bio_kind == 2 => {
-                    prop_assert_eq!(refusal, OwnershipRefusal::DifferentDid(other));
+                    prop_assert_eq!(refusal, LinkPreviewRefusal::Ownership(OwnershipRefusal::DifferentDid(other)));
                 }
-                Err(_) => {}
+                // A read that does not prove the link is explained as Verify
+                // explains it, never as a preview that could not be saved.
+                Err(refusal) => prop_assert!(matches!(refusal, LinkPreviewRefusal::Ownership(_)), "{:?}", refusal),
             }
         }
 
@@ -510,6 +548,7 @@ mod tests {
         fn a_link_confirm_keeps_its_plan_only_for_a_failed_write(
             why in prop::sample::select(vec![
                 LinkNotPublished::Expired,
+                LinkNotPublished::PreviewNotSaved,
                 LinkNotPublished::Refused(BUDGET_SPENT),
                 LinkNotPublished::Refused(LinkRefusal::TokenRejected),
                 LinkNotPublished::Refused(LinkRefusal::Ownership(OwnershipRefusal::RateLimited)),

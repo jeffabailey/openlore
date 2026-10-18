@@ -15,10 +15,10 @@
 use hyper::StatusCode;
 use ports::claim_domain::identity_link::{check_link, GithubObservation};
 use ports::claim_domain::Did;
-use ports::{GithubAccountProfile, PlanKind, WebSession};
+use ports::{GithubAccountProfile, PlanKind, PublishPlanPort, WebSession};
 use review_domain::link_plan::{
-    confirm_link, keeps_plan_for_retry, link_preview, link_refusal_of, restore_link_plan,
-    LinkConfirmRefusal, LinkPlan, LinkRefusal, BUDGET_SPENT,
+    confirm_link, keeps_plan_for_retry, link_preview, link_refusal_of, restore_link_plan, LinkPlan,
+    LinkPreviewRefusal, LinkRefusal, BUDGET_SPENT,
 };
 use review_domain::ownership::{is_github_login, OwnershipRefusal};
 use review_domain::plans::{plan_expires_at, rfc3339_utc};
@@ -49,13 +49,25 @@ pub(crate) async fn preview_link(app: &App, request: &PageRequest) -> Reply {
             StatusCode::OK,
             views::link_preview_page(&plan, &csrf_token_for(&cookie_value)),
         ),
-        Err(refusal) => {
+        Err(LinkPreviewRefusal::Ownership(refusal)) => {
             let refused = OwnershipOutcome::Refused(&refusal);
             let message =
                 views::ownership_message(refused, login, &session.owner_did, &session.handle);
             github_page(app, &session, &cookie_value, Some((refused, &message)))
         }
+        Err(LinkPreviewRefusal::NotSaved) => preview_not_saved(login),
     }
+}
+
+/// A proven link whose preview could not be kept (U-37): nothing to
+/// confirm, nothing published, and GitHub is not blamed.
+fn preview_not_saved(login: &str) -> Reply {
+    not_published(
+        StatusCode::SERVICE_UNAVAILABLE,
+        &LinkNotPublished::PreviewNotSaved,
+        login,
+        "preview_not_saved",
+    )
 }
 
 /// Spend the budget, check the login, read the profile, decide, and keep a
@@ -64,12 +76,12 @@ async fn kept_link_plan(
     app: &App,
     session: &WebSession,
     login: &str,
-) -> Result<LinkPlan, OwnershipRefusal> {
+) -> Result<LinkPlan, LinkPreviewRefusal> {
     if !app.verify_attempts.try_spend(&session.owner_did) {
-        return Err(OwnershipRefusal::TooManyAttempts);
+        return Err(OwnershipRefusal::TooManyAttempts.into());
     }
     if !is_github_login(login) {
-        return Err(OwnershipRefusal::AccountNotFound);
+        return Err(OwnershipRefusal::AccountNotFound.into());
     }
     let profile = app
         .github
@@ -82,10 +94,19 @@ async fn kept_link_plan(
         &observation_of(&profile),
         &rfc3339_utc(now),
     )?;
-    app.plans
-        .put_publish_plan(&session.owner_did, &plan.stored(), plan_expires_at(now))
-        .map_err(|_| OwnershipRefusal::GithubUnavailable)?;
+    keep_for_confirm(app.plans.as_ref(), &plan, plan_expires_at(now))?;
     Ok(plan)
+}
+
+/// Keep `plan` under its own id for its confirm until `expires_at`.
+fn keep_for_confirm(
+    plans: &dyn PublishPlanPort,
+    plan: &LinkPlan,
+    expires_at: i64,
+) -> Result<(), LinkPreviewRefusal> {
+    plans
+        .put_publish_plan(plan.owner_did(), &plan.stored(), expires_at)
+        .map_err(|_| LinkPreviewRefusal::NotSaved)
 }
 
 /// The fresh read as the link proof sees it.
@@ -142,26 +163,13 @@ async fn proven_again(
         &Did(plan.owner_did().to_string()),
         &observation_of(&profile),
     );
-    confirm_link(plan, fresh).map_err(|refusal| (refusal.not_published(), label_of(&refusal)))
+    confirm_link(plan, fresh).map_err(|refusal| (refusal.not_published(), refusal.label()))
 }
 
+/// A confirm refused before or by its GitHub read, with its log label.
 fn refused(refusal: LinkRefusal) -> (LinkNotPublished, &'static str) {
-    let label = match &refusal {
-        LinkRefusal::TokenRejected => "token_rejected",
-        LinkRefusal::Ownership(OwnershipRefusal::TooManyAttempts) => "too_many_attempts",
-        LinkRefusal::Ownership(OwnershipRefusal::RateLimited) => "rate_limited",
-        LinkRefusal::Ownership(OwnershipRefusal::AccountNotFound) => "account_not_found",
-        LinkRefusal::Ownership(_) => "github_unavailable",
-    };
+    let label = refusal.label();
     (LinkNotPublished::Refused(refusal), label)
-}
-
-fn label_of(refusal: &LinkConfirmRefusal) -> &'static str {
-    match refusal {
-        LinkConfirmRefusal::ProofGone(_) => "proof_gone",
-        LinkConfirmRefusal::Unreadable => "unreadable",
-        LinkConfirmRefusal::IdentityChanged => "identity_changed",
-    }
 }
 
 /// The create-only write and its read-back; the page names the record's
@@ -191,9 +199,7 @@ async fn write_link(app: &App, plan: &LinkPlan, confirmed: &ConfirmedPlan) -> Re
 
 /// Keep the plan under its own id with the preview's unchanged deadline.
 fn put_back(app: &App, plan: &LinkPlan, confirmed: &ConfirmedPlan) -> bool {
-    app.plans
-        .put_publish_plan(plan.owner_did(), &plan.stored(), confirmed.expires_at)
-        .is_ok()
+    keep_for_confirm(app.plans.as_ref(), plan, confirmed.expires_at).is_ok()
 }
 
 fn write_failure(failure: &PublishFailure) -> (LinkNotPublished, &'static str) {
@@ -214,4 +220,88 @@ fn not_published(
 ) -> Reply {
     emit(LogEvent::GithubLinkRefused(label));
     Reply::page(status, views::link_not_published_page(why, login, None))
+}
+
+#[cfg(test)]
+mod tests {
+    //! U-37: a proven link whose preview could not be kept is refused in its
+    //! own words, never as GitHub being unreachable.
+    use super::{keep_for_confirm, preview_not_saved};
+    use crate::http::Reply;
+    use adapter_review_store::{DataKey, ReviewStore};
+    use hyper::StatusCode;
+    use ports::claim_domain::identity_link::GithubObservation;
+    use ports::{PlanKind, PublishPlanPort, ReviewStoreError, StoredPublishPlan, TakenPublishPlan};
+    use review_domain::link_plan::{link_preview, LinkPlan, LinkPreviewRefusal};
+    use review_domain::views::NOTHING_PUBLISHED;
+
+    const OWNER: &str = "did:plc:priyaraman7777777777777777";
+    const LOGIN: &str = "priyaraman";
+    const EXPIRES_AT: i64 = 1_700_000_000;
+
+    /// A plan store that keeps nothing.
+    struct UnwritablePlans;
+
+    impl PublishPlanPort for UnwritablePlans {
+        fn put_publish_plan(
+            &self,
+            _: &str,
+            _: &StoredPublishPlan,
+            _: i64,
+        ) -> Result<(), ReviewStoreError> {
+            Err(ReviewStoreError("disk full".to_string()))
+        }
+
+        fn take_publish_plan(
+            &self,
+            _: &str,
+            _: &str,
+            _: PlanKind,
+        ) -> Result<Option<TakenPublishPlan>, ReviewStoreError> {
+            Ok(None)
+        }
+    }
+
+    fn proven_plan() -> LinkPlan {
+        let observation = GithubObservation {
+            login: LOGIN.to_string(),
+            user_id: 4_210_001,
+            bio: Some(format!("my DID: {OWNER}")),
+        };
+        link_preview(OWNER, &observation, "2026-10-17T09:30:00Z").expect("the bio proves it")
+    }
+
+    #[test]
+    fn a_kept_preview_is_taken_back_exactly_as_previewed() {
+        let store = ReviewStore::open_in_memory(DataKey::generate()).expect("store");
+        let plan = proven_plan();
+
+        assert_eq!(keep_for_confirm(&store, &plan, EXPIRES_AT), Ok(()));
+
+        let taken = store
+            .take_publish_plan(OWNER, plan.rkey(), PlanKind::Publish)
+            .expect("readable")
+            .expect("kept");
+        assert_eq!(taken.plan, plan.stored());
+        assert_eq!(taken.expires_at, EXPIRES_AT);
+    }
+
+    #[test]
+    fn a_preview_that_could_not_be_kept_is_not_saved_and_never_blames_github() {
+        let plan = proven_plan();
+
+        assert_eq!(
+            keep_for_confirm(&UnwritablePlans, &plan, EXPIRES_AT),
+            Err(LinkPreviewRefusal::NotSaved)
+        );
+
+        let Reply::Page { status, html, .. } = preview_not_saved(LOGIN) else {
+            panic!("a page, not a redirect");
+        };
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(html.contains("We could not save this preview."), "{html}");
+        assert!(html.contains(NOTHING_PUBLISHED), "{html}");
+        assert!(!html.contains("GitHub could not be reached"), "{html}");
+        assert!(!html.contains("disk full"), "{html}");
+    }
 }
