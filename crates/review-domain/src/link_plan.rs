@@ -235,10 +235,11 @@ fn proves_the_plan(plan: &LinkPlan, proven: &ProvenLink) -> bool {
 }
 
 /// Whether a link confirm that ended `why` puts its plan back, unchanged,
-/// for one Retry (RA-12). Only a write the repo host did not take: the
-/// record key is the link's CID, so a Retry of a create that did land reads
-/// "already exists" as success (ADR-071, U-34). A refusal before the write,
-/// an ended session or a read-back mismatch keeps nothing.
+/// for one Retry (RA-12). Only a write the repo host may have stored
+/// (U-42/U-43: a server error or a lost answer): the record key is the
+/// link's CID, so a Retry of a create that did land reads "already exists"
+/// as success (ADR-071, U-34). A definite refusal, a refusal before the
+/// write, an ended session or a read-back mismatch keeps nothing.
 pub fn keeps_plan_for_retry(why: &LinkNotPublished) -> bool {
     *why == LinkNotPublished::NotWritten
 }
