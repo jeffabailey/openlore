@@ -145,6 +145,38 @@ impl Fault {
     }
 }
 
+/// A reused HTTP client for the public search (see [`LiveIndex::warm_searcher`]).
+pub struct WarmSearcher {
+    client: reqwest::blocking::Client,
+    url: String,
+}
+
+impl WarmSearcher {
+    /// One search (dimension, value): (status, body text, time to the answer).
+    pub fn search(&self, dimension: &str, value: &str) -> (u16, String, Duration) {
+        let body = serde_json::json!({"dimension": dimension, "value": value}).to_string();
+        let started = Instant::now();
+        let response = self
+            .client
+            .post(&self.url)
+            .header("content-type", "application/json")
+            .body(body)
+            .send();
+        match response {
+            Ok(r) => {
+                let status = r.status().as_u16();
+                let text = r.text().unwrap_or_default();
+                (status, text, started.elapsed())
+            }
+            Err(e) => (
+                0,
+                format!("[harness] no HTTP response: {e}"),
+                started.elapsed(),
+            ),
+        }
+    }
+}
+
 /// The two public routes (ADR-083 §1).
 pub const SEARCH_PATH: &str = "/xrpc/org.openlore.appview.searchClaims";
 pub const HEALTH_PATH: &str = "/healthz";
@@ -558,6 +590,24 @@ impl LiveIndex {
     pub fn public_search(&self, dimension: &str, value: &str) -> (u16, String, Duration) {
         let body = serde_json::json!({"dimension": dimension, "value": value}).to_string();
         self.request("POST", SEARCH_PATH, body.into_bytes())
+    }
+
+    /// A search client that has already had one search answered, so timing its
+    /// next searches measures only the index's answer: no client build, no
+    /// connection setup, no process start (acceptance-review row 1: if the 1 s
+    /// budget flakes, measure each HTTP request instead of relaxing it).
+    pub fn warm_searcher(&self) -> WarmSearcher {
+        let searcher = WarmSearcher {
+            client: reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(15))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("http client"),
+            url: format!("{}{}", self.url, SEARCH_PATH),
+        };
+        let (status, body, _) = searcher.search("object", "warm-up");
+        assert_eq!(status, 200, "the warm-up search was answered\n{body}");
+        searcher
     }
 
     /// WHEN anyone reads the health response: (status, JSON body).
