@@ -31,6 +31,8 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# NF-5: the refused-connect fixture holds its port on a loopback connection.
+tokio = { workspace = true, features = ["rt", "net"] }
 
 [lints]
 workspace = true

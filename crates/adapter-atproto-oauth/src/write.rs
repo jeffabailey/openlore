@@ -294,12 +294,31 @@ mod tests {
         }
     }
 
-    /// A local address nothing listens on: a connect there is refused.
-    fn closed_address() -> String {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let address = listener.local_addr().expect("addr");
-        drop(listener);
-        format!("http://{address}/xrpc/{CREATE_RECORD}")
+    /// A local address nothing listens on, so a connect there is refused.
+    /// Its port is the local end of a loopback connection, kept open by the
+    /// returned guard: a connected socket takes no new connections, and no
+    /// parallel test can bind the port while the guard lives (NF-5).
+    fn refusing_address() -> (String, [std::net::TcpStream; 2]) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let far = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            let near = tokio::net::TcpSocket::new_v4().expect("socket");
+            near.bind("127.0.0.1:0".parse().expect("addr"))
+                .expect("bind");
+            let address = near.local_addr().expect("addr");
+            let far_address = far.local_addr().expect("addr");
+            let (near, far) = tokio::join!(near.connect(far_address), far.accept());
+            let held = [
+                near.expect("connect").into_std().expect("std stream"),
+                far.expect("accept").0.into_std().expect("std stream"),
+            ];
+            (format!("http://{address}/xrpc/{CREATE_RECORD}"), held)
+        })
     }
 
     /// A local server that takes the connection, reads the request and
@@ -348,7 +367,12 @@ mod tests {
         fn only_a_connection_never_made_is_unreachable(
             connected in any::<bool>(), wrapped in any::<bool>(),
         ) {
-            let url = if connected { hangs_up_after_the_request() } else { closed_address() };
+            let (url, _held) = if connected {
+                (hangs_up_after_the_request(), None)
+            } else {
+                let (url, held) = refusing_address();
+                (url, Some(held))
+            };
 
             let error = repo_error(transport_failure(&url, wrapped));
 
