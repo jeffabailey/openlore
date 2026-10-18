@@ -45,18 +45,27 @@ const CLAIM_COLLECTION: &str = "org.openlore.claim";
 /// How long a `listRecords` request may take: to connect, and in all
 /// (connect, send and read the body). A PDS that does not answer in time is
 /// unreachable, never a hung page load (the review app's GET /github reads
-/// the owner's repo on every visit).
+/// the owner's repo on every visit). `request: None` leaves the overall
+/// bound to the caller.
 #[derive(Debug, Clone, Copy)]
 struct ListingTimeouts {
     connect: std::time::Duration,
-    request: std::time::Duration,
+    request: Option<std::time::Duration>,
 }
 
-/// The bounds every adapter is built with; the connect bound mirrors
+/// The review app's bounds; the connect bound mirrors
 /// `adapter-atproto-pds::peer_read`.
 const LISTING_TIMEOUTS: ListingTimeouts = ListingTimeouts {
     connect: std::time::Duration::from_secs(10),
-    request: std::time::Duration::from_secs(30),
+    request: Some(std::time::Duration::from_secs(30)),
+};
+
+/// The indexer's bounds: the same connect bound, and no overall one, because
+/// the operator's per-author limit (`PER_DID_TIMEOUT`, ADR-080) bounds each
+/// listing and may be longer than the review app's 30 s.
+const GUARDED_LISTING_TIMEOUTS: ListingTimeouts = ListingTimeouts {
+    request: None,
+    ..LISTING_TIMEOUTS
 };
 
 /// Bounded read-only PULL `IngestSourcePort` adapter over ATProto XRPC
@@ -103,7 +112,7 @@ impl AtProtoIngestAdapter {
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .dns_resolver(Arc::new(GuardedResolver::with_lookup(policy, lookup)));
-        Self::with_client(client, source, Some(policy), LISTING_TIMEOUTS)
+        Self::with_client(client, source, Some(policy), GUARDED_LISTING_TIMEOUTS)
     }
 
     fn with_client(
@@ -112,9 +121,11 @@ impl AtProtoIngestAdapter {
         policy: Option<TransportPolicy>,
         timeouts: ListingTimeouts,
     ) -> Self {
-        let client = client
-            .connect_timeout(timeouts.connect)
-            .timeout(timeouts.request);
+        let client = client.connect_timeout(timeouts.connect);
+        let client = match timeouts.request {
+            Some(request) => client.timeout(request),
+            None => client,
+        };
         Self {
             client: client.build().unwrap_or_else(|_| reqwest::Client::new()),
             source: source.to_string(),
@@ -685,7 +696,7 @@ mod tests {
             "",
             ListingTimeouts {
                 connect: std::time::Duration::from_millis(500),
-                request: std::time::Duration::from_millis(300),
+                request: Some(std::time::Duration::from_millis(300)),
             },
         );
         let listing = adapter.list_repo_claims(&base, "did:plc:x");
@@ -701,7 +712,19 @@ mod tests {
     #[test]
     fn every_listing_is_bounded_in_connecting_and_in_all() {
         assert_eq!(LISTING_TIMEOUTS.connect, std::time::Duration::from_secs(10));
-        assert_eq!(LISTING_TIMEOUTS.request, std::time::Duration::from_secs(30));
+        assert_eq!(
+            LISTING_TIMEOUTS.request,
+            Some(std::time::Duration::from_secs(30))
+        );
+    }
+
+    #[test]
+    fn the_indexer_listing_leaves_its_overall_bound_to_the_per_author_limit() {
+        assert_eq!(
+            GUARDED_LISTING_TIMEOUTS.connect,
+            std::time::Duration::from_secs(10)
+        );
+        assert_eq!(GUARDED_LISTING_TIMEOUTS.request, None);
     }
 
     // bypass: closed-world pre-check examples (no DNS involved), one per refusal kind.
