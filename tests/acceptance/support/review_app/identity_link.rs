@@ -64,6 +64,40 @@ pub const NOTHING_PUBLISHED: &str = "Nothing was published.";
 /// `NOTHING_PUBLISHED` there.
 pub const MAY_HAVE_BEEN_SAVED: &str = "may have been saved";
 
+/// A GitHub username with no account behind it (one letter off Priya's).
+pub const UNKNOWN_GITHUB_LOGIN: &str = "priyaramn";
+
+/// A username GitHub could never have (refused before GitHub is asked).
+pub const MALFORMED_GITHUB_LOGIN: &str = "-priyaraman-";
+
+/// The GitHub step's offer to withdraw a published link.
+pub const RETRACT_LINK: &str = "Retract this link";
+
+/// THEN a definite refusal of the link write says nothing was published and
+/// never that the link may have been saved (U-42, N1).
+pub fn then_told_nothing_was_published(page: &Page, row: &str) {
+    assert!(
+        page.shows(NOTHING_PUBLISHED),
+        "[{row}] the page says nothing was published:\n{}",
+        page.text()
+    );
+    assert!(
+        !page.shows(MAY_HAVE_BEEN_SAVED),
+        "[{row}] nothing was stored, so the page never says the link may have been saved (U-42):\n{}",
+        page.text()
+    );
+}
+
+/// THEN the page answering a refused GitHub request still offers to retract
+/// the owner's published link (F-4, N2).
+pub fn then_refused_page_offers_retraction(page: &Page, row: &str) {
+    assert!(
+        page.offers(RETRACT_LINK),
+        "[{row}] the refused request's page still offers {RETRACT_LINK:?}:\n{}",
+        page.text()
+    );
+}
+
 /// The refusal once the hourly verify budget is spent (ADR-076 §2, U-26).
 pub const TOO_MANY_ATTEMPTS: &str = "Too many verification attempts in the last hour";
 
@@ -181,7 +215,7 @@ pub fn then_sees_record_address(page: &Page, record: &StoredRecord) {
 /// WHEN the owner presses "Retract this link" on the GitHub step.
 pub fn when_opens_link_retraction(browser: &mut Browser) -> &Page {
     browser.open("/github");
-    browser.press("Retract this link")
+    browser.press(RETRACT_LINK)
 }
 
 /// The `sameAs` records in `persona`'s repo.

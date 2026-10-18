@@ -14,7 +14,7 @@
 #[path = "support/review_app/mod.rs"]
 mod review_app;
 
-use openlore_test_support::WritePosture;
+use openlore_test_support::{WritePosture, CLAIM_COLLECTION};
 use review_app::state_delta::{assert_state_delta, Delta};
 use review_app::*;
 
@@ -175,6 +175,47 @@ fn priya_withdraws_her_link_without_erasing_it() {
         world.atproto.forbidden_write_attempts().is_empty(),
         "create-only"
     );
+}
+
+/// RA-4b (error, regression guard; slice-3 re-review N2, F-4 fixed in adbc648)
+/// ```gherkin
+/// @driving_port @real-io @error @f-4 @n-2 @contract-shape:unbounded-preservation
+/// Scenario Outline: A refused GitHub request keeps the offer to retract Priya's link
+///   Given Priya published her GitHub link from the app
+///   When <she asks for something GitHub refuses>
+///   Then the page that refuses her still offers "Retract this link"
+///   And her link is still there, unchanged
+///   Examples:
+///     | she asks for something GitHub refuses                        |
+///     | she verifies github "priyaramn", which has no account          |
+///     | she asks for a link preview naming the malformed username "-priyaraman-" |
+/// ```
+#[test]
+fn a_refused_github_request_keeps_the_offer_to_retract_priyas_link() {
+    for row in ["verify unknown account", "malformed link preview"] {
+        let world = ReviewWorld::new();
+        let mut browser = given_link_published(&world, Persona::Priya);
+        let link = then_pds_holds_self_attested_link(&world, Persona::Priya);
+        match row {
+            "verify unknown account" => {
+                when_verifies_github(&mut browser, UNKNOWN_GITHUB_LOGIN);
+            }
+            _ => {
+                let offer = link_offer_form(&mut browser);
+                when_submits_link_offer(
+                    &mut browser,
+                    &Browser::with_field(&offer, LINK_LOGIN_FIELD, MALFORMED_GITHUB_LOGIN),
+                );
+            }
+        }
+
+        then_refused_page_offers_retraction(&browser.page, row);
+        assert_eq!(
+            then_pds_holds_self_attested_link(&world, Persona::Priya),
+            link,
+            "[{row}] her link is unchanged"
+        );
+    }
 }
 
 /// RA-5 (error, infrastructure-failure, table; rows 3-4 from the slice-3
@@ -685,6 +726,56 @@ fn after_a_failed_link_write_retry_publishes_the_link_exactly_once() {
         );
         let link = then_pds_holds_self_attested_link(&world, Persona::Priya);
         then_sees_record_address(&browser.page, &link);
+    }
+}
+
+/// RA-12b (error, infrastructure-failure, table; slice-3 re-review N1, U-42)
+///
+/// U-42 allows "may have been saved" only where the record may really have
+/// been stored (RA-12). A repo host that refuses the record, or that cannot
+/// be reached at all, stored nothing, so the page keeps "Nothing was
+/// published." Whether Retry is offered here is not pinned. The unreachable
+/// row makes the host unreachable on the preview; the confirm reads GitHub
+/// (a separate double) first and the write is its first call to the repo host.
+/// ```gherkin
+/// @driving_port @real-io @error @infrastructure-failure @u-42 @n-1 @contract-shape:unbounded-preservation
+/// Scenario Outline: When her repo host definitely did not take the link, Priya is told nothing was published
+///   Given Priya is on her link preview
+///   And her repo host <refuses>
+///   When she confirms
+///   Then she sees "Nothing was published."
+///   And she is not told her link may have been saved
+///   And her repo holds no link
+///   Examples:
+///     | refuses                       |
+///     | refuses the link record       |
+///     | cannot be reached             |
+/// ```
+#[test]
+#[ignore = "DISTILL github-did-identity-link: pending N1 fix"]
+fn when_her_repo_host_definitely_did_not_take_the_link_priya_is_told_nothing_was_published() {
+    for row in ["record refused", "host unreachable"] {
+        let world = ReviewWorld::new();
+        let mut browser = given_github_verified(&world, Persona::Priya);
+        when_opens_link_preview(&mut browser);
+        match row {
+            "record refused" => world.atproto.set_write_posture(
+                Persona::Priya.did(),
+                WritePosture::RefuseCollection(CLAIM_COLLECTION.to_string()),
+            ),
+            _ => world
+                .atproto
+                .set_host_reachable(Persona::Priya.pds_host(), false),
+        }
+
+        when_confirms_link(&mut browser);
+
+        then_told_nothing_was_published(&browser.page, row);
+        assert!(
+            links_in_pds(&world, Persona::Priya).is_empty(),
+            "[{row}] her repo holds no link: {:#?}",
+            claims_in_pds(&world, Persona::Priya)
+        );
     }
 }
 
