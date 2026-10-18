@@ -5,6 +5,8 @@ use maud::html;
 
 use super::*;
 use crate::plans::RetractPlan;
+use ports::claim_domain::identity_link::is_reserved_predicate;
+use ports::claim_domain::UnsignedClaim;
 
 /// Where a retract plan is confirmed (or retried).
 const RETRACT_ACTION: &str = "/retract";
@@ -24,17 +26,19 @@ pub const RETRACTION_NOTICE: &str = "A public retraction referencing this claim 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RetractPreview<'a> {
     pub plan: &'a RetractPlan,
+    /// The claim `plan` retracts: the headline names it by its own fields,
+    /// since a link's retraction restates none of them (U-39).
+    pub retracted: &'a UnsignedClaim,
     pub csrf_token: &'a str,
     pub profile_path: &'a str,
 }
 
 pub fn retract_preview_page(view: &RetractPreview<'_>) -> String {
-    let claim = view.plan.claim();
     page(
         "Retract this claim?",
         html! {
             h1 { "Retract this claim?" }
-            p { (claim_headline(&claim.subject, &claim.object)) }
+            p { (retracted_headline(view.retracted)) }
             p { strong { (RETRACTION_NOTICE) } }
             p {
                 "The retraction is added at " code { (view.plan.at_uri()) }
@@ -45,6 +49,16 @@ pub fn retract_preview_page(view: &RetractPreview<'_>) -> String {
             p { a href=(view.profile_path) { (CANCEL_LABEL) } }
         },
     )
+}
+
+/// The claim being retracted: an identity link as its record's own triple
+/// (it names no repo or philosophy), any other claim by its headline.
+fn retracted_headline(claim: &UnsignedClaim) -> Markup {
+    if is_reserved_predicate(&claim.predicate) {
+        html! { code { (claim.subject) " " (claim.predicate) " " (claim.object) } }
+    } else {
+        claim_headline(&claim.subject, &claim.object)
+    }
 }
 
 /// The retraction landed (or the claim already was retracted): the claim
@@ -83,4 +97,48 @@ pub fn retract_failed_page(
             (back_to_profile(profile_path))
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    //! 03-09: the retract preview of a link names the link it retracts, not
+    //! the retraction's own (empty, U-39) fields.
+    use super::*;
+    use crate::link_plan::link_plan;
+    use crate::plans::retract_plan;
+    use ports::claim_domain::identity_link::GithubObservation;
+    use ports::claim_domain::identity_link::{check_link, link_predicate, ProofCheck};
+    use ports::claim_domain::Did;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Universe: owner DIDs × GitHub accounts. The headline is the
+        /// original link's subject, predicate and object; nothing in it is
+        /// built from the empty retraction.
+        #[test]
+        fn a_link_retract_preview_names_the_link_it_retracts(
+            did in "[a-z2-7]{24}".prop_map(|s| format!("did:plc:{s}")),
+            login in "[a-z][a-z0-9-]{0,15}",
+            user_id in 1u64..=u64::from(u32::MAX),
+        ) {
+            let observation = GithubObservation { login: login.clone(), user_id, bio: Some(format!("my DID: {did}")) };
+            let Ok(ProofCheck::Verified(proven)) = check_link(&Did(did.clone()), &observation) else {
+                panic!("the bio names the DID");
+            };
+            let link = link_plan(&did, &proven, "2026-10-17T09:30:00Z").expect("link plan");
+            let retraction = retract_plan(&did, link.rkey(), link.claim(), "2026-10-17T10:00:00Z").expect("retraction");
+
+            let html = retract_preview_page(&RetractPreview {
+                plan: &retraction,
+                retracted: link.claim(),
+                csrf_token: "csrf",
+                profile_path: "/@priya.example",
+            });
+
+            let headline = format!("<code>{did} {} github:{login}</code>", link_predicate());
+            prop_assert!(html.contains(&headline), "{}", html);
+            prop_assert!(!html.contains("https://github.com//"), "{}", html);
+            prop_assert!(!html.contains(" embodies "), "{}", html);
+        }
+    }
 }

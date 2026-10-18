@@ -397,6 +397,7 @@ fn the_retract_pages_show_the_retraction_and_lead_back_to_the_profile() {
     assert_page(
         &retract_preview_page(&RetractPreview {
             plan: &retraction,
+            retracted: publish.claim(),
             csrf_token: CSRF,
             profile_path: PROFILE_PATH,
         }),

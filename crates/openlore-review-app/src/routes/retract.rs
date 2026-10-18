@@ -62,6 +62,7 @@ pub(crate) async fn retract_preview(app: &App, request: &PageRequest) -> Reply {
             StatusCode::OK,
             views::retract_preview_page(&RetractPreview {
                 plan: &plan,
+                retracted: &original,
                 csrf_token: &csrf_token_for(&cookie),
                 profile_path: &profile_path(&identity),
             }),
