@@ -313,6 +313,36 @@ mod tests {
     };
     use ports::claim_domain::{claim_record_json, decode_claim_record, Did};
     use ports::PlanKind;
+
+    /// The `github.link.refused` log labels are an operator contract: each
+    /// refusal keeps its own literal name (mutation testing, slice 3).
+    #[test]
+    fn each_link_refusal_logs_under_its_own_label() {
+        for (refusal, label) in [
+            (
+                LinkConfirmRefusal::ProofGone(CheckVerdict::DidMissing),
+                "proof_gone",
+            ),
+            (LinkConfirmRefusal::Unreadable, "unreadable"),
+            (LinkConfirmRefusal::IdentityChanged, "identity_changed"),
+        ] {
+            assert_eq!(refusal.label(), label);
+        }
+        for (refusal, label) in [
+            (LinkRefusal::TokenRejected, "token_rejected"),
+            (BUDGET_SPENT, "too_many_attempts"),
+            (
+                LinkRefusal::Ownership(OwnershipRefusal::RateLimited),
+                "rate_limited",
+            ),
+            (
+                LinkRefusal::Ownership(OwnershipRefusal::AccountNotFound),
+                "account_not_found",
+            ),
+        ] {
+            assert_eq!(refusal.label(), label);
+        }
+    }
     use proptest::prelude::*;
 
     const COMPOSED_AT: &str = "2026-10-17T09:30:00Z";
