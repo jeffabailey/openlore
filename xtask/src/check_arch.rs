@@ -1829,8 +1829,12 @@ pub fn scan_identity_verify_holds_no_storage_or_signing_handle(
 /// ADR-085 §2, U-26). Nor the claim-publish path (F-03, 03-05): the link
 /// confirm admits its plan only through `restore_link_plan`, never
 /// `restore_plan`, the queue's `owner_can_publish` gate, or the suggestion
-/// state change of `mark_published` / `change_state`.
-const LINK_PREVIEW_ROUTE_SOURCE: &str = "crates/openlore-review-app/src/routes/github_link.rs";
+/// state change of `mark_published` / `change_state`. The executor that
+/// writes the confirmed link (`execute_link`) is held to the same rule.
+const LINK_PREVIEW_ROUTE_SOURCES: &[&str] = &[
+    "crates/openlore-review-app/src/routes/github_link.rs",
+    "crates/openlore-review-app/src/executor.rs",
+];
 const LINK_PREVIEW_ROUTE_FORBIDDEN_TOKENS: &[&str] = &[
     "GithubLinkPort",
     "github_link",
@@ -1846,24 +1850,27 @@ const LINK_PREVIEW_ROUTE_FORBIDDEN_TOKENS: &[&str] = &[
 pub fn scan_link_preview_proves_from_a_fresh_read(
     workspace_root: &Path,
 ) -> anyhow::Result<Vec<String>> {
-    let path = workspace_root.join(LINK_PREVIEW_ROUTE_SOURCE);
-    if !path.is_file() {
-        return Ok(Vec::new());
+    let mut findings = Vec::new();
+    for relative in LINK_PREVIEW_ROUTE_SOURCES {
+        let path = workspace_root.join(relative);
+        if !path.is_file() {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path)?;
+        findings.extend(
+            reader_findings(&source, LINK_PREVIEW_ROUTE_FORBIDDEN_TOKENS)
+                .into_iter()
+                .map(|finding| {
+                    format!(
+                        "{relative}: {finding} — the link preview and confirm \
+                         prove the link from their own fresh GitHub read, never read the stored \
+                         verification and never take the claim-publish path \
+                         (link_preview_proves_from_a_fresh_read, C-GDL-10 / U-26 / F-03)"
+                    )
+                }),
+        );
     }
-    let source = std::fs::read_to_string(&path)?;
-    Ok(
-        reader_findings(&source, LINK_PREVIEW_ROUTE_FORBIDDEN_TOKENS)
-            .into_iter()
-            .map(|finding| {
-                format!(
-                    "{LINK_PREVIEW_ROUTE_SOURCE}: {finding} — the link preview and confirm \
-                     prove the link from their own fresh GitHub read, never read the stored \
-                     verification and never take the claim-publish path \
-                     (link_preview_proves_from_a_fresh_read, C-GDL-10 / U-26 / F-03)"
-                )
-            })
-            .collect(),
-    )
+    Ok(findings)
 }
 
 /// The purge capability's names: the port, its one method and the composition
@@ -4417,6 +4424,36 @@ mod tests {
                 .expect("scan real tree"),
             Vec::<String>::new(),
             "the real link preview route proves from its own fresh read"
+        );
+    }
+
+    #[test]
+    fn link_preview_scan_holds_the_link_executor_to_the_same_rule() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let src = violating.path().join("crates/openlore-review-app/src");
+        std::fs::create_dir_all(&src).expect("mkdir");
+        std::fs::write(
+            src.join("executor.rs"),
+            "use review_domain::link_plan::LinkPlan;\n\
+             async fn execute_link(app: &App, plan: &LinkPlan) {\n\
+                 app.links.github_link(plan.owner_did());\n\
+                 mark_published(app, plan);\n\
+             }\n",
+        )
+        .expect("write");
+        let findings = scan_link_preview_proves_from_a_fresh_read(violating.path()).expect("scan");
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        for token in ["github_link", "mark_published"] {
+            assert!(
+                findings.iter().any(|f| f
+                    .starts_with("crates/openlore-review-app/src/executor.rs:")
+                    && f.contains(&format!("`{token}`"))),
+                "{token}: {findings:?}"
+            );
+        }
+        assert!(
+            !findings.iter().any(|f| f.contains("`LinkPlan`")),
+            "{findings:?}"
         );
     }
 
