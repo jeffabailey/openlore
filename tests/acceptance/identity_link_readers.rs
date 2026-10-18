@@ -453,6 +453,51 @@ fn a_link_from_a_peer_jeff_removed_no_longer_shows_or_is_rechecked() {
     assert_link_store_unchanged(&before, &world.env);
 }
 
+/// IR-20c (lifecycle — U-20; chained on IR-20)
+/// ```gherkin
+/// @driving_port @real-io @u-20 @contract-shape:bounded-change
+/// Scenario: A link from a peer Jeff removed and then followed again shows again
+///   Given Jeff followed Rachel, whose link to github "rachelk" he checked and sees as her GitHub account
+///   And Jeff removed Rachel from the people he follows
+///   When Jeff adds Rachel again
+///   Then he is told he is following Rachel again, not that she is already followed
+///   And his linked identities show did:plc:rachel-test as github:rachelk again
+///   And reading the person github "rachelk" shows the link again
+/// ```
+#[test]
+fn a_link_from_a_peer_jeff_removed_and_followed_again_shows_again() {
+    let mut world = LinkWorld::with(&[RACHEL_GH]);
+    bio_names(&world, RACHEL_GH, RACHEL_DID);
+    given_peer_published(
+        &mut world,
+        Peer::Rachel,
+        vec![link_spec(RACHEL_DID, RACHEL_GH)],
+    );
+    given_i_verified(&world, None);
+    given_i_removed_the_peer(&world, Peer::Rachel);
+    assert_shown(
+        &when_i_list(&world, None),
+        RACHEL_DID,
+        RACHEL_GH,
+        Shown::Nothing,
+    );
+
+    let added = given_i_followed_the_peer_again(&world, Peer::Rachel);
+
+    assert!(
+        added.stdout.contains("Following peer again")
+            && !added.stdout.contains("already subscribed"),
+        "`peer add` of a removed peer follows it again;\n{}",
+        added.stdout
+    );
+    let listed = when_i_list(&world, None);
+    assert_eq!(listed.status, 0, "{}\n{}", listed.stdout, listed.stderr);
+    assert_shown(&listed, RACHEL_DID, RACHEL_GH, Shown::Associated);
+    let read = when_i_read_the_person(&world, RACHEL_GH);
+    assert_eq!(read.status, 0, "{}\n{}", read.stdout, read.stderr);
+    assert_shown(&read, RACHEL_DID, RACHEL_GH, Shown::Associated);
+}
+
 /// IR-9 (boundary, table)
 /// ```gherkin
 /// @driving_port @real-io @boundary @n-3 @adr-085-5 @contract-shape:pure-function
@@ -741,6 +786,52 @@ fn the_person_view_shows_a_verified_link_even_with_the_network_off() {
     );
     assert_candidate(&inferred, 1, "github:BurntSushi", MEMORY_SAFETY);
     assert_shown(&inferred, RACHEL_DID, BURNTSUSHI_GH, Shown::Associated);
+}
+
+/// IR-11b (lifecycle — U-19/U-20; chained on IR-11)
+/// ```gherkin
+/// @driving_port @real-io @u-19 @u-20 @contract-shape:bounded-change
+/// Scenario: Inferred people drop a removed peer's link and show it again once she is followed again
+///   Given Jeff's store infers that github "BurntSushi" adheres to memory-safety
+///   And Rachel published a link to github "BurntSushi", which Jeff verified
+///   When Jeff removes Rachel and lists inferred people with the network disabled
+///   Then no entry links did:plc:rachel-test to github:BurntSushi
+///   When Jeff adds Rachel again and lists inferred people with the network disabled
+///   Then BurntSushi's entry shows "did:plc:rachel-test is github:BurntSushi (verified today)"
+/// ```
+#[test]
+fn inferred_people_drop_a_removed_peers_link_and_show_it_once_she_is_followed_again() {
+    let world = LinkWorld::with(&[BURNTSUSHI_GH]);
+    let (_mine, mut rachel) = given_burntsushi_builds_two_signed_memory_safe_repos(&world.env);
+    bio_names(&world, BURNTSUSHI_GH, RACHEL_DID);
+    rachel.publish_and_pull(&world.env, vec![link_spec(RACHEL_DID, BURNTSUSHI_GH)]);
+    given_i_verified(&world, None);
+
+    rachel.unsubscribe(&world.env);
+    let while_removed = infer_people_offline(&world.env, &[]);
+
+    assert_eq!(
+        while_removed.status, 0,
+        "{}\n{}",
+        while_removed.stdout, while_removed.stderr
+    );
+    assert_shown(&while_removed, RACHEL_DID, BURNTSUSHI_GH, Shown::Nothing);
+
+    rachel.follow_again(&world.env);
+    let followed_again = infer_people_offline(&world.env, &[]);
+
+    assert_eq!(
+        followed_again.status, 0,
+        "{}\n{}",
+        followed_again.stdout, followed_again.stderr
+    );
+    assert_candidate(&followed_again, 1, "github:BurntSushi", MEMORY_SAFETY);
+    assert_shown(
+        &followed_again,
+        RACHEL_DID,
+        BURNTSUSHI_GH,
+        Shown::Associated,
+    );
 }
 
 /// IR-12 (KPI-GDL-3 via the person scrape, UC-8)

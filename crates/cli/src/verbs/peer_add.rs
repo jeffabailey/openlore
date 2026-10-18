@@ -15,7 +15,8 @@
 //! 2. `resolve_peer(did)` → `PeerInfo` (handle + PDS endpoint). A
 //!    resolution failure exits non-zero, persists nothing (PS-3).
 //! 3. Persist via `add_subscription`. `Added` → fresh-subscribe output;
-//!    `AlreadyExisted` → idempotent "already subscribed since <ts>" (PS-2).
+//!    `AlreadyExisted` → idempotent "already subscribed since <ts>" (PS-2);
+//!    `Refollowed` → a removed peer is followed again (U-20).
 //! 4. Render the resolve confirmation + the next-pull hint + the
 //!    unsubscribe hint (journey step 1; ADR-013).
 //!
@@ -87,6 +88,9 @@ pub fn run(wiring: &Wiring, args: &PeerAddArgs) -> Result<PeerAddOutcome> {
     let stdout = match outcome {
         AddSubscriptionOutcome::Added { subscribed_at } => render_added(&peer_info, subscribed_at),
         AddSubscriptionOutcome::AlreadyExisted { since } => render_already(&peer_info, since),
+        AddSubscriptionOutcome::Refollowed { subscribed_at } => {
+            render_refollowed(&peer_info, subscribed_at)
+        }
     };
 
     Ok(PeerAddOutcome {
@@ -127,6 +131,25 @@ fn render_added(peer: &PeerInfo, subscribed_at: DateTime<Utc>) -> String {
     out.push_str(&format!(
         "Tip: peer claims will appear in `openlore graph query --federated <subject>`.\n     \
          To unsubscribe later: `openlore peer remove {}`.\n",
+        peer.did.0
+    ));
+    out
+}
+
+/// Pure render for following a peer the user had removed (U-20): the
+/// subscription is active again and its cached claims count again.
+fn render_refollowed(peer: &PeerInfo, subscribed_at: DateTime<Utc>) -> String {
+    let mut out = render_resolve_header(peer);
+    out.push_str("Following peer again ... ok\n");
+    out.push_str(&format!(
+        "  subscribed_at    : {}\n",
+        subscribed_at.to_rfc3339()
+    ));
+    out.push_str("  cached claims    : kept, and counted again\n");
+    out.push_str("  next pull        : on-demand (`openlore peer pull`)\n");
+    out.push('\n');
+    out.push_str(&format!(
+        "To unsubscribe: `openlore peer remove {}`.\n",
         peer.did.0
     ));
     out

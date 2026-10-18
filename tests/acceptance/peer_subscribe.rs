@@ -196,6 +196,66 @@ fn peer_subscribe_add_is_idempotent_on_re_subscribe() {
     assert_one_active_subscription_for(&env, peer_did);
 }
 
+/// PS-2b (U-20): `openlore peer add` for a peer the user REMOVED (plain,
+/// non-purge `peer remove`) follows that peer again: the soft-removed row
+/// becomes active (`removed_at` cleared), no duplicate row is written, the
+/// cached claims are kept, and the CLI says it is following the peer again —
+/// never "already subscribed".
+///
+/// @us-fed-001 @us-fed-005 @real-io @driving_port @j-003 @u-20
+#[test]
+fn peer_subscribe_add_after_remove_follows_the_peer_again() {
+    let env = TestEnv::initialized();
+
+    let peer_did = "did:plc:rachel-test";
+    let peer = PeerPds::for_peer(peer_did, fixture_other_developer_three_claims());
+    let first = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_exit_zero_and_stdout_contains(&first, peer_did);
+    let cached_count = 3;
+    seed_cached_peer_claims(&env, peer_did, cached_count);
+    let removed = run_openlore(&env, &["peer", "remove", peer_did]);
+    assert_exit_zero_and_stdout_contains(&removed, "Removed subscription");
+    assert_subscription_soft_removed_for(&env, peer_did);
+
+    let again = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+
+    assert_exit_zero_and_stdout_contains(&again, "Following peer again");
+    assert!(
+        !again.stdout.contains("already subscribed"),
+        "a removed peer is not 'already subscribed';\n--- stdout ---\n{}",
+        again.stdout
+    );
+    assert!(
+        again
+            .stdout
+            .contains(&format!("openlore peer remove {peer_did}")),
+        "expected the unsubscribe hint;\n--- stdout ---\n{}",
+        again.stdout
+    );
+    assert_one_active_subscription_for(&env, peer_did);
+    assert_peer_claims_row_count_for(&env, peer_did, cached_count);
+
+    // Adding the now-active peer once more is the idempotent path again.
+    let once_more = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_exit_zero_and_stdout_contains(&once_more, "already subscribed since");
+    assert_one_active_subscription_for(&env, peer_did);
+}
+
 /// Read the persisted `subscribed_at` for `peer_did` straight from the
 /// DuckDB `peer_subscriptions` row. Port-exposed name:
 /// `peer_storage.subscriptions.subscribed_at[did]`. Test-support is the

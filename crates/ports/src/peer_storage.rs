@@ -80,11 +80,71 @@ pub enum PeerStorageError {
 
 /// Result of `add_subscription`. Distinguishes fresh-subscribe from
 /// idempotent-re-subscribe so the cli can render "already subscribed
-/// since <ts>" (US-FED-001 AC #3) without a second DB lookup.
+/// since <ts>" (US-FED-001 AC #3) without a second DB lookup, and from
+/// re-following a peer the user removed (U-20).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddSubscriptionOutcome {
-    Added { subscribed_at: DateTime<Utc> },
-    AlreadyExisted { since: DateTime<Utc> },
+    Added {
+        subscribed_at: DateTime<Utc>,
+    },
+    AlreadyExisted {
+        since: DateTime<Utc>,
+    },
+    /// The peer had been soft-removed (`peer remove` without `--purge`);
+    /// the subscription is active again from `subscribed_at`.
+    Refollowed {
+        subscribed_at: DateTime<Utc>,
+    },
+}
+
+/// What `add_subscription` must do to the stored subscription row. A pure
+/// decision ([`plan_add_subscription`]); the adapter only carries it out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddSubscriptionPlan {
+    /// No row for this DID (never added, or hard-purged): insert this one.
+    Insert(PeerSubscription),
+    /// The DID is followed already: write nothing.
+    KeepActive { since: DateTime<Utc> },
+    /// The DID was soft-removed: overwrite its row with this active one.
+    Refollow(PeerSubscription),
+}
+
+impl AddSubscriptionPlan {
+    /// The outcome the caller sees once the plan is carried out.
+    pub fn outcome(&self) -> AddSubscriptionOutcome {
+        match self {
+            Self::Insert(sub) => AddSubscriptionOutcome::Added {
+                subscribed_at: sub.subscribed_at,
+            },
+            Self::KeepActive { since } => AddSubscriptionOutcome::AlreadyExisted { since: *since },
+            Self::Refollow(sub) => AddSubscriptionOutcome::Refollowed {
+                subscribed_at: sub.subscribed_at,
+            },
+        }
+    }
+}
+
+/// Decide how `peer add` treats the stored row for the requested DID.
+///
+/// An active row is kept untouched (PS-2 idempotency). A soft-removed row
+/// is followed again (U-20): the requested subscription — freshly resolved
+/// handle and PDS, the new `subscribed_at`, never removed — replaces it, so
+/// the peer's cached claims count again. No row means a fresh insert.
+pub fn plan_add_subscription(
+    existing: Option<&PeerSubscription>,
+    requested: PeerSubscription,
+) -> AddSubscriptionPlan {
+    let active_request = PeerSubscription {
+        removed_at: None,
+        ..requested
+    };
+    match existing {
+        None => AddSubscriptionPlan::Insert(active_request),
+        Some(row) if row.is_active() => AddSubscriptionPlan::KeepActive {
+            since: row.subscribed_at,
+        },
+        Some(_) => AddSubscriptionPlan::Refollow(active_request),
+    }
 }
 
 /// Result of `soft_remove`. `was_subscribed = false` ↔ "this DID was
@@ -137,7 +197,8 @@ pub trait PeerStoragePort {
     fn probe(&self) -> ProbeOutcome;
 
     /// Add (or idempotently re-confirm) a subscription. Returns
-    /// `Added` on first insert and `AlreadyExisted` for re-runs.
+    /// `Added` on first insert, `AlreadyExisted` for an active peer and
+    /// `Refollowed` for a soft-removed one (see [`plan_add_subscription`]).
     fn add_subscription(
         &self,
         sub: PeerSubscription,
@@ -236,4 +297,85 @@ pub trait PeerStoragePort {
         &self,
         target_cid: &Cid,
     ) -> Result<Vec<(Did, Cid, ReferenceType)>, PeerStorageError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn subscription(at_hour: u32, removed_at_hour: Option<u32>) -> PeerSubscription {
+        let at = |hour| Utc.with_ymd_and_hms(2026, 10, 1, hour, 0, 0).unwrap();
+        PeerSubscription {
+            peer_did: Did("did:plc:rachel-test".to_string()),
+            peer_handle: "rachel.test".to_string(),
+            peer_pds_endpoint: Url::parse("https://pds.example").unwrap(),
+            subscribed_at: at(at_hour),
+            removed_at: removed_at_hour.map(at),
+        }
+    }
+
+    #[test]
+    fn a_peer_never_added_is_inserted_as_active() {
+        let requested = subscription(9, None);
+
+        let plan = plan_add_subscription(None, requested.clone());
+
+        assert_eq!(plan, AddSubscriptionPlan::Insert(requested.clone()));
+        assert_eq!(
+            plan.outcome(),
+            AddSubscriptionOutcome::Added {
+                subscribed_at: requested.subscribed_at
+            }
+        );
+    }
+
+    #[test]
+    fn an_active_peer_is_kept_and_reports_its_original_follow_time() {
+        let stored = subscription(8, None);
+
+        let plan = plan_add_subscription(Some(&stored), subscription(9, None));
+
+        assert_eq!(
+            plan,
+            AddSubscriptionPlan::KeepActive {
+                since: stored.subscribed_at
+            }
+        );
+        assert_eq!(
+            plan.outcome(),
+            AddSubscriptionOutcome::AlreadyExisted {
+                since: stored.subscribed_at
+            }
+        );
+    }
+
+    #[test]
+    fn a_removed_peer_is_followed_again_from_now() {
+        let stored = subscription(8, Some(9));
+        let requested = subscription(10, None);
+
+        let plan = plan_add_subscription(Some(&stored), requested.clone());
+
+        assert_eq!(plan, AddSubscriptionPlan::Refollow(requested.clone()));
+        assert_eq!(
+            plan.outcome(),
+            AddSubscriptionOutcome::Refollowed {
+                subscribed_at: requested.subscribed_at
+            }
+        );
+    }
+
+    #[test]
+    fn a_written_subscription_is_never_removed() {
+        let stored_removed = subscription(8, Some(9));
+        for existing in [None, Some(&stored_removed)] {
+            match plan_add_subscription(existing, subscription(10, Some(11))) {
+                AddSubscriptionPlan::Insert(sub) | AddSubscriptionPlan::Refollow(sub) => {
+                    assert!(sub.is_active(), "{existing:?} wrote a removed row")
+                }
+                AddSubscriptionPlan::KeepActive { .. } => panic!("{existing:?} kept nothing"),
+            }
+        }
+    }
 }

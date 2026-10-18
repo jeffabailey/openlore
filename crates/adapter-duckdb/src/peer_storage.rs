@@ -42,8 +42,9 @@ use claim_domain::{
 };
 use duckdb::Connection;
 use ports::{
-    AddSubscriptionOutcome, HardPurgeOutcome, PeerStorageError, PeerStoragePort, PeerSubscription,
-    ProbeOutcome, SoftRemoveOutcome, WritePeerClaimOutcome,
+    plan_add_subscription, AddSubscriptionOutcome, AddSubscriptionPlan, HardPurgeOutcome,
+    PeerStorageError, PeerStoragePort, PeerSubscription, ProbeOutcome, SoftRemoveOutcome,
+    WritePeerClaimOutcome,
 };
 use url::Url;
 
@@ -284,6 +285,47 @@ fn lookup_subscription_row(
     }
 }
 
+/// Insert a new, active subscription row. Caller holds the connection lock.
+fn insert_subscription_row(
+    conn: &Connection,
+    sub: &PeerSubscription,
+) -> Result<(), PeerStorageError> {
+    conn.execute(
+        "INSERT INTO peer_subscriptions \
+            (peer_did, peer_handle, peer_pds_endpoint, subscribed_at, removed_at) \
+         VALUES (?, ?, ?, ?, NULL)",
+        duckdb::params![
+            sub.peer_did.0,
+            sub.peer_handle,
+            sub.peer_pds_endpoint.to_string(),
+            sub.subscribed_at.naive_utc(),
+        ],
+    )
+    .map(|_| ())
+    .map_err(|err| PeerStorageError::DuckDb(format!("insert peer_subscriptions: {err}")))
+}
+
+/// Make a soft-removed subscription row active again with the freshly
+/// resolved handle, PDS and follow time (U-20). Caller holds the lock.
+fn refollow_subscription_row(
+    conn: &Connection,
+    sub: &PeerSubscription,
+) -> Result<(), PeerStorageError> {
+    conn.execute(
+        "UPDATE peer_subscriptions \
+         SET peer_handle = ?, peer_pds_endpoint = ?, subscribed_at = ?, removed_at = NULL \
+         WHERE peer_did = ?",
+        duckdb::params![
+            sub.peer_handle,
+            sub.peer_pds_endpoint.to_string(),
+            sub.subscribed_at.naive_utc(),
+            sub.peer_did.0,
+        ],
+    )
+    .map(|_| ())
+    .map_err(|err| PeerStorageError::DuckDb(format!("refollow peer_subscriptions: {err}")))
+}
+
 /// Count cached `peer_claims` rows attributed to `peer_did`. Returns a
 /// `u32` (the count drives the cli's "N cached peer claims retained" /
 /// "Purged N" lines). Caller holds the connection lock.
@@ -506,34 +548,19 @@ impl PeerStoragePort for DuckDbPeerStorageAdapter {
     ) -> Result<AddSubscriptionOutcome, PeerStorageError> {
         let conn = self.lock_conn()?;
 
-        // Idempotency (US-FED-001 AC #3): if a row already exists for this
-        // DID — active OR soft-removed — report `AlreadyExisted` with its
-        // original `subscribed_at` and do NOT insert a duplicate. The
-        // PRIMARY KEY on `peer_did` would reject a second insert anyway;
-        // checking first lets us surface the original timestamp the cli
-        // renders without relying on a constraint-violation error string.
-        if let Some(existing) = lookup_subscription_row(&conn, &sub.peer_did)? {
-            return Ok(AddSubscriptionOutcome::AlreadyExisted {
-                since: existing.subscribed_at,
-            });
+        // The decision is pure (`plan_add_subscription`): an active row is
+        // kept (US-FED-001 AC #3 — its original `subscribed_at` is echoed,
+        // no duplicate), a soft-removed row is followed again (U-20), and a
+        // missing row (never added, or hard-purged) is inserted. This
+        // adapter only carries the plan out.
+        let existing = lookup_subscription_row(&conn, &sub.peer_did)?;
+        let plan = plan_add_subscription(existing.as_ref(), sub);
+        match &plan {
+            AddSubscriptionPlan::Insert(row) => insert_subscription_row(&conn, row)?,
+            AddSubscriptionPlan::Refollow(row) => refollow_subscription_row(&conn, row)?,
+            AddSubscriptionPlan::KeepActive { .. } => {}
         }
-
-        conn.execute(
-            "INSERT INTO peer_subscriptions \
-                (peer_did, peer_handle, peer_pds_endpoint, subscribed_at, removed_at) \
-             VALUES (?, ?, ?, ?, NULL)",
-            duckdb::params![
-                sub.peer_did.0,
-                sub.peer_handle,
-                sub.peer_pds_endpoint.to_string(),
-                sub.subscribed_at.naive_utc(),
-            ],
-        )
-        .map_err(|err| PeerStorageError::DuckDb(format!("insert peer_subscriptions: {err}")))?;
-
-        Ok(AddSubscriptionOutcome::Added {
-            subscribed_at: sub.subscribed_at,
-        })
+        Ok(plan.outcome())
     }
 
     fn list_active_subscriptions(&self) -> Result<Vec<PeerSubscription>, PeerStorageError> {

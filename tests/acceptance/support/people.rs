@@ -620,6 +620,26 @@ impl SubscribedPeer {
         );
     }
 
+    /// GIVEN: Maria follows the peer again after removing it (real `peer add`
+    /// against the peer's current record set). Returns the CLI outcome so the
+    /// caller can read what `peer add` said.
+    pub fn follow_again(&self, env: &TestEnv) -> CliOutcome {
+        let (records, _, _) = peer_records(self.did, self.seed, &self.published);
+        let pds = PeerPds::for_peer(self.did, records);
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", self.did],
+            self.did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "precondition: `peer add {}` again must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            self.did, added.stdout, added.stderr
+        );
+        added
+    }
+
     /// GIVEN: Maria unsubscribes AND purges the peer's cached claims.
     pub fn unsubscribe_and_purge(&self, env: &TestEnv) {
         let removed = run_openlore_with_stdin(env, &["peer", "remove", self.did, "--purge"], "y\n");

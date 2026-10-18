@@ -100,8 +100,8 @@ pub use graph::{
     AttributedClaim, GraphEdge, GraphNode, ScoringFilter, TraversalBound, TraversalResult,
 };
 pub use peer_storage::{
-    AddSubscriptionOutcome, HardPurgeOutcome, PeerStorageError, PeerStoragePort, SoftRemoveOutcome,
-    WritePeerClaimOutcome,
+    plan_add_subscription, AddSubscriptionOutcome, AddSubscriptionPlan, HardPurgeOutcome,
+    PeerStorageError, PeerStoragePort, SoftRemoveOutcome, WritePeerClaimOutcome,
 };
 
 // -----------------------------------------------------------------------------
