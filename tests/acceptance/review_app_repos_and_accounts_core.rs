@@ -247,8 +247,32 @@ fn sut_save_admission(
     })
 }
 
-fn sut_import_admission(_scope: &ScopeView) -> Result<(), LimitRefusalView> {
-    todo!("RED: bind to review_domain::repo_scope::admit_import (DELIVER 03-*)")
+fn sut_import_admission(scope: &ScopeView) -> Result<(), LimitRefusalView> {
+    use review_domain::repo_scope::{admit_import, SavedTicks, ScopeAccount, Standing};
+    let accounts: Vec<ScopeAccount> = scope
+        .accounts
+        .iter()
+        .map(|a| ScopeAccount {
+            github_user_id: a.id,
+            standing: if a.verified {
+                Standing::Verified
+            } else {
+                Standing::Unverified
+            },
+            saved: a
+                .saved
+                .clone()
+                .map_or(SavedTicks::NeverSaved, SavedTicks::Saved),
+            ranked_eligible: a.eligible.clone(),
+        })
+        .collect();
+    admit_import(&accounts, &scope.imports, CAP)
+        .map(drop)
+        .map_err(|refusal| LimitRefusalView {
+            limit: refusal.limit,
+            total: refusal.total,
+            excess: refusal.excess,
+        })
 }
 
 fn sut_scan_intent(
@@ -495,12 +519,70 @@ fn sut_add_account(
 }
 
 fn sut_classify_import(
-    _typed: &str,
-    _read: &RepoReadView,
-    _listed: &[u64],
-    _scope: &ScopeView,
+    typed: &str,
+    read: &RepoReadView,
+    listed: &[u64],
+    scope: &ScopeView,
 ) -> ImportVerdictView {
-    todo!("RED: bind to review_domain::repo_scope::classify_import (DELIVER 03-*)")
+    use claim_domain::authority::{RepoFacts, RepoOwnerKind, RepoRead};
+    use review_domain::repo_scope::{
+        classify_import, ImportRefusal, ImportVerdict, SavedTicks, ScopeAccount, Standing,
+    };
+    let accounts: Vec<ScopeAccount> = scope
+        .accounts
+        .iter()
+        .map(|a| ScopeAccount {
+            github_user_id: a.id,
+            standing: if a.verified {
+                Standing::Verified
+            } else {
+                Standing::Unverified
+            },
+            saved: a
+                .saved
+                .clone()
+                .map_or(SavedTicks::NeverSaved, SavedTicks::Saved),
+            ranked_eligible: a.eligible.clone(),
+        })
+        .collect();
+    let facts = match read {
+        RepoReadView::Found {
+            full_name,
+            owner_id,
+            owner_is_user,
+        } => Some(RepoFacts {
+            repo_id: 1,
+            full_name: full_name.clone(),
+            owner_id: *owner_id,
+            owner_login: full_name.split('/').next().unwrap_or_default().to_string(),
+            owner_kind: if *owner_is_user {
+                RepoOwnerKind::User
+            } else {
+                RepoOwnerKind::Organization
+            },
+            fork: false,
+            archived: false,
+        }),
+        _ => None,
+    };
+    let read = match (read, &facts) {
+        (_, Some(facts)) => RepoRead::Found(facts),
+        (RepoReadView::NotFound, None) => RepoRead::Gone,
+        _ => RepoRead::Unfinished,
+    };
+    match classify_import(typed, read, listed, &accounts, &scope.imports, CAP) {
+        ImportVerdict::Admitted(_) => ImportVerdictView::Admitted,
+        ImportVerdict::Refused(ImportRefusal::Shape) => ImportVerdictView::Shape,
+        ImportVerdict::Refused(ImportRefusal::NotFound) => ImportVerdictView::NotFound,
+        ImportVerdict::Refused(ImportRefusal::Unreachable) => ImportVerdictView::Unreachable,
+        ImportVerdict::Refused(ImportRefusal::OwnedByListedAccount) => {
+            ImportVerdictView::OwnedByListedAccount
+        }
+        ImportVerdict::Refused(ImportRefusal::OverLimit(_)) => ImportVerdictView::OverLimit,
+        ImportVerdict::Refused(ImportRefusal::AlreadyImported) => {
+            unreachable!("repo 1 is never among the generated imports")
+        }
+    }
 }
 
 fn sut_move(_scope: &ScopeView, _repo: u64, _account: usize) -> ScopeView {
@@ -787,7 +869,6 @@ proptest! {
     /// CORE-RRA-3 (@property @BR-RRA-3 @I-07 @contract-shape:pure-function)
     /// Admitted Saves and imports never reach a state the scan start refuses.
     #[test]
-    #[ignore = "CORE-RRA-3 (bind with DELIVER step 03-02): one definition of S across Save, import and scan start (RED binding)"]
     fn core_rra3_admitted_changes_never_overfill_a_scan(
         start in arb_scope().prop_filter("start within the limit", |s| total_toward_limit(s) <= CAP),
         ops in proptest::collection::vec((any::<bool>(), 0usize..3, 0usize..12), 0..12)
@@ -1014,7 +1095,6 @@ proptest! {
 
     /// CORE-RRA-9 (@property @US-RRA-005 @AC-005.1 @AC-005.2 @AC-005.3 @AC-005.6 @C6a @C6c @contract-shape:pure-function)
     #[test]
-    #[ignore = "CORE-RRA-9 (bind with DELIVER step 03-02): repo_scope import classification (RED binding)"]
     fn core_rra9_an_import_verdict_is_one_of_a_closed_set_in_a_fixed_order(
         typed in arb_typed(),
         read in arb_repo_read(),

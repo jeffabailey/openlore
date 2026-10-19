@@ -12,6 +12,7 @@ use ports::claim_domain::UnsignedClaim;
 use ports::{AccountCheckOutcome, AccountRefusal, KpiCounterRow, OutsideDefault, Suggestion};
 
 use crate::ownership::OwnershipRefusal;
+use crate::repo_scope::ImportRefusal;
 use crate::signin::SignInFailure;
 
 /// Every counted event.
@@ -62,6 +63,16 @@ pub enum KpiEvent {
     AccountRemoved,
     /// KPI-RRA-3: an owner named a public repo she doesn't own (US-RRA-005).
     ImportAdded,
+    /// "Add repo" was refused: the name is not `owner/name`.
+    ImportRefusedShape,
+    /// "Add repo" was refused: no public repo is there.
+    ImportRefusedNotFound,
+    /// "Add repo" was refused: a listed account owns the repo.
+    ImportRefusedOwned,
+    /// "Add repo" was refused: the scan's total would pass the limit.
+    ImportRefusedOverLimit,
+    /// "Add repo" was refused: GitHub could not answer.
+    ImportRefusedUnreachable,
     /// KPI-RRA-4: a publish was refused because none of the owner's listed
     /// accounts owns the repo now (another account or an organization does).
     PublishRefusedNotOwned,
@@ -76,7 +87,7 @@ pub enum KpiEvent {
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 35] = [
+    pub const ALL: [KpiEvent; 40] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -106,6 +117,11 @@ impl KpiEvent {
         Self::ScanAccountUnfinished,
         Self::AccountRemoved,
         Self::ImportAdded,
+        Self::ImportRefusedShape,
+        Self::ImportRefusedNotFound,
+        Self::ImportRefusedOwned,
+        Self::ImportRefusedOverLimit,
+        Self::ImportRefusedUnreachable,
         Self::PublishRefusedNotOwned,
         Self::PublishRefusedBioFailed,
         Self::PublishRefusedUnreachable,
@@ -148,6 +164,11 @@ impl KpiEvent {
             Self::ScanAccountUnfinished => "scan.account.unfinished",
             Self::AccountRemoved => "account.removed",
             Self::ImportAdded => "import.added",
+            Self::ImportRefusedShape => "import.refused.shape",
+            Self::ImportRefusedNotFound => "import.refused.not_found",
+            Self::ImportRefusedOwned => "import.refused.owned",
+            Self::ImportRefusedOverLimit => "import.refused.over_limit",
+            Self::ImportRefusedUnreachable => "import.refused.unreachable",
             Self::PublishRefusedNotOwned => "publish.refused.not_owned",
             Self::PublishRefusedBioFailed => "publish.refused.bio_failed",
             Self::PublishRefusedUnreachable => "publish.refused.unreachable",
@@ -237,6 +258,18 @@ pub fn publish_refusal_events(refusal: SigningRefusal) -> Vec<KpiEvent> {
         SigningRefusal::BioNoLongerHolds(_) => vec![KpiEvent::PublishRefusedBioFailed],
         SigningRefusal::Unfinished => vec![KpiEvent::PublishRefusedUnreachable],
         SigningRefusal::RepoGone => Vec::new(),
+    }
+}
+
+/// What a refused "Add repo" counts (an already-imported repo is not counted).
+pub fn import_refusal_event(refusal: ImportRefusal) -> Option<KpiEvent> {
+    match refusal {
+        ImportRefusal::Shape => Some(KpiEvent::ImportRefusedShape),
+        ImportRefusal::NotFound => Some(KpiEvent::ImportRefusedNotFound),
+        ImportRefusal::Unreachable => Some(KpiEvent::ImportRefusedUnreachable),
+        ImportRefusal::OwnedByListedAccount => Some(KpiEvent::ImportRefusedOwned),
+        ImportRefusal::OverLimit(_) => Some(KpiEvent::ImportRefusedOverLimit),
+        ImportRefusal::AlreadyImported => None,
     }
 }
 

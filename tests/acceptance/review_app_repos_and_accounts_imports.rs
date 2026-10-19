@@ -133,7 +133,6 @@ fn priya_names_a_public_repo_she_doesnt_own_and_gets_private_suggestions() {
 ///     | GitHub says it is too busy to answer       | Priya  | rust-lang/cargo           | GitHub could not be reached, so we couldn't check github.com/rust-lang/cargo. Please try again in a few minutes. Nothing was lost. |
 /// ```
 #[test]
-#[ignore = "DELIVER 03-02: import refusals name the cause and the fix"]
 fn a_repo_that_cannot_be_imported_is_refused_with_the_cause_and_the_fix() {
     #[derive(Debug, Clone, Copy, PartialEq)]
     enum Setup {

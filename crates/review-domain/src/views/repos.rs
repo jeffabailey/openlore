@@ -6,7 +6,7 @@ use maud::{html, Markup};
 use super::*;
 use ports::{ImportedRepo, ListingExtent};
 
-use crate::repo_scope::{ChooseList, LimitRefusal, TicksRoom, SCAN_REPO_CAP};
+use crate::repo_scope::{ChooseList, ImportRefusal, LimitRefusal, TicksRoom, SCAN_REPO_CAP};
 
 /// Where the choose page lives and its Save form posts.
 pub const REPOS_PATH: &str = "/repos";
@@ -73,12 +73,17 @@ pub struct AccountRepos<'a> {
 }
 
 /// What a request on the choose page did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReposNotice {
     /// A Save stored a choice whose next scan reads `reads` repos.
     Saved { reads: usize },
     /// A Save was refused: the total would pass the limit (BR-RRA-3).
     OverLimit(LimitRefusal),
+    /// "Add repo" of `repo` (as typed) was refused, nothing changed.
+    ImportRefused {
+        refusal: ImportRefusal,
+        repo: String,
+    },
 }
 
 /// The choose page.
@@ -106,6 +111,32 @@ pub fn save_over_limit_message(refusal: LimitRefusal) -> String {
         refusal.limit, refusal.total, refusal.excess
     )
 }
+
+/// AC-005.*: the cause of a refused "Add repo" of `repo` and the fix.
+pub fn import_refusal_message(refusal: ImportRefusal, repo: &str) -> String {
+    match refusal {
+        ImportRefusal::Shape => IMPORT_SHAPE_MESSAGE.to_string(),
+        ImportRefusal::NotFound => format!(
+            "We couldn't find a public repo at github.com/{repo}. Check the spelling. Private repos can't be read."
+        ),
+        ImportRefusal::Unreachable => format!(
+            "GitHub could not be reached, so we couldn't check github.com/{repo}. Please try again in a few minutes. Nothing was lost."
+        ),
+        ImportRefusal::OwnedByListedAccount => {
+            format!("github.com/{repo} is yours. Tick it in your repo list instead.")
+        }
+        ImportRefusal::AlreadyImported => format!("github:{repo} is already in your list."),
+        ImportRefusal::OverLimit(refusal) => format!(
+            "You can choose up to {} repos per scan in total. You have {} chosen. Untick or remove {} before adding another.",
+            refusal.limit,
+            refusal.total,
+            counted(refusal.excess, "repo", "repos")
+        ),
+    }
+}
+
+/// AC-005.6: a name that is not `owner/name`.
+pub const IMPORT_SHAPE_MESSAGE: &str = "Enter the repo as owner/name, for example rust-lang/cargo.";
 
 /// "2 of 4 ticked: your limit of 10 repos is reached. Untick others to choose more."
 pub fn limit_reached_message(list: &ChooseList) -> String {
@@ -158,12 +189,15 @@ pub fn repos_page(view: &ReposView<'_>) -> String {
         "Choose repos",
         html! {
             h1 { "Choose repos" }
-            @match view.notice {
+            @match &view.notice {
                 Some(ReposNotice::Saved { reads }) => {
-                    p role="status" { strong { (saved_message(reads)) } }
+                    p role="status" { strong { (saved_message(*reads)) } }
                 }
                 Some(ReposNotice::OverLimit(refusal)) => {
-                    p role="alert" { strong { (save_over_limit_message(refusal)) } }
+                    p role="alert" { strong { (save_over_limit_message(*refusal)) } }
+                }
+                Some(ReposNotice::ImportRefused { refusal, repo }) => {
+                    p role="alert" { strong { (import_refusal_message(*refusal, repo)) } }
                 }
                 None => {}
             }

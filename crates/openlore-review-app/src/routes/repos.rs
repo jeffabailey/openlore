@@ -98,7 +98,7 @@ fn listed_imports(app: &App, owner_did: &str) -> Vec<ImportedRepo> {
     app.imports_read.imports(owner_did).unwrap_or_default()
 }
 
-fn import_ids(app: &App, owner_did: &str) -> Vec<u64> {
+pub(crate) fn import_ids(app: &App, owner_did: &str) -> Vec<u64> {
     listed_imports(app, owner_did)
         .iter()
         .map(|import| import.repo_id)
@@ -106,7 +106,7 @@ fn import_ids(app: &App, owner_did: &str) -> Vec<u64> {
 }
 
 /// The owner's accounts, in the order they were added.
-fn listed_accounts(app: &App, owner_did: &str) -> Vec<GithubLink> {
+pub(crate) fn listed_accounts(app: &App, owner_did: &str) -> Vec<GithubLink> {
     app.links.github_accounts(owner_did).unwrap_or_default()
 }
 
@@ -158,7 +158,7 @@ async fn account_states(app: &App, owner_did: &str) -> Vec<AccountState> {
 }
 
 /// The owner's accounts as the limit counts them.
-async fn owner_scope(app: &App, owner_did: &str) -> Vec<ScopeAccount> {
+pub(crate) async fn owner_scope(app: &App, owner_did: &str) -> Vec<ScopeAccount> {
     account_states(app, owner_did)
         .await
         .iter()
@@ -234,7 +234,9 @@ pub(crate) async fn repos_page(
         })
         .collect();
     let status = match notice {
-        Some(ReposNotice::OverLimit(_)) => StatusCode::UNPROCESSABLE_ENTITY,
+        Some(ReposNotice::OverLimit(_) | ReposNotice::ImportRefused { .. }) => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
         _ => StatusCode::OK,
     };
     Reply::page(

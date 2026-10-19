@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ports::claim_domain::authority::RepoRead;
 use ports::{
     AccountAdmission, AccountAdmitted, AccountRefusal, AccountRepoListing, ImportedRepo,
     ListedRepo, ListingExtent, OutsideDefault, OwnedRepo, PlanRowStatus, PlannedScanRepo,
@@ -146,8 +147,8 @@ pub fn default_ticks(
     imports: &[u64],
     cap: usize,
 ) -> Vec<(u64, Vec<u64>)> {
-    let saved: usize = accounts.iter().map(|account| account.saved.count()).sum();
-    let room = cap.saturating_sub(saved + imports.len());
+    let room = cap
+        .saturating_sub(saved_total(accounts.iter().map(|account| &account.saved)) + imports.len());
     accounts
         .iter()
         .filter(|account| account.takes_default_ticks())
@@ -174,11 +175,12 @@ pub fn admit_save(
     cap: usize,
 ) -> Result<usize, LimitRefusal> {
     let others = |id: &u64| *id != github_user_id;
-    let others_saved: usize = accounts
-        .iter()
-        .filter(|account| others(&account.github_user_id))
-        .map(|account| account.saved.count())
-        .sum();
+    let others_saved = saved_total(
+        accounts
+            .iter()
+            .filter(|account| others(&account.github_user_id))
+            .map(|account| &account.saved),
+    );
     let others_defaults: usize = default_ticks(accounts, imports, cap)
         .iter()
         .filter(|(id, _)| others(id))
@@ -188,6 +190,22 @@ pub fn admit_save(
         ticked.len() + others_saved + imports.len() + others_defaults,
         cap,
     )
+}
+
+/// `S`, the one definition (OQ-D3): the ticks of every saved choice, the
+/// account verified or not. Save, import and scan start all count it.
+fn saved_total<'a>(saved: impl IntoIterator<Item = &'a SavedTicks>) -> usize {
+    saved.into_iter().map(SavedTicks::count).sum()
+}
+
+/// What the next scan reads now: `S + I + D`, the saved ticks, the imports
+/// and the default ticks within the room they leave.
+fn chosen_total(accounts: &[ScopeAccount], imports: &[u64], cap: usize) -> usize {
+    let defaults: usize = default_ticks(accounts, imports, cap)
+        .iter()
+        .map(|(_, ticks)| ticks.len())
+        .sum();
+    saved_total(accounts.iter().map(|account| &account.saved)) + imports.len() + defaults
 }
 
 /// The total itself when it fits under `cap`, else the refusal naming it.
@@ -478,7 +496,7 @@ pub fn scan_intent(accounts: &[ScanAccount], imports: &[u64], cap: usize) -> Sca
     if imports.is_empty() && !accounts.iter().any(ScanAccount::has_something_to_read) {
         return ScanIntent::NothingToRead;
     }
-    let saved: usize = accounts.iter().map(|account| account.saved.count()).sum();
+    let saved = saved_total(accounts.iter().map(|account| &account.saved));
     match within_cap(saved + imports.len(), cap) {
         Err(refusal) => ScanIntent::OverLimit(refusal),
         Ok(_) => ScanIntent::Read(FrozenScope {
@@ -769,6 +787,106 @@ pub fn import_shape(typed: &str) -> Option<(&str, &str)> {
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
     (part(owner) && part(name)).then_some((owner, name))
+}
+
+/// Why a named repo is not imported (DWD-RRA-4: the first that applies).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportRefusal {
+    /// Not `owner/name`: decided without asking GitHub.
+    Shape,
+    /// GitHub says no public repo is there (missing or private).
+    NotFound,
+    /// GitHub could not answer (outage or rate limit).
+    Unreachable,
+    /// A listed account (verified or not) owns it (D-RRA-T2).
+    OwnedByListedAccount,
+    /// It is already on "Repos you don't own" (D-RRA-T3).
+    AlreadyImported,
+    /// Adding it would pass the limit.
+    OverLimit(LimitRefusal),
+}
+
+/// What "Add repo" decides (CORE-RRA-9): the import to store, or the one
+/// refusal that names its cause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportVerdict {
+    Admitted(ImportedRepo),
+    Refused(ImportRefusal),
+}
+
+/// Import admission (CORE-RRA-3): one more repo is admitted iff the scan's
+/// total (the same `S + I + D` a Save and a scan start count) stays within
+/// `cap`. Admitted: the total the next scan reads.
+pub fn admit_import(
+    accounts: &[ScopeAccount],
+    imports: &[u64],
+    cap: usize,
+) -> Result<usize, LimitRefusal> {
+    let total = chosen_total(accounts, imports, cap);
+    if total < cap {
+        Ok(total + 1)
+    } else {
+        Err(LimitRefusal {
+            limit: cap,
+            total,
+            excess: total + 1 - cap,
+        })
+    }
+}
+
+/// Classify an "Add repo" request (CORE-RRA-9, DWD-RRA-4) in a fixed order:
+/// shape → the repo read → owned by a listed account → already imported →
+/// over the limit → admitted.
+pub fn classify_import(
+    typed: &str,
+    read: RepoRead<'_>,
+    listed: &[u64],
+    accounts: &[ScopeAccount],
+    imports: &[u64],
+    cap: usize,
+) -> ImportVerdict {
+    let admitted = import_shape(typed)
+        .ok_or(ImportRefusal::Shape)
+        .and(found(read))
+        .and_then(|facts| not_owned(facts, listed))
+        .and_then(|facts| not_yet_imported(facts, imports))
+        .and_then(|facts| {
+            admit_import(accounts, imports, cap)
+                .map(|_| import_of(facts))
+                .map_err(ImportRefusal::OverLimit)
+        });
+    match admitted {
+        Ok(import) => ImportVerdict::Admitted(import),
+        Err(refusal) => ImportVerdict::Refused(refusal),
+    }
+}
+
+/// The repo GitHub served, or why it could not be read.
+fn found(read: RepoRead<'_>) -> Result<&RepoFacts, ImportRefusal> {
+    match read {
+        RepoRead::Found(facts) => Ok(facts),
+        RepoRead::Gone => Err(ImportRefusal::NotFound),
+        RepoRead::Unfinished => Err(ImportRefusal::Unreachable),
+    }
+}
+
+fn not_owned<'a>(facts: &'a RepoFacts, listed: &[u64]) -> Result<&'a RepoFacts, ImportRefusal> {
+    if listed.contains(&facts.owner_id) {
+        Err(ImportRefusal::OwnedByListedAccount)
+    } else {
+        Ok(facts)
+    }
+}
+
+fn not_yet_imported<'a>(
+    facts: &'a RepoFacts,
+    imports: &[u64],
+) -> Result<&'a RepoFacts, ImportRefusal> {
+    if imports.contains(&facts.repo_id) {
+        Err(ImportRefusal::AlreadyImported)
+    } else {
+        Ok(facts)
+    }
 }
 
 /// The import a public repo read from GitHub becomes, named as GitHub
