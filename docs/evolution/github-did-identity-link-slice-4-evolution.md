@@ -198,8 +198,12 @@ Not pushed: the slice is committed locally on `main` through `7a3a1b9`.
 - **Private `bare_did` duplicate**: `adapter-http-viewer` keeps its own private
   `bare_did` (`crates/adapter-http-viewer/src/lib.rs`) next to the shared
   `viewer_domain::common::bare_did`; fold it into the shared one.
-- **F4** (probe nuance) and **F5** (optional unit tests) from the adversarial
-  review.
+- **F4** from the adversarial review: `read_listed_links` returns before the
+  check read when no link is stored, so the startup probe exercises the check
+  table only when links exist. VL-14 relies on that; note it in its comment.
+- **F5** from the adversarial review: `of_author`, `of_person`,
+  `github_person` and the Lines render are covered only by acceptance tests;
+  unit tests for the pure selectors are optional.
 - Known limit (D-VL-6, VL-17): after a rename and reuse of the old login, the
   old login's page shows the first DID's line until the reader re-checks.
 - Carried from slice 3: U-44 NF-1, F-6, NF-4/NF-5, F-11, U-20, and the slice-2
