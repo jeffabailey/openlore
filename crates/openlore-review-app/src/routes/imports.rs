@@ -29,7 +29,9 @@ pub(crate) async fn add_import(app: &App, request: &PageRequest) -> Reply {
     };
     let typed = field(&request.form, IMPORT_REPO_FIELD).unwrap_or_default();
     let today = utc_day(crate::limiter::unix_now_secs());
-    let notice = match import_verdict(app, &session.owner_did, &typed).await {
+    let scope_guard = app.scope_locks.hold(&session.owner_did).await;
+    let verdict = import_verdict(app, &session.owner_did, &typed).await;
+    let notice = match verdict {
         ImportVerdict::Admitted(import) => {
             let tally = KpiTally {
                 day: &today,
@@ -50,6 +52,7 @@ pub(crate) async fn add_import(app: &App, request: &PageRequest) -> Reply {
             })
         }
     };
+    drop(scope_guard);
     repos_page(app, &session, &csrf_token_of(request), notice).await
 }
 
@@ -132,6 +135,7 @@ pub(crate) async fn remove_import(app: &App, request: &PageRequest) -> Reply {
         Ok(signed_in) => signed_in,
         Err(refused) => return refused,
     };
+    let scope_guard = app.scope_locks.hold(&session.owner_did).await;
     let Some(import) = named_import(app, &session.owner_did, request) else {
         return not_found();
     };
@@ -143,6 +147,7 @@ pub(crate) async fn remove_import(app: &App, request: &PageRequest) -> Reply {
     let removal = app
         .scope_removal
         .remove_import(&session.owner_did, import.repo_id, tally);
+    drop(scope_guard);
     let notice = match removal {
         Ok(ImportRemoval::Removed {
             full_name,

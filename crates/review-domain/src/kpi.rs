@@ -34,6 +34,9 @@ pub enum KpiEvent {
     /// KPI-RRA-1 restricted to suggestions from an account other than the
     /// owner's first (UC-RRA-7).
     SuggestionActedOutsideDefaultOtherAccount,
+    /// KPI-RRA-1 (and KPI-RRA-3) restricted to suggestions from a repo the
+    /// owner imported.
+    SuggestionActedOutsideDefaultImported,
     /// The choose-repos page was opened.
     ReposChoiceViewed,
     /// A Save stored a repo choice.
@@ -98,7 +101,7 @@ pub enum KpiEvent {
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 45] = [
+    pub const ALL: [KpiEvent; 46] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -111,6 +114,7 @@ impl KpiEvent {
         Self::SuggestionDeclined,
         Self::SuggestionActedOutsideDefault,
         Self::SuggestionActedOutsideDefaultOtherAccount,
+        Self::SuggestionActedOutsideDefaultImported,
         Self::ReposChoiceViewed,
         Self::ReposChoiceSaved,
         Self::ReposChoiceChangedFromDefault,
@@ -162,6 +166,9 @@ impl KpiEvent {
             Self::SuggestionActedOutsideDefault => "suggestion.acted.outside_default",
             Self::SuggestionActedOutsideDefaultOtherAccount => {
                 "suggestion.acted.outside_default.other_account"
+            }
+            Self::SuggestionActedOutsideDefaultImported => {
+                "suggestion.acted.outside_default.imported"
             }
             Self::ReposChoiceViewed => "repos.choice.viewed",
             Self::ReposChoiceSaved => "repos.choice.saved",
@@ -348,6 +355,38 @@ pub fn outside_default_events(outside_default: Option<OutsideDefault>) -> Vec<Kp
     }
 }
 
+/// Where a suggestion the owner acts on came from, as KPI-RRA-1 counts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActedOrigin {
+    /// A repo today's default top 5 of her first account would read.
+    Default,
+    /// A repo of one of her accounts outside that default.
+    Outside(OutsideDefault),
+    /// A repo she imported.
+    Imported,
+}
+
+/// The KPI-RRA-1 counters an action on a suggestion from `origin` adds.
+pub fn acted_origin_events(origin: ActedOrigin) -> Vec<KpiEvent> {
+    match origin {
+        ActedOrigin::Default => Vec::new(),
+        ActedOrigin::Outside(outside_default) => outside_default_events(Some(outside_default)),
+        ActedOrigin::Imported => vec![
+            KpiEvent::SuggestionActedOutsideDefault,
+            KpiEvent::SuggestionActedOutsideDefaultImported,
+        ],
+    }
+}
+
+/// The counters a decline adds: `suggestion.declined`, plus KPI-RRA-1's
+/// when the suggestion came from outside the default ("act on = approve,
+/// edit or decline").
+pub fn decline_events(origin: ActedOrigin) -> Vec<KpiEvent> {
+    std::iter::once(KpiEvent::SuggestionDeclined)
+        .chain(acted_origin_events(origin))
+        .collect()
+}
+
 /// The counter one scan's bio check of an account adds: a failed or an
 /// unfinished check counts; a passed one does not.
 pub fn account_check_event(outcome: AccountCheckOutcome) -> Option<KpiEvent> {
@@ -490,6 +529,34 @@ mod tests {
                 || Confidence::from_basis_points(i64::from(published_bp)).basis_points() != i64::from(offered_bp);
             prop_assert_eq!(events[0], KpiEvent::SuggestionApproved);
             prop_assert_eq!(events.contains(&KpiEvent::SuggestionApprovedEdited), edited);
+        }
+
+        /// Universe: every origin of a declined suggestion (U-RRA-D5). A
+        /// decline always counts once, and counts toward KPI-RRA-1 exactly
+        /// when the suggestion came from outside the default, with the same
+        /// KPI-RRA-1 counters an approval of it adds.
+        #[test]
+        fn a_decline_counts_toward_kpi_rra_1_exactly_when_it_came_from_outside_the_default(
+            origin in prop_oneof![
+                Just(ActedOrigin::Default),
+                Just(ActedOrigin::Imported),
+                proptest::sample::select(OutsideDefault::ALL.to_vec()).prop_map(ActedOrigin::Outside),
+            ]
+        ) {
+            let events = decline_events(origin);
+            prop_assert_eq!(events[0], KpiEvent::SuggestionDeclined);
+            prop_assert_eq!(
+                events.contains(&KpiEvent::SuggestionActedOutsideDefault),
+                origin != ActedOrigin::Default
+            );
+            prop_assert_eq!(
+                events.contains(&KpiEvent::SuggestionActedOutsideDefaultImported),
+                origin == ActedOrigin::Imported
+            );
+            if let ActedOrigin::Outside(outside_default) = origin {
+                let approval_counts = outside_default_events(Some(outside_default));
+                prop_assert_eq!(&events[1..], approval_counts.as_slice());
+            }
         }
 
         /// Universe: arbitrary strings. Only `YYYY-MM-DD`-shaped text is a day.

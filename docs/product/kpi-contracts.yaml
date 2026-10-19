@@ -18,7 +18,7 @@
 #   notes:                  caveats, deferrals, links
 
 schema_version: 1
-last_updated: 2026-10-14  # +KPI-GDL-1..4, +KPI-OOS-1..4 (registered at DESIGN acceptance). Earlier: +KPI-CPI-1..5, +KPI-HB-1..3 (registered after finalize). Earlier: serverless-philosophy-federation DEVOPS: +KPI-SF-1..5 (KPI-SF-1 = round-trip CID integrity North Star, CI contract test; telemetry-free per sovereignty). slice-08 realized KPI-AV-1/2/3/4/5 + KPI-VIEW-2 + KPI-HX-G1/2/3 on /search (no new KPI)
+last_updated: 2026-10-19  # +KPI-RRA-1..7 (review-app-repos-and-accounts, KPI-RRA-6 deferred). Earlier: +KPI-GDL-1..4, +KPI-OOS-1..4 (registered at DESIGN acceptance). Earlier: +KPI-CPI-1..5, +KPI-HB-1..3 (registered after finalize). Earlier: serverless-philosophy-federation DEVOPS: +KPI-SF-1..5 (KPI-SF-1 = round-trip CID integrity North Star, CI contract test; telemetry-free per sovereignty). slice-08 realized KPI-AV-1/2/3/4/5 + KPI-VIEW-2 + KPI-HX-G1/2/3 on /search (no new KPI)
 
 kpis:
   - id: KPI-1
@@ -762,6 +762,79 @@ kpis:
     measurement_method: "dogfood session log"
     baseline_at_ga: "0 (feature new)"
     notes: "Leading. The review app cannot reach org repos in v1."
+
+  # --- review-app-repos-and-accounts, registered 2026-10-19 (DELIVER closing step 03-06, D-RRA-T4) ---
+  # Source: docs/feature/review-app-repos-and-accounts/discuss/outcome-kpis.md; counter names
+  # per design/wave-decisions.md D-RRA-D11 (kpi_counters, counts only: no DID, handle, login or repo name).
+  - id: KPI-RRA-1
+    name: "Owners act on a suggestion from a repo today's scan would not read"
+    type: north-star
+    feature_origin: review-app-repos-and-accounts
+    persona: P-001
+    target: ">= 30% of verified owners who scan after R1 approve, edit or decline >= 1 suggestion from outside the default top 5, a second account, or an imported repo, within 30 days"
+    measurement_method: "kpi_counters: suggestion.acted.outside_default (+ .other_account, + .imported) on approve, edit and decline / scanning owners (scan.completed)"
+    baseline_at_ga: "0% (impossible before the feature)"
+    notes: "North Star. Declines count since U-RRA-D5 (03-06). Target is a hypothesis; re-set from the 2-week baseline."
+
+  - id: KPI-RRA-2
+    name: "Owners who start adding another GitHub account finish it verified"
+    type: leading
+    feature_origin: review-app-repos-and-accounts
+    persona: P-001
+    target: ">= 70%"
+    measurement_method: "kpi_counters: account.add.verified / account.add.started; refusals by cause account.add.refused.{did_missing, held_by_another, already_listed, at_limit, unreachable}"
+    baseline_at_ga: "0% (not possible before the feature)"
+    notes: "Leading. US-RRA-003/004."
+
+  - id: KPI-RRA-3
+    name: "Owners who import a repo act on a suggestion from it"
+    type: leading
+    feature_origin: review-app-repos-and-accounts
+    persona: P-001
+    target: ">= 50% of owners who import >= 1 repo act on >= 1 imported suggestion within 30 days"
+    measurement_method: "kpi_counters: import.added, suggestion.acted.outside_default.imported (declines; imported suggestions are never publishable, BR-RRA-1); also import.removed, import.removed.age.{lt_1d, lt_14d, ge_14d}, import.refused.{shape, not_found, owned, over_limit, unreachable}, import.moved_to_owned"
+    baseline_at_ga: "0%"
+    notes: "Leading. US-RRA-005."
+
+  - id: KPI-RRA-4
+    name: "No PDS write, preview, profile entry or share post of a suggestion whose repo is not owned by a listed account whose bio holds the writer's DID"
+    type: guardrail
+    feature_origin: review-app-repos-and-accounts
+    persona: P-001
+    target: "0"
+    measurement_method: "CI property over every publish request path (AC-006.3) + production audit: every PDS write has an ownership.publish_check.passed log event in the same request; refusals counted as publish.refused.{not_owned, bio_failed, unreachable}"
+    baseline_at_ga: "n/a (no imports before the feature)"
+    notes: "Guardrail. Release-blocking. BR-RRA-1/2, ADR-089."
+
+  - id: KPI-RRA-5
+    name: "No repo read from an account whose bio check failed in that scan"
+    type: guardrail
+    feature_origin: review-app-repos-and-accounts
+    persona: P-001
+    target: "0"
+    measurement_method: "scan-gate audit per account (extends KPI-BRA-5); kpi_counters: scan.account.failed, scan.account.unfinished"
+    baseline_at_ga: "0 today (one account)"
+    notes: "Guardrail. Release-blocking."
+
+  - id: KPI-RRA-6
+    name: "Owners who import an org repo they administer publish a claim about it"
+    type: leading
+    feature_origin: review-app-repos-and-accounts
+    persona: P-001
+    target: ">= 1 dogfood claim confirmed by a second reader, then >= 20% within 60 days"
+    measurement_method: "kpi_counters: publish.administered (not instrumented in v1)"
+    baseline_at_ga: "0"
+    notes: "Deferred (R4) by the user 2026-10-19; not measured until US-RRA-007 is scheduled."
+
+  - id: KPI-RRA-7
+    name: "No scan reads a repo not chosen or imported, more than the limit, past the daily cap, or re-offers a declined key"
+    type: guardrail
+    feature_origin: review-app-repos-and-accounts
+    persona: P-001
+    target: "0 scans that read a repo not chosen or imported, read more than 10 repos, exceed 6 a day per DID, or re-offer a declined key (owned or imported)"
+    measurement_method: "CI property on the scan's repo set + budget properties + suppression audit (extends KPI-BRA-4b); kpi_counters: repos.choice.viewed, repos.choice.saved, repos.choice.changed_from_default, repos.choice.refused.over_limit, scan.refused.{nothing_to_read, over_limit}"
+    baseline_at_ga: "0 today"
+    notes: "Guardrail. Release-blocking. Scope changes serialized per DID (ADR-088 §10)."
 
 # Guardrail policy:
 #   KPI-4 and KPI-5 are guardrails. A release that lowers either is blocked,

@@ -161,6 +161,7 @@ pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
     };
     let typed = field(&request.form, "github_login").unwrap_or_default();
     let typed = typed.trim();
+    let scope_guard = app.scope_locks.hold(&session.owner_did).await;
     let listed = app
         .links
         .github_accounts(&session.owner_did)
@@ -184,6 +185,7 @@ pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
             }
         }
     };
+    drop(scope_guard);
     let message = views::ownership_message(shown, &login, &session.owner_did, &session.handle);
     github_page(app, &session, &cookie_value, Some((shown, &message))).await
 }
@@ -437,6 +439,7 @@ pub(crate) async fn remove_account(app: &App, request: &PageRequest) -> Reply {
         Ok(signed_in) => signed_in,
         Err(refused) => return refused,
     };
+    let scope_guard = app.scope_locks.hold(&session.owner_did).await;
     let Some(account) = named_account(app, &session, request) else {
         return not_found();
     };
@@ -446,6 +449,7 @@ pub(crate) async fn remove_account(app: &App, request: &PageRequest) -> Reply {
         account.github_user_id,
         counted.tally(),
     );
+    drop(scope_guard);
     let Ok(AccountRemoval::Removed { deleted_pending }) = removal else {
         return github_page(app, &session, &cookie_value, None).await;
     };

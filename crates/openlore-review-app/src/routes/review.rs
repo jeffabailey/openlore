@@ -13,6 +13,7 @@ use ports::{
     ReviewStateRead, Suggestion, SuggestionKey, WebSession,
 };
 use review_domain::edits::{edit_claim, philosophy_choices};
+use review_domain::kpi::ActedOrigin;
 use review_domain::lifecycle::{
     owner_step, tally, visible_and_approvable, LifecycleEvent, OwnerStep, Tally,
 };
@@ -664,7 +665,9 @@ fn with_own_step(
         .ok()
         .and_then(|states| states.into_iter().find(|(k, _)| *k == key))
         .map(|(_, state)| state);
-    let logged = (event == LifecycleEvent::Decline).then_some(LogEvent::SuggestionDeclined);
+    let logged = (event == LifecycleEvent::Decline).then(|| LogEvent::SuggestionDeclined {
+        origin: acted_origin(app.review_read.as_ref(), &session.owner_did, &key),
+    });
     let counted = logged.as_ref().map(Counted::of);
     let tally = counted.as_ref().map_or(KpiTally::NONE, Counted::tally);
     let moved = match current.and_then(|state| owner_step(state, event)) {
@@ -681,6 +684,28 @@ fn with_own_step(
     match moved {
         Some(moved) => done(&cookie_value, &session, &key, moved),
         None => not_found(),
+    }
+}
+
+/// Where the owner's suggestion `key` came from, as KPI-RRA-1 counts an
+/// action on it: an imported repo, or her accounts' repos inside or outside
+/// today's default (an unanswered read counts as the default).
+fn acted_origin(
+    review_read: &dyn ReviewStateRead,
+    owner_did: &str,
+    key: &SuggestionKey,
+) -> ActedOrigin {
+    let imported = review_read
+        .pending_sources(owner_did)
+        .unwrap_or_default()
+        .iter()
+        .any(|(pending, source)| pending == key && matches!(source, RepoSource::Imported(_)));
+    if imported {
+        return ActedOrigin::Imported;
+    }
+    match review_read.outside_default(owner_did, key).ok().flatten() {
+        Some(outside_default) => ActedOrigin::Outside(outside_default),
+        None => ActedOrigin::Default,
     }
 }
 
@@ -767,14 +792,15 @@ pub(crate) fn not_found() -> Reply {
 mod tests {
     //! C-6 (U-37): a stored link plan never appears in the review queue. The
     //! queue is composed by `owner_queue`, the function `queue_page` renders.
-    use super::{owner_queue, OwnerQueue};
+    use super::{acted_origin, owner_queue, OwnerQueue};
     use crate::routes::github::github_step_of;
     use adapter_review_store::{DataKey, ReviewStore};
     use ports::claim_domain::identity_link::{link_predicate, GithubObservation};
     use ports::{
-        AccountAdmission, AccountAdmitted, GithubAccountsWrite, KpiTally, PublishPlanPort,
-        ReviewStateWrite, Suggestion, SuggestionKey,
+        AccountAdmission, AccountAdmitted, GithubAccountsWrite, ImportedRepo, ImportedReposWrite,
+        KpiTally, OutsideDefault, PublishPlanPort, ReviewStateWrite, Suggestion, SuggestionKey,
     };
+    use review_domain::kpi::ActedOrigin;
     use review_domain::lifecycle::tally;
     use review_domain::link_plan::link_preview;
     use review_domain::views::{self, QueueView};
@@ -848,5 +874,70 @@ mod tests {
         for link_part in [plan.claim().object.as_str(), link_predicate(), plan.rkey()] {
             assert!(!html.contains(link_part), "{link_part}: {html}");
         }
+    }
+
+    fn suggestion_about(repo: &str) -> Suggestion {
+        Suggestion {
+            key: SuggestionKey {
+                subject: format!("github:{repo}"),
+                predicate: "embodiesPhilosophy".into(),
+                object: "org.openlore.philosophy.memory-safety".into(),
+            },
+            confidence_bp: 2500,
+            evidence: vec![],
+            why: vec![],
+            source_repo: repo.into(),
+        }
+    }
+
+    /// U-RRA-D5: a declined suggestion counts toward KPI-RRA-1 by where it
+    /// came from: an import, an owned repo outside the default, or the
+    /// default itself.
+    #[test]
+    fn a_suggestions_origin_is_read_as_kpi_rra_1_counts_it() {
+        let store = ReviewStore::open_in_memory(DataKey::generate()).expect("store");
+        store
+            .add_or_reverify(OWNER, LINKED_LOGIN, LINKED_ID, 3, KpiTally::NONE)
+            .expect("linked");
+        let listed = [
+            ("priyaraman/default", 1, None),
+            ("priyaraman/chosen", 2, Some(OutsideDefault::OwnedChoice)),
+            ("priyaraman/other", 3, Some(OutsideDefault::OtherAccount)),
+        ];
+        for (repo, repo_id, outside_default) in listed {
+            store
+                .add_pending_from_listed_source(
+                    OWNER,
+                    &ports::SuggestionSource {
+                        account_id: LINKED_ID,
+                        repo_id,
+                        outside_default,
+                    },
+                    &[suggestion_about(repo)],
+                )
+                .expect("queued");
+        }
+        let imported = ImportedRepo {
+            repo_id: 9,
+            full_name: "rust-lang/cargo".into(),
+        };
+        store
+            .add_import(OWNER, &imported, KpiTally::NONE)
+            .expect("imported");
+        store
+            .add_pending_from_import(OWNER, 9, &[suggestion_about("rust-lang/cargo")])
+            .expect("queued");
+
+        let origin_of = |repo: &str| acted_origin(&store, OWNER, &suggestion_about(repo).key);
+        assert_eq!(origin_of("priyaraman/default"), ActedOrigin::Default);
+        assert_eq!(
+            origin_of("priyaraman/chosen"),
+            ActedOrigin::Outside(OutsideDefault::OwnedChoice)
+        );
+        assert_eq!(
+            origin_of("priyaraman/other"),
+            ActedOrigin::Outside(OutsideDefault::OtherAccount)
+        );
+        assert_eq!(origin_of("rust-lang/cargo"), ActedOrigin::Imported);
     }
 }

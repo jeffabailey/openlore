@@ -550,7 +550,6 @@ fn an_imported_repo_moves_to_the_owned_list_when_its_owner_account_is_verified()
 ///     | she removed her DID from the priya-tidal bio meanwhile | she sees "Your DID is no longer in the bio of github.com/priya-tidal, so nothing was published. Put your DID back, verify the account, then publish again." and nothing is written |
 /// ```
 #[test]
-#[ignore = "DELIVER 03-18: a moved suggestion publishes through the fresh owner + bio check (OQ-D2)"]
 fn a_moved_suggestion_is_published_only_while_its_owner_accounts_bio_holds_her_did() {
     for bio_removed in [false, true] {
         let world = rra_world();
@@ -873,7 +872,6 @@ fn disconnect_and_forget_me_forgets_her_accounts_choices_and_imports() {
 ///   And his chosen and imported repos total at most 10
 /// ```
 #[test]
-#[ignore = "DELIVER 03-17: scope changes are serialized per DID (no lost limit check)"]
 fn two_changes_at_once_never_take_the_total_past_the_limit() {
     let world = rra_world();
     let all = dmitri_repos();

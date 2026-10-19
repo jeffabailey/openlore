@@ -29,6 +29,7 @@ use crate::admin;
 use crate::limiter::{ScanLimiter, ShareAllowance};
 use crate::routes::github::VerifyAttempts;
 use crate::routes::signin;
+use crate::wiring::ScopeLocks;
 
 /// Sent on every response (AC-000.2, NFR-BRA-2): HTTPS only, own scripts
 /// only, never framed, no MIME sniffing, no cross-origin referrer.
@@ -103,6 +104,8 @@ pub(crate) struct App {
     pub(crate) verify_attempts: VerifyAttempts,
     pub(crate) scan_limiter: ScanLimiter,
     pub(crate) share_allowance: ShareAllowance,
+    /// Serializes one DID's scope changes (ADR-088 §10).
+    pub(crate) scope_locks: ScopeLocks,
 }
 
 /// The static public routes.

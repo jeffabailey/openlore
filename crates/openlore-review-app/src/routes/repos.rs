@@ -54,7 +54,9 @@ pub(crate) async fn save_choice(app: &App, request: &PageRequest) -> Reply {
         .filter_map(|id| id.parse().ok())
         .collect();
     let csrf_token = csrf_token_of(request);
+    let scope_guard = app.scope_locks.hold(&session.owner_did).await;
     let Ok(listing) = app.github.list_account_repos(&account.github_login).await else {
+        drop(scope_guard);
         return repos_page(app, &session, &csrf_token, None).await;
     };
     let choice = choice_to_save(&listing.repos, &ticked);
@@ -90,6 +92,7 @@ pub(crate) async fn save_choice(app: &App, request: &PageRequest) -> Reply {
                 .map(|()| ReposNotice::Saved { reads })
         }
     };
+    drop(scope_guard);
     repos_page(app, &session, &csrf_token, notice).await
 }
 

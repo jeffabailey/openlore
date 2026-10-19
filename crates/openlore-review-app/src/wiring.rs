@@ -6,9 +6,9 @@
 //! Log events are a closed catalogue ([`LogEvent`]): the allowlist of event
 //! names and fields is the type, so no token, key or user data can be logged.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use adapter_atproto_did::IdentityLookup;
@@ -25,9 +25,9 @@ use ports::{
     RevokeOutcome, ScanRunPort, ScanStatus, SecretStorePort,
 };
 use review_domain::kpi::{
-    account_check_event, approval_events, outside_default_events, publish_refusal_events,
-    publish_refusal_label, rollup_day, seconds_until_next_rollup, sign_in_refusal_event,
-    sum_counters, utc_day, AccountAddRefused, KpiEvent,
+    account_check_event, approval_events, decline_events, outside_default_events,
+    publish_refusal_events, publish_refusal_label, rollup_day, seconds_until_next_rollup,
+    sign_in_refusal_event, sum_counters, utc_day, AccountAddRefused, ActedOrigin, KpiEvent,
 };
 use review_domain::signin::{permission_mode, SignInFailure};
 use review_domain::views::ScanRefused;
@@ -118,8 +118,11 @@ pub(crate) enum LogEvent<'a> {
     ScanRefused(ScanRefused),
     /// The server GitHub token expires within the warning window (A-8).
     GithubTokenExpiring(i64),
-    /// An owner declined a suggestion (KPI count; never which one or whose).
-    SuggestionDeclined,
+    /// An owner declined a suggestion (KPI count; never which one or whose),
+    /// with where it came from (KPI-RRA-1).
+    SuggestionDeclined {
+        origin: ActedOrigin,
+    },
     /// A preview or confirm minted no signing permit (the reason only;
     /// never which repo or whose, KPI-RRA-4).
     PublishRefused(SigningRefusal),
@@ -170,7 +173,7 @@ fn counters_of(event: &LogEvent<'_>) -> Vec<KpiEvent> {
         LogEvent::ScanAccountChecked(outcome) => {
             account_check_event(*outcome).into_iter().collect()
         }
-        LogEvent::SuggestionDeclined => vec![KpiEvent::SuggestionDeclined],
+        LogEvent::SuggestionDeclined { origin } => decline_events(*origin),
         LogEvent::PublishRefused(refusal) => publish_refusal_events(*refusal),
         LogEvent::SuggestionApproved {
             edited,
@@ -276,7 +279,7 @@ fn describe(event: LogEvent<'_>) -> (Level, &'static str, Vec<(&'static str, Val
             vec![("reason", json!(refusal_reason(failure)))],
         ),
         LogEvent::CallbackPanicIsolated => (Warn, "signin.callback_panic_isolated", vec![]),
-        LogEvent::SuggestionDeclined => (Info, "suggestion.declined", vec![]),
+        LogEvent::SuggestionDeclined { .. } => (Info, "suggestion.declined", vec![]),
         LogEvent::PublishRefused(refusal) => (
             Info,
             "publish.refused",
@@ -735,6 +738,33 @@ fn app(wired: Wired) -> App {
         verify_attempts: VerifyAttempts::default(),
         share_allowance: ShareAllowance::default(),
         scan_limiter,
+        scope_locks: ScopeLocks::default(),
+    }
+}
+
+/// ADR-088 §10: save, import, add or remove an account, remove an import
+/// and the BR-RRA-5 move of one DID run one at a time, so the pure limit
+/// check and its write never interleave with another tab's change. The app
+/// is one container (ADR-075), so an in-process lock per DID suffices;
+/// other DIDs never wait.
+#[derive(Default)]
+pub(crate) struct ScopeLocks {
+    by_owner: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+/// Held while one scope change of a DID reads, checks and writes.
+pub(crate) type ScopeGuard = tokio::sync::OwnedMutexGuard<()>;
+
+impl ScopeLocks {
+    /// Wait for `owner_did`'s scope to be free and hold it. A DID's entry
+    /// is dropped once nobody holds or waits for it.
+    pub(crate) async fn hold(&self, owner_did: &str) -> ScopeGuard {
+        let lock = {
+            let mut by_owner = self.by_owner.lock().unwrap_or_else(PoisonError::into_inner);
+            by_owner.retain(|_, lock| Arc::strong_count(lock) > 1);
+            Arc::clone(by_owner.entry(owner_did.to_string()).or_default())
+        };
+        lock.lock_owned().await
     }
 }
 
@@ -789,6 +819,43 @@ mod tests {
                 json!({"ts": 7, "level": "info", "event": "scan.refused", "reason": reason})
             );
             assert!(counters_of(&LogEvent::ScanRefused(refused)).is_empty());
+        }
+    }
+
+    /// ADR-088 §10: a DID's second scope change waits for the first; another
+    /// DID's change does not, and the first DID is free again once released.
+    #[tokio::test]
+    async fn a_scope_change_waits_only_for_the_same_did() {
+        let locks = ScopeLocks::default();
+        let wait = Duration::from_millis(50);
+        let first = locks.hold("did:plc:first").await;
+        assert!(tokio::time::timeout(wait, locks.hold("did:plc:first"))
+            .await
+            .is_err());
+        assert!(tokio::time::timeout(wait, locks.hold("did:plc:second"))
+            .await
+            .is_ok());
+        drop(first);
+        assert!(tokio::time::timeout(wait, locks.hold("did:plc:first"))
+            .await
+            .is_ok());
+    }
+
+    /// U-RRA-D5: a decline is counted with KPI-RRA-1's counters of its
+    /// origin, in the decline's own tally.
+    #[test]
+    fn a_decline_carries_the_kpi_rra_1_counters_of_its_origin() {
+        for origin in [
+            ActedOrigin::Default,
+            ActedOrigin::Imported,
+            ActedOrigin::Outside(OutsideDefault::OwnedChoice),
+            ActedOrigin::Outside(OutsideDefault::OtherAccount),
+        ] {
+            assert_eq!(
+                counters_of(&LogEvent::SuggestionDeclined { origin }),
+                decline_events(origin),
+                "{origin:?}"
+            );
         }
     }
 }
