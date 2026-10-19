@@ -91,7 +91,6 @@ fn store_pages(cid: &str) -> [(&'static str, PersonPage); 4] {
 /// `identity list`). A SECONDARY guardrail (D-e waiver, not the Then) checks
 /// the fail-closed store universe is unchanged too.
 #[test]
-#[ignore = "DELIVER 04-08: linked identities ask GitHub nothing and write nothing"]
 fn showing_linked_identities_asks_github_nothing_changes_nothing_and_reads_the_same_with_github_down(
 ) {
     let (world, cid) = two_linked_people();
@@ -320,7 +319,6 @@ fn a_store_made_before_identity_links_shows_every_page_and_no_linked_identity_it
 ///     | network search for github:rachelk  |
 /// ```
 #[test]
-#[ignore = "DELIVER 04-08: the htmx swap and the full page carry the same region"]
 fn the_results_swap_and_the_full_page_carry_the_same_linked_identities() {
     let (world, cid) = two_linked_people();
     let index =
