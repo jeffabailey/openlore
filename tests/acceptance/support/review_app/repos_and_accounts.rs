@@ -1048,6 +1048,26 @@ pub fn scan_status(browser: &mut Browser) -> String {
         .unwrap_or_else(|| "missing".into())
 }
 
+/// THEN, in the scan started after `scan_start` (a [`github_mark`]), no
+/// account's owned repos were listed before that account's bio check
+/// (U-RRA-D7; choose-page and Save listings happen outside the scan).
+pub fn then_no_account_listed_before_its_bio_check(
+    world: &ReviewWorld,
+    scan_start: u64,
+    accounts: &[Account],
+) {
+    for account in accounts {
+        let early = world
+            .github
+            .listings_before_bio_check_since(account.login(), scan_start);
+        assert!(
+            early.is_empty(),
+            "{} listed before its bio check in the scan (requests {early:?})",
+            account.page_name()
+        );
+    }
+}
+
 /// The scan summary text on the queue.
 pub fn scan_summary(browser: &mut Browser) -> String {
     browser.open("/review").text()

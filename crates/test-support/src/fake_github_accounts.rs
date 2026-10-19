@@ -679,6 +679,34 @@ impl FakeGithubAccounts {
             .count()
     }
 
+    /// U-RRA-D7: within a scan that started after request `after_seq`, every
+    /// listing of `login`'s owned repos (`/users/{login}/repos`) made before
+    /// that scan's first profile read of `login` (by login or numeric id).
+    /// Listings outside a scan (the choose-repos page, Save) are allowed: the
+    /// caller passes the request mark taken when the scan was started, and
+    /// listings after the account's bio check are the scan's own.
+    pub fn listings_before_bio_check_since(&self, login: &str, after_seq: u64) -> Vec<u64> {
+        let lower = login.to_ascii_lowercase();
+        let id_path = self
+            .state
+            .accounts
+            .lock()
+            .unwrap()
+            .get(&lower)
+            .map(|a| format!("/user/{}", a.id));
+        let listing = format!("/users/{lower}/repos");
+        let mut offending = Vec::new();
+        for r in self.requests().into_iter().filter(|r| r.seq > after_seq) {
+            if r.is_profile_read_of(&lower) || id_path.as_deref() == Some(r.path.as_str()) {
+                break;
+            }
+            if r.path.to_ascii_lowercase() == listing {
+                offending.push(r.seq);
+            }
+        }
+        offending
+    }
+
     /// Number of scrape reads (repo list or per-repo reads) of `login`.
     pub fn scrape_reads_of(&self, login: &str) -> usize {
         self.requests()
@@ -1246,6 +1274,26 @@ mod tests {
 
     // review-app-repos-and-accounts (DISTILL 2026-10-19): repo ids, owners,
     // transfers and per-account outages.
+
+    #[test]
+    fn a_scan_listing_before_the_bio_check_is_flagged_but_page_listings_are_not() {
+        let gh = FakeGithubAccounts::start(vec![priya()]);
+        get(&gh, "/users/priyaraman/repos"); // the choose-repos page
+        let scan_start = gh.requests().last().map(|r| r.seq).unwrap_or(0);
+        get(&gh, "/user/4210001"); // the scan's bio check, by id
+        get(&gh, "/users/priyaraman/repos");
+        assert!(gh
+            .listings_before_bio_check_since("priyaraman", scan_start)
+            .is_empty());
+        let second_scan = gh.requests().last().map(|r| r.seq).unwrap_or(0);
+        get(&gh, "/users/priyaraman/repos"); // listed before its bio check
+        get(&gh, "/users/priyaraman");
+        assert_eq!(
+            gh.listings_before_bio_check_since("priyaraman", second_scan)
+                .len(),
+            1
+        );
+    }
 
     #[test]
     fn listing_rows_and_repo_facts_carry_ids_and_the_owner() {

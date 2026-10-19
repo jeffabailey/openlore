@@ -103,12 +103,11 @@ fn ownership_is_re_checked_before_every_scrape() {
         .github
         .scrapes_without_preceding_bio_check("priyaraman")
         .is_empty());
+    // A profile read by login or by numeric id is an ownership re-check
+    // (review-app-repos-and-accounts U-RRA-D6: scans read by id).
     let bio_reads = world
         .github
-        .requests()
-        .iter()
-        .filter(|r| r.is_profile_read_of("priyaraman"))
-        .count();
+        .profile_reads_of("priyaraman", github_id(Persona::Priya));
     assert!(
         bio_reads >= 4,
         "verify + three scans each read the bio; saw {bio_reads}"

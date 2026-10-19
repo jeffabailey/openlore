@@ -339,6 +339,7 @@ fn an_account_that_needs_re_verifying_shows_no_repo_list() {
 ///   When <owner> presses "Scan again"
 ///   Then exactly <read> are read and no other repo
 ///   And the summary says "<n> repos read"
+///   And the scan checked the account's bio before it listed or read any of its repos
 ///   Examples:
 ///     | owner  | choice                                                   | read                                                                      | n  |
 ///     | Priya  | saved tidepool, quill-docs, kelp, harbor-cli, ferrous-notes | priyaraman/tidepool, quill-docs, kelp, harbor-cli, ferrous-notes        | 5  |
@@ -364,10 +365,12 @@ fn the_scan_reads_only_the_repos_priya_chose_or_todays_top_5() {
             given_saved_choice(&mut browser, account, choice);
         }
 
+        let scan_start = github_mark(&world);
         let (status, read) = when_scans(&world, &mut browser);
 
         assert_eq!(status, "completed", "{}", browser.page.text());
         assert_eq!(read, set_of(&expected), "{account:?} saved = {saved:?}");
+        then_no_account_listed_before_its_bio_check(&world, scan_start, &[account]);
         let summary = format!("{} repos read", expected.len());
         assert!(browser.page.shows(&summary), "{}", browser.page.text());
         assert!(

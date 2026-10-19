@@ -217,6 +217,7 @@ fn a_new_accounts_default_ticks_fit_the_limit() {
 ///   Then 7 repos are read under one of her 6 scans today
 ///   And the summary says "Ownership re-checked: priyaraman ✓ · priya-tidal ✓"
 ///   And the card for priya-tidal/ingest-bench says "from github.com/priya-tidal"
+///   And the scan checked each account's bio before it listed or read any of that account's repos
 /// ```
 #[test]
 fn one_scan_covers_both_accounts_and_each_card_names_its_account() {
@@ -229,11 +230,23 @@ fn one_scan_covers_both_accounts_and_each_card_names_its_account() {
         &[INGEST_BENCH, TIDAL_SDK],
     );
 
+    let scan_start = github_mark(&world);
     let read = given_scanned(&world, &mut browser);
 
     let mut expected = set_of(&PRIYA_CHOICE);
     expected.extend(set_of(&[INGEST_BENCH, TIDAL_SDK]));
     assert_eq!(read, expected);
+    then_no_account_listed_before_its_bio_check(&world, scan_start, &BOTH);
+    for account in BOTH {
+        assert!(
+            world
+                .github
+                .scrapes_without_preceding_bio_check(account.login())
+                .is_empty(),
+            "{}: no repo read before its bio check",
+            account.page_name()
+        );
+    }
     assert!(
         scan_summary(&mut browser).contains("Ownership re-checked: priyaraman ✓ · priya-tidal ✓"),
         "{}",
