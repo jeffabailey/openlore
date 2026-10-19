@@ -2,10 +2,10 @@
   "roadmap": {
     "project_id": "github-did-identity-link",
     "created_at": "2026-10-15T00:00:00Z",
-    "total_steps": 34,
+    "total_steps": 35,
     "scope": "SLICE 1: claim_domain::identity_link core, identity link/verify/list/forget, v7 checks + read/write/purge ports, GithubPort::read_person_by_id + DD-GDL-11 contract test, reserved-predicate guard (claim counter exempt, D-b), GDL-D13 check-arch rules. SLICE 2 (phase 02): readers — identity list lineage, age hint, record IDs and --did; scorer drops sameAs; infer people and person-scrape link lines (scrape refreshes checks); search label; ADR-084 peer-pull fixture. SLICE 3 (phase 03): review app — \"Publish this link\" (preview + confirm, each from its own fresh GitHub read) and \"Retract this link\" as self-attested records; prove_ownership delegates to the shared identity_link core; review-app reserved-predicate guard; link plans stored under kind publish (U-21 B); link records hidden from the public profile and share draft (U-27)."
   },
-  "total_steps": 34,
+  "total_steps": 35,
   "conventions": {
     "paradigm": "ADR-007: decisions pure in claim-domain; adapters and cli verbs do I/O only.",
     "test_paradigm": "Acceptance: example-based subprocess. Pure core: proptest against the CORE oracles. Adapters: real DuckDB / real HTTP adapter against FakeGithubAccounts, never mocked.",
@@ -1678,6 +1678,47 @@
           ],
           "files_to_create": [],
           "mutation_note": "Kill: a GitHub call or a check write on page load; the region only in the full-page shell."
+        },
+        {
+          "id": "04-09",
+          "name": "A retraction that repeats the link's evidence never shows (U-51)",
+          "description": "U-51 (found by 04-04's mutation RED): the shared lineage read builds each candidate's ClaimLineage with empty references and LINK_CANDIDATES_SQL keeps Retracts-carrying records, so active_link_records' retraction check never fires. Chosen fix: each LinkCandidate carries its own references, read by the candidate query and passed through stored_claim, so the claim-domain rule decides.",
+          "criteria": [
+            "A retraction whose subject, predicate, object and evidence repeat the link never appears in `identity list`, and the retracted link is gone too (U-39, ADR-060).",
+            "The same store shows no line for that link on the viewer pages (one read, D-VL-3).",
+            "A link record carrying no reference still lists as before; every identity_link, identity_link_readers, infer_people and slice-4 viewer scenario stays green.",
+            "adapter-duckdb: a candidate read returns the record's own references (crafter-owned adapter test against real DuckDB)."
+          ],
+          "test_file": "tests/acceptance/identity_link_readers.rs",
+          "scenario_name": "a_retraction_that_repeats_the_links_evidence_never_shows",
+          "scenario_fns": [
+            "identity_link_readers::a_retraction_that_repeats_the_links_evidence_never_shows"
+          ],
+          "n_scenarios": [
+            "U-51 (RED driver)",
+            "adapter-duckdb candidate-references test"
+          ],
+          "green": [
+            "cargo build -p cli --bins",
+            "cargo test -p cli --test identity_link --test identity_link_readers --test infer_people",
+            "cargo test -p cli --test viewer_linked_identity --test viewer_linked_identity_invariants",
+            "cargo test -p adapter-duckdb",
+            "cargo test -p ports",
+            "cargo test -p claim-domain",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver: the new identity_link_readers.rs test the acceptance designer is writing; confirm its exact fn name by grepping `DELIVER 04-09` and un-ignore only it (C-5). Fix choice: load references, not a SQL exclusion. Rationale: the retraction rule already lives in claim_domain::identity_link (active_link_records, !is_retraction); a SQL filter would be a second copy of it in the adapter, and `retracts` would become a predicate rule outside claim-domain. Loading references also matches how referrers are already read. Change: LinkCandidate gains `references: Vec<ClaimReference>` (ports), LINK_CANDIDATES_SQL / its row mapping fill it (adapter-duckdb), stored_claim passes `&candidate.references` instead of `&[]` (ports). LinkCandidate is built only in those two files. Never a viewer-side filter (D-VL-3). depends_on 04-08 is serialization-only (slice order).",
+          "estimate_hours": 3,
+          "depends_on": [
+            "04-08"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/identity_link_readers.rs",
+            "crates/ports/src/identity_link_check.rs",
+            "crates/adapter-duckdb/src/identity_link_checks.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a candidate lineage built with empty references; a Retracts-carrying candidate projected as a link."
         }
       ]
     }
@@ -1740,7 +1781,8 @@
       "status": "approved",
       "by": "nw-software-crafter-reviewer (2 rounds) + orchestrator",
       "date": "2026-10-19",
-      "note": "Round 1 rejected on F1-F9; round 2 resolved all but F7 (low, one criterion named a check-arch test fn), which the orchestrator rephrased under the max-2 rule."
+      "note": "Round 1 rejected on F1-F9; round 2 resolved all but F7 (low, one criterion named a check-arch test fn), which the orchestrator rephrased under the max-2 rule.",
+      "addendum_04_09": "Step 04-09 added after approval by the orchestrator for U-51 (retraction repeating the link's evidence, found by 04-04's mutation RED); not re-reviewed."
     }
   }
 }
