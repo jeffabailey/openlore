@@ -46,7 +46,7 @@ fn render_claim_detail_shows_all_fields_and_every_evidence_url() {
         "https://github.com/tokio-rs/tokio/blob/HEAD/LICENSE",
         "https://github.com/tokio-rs/tokio/blob/HEAD/Cargo.toml",
     ]);
-    let html = render_claim_detail(&view, &CounterThread::None);
+    let html = render_claim_detail(&view, &CounterThread::None, &LinkedIdentities::None);
     for needle in [
         "tokio-rs/tokio",
         "has-license",
@@ -70,7 +70,7 @@ fn render_claim_detail_shows_all_fields_and_every_evidence_url() {
 /// Guards the empty/non-empty fork of the evidence section.
 #[test]
 fn render_claim_detail_with_no_evidence_shows_explicit_empty_state() {
-    let html = render_claim_detail(&detail(&[]), &CounterThread::None);
+    let html = render_claim_detail(&detail(&[]), &CounterThread::None, &LinkedIdentities::None);
     assert!(
         html.contains("no evidence attached"),
         "a claim with empty evidence must show \"no evidence attached\"; got:\n{html}"
@@ -103,7 +103,12 @@ fn empty_counter_rows_project_to_none_and_render_no_noise() {
     let thread = CounterThread::from_rows(&[]);
     assert_eq!(thread, CounterThread::None);
 
-    let frag = render_claim_detail_fragment(&detail(&["https://e.test/0"]), &thread).into_string();
+    let frag = render_claim_detail_fragment(
+        &detail(&["https://e.test/0"]),
+        &thread,
+        &LinkedIdentities::None,
+    )
+    .into_string();
     for noise in [
         COUNTER_THREAD_HEADING,
         COUNTERED_PRESENCE_FLAG,
@@ -165,7 +170,12 @@ fn render_thread_attributes_each_counter_with_drill_link_and_verbatim_reason() {
         "",
     )];
     let thread = CounterThread::from_rows(&rows);
-    let frag = render_claim_detail_fragment(&detail(&["https://e.test/0"]), &thread).into_string();
+    let frag = render_claim_detail_fragment(
+        &detail(&["https://e.test/0"]),
+        &thread,
+        &LinkedIdentities::None,
+    )
+    .into_string();
 
     assert!(
         frag.contains(COUNTER_THREAD_HEADING),
@@ -221,7 +231,12 @@ fn render_thread_two_distinct_authors_renders_two_items_never_a_merged_row() {
         ),
     ];
     let thread = CounterThread::from_rows(&rows);
-    let frag = render_claim_detail_fragment(&detail(&["https://e.test/0"]), &thread).into_string();
+    let frag = render_claim_detail_fragment(
+        &detail(&["https://e.test/0"]),
+        &thread,
+        &LinkedIdentities::None,
+    )
+    .into_string();
 
     // EXACTLY two attributed counter entries — one per (author, cid), never
     // collapsed. Counted by the per-entry "Counter author" label (the evidence
@@ -273,7 +288,8 @@ fn render_thread_empty_reason_shows_explicit_no_reason_state() {
         "https://pds.x",
     )];
     let thread = CounterThread::from_rows(&rows);
-    let frag = render_claim_detail_fragment(&detail(&[]), &thread).into_string();
+    let frag =
+        render_claim_detail_fragment(&detail(&[]), &thread, &LinkedIdentities::None).into_string();
 
     assert!(
         frag.contains("did:plc:tobias-test"),
@@ -297,10 +313,16 @@ fn render_thread_empty_reason_shows_explicit_no_reason_state() {
 #[test]
 fn counter_presence_never_changes_the_claim_region_above_the_thread() {
     let view = detail(&["https://e.test/0"]);
-    let uncountered = render_claim_detail_fragment(&view, &CounterThread::None).into_string();
+    let uncountered =
+        render_claim_detail_fragment(&view, &CounterThread::None, &LinkedIdentities::None)
+            .into_string();
     let rows = vec![counter_row("did:plc:maria", "bafyc", Some("nope"), "")];
-    let countered =
-        render_claim_detail_fragment(&view, &CounterThread::from_rows(&rows)).into_string();
+    let countered = render_claim_detail_fragment(
+        &view,
+        &CounterThread::from_rows(&rows),
+        &LinkedIdentities::None,
+    )
+    .into_string();
 
     // The countered render is a PREFIX-superset: the claim fields + evidence the
     // un-countered render shows all appear UNCHANGED in the countered render.
@@ -328,7 +350,8 @@ fn render_claim_detail_fragment_wraps_claim_detail_with_all_fields_and_evidence(
     let ev0 = "https://github.com/tokio-rs/tokio/blob/HEAD/LICENSE";
     let ev1 = "https://github.com/tokio-rs/tokio/blob/HEAD/Cargo.toml";
     let view = detail(&[ev0, ev1]);
-    let frag = render_claim_detail_fragment(&view, &CounterThread::None).into_string();
+    let frag = render_claim_detail_fragment(&view, &CounterThread::None, &LinkedIdentities::None)
+        .into_string();
 
     // Wrapped in the swap-target id, the single source of truth (CLAIM_DETAIL_ID).
     assert!(
@@ -380,7 +403,7 @@ proptest! {
             .map(|i| format!("https://example.test/evidence-{i}"))
             .collect();
         let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
-        let html = render_claim_detail(&detail(&url_refs), &CounterThread::None);
+        let html = render_claim_detail(&detail(&url_refs), &CounterThread::None, &LinkedIdentities::None);
 
         let mut last_pos: Option<usize> = None;
         for url in &urls {
@@ -409,7 +432,7 @@ proptest! {
     fn render_claim_detail_renders_confidence_verbatim(confidence in 0.0f64..=1.0f64) {
         let mut view = detail(&["https://example.test/e0"]);
         view.confidence = confidence;
-        let html = render_claim_detail(&view, &CounterThread::None);
+        let html = render_claim_detail(&view, &CounterThread::None, &LinkedIdentities::None);
         prop_assert!(
             html.contains(&render_confidence(confidence)),
             "detail must embed the verbatim confidence {:?}",
@@ -2578,10 +2601,13 @@ fn search_fragment_renders_verified_attributed_rows_with_verbatim_confidence() {
         0.85,
     )]);
 
-    let html = render_search_results_fragment(&SearchState::Results {
-        result,
-        dimension: appview_domain::SearchDimension::Object,
-    })
+    let html = render_search_results_fragment(
+        &SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        },
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     assert!(
@@ -2623,10 +2649,13 @@ fn search_fragment_renders_two_author_groups_never_a_merged_row() {
         ),
     ]);
 
-    let html = render_search_results_fragment(&SearchState::Results {
-        result,
-        dimension: appview_domain::SearchDimension::Object,
-    })
+    let html = render_search_results_fragment(
+        &SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        },
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     assert!(html.contains("did:plc:priya-test#org.openlore.application"));
@@ -2657,8 +2686,8 @@ fn search_full_page_embeds_the_results_fragment_verbatim() {
         dimension: appview_domain::SearchDimension::Object,
     };
 
-    let fragment = render_search_results_fragment(&state).into_string();
-    let page = render_search_page(&state);
+    let fragment = render_search_results_fragment(&state, &LinkedIdentities::None).into_string();
+    let page = render_search_page(&state, &LinkedIdentities::None);
 
     assert!(
             page.contains(&fragment),
@@ -2696,11 +2725,14 @@ fn search_filtered_results_discloses_the_hidden_event_count_and_untick_guidance(
         0.72,
     )]);
 
-    let html = render_search_results_fragment(&SearchState::FilteredResults {
-        result,
-        dimension: appview_domain::SearchDimension::Object,
-        hidden_count: 3,
-    })
+    let html = render_search_results_fragment(
+        &SearchState::FilteredResults {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+            hidden_count: 3,
+        },
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     assert!(
@@ -2722,8 +2754,11 @@ fn search_filtered_results_discloses_the_hidden_event_count_and_untick_guidance(
 /// untick guidance — an explicit withdrawn state, NEVER a blank region.
 #[test]
 fn search_all_retracted_names_the_withdrawn_state_never_a_blank_region() {
-    let html = render_search_results_fragment(&SearchState::AllRetracted { hidden_count: 2 })
-        .into_string();
+    let html = render_search_results_fragment(
+        &SearchState::AllRetracted { hidden_count: 2 },
+        &LinkedIdentities::None,
+    )
+    .into_string();
 
     assert!(
         html.contains(SEARCH_RETRACTION_ALL_HIDDEN_FRAGMENT),
@@ -2749,7 +2784,10 @@ fn search_all_retracted_names_the_withdrawn_state_never_a_blank_region() {
 /// page chrome + the active-toggle reflection (the form + its `checked` attribute).
 #[test]
 fn search_page_reflects_the_active_hide_toggle_for_a_filter_bearing_state() {
-    let page = render_search_page(&SearchState::AllRetracted { hidden_count: 1 });
+    let page = render_search_page(
+        &SearchState::AllRetracted { hidden_count: 1 },
+        &LinkedIdentities::None,
+    );
 
     assert!(
         page.contains("Network Search"),
@@ -2792,10 +2830,13 @@ fn contributor_results_render_one_author_trail_with_the_honesty_footer() {
         ),
     ]);
 
-    let html = render_search_results_fragment(&SearchState::Results {
-        result,
-        dimension: appview_domain::SearchDimension::Contributor,
-    })
+    let html = render_search_results_fragment(
+        &SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Contributor,
+        },
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     // The honest-framing footer is present (the contributor-specific promise).
@@ -2851,10 +2892,13 @@ fn object_results_render_without_the_contributor_footer() {
         0.82,
     )]);
 
-    let html = render_search_results_fragment(&SearchState::Results {
-        result,
-        dimension: appview_domain::SearchDimension::Object,
-    })
+    let html = render_search_results_fragment(
+        &SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        },
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     assert!(
@@ -2893,10 +2937,13 @@ fn subject_results_render_n_author_groups_without_a_footer_or_merge() {
         ),
     ]);
 
-    let html = render_search_results_fragment(&SearchState::Results {
-        result,
-        dimension: appview_domain::SearchDimension::Subject,
-    })
+    let html = render_search_results_fragment(
+        &SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Subject,
+        },
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     // N distinct author groups, each attributed + verified (no merge).
@@ -2933,10 +2980,13 @@ fn search_fragment_renders_no_sign_or_follow_control() {
         0.85,
     )]);
 
-    let html = render_search_results_fragment(&SearchState::Results {
-        result,
-        dimension: appview_domain::SearchDimension::Object,
-    })
+    let html = render_search_results_fragment(
+        &SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        },
+        &LinkedIdentities::None,
+    )
     .into_string();
     let lowered = html.to_ascii_lowercase();
 
@@ -2972,10 +3022,13 @@ fn search_fragment_unfollowed_row_shows_cli_follow_guidance_text_only() {
         0.82,
     )]);
 
-    let html = render_search_results_fragment(&SearchState::Results {
-        result,
-        dimension: appview_domain::SearchDimension::Object,
-    })
+    let html = render_search_results_fragment(
+        &SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        },
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     // The render-only follow guidance TEXT names the BARE DID.
@@ -3007,9 +3060,12 @@ fn search_fragment_unfollowed_row_shows_cli_follow_guidance_text_only() {
 /// never a blank region.
 #[test]
 fn search_fragment_no_results_names_the_queried_value() {
-    let html = render_search_results_fragment(&SearchState::NoResults {
-        queried_value: "org.openlore.philosophy.reprducible".to_string(),
-    })
+    let html = render_search_results_fragment(
+        &SearchState::NoResults {
+            queried_value: "org.openlore.philosophy.reprducible".to_string(),
+        },
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     assert!(
@@ -3027,7 +3083,8 @@ fn search_fragment_no_results_names_the_queried_value() {
 /// transport string, so no HTTP status / "connection refused" / raw URL leaks.
 #[test]
 fn search_fragment_unavailable_is_fixed_and_leaks_no_internals() {
-    let html = render_search_results_fragment(&SearchState::Unavailable).into_string();
+    let html = render_search_results_fragment(&SearchState::Unavailable, &LinkedIdentities::None)
+        .into_string();
     let lowered = html.to_ascii_lowercase();
 
     assert!(
@@ -3057,7 +3114,7 @@ fn search_fragment_unavailable_is_fixed_and_leaks_no_internals() {
 /// three — the form must offer all three).
 #[test]
 fn search_form_offers_all_three_dimension_inputs() {
-    let html = render_search_page(&SearchState::Form);
+    let html = render_search_page(&SearchState::Form, &LinkedIdentities::None);
 
     assert!(
         html.contains(&format!("action=\"{SEARCH_URL}\"")),
@@ -3109,10 +3166,13 @@ fn search_fragment_shows_the_counter_annotation_inline_never_applied() {
         suggestion: None,
     };
 
-    let html = render_search_results_fragment(&SearchState::Results {
-        result,
-        dimension: appview_domain::SearchDimension::Object,
-    })
+    let html = render_search_results_fragment(
+        &SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        },
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     // The counter is SHOWN inline — the annotation names the countering author.
@@ -3149,10 +3209,13 @@ fn search_fragment_omits_the_counter_annotation_when_uncountered() {
         0.82,
     )]);
 
-    let html = render_search_results_fragment(&SearchState::Results {
-        result,
-        dimension: appview_domain::SearchDimension::Object,
-    })
+    let html = render_search_results_fragment(
+        &SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        },
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     assert!(
@@ -3200,10 +3263,13 @@ fn search_state_one_row(author: &str, relationship: AuthorRelationship) -> Searc
 /// `SEARCH_FOLLOWING_INDICATOR`, never the guidance prefix).
 #[test]
 fn search_subscribed_peer_row_shows_following_and_no_peer_add() {
-    let html = render_search_results_fragment(&search_state_one_row(
-        "did:plc:rachel-test#org.openlore.application",
-        AuthorRelationship::SubscribedPeer,
-    ))
+    let html = render_search_results_fragment(
+        &search_state_one_row(
+            "did:plc:rachel-test#org.openlore.application",
+            AuthorRelationship::SubscribedPeer,
+        ),
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     assert!(
@@ -3225,10 +3291,13 @@ fn search_subscribed_peer_row_shows_following_and_no_peer_add() {
 /// never the "Following" indicator).
 #[test]
 fn search_network_unfollowed_row_keeps_peer_add_and_no_following() {
-    let html = render_search_results_fragment(&search_state_one_row(
-        "did:plc:priya-test#org.openlore.application",
-        AuthorRelationship::NetworkUnfollowed,
-    ))
+    let html = render_search_results_fragment(
+        &search_state_one_row(
+            "did:plc:priya-test#org.openlore.application",
+            AuthorRelationship::NetworkUnfollowed,
+        ),
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     // The bare-DID `openlore peer add did:plc:priya-test` guidance is present.
@@ -3253,10 +3322,13 @@ fn search_network_unfollowed_row_keeps_peer_add_and_no_following() {
 /// `Markup::default()` and never a peer-add affordance).
 #[test]
 fn search_you_row_shows_self_indicator_and_no_peer_add() {
-    let html = render_search_results_fragment(&search_state_one_row(
-        "did:plc:me-test#org.openlore.application",
-        AuthorRelationship::You,
-    ))
+    let html = render_search_results_fragment(
+        &search_state_one_row(
+            "did:plc:me-test#org.openlore.application",
+            AuthorRelationship::You,
+        ),
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     assert!(
@@ -3287,10 +3359,13 @@ fn search_you_row_shows_self_indicator_and_no_peer_add() {
 /// never a peer-add affordance).
 #[test]
 fn search_unsubscribed_cache_row_shows_residue_indicator_and_no_peer_add() {
-    let html = render_search_results_fragment(&search_state_one_row(
-        "did:plc:tobias-test#org.openlore.application",
-        AuthorRelationship::UnsubscribedCache,
-    ))
+    let html = render_search_results_fragment(
+        &search_state_one_row(
+            "did:plc:tobias-test#org.openlore.application",
+            AuthorRelationship::UnsubscribedCache,
+        ),
+        &LinkedIdentities::None,
+    )
     .into_string();
 
     assert!(
@@ -3356,7 +3431,7 @@ fn search_follow_state_affordances_are_render_only_text() {
         dimension: appview_domain::SearchDimension::Object,
     };
 
-    let html = render_search_results_fragment(&state).into_string();
+    let html = render_search_results_fragment(&state, &LinkedIdentities::None).into_string();
     let lowered = html.to_ascii_lowercase();
 
     // Both affordances ARE present (the mix is genuine).
@@ -3550,9 +3625,12 @@ fn rich_scored_state() -> ScoreState {
 /// projection at the unit level (the cardinal anti-opaque-number contract).
 #[test]
 fn score_fragment_renders_per_claim_breakdown_attributed_and_verbatim() {
-    let html =
-        render_score_results_fragment(&rich_scored_state(), &std::collections::HashSet::new())
-            .into_string();
+    let html = render_score_results_fragment(
+        &rich_scored_state(),
+        &std::collections::HashSet::new(),
+        &LinkedIdentities::None,
+    )
+    .into_string();
 
     assert!(
         html.contains(SCORE_RESULTS_ID),
@@ -3626,6 +3704,7 @@ fn score_fragment_rendered_subtotals_sum_to_the_displayed_weight() {
     let html = render_score_results_fragment(
         &ScoreState::Scored { view: view.clone() },
         &std::collections::HashSet::new(),
+        &LinkedIdentities::None,
     )
     .into_string();
 
@@ -3716,8 +3795,10 @@ fn score_render_never_shows_a_weight_without_a_breakdown_table() {
         ("conflicting", &conflicting),
     ] {
         let empty_presence = std::collections::HashSet::new();
-        let fragment = render_score_results_fragment(state, &empty_presence).into_string();
-        let page = render_score_page(state, &empty_presence);
+        let fragment =
+            render_score_results_fragment(state, &empty_presence, &LinkedIdentities::None)
+                .into_string();
+        let page = render_score_page(state, &empty_presence, &LinkedIdentities::None);
         for (shape, html) in [("fragment", &fragment), ("page", &page)] {
             // The surface must actually show a weight (else the structural guard
             // would pass vacuously).
@@ -3780,8 +3861,9 @@ fn score_render_keeps_confidence_and_weight_verbatim_in_fragment_and_page() {
     let weight_verbatim = format!("Weight: {}", render_weight(pairing.weight));
 
     let empty_presence = std::collections::HashSet::new();
-    let fragment = render_score_results_fragment(&state, &empty_presence).into_string();
-    let page = render_score_page(&state, &empty_presence);
+    let fragment = render_score_results_fragment(&state, &empty_presence, &LinkedIdentities::None)
+        .into_string();
+    let page = render_score_page(&state, &empty_presence, &LinkedIdentities::None);
 
     for (shape, html) in [("fragment", &fragment), ("page", &page)] {
         // The 0.90 claim renders "0.90" verbatim — never truncated, never a percent.
@@ -3852,6 +3934,7 @@ fn score_fragment_renders_two_distinct_authors_on_one_pairing_as_two_rows_no_mer
     let html = render_score_results_fragment(
         &ScoreState::Scored { view },
         &std::collections::HashSet::new(),
+        &LinkedIdentities::None,
     )
     .into_string();
 
@@ -3910,6 +3993,7 @@ fn score_fragment_projects_sparse_bucket_and_honesty_line_at_any_confidence() {
     let html = render_score_results_fragment(
         &ScoreState::Scored { view },
         &std::collections::HashSet::new(),
+        &LinkedIdentities::None,
     )
     .into_string();
 
@@ -3946,6 +4030,7 @@ fn score_fragment_renders_guided_no_claims_state_naming_the_did() {
             contributor: "did:plc:nobody-local".to_string(),
         },
         &std::collections::HashSet::new(),
+        &LinkedIdentities::None,
     )
     .into_string();
 
@@ -3974,8 +4059,9 @@ fn score_fragment_renders_guided_no_claims_state_naming_the_did() {
 fn score_page_embeds_the_fragment_and_adds_chrome_and_form() {
     let state = rich_scored_state();
     let empty_presence = std::collections::HashSet::new();
-    let fragment = render_score_results_fragment(&state, &empty_presence).into_string();
-    let page = render_score_page(&state, &empty_presence);
+    let fragment = render_score_results_fragment(&state, &empty_presence, &LinkedIdentities::None)
+        .into_string();
+    let page = render_score_page(&state, &empty_presence, &LinkedIdentities::None);
 
     assert!(
         page.contains(&fragment),
@@ -4048,9 +4134,12 @@ fn score_legend_renders_once_in_scored_arm_blocklist_clean_and_absent_otherwise(
     for (shape, html) in [
         (
             "fragment",
-            render_score_results_fragment(&scored, &empty).into_string(),
+            render_score_results_fragment(&scored, &empty, &LinkedIdentities::None).into_string(),
         ),
-        ("page", render_score_page(&scored, &empty)),
+        (
+            "page",
+            render_score_page(&scored, &empty, &LinkedIdentities::None),
+        ),
     ] {
         assert_eq!(
             html.matches(SCORE_COUNTER_LEGEND).count(),
@@ -4077,7 +4166,8 @@ fn score_legend_renders_once_in_scored_arm_blocklist_clean_and_absent_otherwise(
             contributor: "did:plc:nobody".to_string(),
         },
     ] {
-        let html = render_score_results_fragment(&state, &empty).into_string();
+        let html =
+            render_score_results_fragment(&state, &empty, &LinkedIdentities::None).into_string();
         assert!(
             !html.contains(SCORE_COUNTER_LEGEND),
             "the {state:?} arm must render NO SCORE_COUNTER_LEGEND (Scored arm only); \
@@ -4108,7 +4198,9 @@ fn score_breakdown_emits_the_marker_iff_presence_contains_the_cid() {
             .map(|(_, c)| *c)
             .collect();
         let presence = presence_of(&chosen);
-        let html = render_score_results_fragment(&rich_scored_state(), &presence).into_string();
+        let html =
+            render_score_results_fragment(&rich_scored_state(), &presence, &LinkedIdentities::None)
+                .into_string();
 
         for cid in all {
             let marker = score_marker(cid);
@@ -4153,13 +4245,14 @@ fn flagged_score_render_is_byte_identical_to_slice09_with_markers_and_legend_eli
     let empty = std::collections::HashSet::new();
     // The slice-09 baseline: the SAME state rendered with an EMPTY presence set
     // (no markers) and the legend stripped.
-    let baseline = render_score_results_fragment(&state, &empty)
+    let baseline = render_score_results_fragment(&state, &empty, &LinkedIdentities::None)
         .into_string()
         .replace(SCORE_COUNTER_LEGEND, "");
 
     // Flag ALL three contributions, then elide the additive markers AND the legend.
     let presence = presence_of(&["bafyone", "bafytwo", "bafythree"]);
-    let mut flagged_elided = render_score_results_fragment(&state, &presence).into_string();
+    let mut flagged_elided =
+        render_score_results_fragment(&state, &presence, &LinkedIdentities::None).into_string();
     for cid in ["bafyone", "bafytwo", "bafythree"] {
         flagged_elided = flagged_elided.replace(&score_marker(cid), "");
     }
@@ -4194,9 +4287,12 @@ fn flagged_score_subtotals_still_sum_to_the_displayed_weight() {
             .map(|(_, c)| *c)
             .collect();
         let presence = presence_of(&chosen);
-        let html =
-            render_score_results_fragment(&ScoreState::Scored { view: view.clone() }, &presence)
-                .into_string();
+        let html = render_score_results_fragment(
+            &ScoreState::Scored { view: view.clone() },
+            &presence,
+            &LinkedIdentities::None,
+        )
+        .into_string();
         // The flagged render's subtotal cells are the SAME projected values, so each
         // pairing's running Σ-subtotal equals its displayed weight (reproduce-by-hand
         // over the SAME WeightedPairing the renderer consumed).
@@ -4367,7 +4463,7 @@ fn render_project_fragment_attributes_each_edge_verbatim_with_bucket_and_cid() {
         &rows,
         &std::collections::HashSet::new(),
     );
-    let html = render_project_fragment(&view).into_string();
+    let html = render_project_fragment(&view, &LinkedIdentities::None).into_string();
     assert!(
         html.contains(TRAVERSAL_RESULTS_ID),
         "fragment must carry the region id; {html}"
@@ -4411,7 +4507,7 @@ fn render_project_fragment_no_claims_names_entity_and_fabricates_no_edge() {
     let view = TraversalView::NoClaims {
         entity: "github:nonexistent/repo".to_string(),
     };
-    let html = render_project_fragment(&view).into_string();
+    let html = render_project_fragment(&view, &LinkedIdentities::None).into_string();
     assert!(html.contains(TRAVERSAL_RESULTS_ID));
     assert!(
         html.contains("github:nonexistent/repo"),
@@ -4443,8 +4539,8 @@ fn render_project_page_embeds_the_fragment_region_with_chrome() {
         &rows,
         &std::collections::HashSet::new(),
     );
-    let fragment = render_project_fragment(&view).into_string();
-    let page = render_project_page(&view);
+    let fragment = render_project_fragment(&view, &LinkedIdentities::None).into_string();
+    let page = render_project_page(&view, &LinkedIdentities::None);
     assert!(
         page.contains(&fragment),
         "the full page must EMBED the exact traversal-results fragment (parity by \
@@ -4628,7 +4724,7 @@ fn render_project_fragment_lists_contributors_as_deduped_ordered_score_links() {
         &rows,
         &std::collections::HashSet::new(),
     );
-    let html = render_project_fragment(&view).into_string();
+    let html = render_project_fragment(&view, &LinkedIdentities::None).into_string();
     // The labeled section is present.
     assert!(
         html.contains("Contributors who claimed"),
@@ -4745,7 +4841,7 @@ fn render_edge_row_emits_the_flag_iff_is_countered_with_claims_anchor() {
     let presence: std::collections::HashSet<String> =
         std::iter::once("bafy-countered".to_string()).collect();
     let view = group_project("github:rust-lang/cargo", &rows, &presence);
-    let html = render_project_fragment(&view).into_string();
+    let html = render_project_fragment(&view, &LinkedIdentities::None).into_string();
     assert!(
         html.contains(r#"<a href="/claims/bafy-countered">Countered</a>"#),
         "the countered edge must carry the render-only one-hop /claims marker; {html}"
@@ -4792,14 +4888,19 @@ fn edge_flag_is_additive_grouping_order_and_contributors_byte_identical() {
         ),
     ];
     let empty = std::collections::HashSet::new();
-    let baseline = render_project_fragment(&group_project("github:rust-lang/cargo", &rows, &empty))
-        .into_string();
+    let baseline = render_project_fragment(
+        &group_project("github:rust-lang/cargo", &rows, &empty),
+        &LinkedIdentities::None,
+    )
+    .into_string();
     let presence: std::collections::HashSet<String> = ["bafy1".to_string(), "bafy3".to_string()]
         .into_iter()
         .collect();
-    let flagged =
-        render_project_fragment(&group_project("github:rust-lang/cargo", &rows, &presence))
-            .into_string();
+    let flagged = render_project_fragment(
+        &group_project("github:rust-lang/cargo", &rows, &presence),
+        &LinkedIdentities::None,
+    )
+    .into_string();
     // Elide every additive anchor from the flagged render; what remains must equal the
     // no-flag baseline byte-for-byte.
     let mut elided = flagged.clone();

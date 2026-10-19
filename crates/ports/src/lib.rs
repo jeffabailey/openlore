@@ -135,10 +135,17 @@ pub use contribution_link::{
 // link-lineage claim reads.
 mod identity_link_check;
 pub use identity_link_check::{
-    read_latest_checks, read_listed_links, CheckFilter, ClaimReferrer, IdentityLinkCheckError,
-    IdentityLinkCheckPurgePort, IdentityLinkCheckReadPort, IdentityLinkCheckWritePort,
-    LinkCandidate, LinkCandidateReadPort, LinkCheck, LinkLineageReadPort, LinkReadError,
-    StoredLinkLineage,
+    CheckFilter, ClaimReferrer, IdentityLinkCheckError, IdentityLinkCheckPurgePort,
+    IdentityLinkCheckReadPort, IdentityLinkCheckWritePort, LinkCandidate, LinkCandidateReadPort,
+    LinkCheck, LinkLineageReadPort,
+};
+
+// github-did-identity-link slice 4 (D-VL-3): the one lineage read of active
+// links over those read ports, shared by `identity list`, the person views and
+// the viewer.
+mod identity_link_listing;
+pub use identity_link_listing::{
+    read_latest_checks, read_listed_links, LinkReadError, StoredLinkLineage,
 };
 
 // -----------------------------------------------------------------------------

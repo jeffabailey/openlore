@@ -162,16 +162,10 @@ fn counter_is_own(origin: &PeerOrigin) -> bool {
 /// chrome, so the fragment and the full page's detail region are byte-identical by
 /// construction (I-HX-5 parity — the field/evidence-rendering logic is NOT
 /// duplicated). This is the load-bearing slice-07 structural contract: page =
-/// chrome + fragment.
-pub fn render_claim_detail_fragment(claim: &ClaimDetailView, thread: &CounterThread) -> Markup {
-    render_claim_detail_fragment_with_links(claim, thread, &LinkedIdentities::None)
-}
-
-/// [`render_claim_detail_fragment`] with the AUTHOR's linked-identities region
-/// (slice 4; D-VL-1) beneath the claim's fields — under its Author row — and
-/// inside `#claim-detail`, so the htmx swap and the full page carry the same
-/// region (ADR-033).
-pub fn render_claim_detail_fragment_with_links(
+/// chrome + fragment. The AUTHOR's linked-identities region (slice 4; D-VL-1)
+/// sits beneath the claim's fields — under its Author row — inside
+/// `#claim-detail`, so the htmx swap and the full page carry it (ADR-033).
+pub fn render_claim_detail_fragment(
     claim: &ClaimDetailView,
     thread: &CounterThread,
     linked: &LinkedIdentities,
@@ -265,12 +259,7 @@ fn render_counter_entry(entry: &CounterEntry) -> Markup {
 /// `<script src="/static/htmx.min.js">` (offline-first, never a CDN; I-HX-2).
 /// Because the detail region is the SAME fn in both shapes, fragment/full-page
 /// parity is structural, not asserted by duplicating render logic (I-HX-5).
-pub fn render_claim_detail(claim: &ClaimDetailView, thread: &CounterThread) -> String {
-    render_claim_detail_with_links(claim, thread, &LinkedIdentities::None)
-}
-
-/// [`render_claim_detail`] embedding [`render_claim_detail_fragment_with_links`].
-pub fn render_claim_detail_with_links(
+pub fn render_claim_detail(
     claim: &ClaimDetailView,
     thread: &CounterThread,
     linked: &LinkedIdentities,
@@ -283,7 +272,7 @@ pub fn render_claim_detail_with_links(
     let body = html! {
         h1 { "Claim Detail" }
         p { (READ_ONLY_NOTICE) }
-        (render_claim_detail_fragment_with_links(claim, thread, linked))
+        (render_claim_detail_fragment(claim, thread, linked))
         p {
             a href="/claims" { "Back to My Claims" }
         }

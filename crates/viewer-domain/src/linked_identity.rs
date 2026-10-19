@@ -15,7 +15,7 @@ use claim_domain::identity_link::{
     PersonKey,
 };
 
-use super::{encode_query_component, html, Markup, PROJECT_URL, SCORE_URL};
+use super::{bare_did, encode_query_component, html, Markup, PROJECT_URL, SCORE_URL};
 
 /// The region heading (viewer-only wording, D-VL-5 open question 3).
 pub const LINKED_IDENTITIES_HEADING: &str = "Linked identities";
@@ -30,6 +30,13 @@ pub const LINKED_IDENTITIES_UNREADABLE: &str =
 
 /// The `id` of the heading that labels the region (`aria-labelledby`).
 pub const LINKED_IDENTITIES_HEADING_ID: &str = "linked-identities-heading";
+
+/// The command a line names when its check is due again (U-8).
+const RECHECK_COMMAND: &str = "openlore identity verify";
+
+/// The subject prefix of a GitHub person page (and of an account as a line
+/// names it).
+const GITHUB_SUBJECT_PREFIX: &str = "github:";
 
 /// What a page shows about one person's linked identities.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,15 +62,34 @@ impl LinkedIdentities {
         }
     }
 
-    /// The lines that belong to `person` (U-6, D-VL-6), selected AFTER every
-    /// standing was decided (C-VL-3): a selection never changes a line. No
-    /// line left, no region; an unreadable region stays unreadable.
-    pub fn of_person(self, person: &PersonKey) -> Self {
+    /// The lines that belong to the GitHub `person` (U-6, D-VL-6).
+    pub fn of_person(&self, person: &PersonKey) -> Self {
+        self.selecting(|listed| links_of_person(listed, person))
+    }
+
+    /// The lines whose DID is `author_did`, both compared bare (D-VL-10): the
+    /// lines come from this reader's local checks; the author only names
+    /// whose lines to show.
+    pub fn of_author(&self, author_did: &str) -> Self {
+        let author = bare_did(author_did);
+        self.selecting(|listed| {
+            listed
+                .iter()
+                .filter(|line| bare_did(&line.identity.link.did) == author)
+                .cloned()
+                .collect()
+        })
+    }
+
+    /// The lines `select` keeps, selected AFTER every standing was decided
+    /// (C-VL-3): a selection never changes a line. No line left, no region;
+    /// an unreadable region stays unreadable.
+    fn selecting(&self, select: impl FnOnce(&[ListedLink]) -> Vec<ListedLink>) -> Self {
         match self {
             LinkedIdentities::Lines { listed, now } => {
-                LinkedIdentities::listed(links_of_person(&listed, person), now)
+                LinkedIdentities::listed(select(listed), *now)
             }
-            other => other,
+            other => other.clone(),
         }
     }
 }
@@ -78,9 +104,6 @@ pub fn github_person(subject: &str) -> Option<PersonKey> {
         .filter(|prefix| prefix.eq_ignore_ascii_case(GITHUB_SUBJECT_PREFIX))
         .map(|_| PersonKey::of_person(subject, []))
 }
-
-/// The subject prefix of a GitHub person page.
-const GITHUB_SUBJECT_PREFIX: &str = "github:";
 
 /// Render the region: a `<section>` labelled by its heading, the lines as a
 /// list and the legend beneath; the notice alone when unreadable; nothing for
@@ -118,7 +141,7 @@ fn render_listed_link(listed: &ListedLink, now: DateTime<Utc>) -> Markup {
         li {
             (render_standing(&listed.identity, now))
             @if suggests_recheck(&listed.identity.standing, now) {
-                "; re-check with " code { "openlore identity verify" }
+                "; re-check with " code { (RECHECK_COMMAND) }
             }
             (record_ids_text(&listed.record_ids))
         }
@@ -158,7 +181,7 @@ fn did_link(did: &str) -> Markup {
 
 /// The account, linked to its GitHub person page.
 fn account_link(login: &str) -> Markup {
-    let account = format!("github:{login}");
+    let account = format!("{GITHUB_SUBJECT_PREFIX}{login}");
     html! {
         a href=(format!("{PROJECT_URL}?subject={}", encode_query_component(&account))) { (account) }
     }

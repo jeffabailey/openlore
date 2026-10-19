@@ -108,20 +108,12 @@ pub enum ScoreState {
 /// WD-CS-3 — the score is a read + pure compute; signing/following stays a CLI
 /// action). [`render_score_page`] EMBEDS this SAME fn beneath the form, so the
 /// fragment and the full page's score region are byte-identical by construction
-/// (I-CS-7 parity — the score-rendering logic is NOT duplicated).
+/// (I-CS-7 parity — the score-rendering logic is NOT duplicated). The
+/// contributor's linked-identities region (github-did-identity-link slice 4;
+/// D-VL-1) sits inside the fragment, above the score, so the htmx swap and the
+/// full page carry the same lines (ADR-033); [`LinkedIdentities::None`] renders
+/// no region at all.
 pub fn render_score_results_fragment(
-    state: &ScoreState,
-    presence: &std::collections::HashSet<String>,
-) -> Markup {
-    render_score_results_fragment_with_links(state, presence, &LinkedIdentities::None)
-}
-
-/// [`render_score_results_fragment`] carrying the contributor's linked
-/// identities (github-did-identity-link slice 4; D-VL-1): the region sits
-/// inside the results fragment, above the score, so the htmx swap and the full
-/// page carry the same lines (ADR-033). [`LinkedIdentities::None`] renders no
-/// region at all.
-pub fn render_score_results_fragment_with_links(
     state: &ScoreState,
     presence: &std::collections::HashSet<String>,
     linked: &LinkedIdentities,
@@ -150,15 +142,6 @@ pub fn render_score_results_fragment_with_links(
 pub fn render_score_page(
     state: &ScoreState,
     presence: &std::collections::HashSet<String>,
-) -> String {
-    render_score_page_with_links(state, presence, &LinkedIdentities::None)
-}
-
-/// [`render_score_page`] carrying the contributor's linked identities inside
-/// the embedded results fragment (slice 4; D-VL-1, ADR-033 parity).
-pub fn render_score_page_with_links(
-    state: &ScoreState,
-    presence: &std::collections::HashSet<String>,
     linked: &LinkedIdentities,
 ) -> String {
     // slice-21 (ADR-058 D6): composed through `page_shell` (persistent left nav +
@@ -171,7 +154,7 @@ pub fn render_score_page_with_links(
             a href=(MY_CLAIMS_URL) { "My Claims" }
         }
         (render_score_form())
-        (render_score_results_fragment_with_links(state, presence, linked))
+        (render_score_results_fragment(state, presence, linked))
     };
     page_shell("OpenLore — Contributor Score", SCORE_URL, body)
 }

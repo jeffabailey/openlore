@@ -218,18 +218,10 @@ fn group_by(
 /// ONLY this region (I-GT-6). Renders NO sign/publish/follow control (I-GT-1 —
 /// traversal is a READ; the cross-links are render-only navigation TEXT, WD-GT-3).
 /// [`render_project_page`] EMBEDS this SAME fn, so the fragment and the full page's
-/// results region are byte-identical by construction (I-GT-6 parity).
-pub fn render_project_fragment(view: &TraversalView) -> Markup {
-    render_project_fragment_with_links(view, &LinkedIdentities::None)
-}
-
-/// [`render_project_fragment`] with the GitHub person's linked-identities
-/// region (slice 4; D-VL-1, D-VL-6) inside `#traversal-results`, so the htmx
-/// swap and the full page carry the same region (ADR-033).
-pub fn render_project_fragment_with_links(
-    view: &TraversalView,
-    linked: &LinkedIdentities,
-) -> Markup {
+/// results region are byte-identical by construction (I-GT-6 parity). The GitHub
+/// person's linked-identities region (slice 4; D-VL-1, D-VL-6) sits inside
+/// `#traversal-results`, so the htmx swap and the full page carry it (ADR-033).
+pub fn render_project_fragment(view: &TraversalView, linked: &LinkedIdentities) -> Markup {
     html! {
         div id=(TRAVERSAL_RESULTS_ID) {
             (render_linked_identities_region(linked))
@@ -250,12 +242,7 @@ pub fn render_project_fragment_with_links(
 /// parity is structural, not asserted by duplicating render logic (I-GT-6). The
 /// `<head>` emits exactly ONE local `<script src="/static/htmx.min.js">`
 /// (offline-first, never a CDN).
-pub fn render_project_page(view: &TraversalView) -> String {
-    render_project_page_with_links(view, &LinkedIdentities::None)
-}
-
-/// [`render_project_page`] embedding [`render_project_fragment_with_links`].
-pub fn render_project_page_with_links(view: &TraversalView, linked: &LinkedIdentities) -> String {
+pub fn render_project_page(view: &TraversalView, linked: &LinkedIdentities) -> String {
     // slice-21 (ADR-058 D6): composed through `page_shell` (persistent left nav +
     // `<main id="viewer-main">`); `active = PROJECT_URL` (the base-path const for the
     // query-bearing `/project?subject=…` route) marks the Project Survey nav item
@@ -266,7 +253,7 @@ pub fn render_project_page_with_links(view: &TraversalView, linked: &LinkedIdent
         nav {
             a href=(MY_CLAIMS_URL) { "My Claims" }
         }
-        (render_project_fragment_with_links(view, linked))
+        (render_project_fragment(view, linked))
     };
     page_shell("OpenLore — Project Survey", PROJECT_URL, body)
 }

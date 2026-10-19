@@ -26,7 +26,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use appview_domain::{compose_results, partition_retracted, NetworkSearchResult};
-use claim_domain::identity_link::RecheckScope;
+use claim_domain::identity_link::{PersonKey, RecheckScope};
 use claim_domain::{Cid, Did, KeyId};
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
@@ -42,15 +42,14 @@ use ports::{
 use scraper_domain::{derive_candidates, load_mapping, normalize_target, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
-    github_person, group_philosophy, group_project, peers_view,
-    render_claim_detail_fragment_with_links, render_claim_detail_with_links,
-    render_claim_not_found_fragment, render_claims_page, render_claims_view_panel_fragment,
-    render_error, render_landing, render_peer_claims_page, render_peer_claims_view_panel_fragment,
-    render_peers_fragment, render_peers_page, render_philosophies_page, render_philosophy_fragment,
-    render_philosophy_page, render_project_fragment_with_links, render_project_page_with_links,
-    render_score_page_with_links, render_score_results_fragment_with_links, render_scrape_page,
-    render_scrape_results_fragment, render_search_page_with_links,
-    render_search_results_fragment_with_links, render_viewer_nav_oob, resolve_author_relationship,
+    github_person, group_philosophy, group_project, peers_view, render_claim_detail,
+    render_claim_detail_fragment, render_claim_not_found_fragment, render_claims_page,
+    render_claims_view_panel_fragment, render_error, render_landing, render_peer_claims_page,
+    render_peer_claims_view_panel_fragment, render_peers_fragment, render_peers_page,
+    render_philosophies_page, render_philosophy_fragment, render_philosophy_page,
+    render_project_fragment, render_project_page, render_score_page, render_score_results_fragment,
+    render_scrape_page, render_scrape_results_fragment, render_search_page,
+    render_search_results_fragment, render_viewer_nav_oob, resolve_author_relationship,
     CandidateRowView, ClaimDetailView, ClaimRowView, CounterThread, LandingSummary,
     LinkedIdentities, PageView, PeerClaimRowView, PeersView, ScoreState, ScrapeState, SearchState,
     TraversalView, HTMX_ASSET_URL, PEERS_URL, PHILOSOPHIES_URL, PHILOSOPHY_URL, PROJECT_URL,
@@ -844,32 +843,62 @@ fn score_page(
     let state = resolve_score_state(store, query);
     // The contributor's linked identities (slice 4; D-VL-1): a contributor that
     // is a DID is a person; a bare form or a malformed value is no one.
-    let linked = query_param(query, "contributor")
-        .filter(|contributor| contributor.starts_with("did:"))
-        .map_or(LinkedIdentities::None, |did| {
-            linked_identities(link_reads, &RecheckScope::Person(did))
-        });
+    let linked = linked_identities(
+        link_reads,
+        query_param(query, "contributor")
+            .filter(|contributor| contributor.starts_with(DID_PREFIX))
+            .map(LinkedPerson::Did),
+    );
     // Read the per-contribution counter PRESENCE for the WHOLE breakdown in ONE
     // flattened aggregate lookup (slice-14 / US-CF-002 / ADR-051). Only the `Scored`
     // arm has contributions to flag; `Form`/`NoClaims` build no view → no query → the
     // empty set (so the render signature stays uniform across shapes/states).
     let presence = score_counter_presence(store, &state);
     match shape {
-        Shape::Fragment => html_ok(
-            render_score_results_fragment_with_links(&state, &presence, &linked).into_string(),
-        ),
-        Shape::FullPage => html_ok(render_score_page_with_links(&state, &presence, &linked)),
+        Shape::Fragment => {
+            html_ok(render_score_results_fragment(&state, &presence, &linked).into_string())
+        }
+        Shape::FullPage => html_ok(render_score_page(&state, &presence, &linked)),
     }
 }
 
-/// What a person page shows of the linked identities within `scope` (slice 4;
-/// D-VL-7) — the one mapping every person page reuses: no reads wired (the
-/// startup probe refused) or any read failing → [`LinkedIdentities::Unreadable`],
-/// never partial lines; no link → no region. Writes nothing, asks GitHub nothing.
-fn linked_identities(link_reads: Option<&LinkReads>, scope: &RecheckScope) -> LinkedIdentities {
-    match link_reads.map(|reads| identity_links_read_with_fault_seam(reads.listed_links(scope))) {
+/// The prefix that makes a `/score` contributor a person (a DID).
+const DID_PREFIX: &str = "did:";
+
+/// Whose linked identities a page shows (slice 4; D-VL-1, D-VL-6, D-VL-10).
+enum LinkedPerson {
+    /// One DID (`/score`'s contributor, a claim's bare author DID).
+    Did(String),
+    /// A GitHub person (`/project?subject=github:<login>`), selected by last-seen
+    /// login after every standing was decided (C-VL-3).
+    Github(PersonKey),
+    /// Every author group's person (`/search`): the one read is shared by every
+    /// group, each selecting its author's lines.
+    EveryAuthor,
+}
+
+/// What a page shows of `person`'s linked identities — the ONE link read and
+/// mapping every page reuses (slice 4; D-VL-7): no person → no region (and no
+/// read); no reads wired (the startup probe refused) or any read failing →
+/// [`LinkedIdentities::Unreadable`], never partial lines; no link → no region.
+/// Writes nothing, asks GitHub nothing.
+fn linked_identities(
+    link_reads: Option<&LinkReads>,
+    person: Option<LinkedPerson>,
+) -> LinkedIdentities {
+    let Some(person) = person else {
+        return LinkedIdentities::None;
+    };
+    let read = |scope: &RecheckScope| match link_reads
+        .map(|reads| identity_links_read_with_fault_seam(reads.listed_links(scope)))
+    {
         Some(Ok(linked)) => linked,
         None | Some(Err(_)) => LinkedIdentities::Unreadable,
+    };
+    match person {
+        LinkedPerson::Did(did) => read(&RecheckScope::Person(did)),
+        LinkedPerson::Github(person) => read(&RecheckScope::Everyone).of_person(&person),
+        LinkedPerson::EveryAuthor => read(&RecheckScope::Everyone),
     }
 }
 
@@ -997,17 +1026,16 @@ fn project_page(
     // The GitHub person's linked identities (slice 4; D-VL-6): standings are
     // decided over every active link (C-VL-3), THEN `links_of_person` selects
     // this person's lines by last-seen login; any other subject is no one.
-    let linked = query_param(query, "subject")
-        .as_deref()
-        .and_then(github_person)
-        .map_or(LinkedIdentities::None, |person| {
-            linked_identities(link_reads, &RecheckScope::Everyone).of_person(&person)
-        });
+    let linked = linked_identities(
+        link_reads,
+        query_param(query, "subject")
+            .as_deref()
+            .and_then(github_person)
+            .map(LinkedPerson::Github),
+    );
     match shape {
-        Shape::Fragment => {
-            html_ok(render_project_fragment_with_links(&view, &linked).into_string())
-        }
-        Shape::FullPage => html_ok(render_project_page_with_links(&view, &linked)),
+        Shape::Fragment => html_ok(render_project_fragment(&view, &linked).into_string()),
+        Shape::FullPage => html_ok(render_project_page(&view, &linked)),
     }
 }
 
@@ -1244,7 +1272,7 @@ fn claim_detail_page(
             // claim's subject — selected as on `/score`, by the bare author DID.
             let linked = linked_identities(
                 link_reads,
-                &RecheckScope::Person(bare_did(&view.author_did).to_owned()),
+                Some(LinkedPerson::Did(bare_did(&view.author_did).to_owned())),
             );
             // slice-11 (US-CT-002 / ADR-046/047): additionally read the LOCAL
             // counter-claim thread over the SAME read-only store the viewer ALREADY
@@ -1261,10 +1289,10 @@ fn claim_detail_page(
                 Err(_) => CounterThread::None,
             };
             match shape {
-                Shape::Fragment => html_ok(
-                    render_claim_detail_fragment_with_links(&view, &thread, &linked).into_string(),
-                ),
-                Shape::FullPage => html_ok(render_claim_detail_with_links(&view, &thread, &linked)),
+                Shape::Fragment => {
+                    html_ok(render_claim_detail_fragment(&view, &thread, &linked).into_string())
+                }
+                Shape::FullPage => html_ok(render_claim_detail(&view, &thread, &linked)),
             }
         }
         // Unknown CID / read failure: the GUIDED 404 — message + back link, never a
@@ -1309,25 +1337,16 @@ async fn search_page(
     // The authors' linked identities (slice 4; D-VL-10): ONE link read per
     // request, shared by every author group, and only when there are groups —
     // the lines come from this reader's local checks, never from the index.
-    let linked = if has_author_groups(&state) {
-        linked_identities(link_reads, &RecheckScope::Everyone)
-    } else {
-        LinkedIdentities::None
-    };
+    let linked = linked_identities(
+        link_reads,
+        state
+            .has_author_groups()
+            .then_some(LinkedPerson::EveryAuthor),
+    );
     match shape {
-        Shape::Fragment => {
-            html_ok(render_search_results_fragment_with_links(&state, &linked).into_string())
-        }
-        Shape::FullPage => html_ok(render_search_page_with_links(&state, &linked)),
+        Shape::Fragment => html_ok(render_search_results_fragment(&state, &linked).into_string()),
+        Shape::FullPage => html_ok(render_search_page(&state, &linked)),
     }
-}
-
-/// Does the search state render author groups (the only place a region sits)?
-fn has_author_groups(state: &SearchState) -> bool {
-    matches!(
-        state,
-        SearchState::Results { .. } | SearchState::FilteredResults { .. }
-    )
 }
 
 /// Resolve the [`SearchState`] for a `/search` request (the pure-ish decision over

@@ -10,36 +10,6 @@ use super::*;
 /// one site to attack — pinned by the unit test). The no-JS full page embeds the
 /// SAME `<div id="search-results">`, so the fragment and the full page's results
 /// region are structurally identical (I-NS-6 parity by construction).
-/// Content-frozen label on a network row that is an identity link (ADR-085 §8,
-/// U-7): the index never checks the GitHub authority behind a link. Matches the
-/// CLI's `LINK_AUTHORITY_NOT_CHECKED_LABEL`. Do NOT paraphrase.
-pub const SEARCH_LINK_AUTHORITY_NOT_CHECKED_LABEL: &str = "authority not checked here";
-
-/// The label of one network row: `Some` for an identity-link row (selected
-/// through the claim-domain link API, never a predicate literal), `None` for
-/// every other row.
-fn link_row_label(predicate: &str) -> Option<&'static str> {
-    claim_domain::identity_link::is_reserved_predicate(predicate)
-        .then_some(SEARCH_LINK_AUTHORITY_NOT_CHECKED_LABEL)
-}
-
-/// The lines of `linked` that belong to the group's author (compared bare):
-/// lines come from this reader's local checks; the index row only names whose
-/// group it is. No line left, no region; an unreadable read stays unreadable.
-fn linked_identities_of_author(linked: &LinkedIdentities, author_did: &str) -> LinkedIdentities {
-    match linked {
-        LinkedIdentities::Lines { listed, now } => LinkedIdentities::listed(
-            listed
-                .iter()
-                .filter(|line| bare_did(&line.identity.link.did) == bare_did(author_did))
-                .cloned()
-                .collect(),
-            *now,
-        ),
-        other => other.clone(),
-    }
-}
-
 pub const SEARCH_RESULTS_ID: &str = "search-results";
 
 /// The real route the network-search view is served at (`/search`) — the no-JS
@@ -292,6 +262,17 @@ pub enum SearchState {
     },
 }
 
+impl SearchState {
+    /// Does this state render author groups — the only place a linked-identities
+    /// region sits on `/search` (slice 4; D-VL-10)?
+    pub fn has_author_groups(&self) -> bool {
+        matches!(
+            self,
+            SearchState::Results { .. } | SearchState::FilteredResults { .. }
+        )
+    }
+}
+
 /// Render the network-search swap-target FRAGMENT (slice-08; ADR-037): the
 /// `<div id="search-results">` wrapping the per-author result groups (or the guided
 /// no-results / fixed unavailable notice) for the given [`SearchState`]. PURE: a
@@ -308,18 +289,10 @@ pub enum SearchState {
 /// each group keyed by its author DID, every row carrying the `[verified]` marker,
 /// the author DID, and the VERBATIM confidence (via [`render_confidence`]) — and
 /// there is NO merged "network consensus" row (the per-author shape is the only
-/// output of the REUSED `compose_results`; the viewer never re-groups).
-pub fn render_search_results_fragment(state: &SearchState) -> Markup {
-    render_search_results_fragment_with_links(state, &LinkedIdentities::None)
-}
-
-/// [`render_search_results_fragment`] with each author group carrying that
-/// author's linked-identities region (slice 4; D-VL-10), selected from `linked`
-/// — the ONE link read of the request, shared by every group.
-pub fn render_search_results_fragment_with_links(
-    state: &SearchState,
-    linked: &LinkedIdentities,
-) -> Markup {
+/// output of the REUSED `compose_results`; the viewer never re-groups). Each
+/// author group carries that author's linked-identities region (slice 4;
+/// D-VL-10), selected from `linked` — the ONE link read of the request.
+pub fn render_search_results_fragment(state: &SearchState, linked: &LinkedIdentities) -> Markup {
     html! {
         div id=(SEARCH_RESULTS_ID) {
             (render_search_result(state, linked))
@@ -344,12 +317,7 @@ pub fn render_search_results_fragment_with_links(
 /// `<script src="/static/htmx.min.js">` (offline-first, never a CDN; I-NS-7) — the
 /// SAME chrome line every other enhanced page carries, so the form's `hx-get` swap
 /// works in-browser instead of falling back to a full GET.
-pub fn render_search_page(state: &SearchState) -> String {
-    render_search_page_with_links(state, &LinkedIdentities::None)
-}
-
-/// [`render_search_page`] embedding [`render_search_results_fragment_with_links`].
-pub fn render_search_page_with_links(state: &SearchState, linked: &LinkedIdentities) -> String {
+pub fn render_search_page(state: &SearchState, linked: &LinkedIdentities) -> String {
     // slice-21 (ADR-058 D6): composed through `page_shell` (persistent left nav +
     // `<main id="viewer-main">`); `active = SEARCH_URL` marks the Network Search nav
     // item current. The `render_*_fragment` fn is UNCHANGED (it rides `Shape::Fragment`
@@ -369,7 +337,7 @@ pub fn render_search_page_with_links(state: &SearchState, linked: &LinkedIdentit
             a href=(MY_CLAIMS_URL) { "My Claims" }
         }
         (render_search_form(hide_active))
-        (render_search_results_fragment_with_links(state, linked))
+        (render_search_results_fragment(state, linked))
     };
     page_shell("OpenLore — Network Search", SEARCH_URL, body)
 }
@@ -504,7 +472,7 @@ fn render_search_author_groups(
         @for (author_did, rows) in &result.by_author {
             section {
                 h2 { "Author: " (author_did.0) }
-                (render_linked_identities_region(&linked_identities_of_author(linked, &author_did.0)))
+                (render_linked_identities_region(&linked.of_author(&author_did.0)))
                 @for row in rows {
                     (render_search_result_row(row))
                 }
@@ -527,6 +495,19 @@ fn render_search_footer(dimension: appview_domain::SearchDimension) -> Markup {
             p { (SEARCH_CONTRIBUTOR_FOOTER) }
         }
     }
+}
+
+/// Content-frozen label on a network row that is an identity link (ADR-085 §8,
+/// U-7): the index never checks the GitHub authority behind a link. Matches the
+/// CLI's `LINK_AUTHORITY_NOT_CHECKED_LABEL`. Do NOT paraphrase.
+pub const SEARCH_LINK_AUTHORITY_NOT_CHECKED_LABEL: &str = "authority not checked here";
+
+/// The label of one network row: `Some` for an identity-link row (selected
+/// through the claim-domain link API, never a predicate literal), `None` for
+/// every other row.
+fn link_row_label(predicate: &str) -> Option<&'static str> {
+    claim_domain::identity_link::is_reserved_predicate(predicate)
+        .then_some(SEARCH_LINK_AUTHORITY_NOT_CHECKED_LABEL)
 }
 
 /// Render one network-search result row (a verified, attributed claim). Carries the
