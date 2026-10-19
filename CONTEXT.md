@@ -1,14 +1,14 @@
 # OpenLore — Resume Context
 
 ## Current Task
-Go-live checklist (`deploy/README.md`) done through step 16 (all pushed, origin/main 204da73); review app live at 61b237a (htmx 4 in-place scan status, batch + in-card approve). Step 17 (announce) is the user's; A-8 token-expiring OK email still due (1-day period).
+github-did-identity-link slices 1–3 delivered and archived (`docs/evolution/github-did-identity-link-slice-{1,2,3}-evolution.md`); all slice-3 follow-ups (NF-1, F-6, U-20, U-47/49/50, PS-10..12, policy rename) pushed, CI green, review app live at 4c429cf (sha256:85f2d221…). Nothing local or undeployed.
 
 ## Key Decisions
-- `vm.swappiness` 10 (live host by hand); memory gate passed with scans (indexer 63 MB/100, review app 27 MB/192), so no t4g.small.
-- Pre-announce, AWS/infra updates need no per-step OK (user, 2026-10-13); ask again after step 17. Push only when told, over SSH (`git push git@github.com:jeffabailey/openlore.git HEAD:main`).
-- Auto-mode classifier blocks the agent stopping apps or editing SSM; hand those commands to the user.
+- Review app reads every AT Protocol host (owner PDS, handle resolver, PLC, did:web) through the SSRF guard via `atproto_address_policy`; unguarded constructors are deleted, not kept.
+- A failed write says "may have been saved" for a 5xx or lost answer (`FailedWrite::MayHaveStored`), "not published" only for a 4xx/unreachable/session error.
+- Push only when told, over SSH (`git push git@github.com:jeffabailey/openlore.git HEAD:main`); deploy with `deploy/ops.sh review-app deploy <40-hex sha>`. Classifier blocks stopping apps/editing SSM: hand those to the user.
 
 ## Next Steps
-- tofu-aws-pds 4451296 (`swappiness` input) is pushed but unreleased: release it, then set `swappiness = 10` in openlore's prod root.
-- Live-check htmx scan polling and Approve selected as canzantest (user drives sign-in/publish).
-- Backlog in memory `openlore-follow-up-backlog.md`: `scan.refused` event (unanswered), SPIKE-6, htmx 4 for local viewer, TRUSTED_PROXIES, serde-saphyr.
+- Optional identity-link slice: the viewer's linked-identity line (design/wave-decisions.md l.212); ask the user before starting.
+- Still open from before (verify first): release tofu-aws-pds 4451296 (`swappiness`), set `swappiness = 10` in openlore's prod root; go-live step 17 (announce) is the user's.
+- Backlog in memory `openlore-follow-up-backlog.md`: `scan.refused` event, SPIKE-6 (bring-your-own PDS), htmx 4 for local viewer, TRUSTED_PROXIES, serde-saphyr.
