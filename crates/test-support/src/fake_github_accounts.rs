@@ -290,6 +290,10 @@ struct GhState {
     /// Accounts whose profile reads (by login or id) answer `503` — GitHub
     /// unreachable for that one check (lowercase login).
     profile_outage: Mutex<std::collections::BTreeSet<String>>,
+    /// `budget_runs_low_after_repos`: (n, remaining to report, repos read so
+    /// far) — once the n-th distinct repo is read, responses report the low
+    /// remaining budget (a scan pauses part way, after real reads).
+    low_after_repos: Mutex<Option<(usize, u64, std::collections::BTreeSet<String>)>>,
 }
 
 impl GhState {
@@ -529,7 +533,18 @@ impl FakeGithubAccounts {
 
     /// The `x-ratelimit-remaining` value every response reports.
     pub fn set_remaining(&self, remaining: u64) {
+        *self.state.low_after_repos.lock().unwrap() = None;
         self.state.remaining.store(remaining, Ordering::SeqCst);
+    }
+
+    /// GitHub's budget runs low part way through a scan: from the first read
+    /// of the `n`-th distinct repo (a request past a repo's root), every
+    /// response reports `low` remaining. With `low` below the app's floor the
+    /// scan pauses after reading `n` repos — not before its first read.
+    /// [`Self::set_remaining`] cancels it.
+    pub fn budget_runs_low_after_repos(&self, n: usize, low: u64) {
+        *self.state.low_after_repos.lock().unwrap() =
+            Some((n, low, std::collections::BTreeSet::new()));
     }
 
     /// Every request is refused with `401 Bad credentials` (expired/revoked PAT).
@@ -801,6 +816,21 @@ fn route(state: &GhState, req: HttpRequest) -> HttpResponse {
         }
     }
 
+    {
+        let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        let mut trigger = state.low_after_repos.lock().unwrap();
+        let fired = match (trigger.as_mut(), segments.as_slice()) {
+            (Some((n, low, seen)), ["repos", owner, name, _rest, ..]) => {
+                seen.insert(format!("{owner}/{name}").to_ascii_lowercase());
+                (seen.len() >= *n).then_some(*low)
+            }
+            _ => None,
+        };
+        if let Some(low) = fired {
+            state.remaining.store(low, Ordering::SeqCst);
+            *trigger = None;
+        }
+    }
     let remaining = state.remaining.load(Ordering::SeqCst);
     let mut headers: Vec<(&str, String)> = vec![
         ("x-ratelimit-limit", "5000".to_string()),

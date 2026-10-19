@@ -1018,14 +1018,22 @@ pub fn given_scanned(world: &ReviewWorld, browser: &mut Browser) -> BTreeSet<Str
 
 /// GIVEN a scan paused for GitHub's budget part-way (BR-RRA-4: it is still
 /// running — a resume continues the same scan). Returns the repos read so far.
+///
+/// The budget runs low only once the scan has read its first planned repo
+/// (U-RRA-D8), so the pause lands mid-plan and a resume that re-planned
+/// instead of reading the frozen plan's rest would read that repo again.
 pub fn given_scan_paused_part_way(world: &ReviewWorld, browser: &mut Browser) -> BTreeSet<String> {
-    world.github.set_remaining(120);
+    world.github.budget_runs_low_after_repos(1, 120);
     let (status, read) = when_scans(world, browser);
     assert_eq!(
         status,
         "rate_limited",
         "the scan must pause for GitHub's budget:\n{}",
         browser.page.text()
+    );
+    assert!(
+        !read.is_empty(),
+        "precondition: the scan read at least one planned repo before it paused"
     );
     read
 }
