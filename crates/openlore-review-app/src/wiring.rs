@@ -24,6 +24,7 @@ use ports::{
     AccountCheckOutcome, KpiTally, OAuthPort, OutsideDefault, ProbeOutcome, ReviewStorePort,
     RevokeOutcome, ScanRunPort, ScanStatus, SecretStorePort,
 };
+use review_domain::budget::{admit_page_reads, PageReadAdmission};
 use review_domain::kpi::{
     account_check_event, approval_events, decline_events, outside_default_events,
     publish_refusal_events, publish_refusal_label, rollup_day, seconds_until_next_rollup,
@@ -739,6 +740,7 @@ fn app(wired: Wired) -> App {
         share_allowance: ShareAllowance::default(),
         scan_limiter,
         scope_locks: ScopeLocks::default(),
+        page_reads: PageReads::default(),
     }
 }
 
@@ -752,19 +754,67 @@ pub(crate) struct ScopeLocks {
     by_owner: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
-/// Held while one scope change of a DID reads, checks and writes.
+/// Held while one scope change of a DID checks and writes its store rows.
+/// No GitHub request is made while it is held (review R2): a change reads
+/// GitHub first, then holds the scope to re-check and write.
 pub(crate) type ScopeGuard = tokio::sync::OwnedMutexGuard<()>;
 
+/// How long a scope change waits for another change of the same DID before
+/// it is refused, nothing changed (review R2).
+pub(crate) const SCOPE_WAIT: Duration = Duration::from_secs(10);
+
+/// The DID's scope stayed held by another change past the wait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ScopeBusy;
+
 impl ScopeLocks {
-    /// Wait for `owner_did`'s scope to be free and hold it. A DID's entry
-    /// is dropped once nobody holds or waits for it.
-    pub(crate) async fn hold(&self, owner_did: &str) -> ScopeGuard {
+    /// Wait at most `wait` for `owner_did`'s scope to be free and hold it,
+    /// else [`ScopeBusy`]. A DID's entry is dropped once nobody holds or
+    /// waits for it.
+    pub(crate) async fn hold_within(
+        &self,
+        owner_did: &str,
+        wait: Duration,
+    ) -> Result<ScopeGuard, ScopeBusy> {
         let lock = {
             let mut by_owner = self.by_owner.lock().unwrap_or_else(PoisonError::into_inner);
             by_owner.retain(|_, lock| Arc::strong_count(lock) > 1);
             Arc::clone(by_owner.entry(owner_did.to_string()).or_default())
         };
-        lock.lock_owned().await
+        tokio::time::timeout(wait, lock.lock_owned())
+            .await
+            .map_err(|_| ScopeBusy)
+    }
+
+    /// [`Self::hold_within`] the app's [`SCOPE_WAIT`].
+    pub(crate) async fn hold(&self, owner_did: &str) -> Result<ScopeGuard, ScopeBusy> {
+        self.hold_within(owner_did, SCOPE_WAIT).await
+    }
+}
+
+/// Each DID's page-action GitHub requests in the last hour (in memory;
+/// resets on restart, like [`crate::routes::github::VerifyAttempts`]).
+#[derive(Default)]
+pub(crate) struct PageReads(Mutex<HashMap<String, Vec<std::time::Instant>>>);
+
+impl PageReads {
+    /// Admit `wanted` GitHub requests by `owner_did` against her hourly
+    /// allowance ([`admit_page_reads`]); admitted requests are spent.
+    pub(crate) fn admit(&self, owner_did: &str, wanted: usize) -> PageReadAdmission {
+        let mut spent = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let now = std::time::Instant::now();
+        let hour = Duration::from_secs(review_domain::budget::HOUR_SECS);
+        let recent = spent.entry(owner_did.to_string()).or_default();
+        recent.retain(|at| now.duration_since(*at) < hour);
+        let ages: Vec<u64> = recent
+            .iter()
+            .map(|at| now.duration_since(*at).as_secs())
+            .collect();
+        let admission = admit_page_reads(&ages, wanted);
+        if admission == PageReadAdmission::Admitted {
+            recent.extend(std::iter::repeat_n(now, wanted));
+        }
+        admission
     }
 }
 
@@ -857,5 +907,56 @@ mod tests {
                 "{origin:?}"
             );
         }
+    }
+
+    /// Review R2: a scope change waits for another of the same DID at most
+    /// its bound, then is refused; once the scope is free it is held, and
+    /// another DID never waits.
+    #[tokio::test]
+    async fn a_scope_change_waits_for_another_only_within_its_bound() {
+        let locks = ScopeLocks::default();
+        let held = locks
+            .hold("did:plc:priya")
+            .await
+            .expect("a free scope is held");
+        let short = Duration::from_millis(50);
+
+        assert_eq!(
+            locks.hold_within("did:plc:priya", short).await.err(),
+            Some(ScopeBusy),
+            "a held scope refuses after the wait"
+        );
+        assert!(
+            locks.hold_within("did:plc:dmitri", short).await.is_ok(),
+            "another DID's scope is its own"
+        );
+        drop(held);
+        assert!(locks.hold_within("did:plc:priya", short).await.is_ok());
+    }
+
+    /// Review R3: admitted page requests are spent against the DID's hourly
+    /// allowance; a refusal spends nothing; another DID has its own.
+    #[test]
+    fn page_requests_are_spent_only_when_admitted() {
+        let reads = PageReads::default();
+        let allowance = review_domain::budget::PAGE_READS_PER_HOUR;
+        let priya = "did:plc:priya";
+        assert_eq!(
+            reads.admit(priya, allowance - 1),
+            PageReadAdmission::Admitted
+        );
+        assert_eq!(
+            reads.admit(priya, 2),
+            PageReadAdmission::OwnerAllowanceSpent
+        );
+        assert_eq!(reads.admit(priya, 1), PageReadAdmission::Admitted);
+        assert_eq!(
+            reads.admit(priya, 1),
+            PageReadAdmission::OwnerAllowanceSpent
+        );
+        assert_eq!(
+            reads.admit("did:plc:dmitri", 1),
+            PageReadAdmission::Admitted
+        );
     }
 }

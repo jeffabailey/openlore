@@ -7,7 +7,9 @@
 
 use hyper::StatusCode;
 use ports::claim_domain::authority::RepoRead;
-use ports::{GithubError, ImportRemoval, ImportedRepo, KpiTally, RepoFacts, RepoSource};
+use ports::{
+    GithubError, ImportRemoval, ImportedRepo, KpiTally, RepoFacts, RepoSource, WebSession,
+};
 use review_domain::kpi::{import_refusal_event, import_removed_age_event, utc_day, KpiEvent};
 use review_domain::repo_scope::{
     classify_import, import_shape, ImportRefusal, ImportVerdict, SCAN_REPO_CAP,
@@ -16,32 +18,68 @@ use review_domain::views::{self, ReposNotice, IMPORT_REPO_FIELD};
 
 use crate::http::{App, PageRequest, Reply};
 use crate::routes::repos::{
-    import_ids, listed_accounts, listed_imports, owner_scope, pending_from, repos_page,
+    import_ids, listed_accounts, listed_imports, owner_scope, pending_from, read_listings,
+    repos_page, verified_logins, Listings,
 };
 use crate::routes::review::not_found;
 use crate::routes::signin::{csrf_token_for, csrf_token_of, field, id_field, signed_in_post};
+use crate::wiring::ScopeBusy;
 
 /// `POST /repos/imports`: read the named repo publicly and list it under
 /// "Repos you don't own", counted as `import.added`; or refuse it, counted
-/// as `import.refused.<cause>`.
+/// as `import.refused.<cause>`. GitHub is read first, once per request (the
+/// repo and one listing per verified account, R3), then the scope is held
+/// to classify against the store as it is now and write (R2).
 pub(crate) async fn add_import(app: &App, request: &PageRequest) -> Reply {
     let (_, session) = match signed_in_post(app, request) {
         Ok(signed_in) => signed_in,
         Err(refused) => return refused,
     };
+    let owner_did = session.owner_did.as_str();
     let typed = field(&request.form, IMPORT_REPO_FIELD).unwrap_or_default();
+    let csrf_token = csrf_token_of(request);
+    let shape = import_shape(&typed);
+    let accounts = listed_accounts(app, owner_did);
+    let verified = verified_logins(&accounts);
+    let Some(listings) =
+        read_listings(app, owner_did, &verified, usize::from(shape.is_some())).await
+    else {
+        let busy = Some(ReposNotice::GithubBusy);
+        return repos_page(app, &session, &csrf_token, busy, &Listings::default());
+    };
+    let answer = match shape {
+        Some((owner, name)) => Some(app.github.read_repo(owner, name).await),
+        None => None,
+    };
+    let notice = match app.scope_locks.hold(owner_did).await {
+        Err(ScopeBusy) => Some(ReposNotice::ScopeBusy),
+        Ok(scope_guard) => {
+            let settled = settle_import(app, owner_did, &typed, answer.as_ref(), &listings);
+            drop(scope_guard);
+            settled
+        }
+    };
+    repos_page(app, &session, &csrf_token, notice, &listings)
+}
+
+/// Under the scope: the verdict on `typed` (GitHub's `answer`, `None` for a
+/// name that is not `owner/name`) against the store as it is now, written
+/// or counted as refused.
+fn settle_import(
+    app: &App,
+    owner_did: &str,
+    typed: &str,
+    answer: Option<&Result<RepoFacts, GithubError>>,
+    listings: &Listings,
+) -> Option<ReposNotice> {
     let today = utc_day(crate::limiter::unix_now_secs());
-    let scope_guard = app.scope_locks.hold(&session.owner_did).await;
-    let verdict = import_verdict(app, &session.owner_did, &typed).await;
-    let notice = match verdict {
+    match import_verdict(app, owner_did, typed, answer, listings) {
         ImportVerdict::Admitted(import) => {
             let tally = KpiTally {
                 day: &today,
                 events: &[KpiEvent::ImportAdded.name()],
             };
-            let _ = app
-                .imports_write
-                .add_import(&session.owner_did, &import, tally);
+            let _ = app.imports_write.add_import(owner_did, &import, tally);
             None
         }
         ImportVerdict::Refused(refusal) => {
@@ -53,27 +91,30 @@ pub(crate) async fn add_import(app: &App, request: &PageRequest) -> Reply {
                 repo: typed.trim().to_string(),
             })
         }
-    };
-    drop(scope_guard);
-    repos_page(app, &session, &csrf_token_of(request), notice).await
+    }
 }
 
-/// The verdict on `typed`: a name that is not `owner/name` is refused before
-/// anything is asked of GitHub.
-async fn import_verdict(app: &App, owner_did: &str, typed: &str) -> ImportVerdict {
-    let Some((owner, name)) = import_shape(typed) else {
+/// The verdict on `typed`: a name that is not `owner/name` was refused
+/// before anything was asked of GitHub.
+fn import_verdict(
+    app: &App,
+    owner_did: &str,
+    typed: &str,
+    answer: Option<&Result<RepoFacts, GithubError>>,
+    listings: &Listings,
+) -> ImportVerdict {
+    let Some(answer) = answer else {
         return ImportVerdict::Refused(ImportRefusal::Shape);
     };
-    let answer = app.github.read_repo(owner, name).await;
     let listed: Vec<u64> = listed_accounts(app, owner_did)
         .iter()
         .map(|account| account.github_user_id)
         .collect();
     classify_import(
         typed,
-        repo_read(&answer),
+        repo_read(answer),
         &listed,
-        &owner_scope(app, owner_did).await,
+        &owner_scope(app, owner_did, listings),
         &import_ids(app, owner_did),
         SCAN_REPO_CAP,
     )
@@ -127,7 +168,9 @@ pub(crate) async fn remove_import(app: &App, request: &PageRequest) -> Reply {
         Ok(signed_in) => signed_in,
         Err(refused) => return refused,
     };
-    let scope_guard = app.scope_locks.hold(&session.owner_did).await;
+    let Ok(scope_guard) = app.scope_locks.hold(&session.owner_did).await else {
+        return removal_page(app, &session, &cookie_value, Some(ReposNotice::ScopeBusy)).await;
+    };
     let Some(import) = named_import(app, &session.owner_did, request) else {
         return not_found();
     };
@@ -156,5 +199,25 @@ pub(crate) async fn remove_import(app: &App, request: &PageRequest) -> Reply {
         }
         _ => None,
     };
-    repos_page(app, &session, &csrf_token_for(&cookie_value), notice).await
+    removal_page(app, &session, &cookie_value, notice).await
+}
+
+/// The choose page after a removal, its listings read once (R3).
+async fn removal_page(
+    app: &App,
+    session: &WebSession,
+    cookie_value: &str,
+    notice: Option<ReposNotice>,
+) -> Reply {
+    let accounts = listed_accounts(app, &session.owner_did);
+    let listings = read_listings(app, &session.owner_did, &verified_logins(&accounts), 0)
+        .await
+        .unwrap_or_default();
+    repos_page(
+        app,
+        session,
+        &csrf_token_for(cookie_value),
+        notice,
+        &listings,
+    )
 }

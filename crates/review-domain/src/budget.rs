@@ -148,6 +148,36 @@ pub fn github_budget_allows(remaining: Option<u64>) -> bool {
     remaining.is_none_or(|remaining| remaining >= GITHUB_REMAINING_FLOOR)
 }
 
+/// GitHub requests one DID's page actions (opening "Choose repos", Save,
+/// "Add repo", Verify) may make per hour (review R3).
+pub const PAGE_READS_PER_HOUR: usize = 200;
+
+/// Whether a page action may make its GitHub requests now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageReadAdmission {
+    Admitted,
+    /// This DID's page actions made their hour's allowance of requests.
+    OwnerAllowanceSpent,
+}
+
+/// Admit a page action of one DID that asks GitHub for `wanted` requests,
+/// given the ages (seconds) of that DID's recent page requests: admitted
+/// while her requests inside the hour, `wanted` included, stay within
+/// [`PAGE_READS_PER_HOUR`]. GitHub's own budget is not judged here: scans
+/// pause at [`GITHUB_REMAINING_FLOOR`] so the budget below it stays for
+/// page actions, and GitHub's refusal of one is relayed as it answers.
+pub fn admit_page_reads(recent_ages_secs: &[u64], wanted: usize) -> PageReadAdmission {
+    let spent = recent_ages_secs
+        .iter()
+        .filter(|age| **age < HOUR_SECS)
+        .count();
+    if spent + wanted <= PAGE_READS_PER_HOUR {
+        PageReadAdmission::Admitted
+    } else {
+        PageReadAdmission::OwnerAllowanceSpent
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,6 +441,26 @@ mod tests {
             );
             prop_assert!(!github_budget_allows(Some(GITHUB_REMAINING_FLOOR - 1)));
             prop_assert!(github_budget_allows(Some(GITHUB_REMAINING_FLOOR)));
+        }
+
+        /// Review R3. Universe: (recent page-request ages, wanted). A page
+        /// action is admitted exactly when the DID's requests in the last
+        /// hour plus `wanted` stay within 200; requests an hour old or older
+        /// never count.
+        #[test]
+        fn a_page_action_reads_github_only_within_the_owners_hourly_allowance(
+            ages in prop::collection::vec(0u64..(3 * HOUR_SECS), 0..260),
+            wanted in 0usize..6,
+        ) {
+            let in_hour = ages.iter().filter(|a| **a < 3_600).count();
+            let expected = if in_hour + wanted <= 200 {
+                PageReadAdmission::Admitted
+            } else {
+                PageReadAdmission::OwnerAllowanceSpent
+            };
+            prop_assert_eq!(admit_page_reads(&ages, wanted), expected);
+            let with_old = [ages.clone(), vec![3_600]].concat();
+            prop_assert_eq!(admit_page_reads(&with_old, wanted), expected);
         }
 
         /// Universe: (event ages, limit, window). Allowed exactly while the

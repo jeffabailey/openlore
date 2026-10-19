@@ -52,6 +52,9 @@ pub enum OwnershipOutcome<'a> {
     Removed {
         deleted_pending: usize,
     },
+    /// Another change to her accounts or repos held them too long (R2);
+    /// nothing changed.
+    ScopeBusy,
 }
 
 /// The sentence explaining a verify outcome (AC-002.3: each names the fix).
@@ -68,6 +71,7 @@ pub fn ownership_message(
         OwnershipOutcome::NotAdded(refusal) => {
             return account_refusal_message(refusal, login, handle)
         }
+        OwnershipOutcome::ScopeBusy => return SCOPE_BUSY_MESSAGE.to_string(),
         OwnershipOutcome::Removed { deleted_pending } => {
             return format!(
                 "github.com/{login} removed. Its {} {} deleted. Your published claims are \
@@ -140,7 +144,9 @@ fn outcome_role(outcome: OwnershipOutcome<'_>) -> &'static str {
         OwnershipOutcome::Verified
         | OwnershipOutcome::NotAdded(AccountRefusal::AlreadyListed)
         | OwnershipOutcome::Removed { .. } => "status",
-        OwnershipOutcome::Refused(_) | OwnershipOutcome::NotAdded(_) => "alert",
+        OwnershipOutcome::Refused(_)
+        | OwnershipOutcome::NotAdded(_)
+        | OwnershipOutcome::ScopeBusy => "alert",
     }
 }
 

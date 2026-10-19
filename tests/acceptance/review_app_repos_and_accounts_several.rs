@@ -1194,7 +1194,6 @@ fn one_owner_never_sees_or_changes_another_owners_accounts_or_choices() {
 ///   Then after she adds and verifies priya-tidal again, its list starts fresh: today's default ticks, no old choice
 /// ```
 #[test]
-#[ignore = "REVIEW-FIX: R1"]
 fn a_save_that_races_a_removal_never_brings_the_removed_accounts_choice_back() {
     let world = rra_world();
     let mut holding = given_accounts_verified(&world, &BOTH);

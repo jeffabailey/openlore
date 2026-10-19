@@ -658,14 +658,16 @@ pub trait RepoChoiceRead: Send + Sync {
 pub trait RepoChoiceWrite: Send + Sync {
     /// Save `rows` as the account's choice: each row's tick replaces the
     /// stored one, and a stored repo not among `rows` is no longer ticked.
-    /// `tally` is added in the same transaction.
+    /// `tally` is added in the same transaction. Only while the owner still
+    /// lists the account, judged in that transaction (review R1): `false`
+    /// when she no longer does, and then nothing is written or counted.
     fn save_choice(
         &self,
         owner_did: &str,
         github_user_id: u64,
         rows: &[SavedRepoChoice],
         tally: KpiTally<'_>,
-    ) -> Result<(), ReviewStoreError>;
+    ) -> Result<bool, ReviewStoreError>;
 }
 
 /// What removing one of the owner's accounts did (ADR-088 §8).

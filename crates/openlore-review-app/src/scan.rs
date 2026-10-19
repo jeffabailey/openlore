@@ -448,7 +448,9 @@ async fn scan_accounts(
     }
     record_checks(app, owner_did, run_id, &checked);
     let (scope, moved) = frozen.scope.after_moves(&account_checks);
-    let scope_guard = app.scope_locks.hold(owner_did).await;
+    let Ok(scope_guard) = app.scope_locks.hold(owner_did).await else {
+        return Ended::with_status(ScanStatus::Interrupted);
+    };
     let stored = store_moves(app, owner_did, accounts, &account_checks, &moved);
     drop(scope_guard);
     if stored.is_err() {

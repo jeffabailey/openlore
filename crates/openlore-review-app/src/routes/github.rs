@@ -30,12 +30,15 @@ use review_domain::repo_scope::{
 use review_domain::views::{self, GithubStep, OwnershipOutcome};
 
 use crate::http::{App, PageRequest, Reply};
-use crate::routes::repos::{import_ids, listed_accounts, owner_scope, pending_from};
+use crate::routes::repos::{
+    import_ids, listed_accounts, owner_scope, page_reads_admitted, pending_from, read_listings,
+    verified_logins, Listings,
+};
 use crate::routes::review::not_found;
 use crate::routes::signin::{
     csrf_token_for, current_session, field, id_field, signed_in_post, to_landing,
 };
-use crate::wiring::{emit, observe, Counted, LogEvent};
+use crate::wiring::{emit, observe, Counted, LogEvent, ScopeBusy};
 
 /// Recent verify attempts per DID (in memory; resets on restart, ADR-076 §2).
 #[derive(Default)]
@@ -151,11 +154,15 @@ struct Verified {
 enum NotVerified {
     Check(OwnershipRefusal),
     Listing(AccountRefusal),
+    /// Another change held her scope too long (R2); nothing changed.
+    ScopeBusy,
 }
 
 /// `POST /github`: check the named account's bio for the signed-in DID and
 /// add it to her list (up to [`MAX_GITHUB_ACCOUNTS`]), or verify a listed
-/// one again.
+/// one again. GitHub is read first (the profile and, when an import could
+/// move, the listings BR-RRA-5 needs), then the scope is held to decide
+/// against the store as it is now and write (R2).
 pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
     let (cookie_value, session) = match signed_in_post(app, request) {
         Ok(signed_in) => signed_in,
@@ -163,17 +170,29 @@ pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
     };
     let typed = field(&request.form, "github_login").unwrap_or_default();
     let typed = typed.trim();
-    let scope_guard = app.scope_locks.hold(&session.owner_did).await;
-    let listed = listed_accounts(app, &session.owner_did);
-    let attempt = Attempt::of(&listed);
+    let attempt = Attempt::of(&listed_accounts(app, &session.owner_did));
     if attempt == Attempt::AnotherAccount {
         observe(app, LogEvent::AccountAddStarted);
     }
-    let (login, outcome) = check_bio(app, &session, typed, &listed).await;
+    let read = read_profile(app, &session.owner_did, typed, attempt).await;
+    let move_listings = match &read {
+        Ok(profile) => listings_for_moves(app, &session.owner_did, profile).await,
+        Err(_) => None,
+    };
+    let (login, outcome) = match app.scope_locks.hold(&session.owner_did).await {
+        Err(ScopeBusy) => (typed.to_string(), Err(NotVerified::ScopeBusy)),
+        Ok(scope_guard) => {
+            let decided = check_bio(app, &session, typed, read);
+            if let (Ok(verified), Some(listings)) = (&decided.1, &move_listings) {
+                move_owned_imports(app, &session.owner_did, verified.github_user_id, listings);
+            }
+            drop(scope_guard);
+            decided
+        }
+    };
     let shown = match &outcome {
         Ok(verified) => {
             emit(attempt.admitted_event(verified.admitted));
-            move_owned_imports(app, &session.owner_did, &login, verified.github_user_id).await;
             OwnershipOutcome::Verified
         }
         Err(not_verified) => {
@@ -181,10 +200,10 @@ pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
             match not_verified {
                 NotVerified::Check(refusal) => OwnershipOutcome::Refused(refusal),
                 NotVerified::Listing(refusal) => OwnershipOutcome::NotAdded(*refusal),
+                NotVerified::ScopeBusy => OwnershipOutcome::ScopeBusy,
             }
         }
     };
-    drop(scope_guard);
     let message = views::ownership_message(shown, &login, &session.owner_did, &session.handle);
     github_page(app, &session, &cookie_value, Some((shown, &message))).await
 }
@@ -196,40 +215,84 @@ fn count_refusal(app: &App, attempt: Attempt, not_verified: &NotVerified) {
             AccountAddRefused::of_check(refusal)
         }
         NotVerified::Listing(refusal) => Some(AccountAddRefused::of_listing(*refusal)),
+        NotVerified::ScopeBusy => None,
     };
     if let (Attempt::AnotherAccount, Some(refused)) = (attempt, counted) {
         observe(app, LogEvent::AccountAddRefused(refused));
     }
 }
 
-/// Read the profile, decide whether the account may join the list, prove
-/// ownership and add it. Returns the login to name in the message
-/// (GitHub's spelling once the profile is read).
-async fn check_bio(
+/// Read the typed account's profile, within the hourly verify attempts and
+/// the page-read allowance (R3); before any scope is held.
+async fn read_profile(
+    app: &App,
+    owner_did: &str,
+    typed: &str,
+    attempt: Attempt,
+) -> Result<GithubAccountProfile, OwnershipRefusal> {
+    if !app.verify_attempts.try_spend(owner_did) {
+        return Err(OwnershipRefusal::TooManyAttempts);
+    }
+    if !is_github_login(typed) {
+        return Err(OwnershipRefusal::AccountNotFound);
+    }
+    if !page_reads_admitted(app, owner_did, 1) {
+        let busy = GithubError::RateLimited {
+            authenticated: true,
+        };
+        return Err(attempt.read_refusal(&busy));
+    }
+    app.github
+        .read_account(typed)
+        .await
+        .map_err(|error| attempt.read_refusal(&error))
+}
+
+/// The listings a BR-RRA-5 move after this verify needs, read before the
+/// scope is held: only when she lists imports and the profile's bio proves
+/// the DID, the verified account's and her other verified accounts' (for
+/// the limit). `None`: no move is tried (the next scan stores it).
+async fn listings_for_moves(
+    app: &App,
+    owner_did: &str,
+    profile: &GithubAccountProfile,
+) -> Option<Listings> {
+    let proven = prove_ownership(owner_did, &account_of(profile), None).is_ok();
+    if !proven || import_ids(app, owner_did).is_empty() {
+        return None;
+    }
+    let accounts = listed_accounts(app, owner_did);
+    let others = verified_logins(&accounts)
+        .into_iter()
+        .filter(|(id, _)| *id != profile.id);
+    let verified: Vec<(u64, &str)> = std::iter::once((profile.id, profile.login.as_str()))
+        .chain(others)
+        .collect();
+    read_listings(app, owner_did, &verified, 0).await
+}
+
+/// Under the scope: decide whether the account whose profile was `read`
+/// may join the list, prove ownership and add it. Returns the login to
+/// name in the message (GitHub's spelling once the profile is read).
+fn check_bio(
     app: &App,
     session: &WebSession,
     typed: &str,
-    listed: &[GithubLink],
+    read: Result<GithubAccountProfile, OwnershipRefusal>,
 ) -> (String, Result<Verified, NotVerified>) {
-    let refused = |refusal| (typed.to_string(), Err(NotVerified::Check(refusal)));
-    if !app.verify_attempts.try_spend(&session.owner_did) {
-        return refused(OwnershipRefusal::TooManyAttempts);
-    }
-    if !is_github_login(typed) {
-        return refused(OwnershipRefusal::AccountNotFound);
-    }
-    let attempt = Attempt::of(listed);
-    let profile = match app.github.read_account(typed).await {
+    let profile = match read {
         Ok(profile) => profile,
-        Err(error) => return refused(attempt.read_refusal(&error)),
+        Err(refusal) => return (typed.to_string(), Err(NotVerified::Check(refusal))),
     };
+    let listed = listed_accounts(app, &session.owner_did);
+    let attempt = Attempt::of(&listed);
     let proven = || {
         prove_ownership(&session.owner_did, &account_of(&profile), None).map_err(|refusal| {
-            unverify_if_listed(app, session, listed, &profile, &refusal);
+            unverify_if_listed(app, session, &listed, &profile, &refusal);
             NotVerified::Check(refusal)
         })
     };
-    let outcome = match admission(app, session, listed, profile.id) {
+    let outcome = match admission(app, session, &listed, profile.id) {
         // A listed account's bio is still read: a failed check marks it
         // unverified, as a re-check anywhere does.
         AccountAdmission::Refused(AccountRefusal::AlreadyListed) => {
@@ -290,15 +353,12 @@ fn add_account(
     }
 }
 
-/// BR-RRA-5 after a verify: each import the account `github_user_id` now
-/// owns moves to its choice. One listing; the scope is read again only
-/// when a repo moves.
-async fn move_owned_imports(app: &App, owner_did: &str, login: &str, github_user_id: u64) {
+/// BR-RRA-5 after a verify, under the scope: each import the account
+/// `github_user_id` now owns, as this request's `listings` show it, moves to
+/// its choice. No GitHub request.
+fn move_owned_imports(app: &App, owner_did: &str, github_user_id: u64, listings: &Listings) {
     let imports = import_ids(app, owner_did);
-    if imports.is_empty() {
-        return;
-    }
-    let Ok(listing) = app.github.list_account_repos(login).await else {
+    let Some(listing) = listings.listed(github_user_id) else {
         return;
     };
     let owned = owned_imports(&listing.repos, &imports);
@@ -306,7 +366,7 @@ async fn move_owned_imports(app: &App, owner_did: &str, login: &str, github_user
         return;
     }
     let mut scope = Scope {
-        accounts: owner_scope(app, owner_did).await,
+        accounts: owner_scope(app, owner_did, listings),
         imports,
     };
     for repo_id in owned {
@@ -414,7 +474,11 @@ pub(crate) async fn remove_account(app: &App, request: &PageRequest) -> Reply {
         Ok(signed_in) => signed_in,
         Err(refused) => return refused,
     };
-    let scope_guard = app.scope_locks.hold(&session.owner_did).await;
+    let Ok(scope_guard) = app.scope_locks.hold(&session.owner_did).await else {
+        let shown = OwnershipOutcome::ScopeBusy;
+        let message = views::ownership_message(shown, "", &session.owner_did, &session.handle);
+        return github_page(app, &session, &cookie_value, Some((shown, &message))).await;
+    };
     let Some(account) = named_account(app, &session, request) else {
         return not_found();
     };

@@ -50,11 +50,23 @@ pub const LISTING_RATE_LIMITED_MESSAGE: &str = "GitHub is rate-limiting the app,
 /// AC-001.5: any other failed listing.
 pub const LISTING_UNREACHABLE_MESSAGE: &str = "GitHub couldn't be reached, so your repo list couldn't be loaded. Your saved choice is unchanged. Please try again in a few minutes.";
 
+/// Review R3: the app spent its GitHub allowance for now, so it did not ask.
+pub const LISTING_BUSY_MESSAGE: &str = "GitHub is busy right now, so your repo list wasn't loaded. Your saved choice is unchanged. Please try again in a few minutes.";
+
+/// Review R3: a Save or "Add repo" the app could not check with GitHub now.
+pub const GITHUB_BUSY_MESSAGE: &str =
+    "GitHub is busy right now, so nothing was changed. Please try again in a few minutes.";
+
+/// Review R2: another change to her repos or accounts held the way too long.
+pub const SCOPE_BUSY_MESSAGE: &str = "Another change to your repos or accounts is still being saved, so nothing was changed. Please try again in a moment.";
+
 /// Why an account's repos could not be listed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListingFailure {
     RateLimited,
     Unreachable,
+    /// The app's GitHub allowance for page actions is spent for now (R3).
+    Busy,
 }
 
 /// What the choose page can show for one account.
@@ -93,6 +105,20 @@ pub enum ReposNotice {
         repo: String,
         deleted_pending: usize,
     },
+    /// GitHub could not be asked now (R3); nothing changed.
+    GithubBusy,
+    /// Another change to her scope held it too long (R2); nothing changed.
+    ScopeBusy,
+}
+
+impl ReposNotice {
+    /// Whether the notice refuses the request (an alert, not a status).
+    pub fn is_refusal(&self) -> bool {
+        matches!(
+            self,
+            Self::OverLimit(_) | Self::ImportRefused { .. } | Self::GithubBusy | Self::ScopeBusy
+        )
+    }
 }
 
 /// The choose page.
@@ -230,6 +256,7 @@ pub fn listing_failure_message(failure: ListingFailure) -> &'static str {
     match failure {
         ListingFailure::RateLimited => LISTING_RATE_LIMITED_MESSAGE,
         ListingFailure::Unreachable => LISTING_UNREACHABLE_MESSAGE,
+        ListingFailure::Busy => LISTING_BUSY_MESSAGE,
     }
 }
 
@@ -262,6 +289,12 @@ pub fn repos_page(view: &ReposView<'_>) -> String {
                 }
                 Some(ReposNotice::ImportRemoved { repo, deleted_pending }) => {
                     p role="status" { strong { (import_removed_message(repo, *deleted_pending)) } }
+                }
+                Some(ReposNotice::GithubBusy) => {
+                    p role="alert" { strong { (GITHUB_BUSY_MESSAGE) } }
+                }
+                Some(ReposNotice::ScopeBusy) => {
+                    p role="alert" { strong { (SCOPE_BUSY_MESSAGE) } }
                 }
                 None => {}
             }

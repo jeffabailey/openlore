@@ -29,7 +29,7 @@ use crate::admin;
 use crate::limiter::{ScanLimiter, ShareAllowance};
 use crate::routes::github::VerifyAttempts;
 use crate::routes::signin;
-use crate::wiring::ScopeLocks;
+use crate::wiring::{PageReads, ScopeLocks};
 
 /// Sent on every response (AC-000.2, NFR-BRA-2): HTTPS only, own scripts
 /// only, never framed, no MIME sniffing, no cross-origin referrer.
@@ -106,6 +106,8 @@ pub(crate) struct App {
     pub(crate) share_allowance: ShareAllowance,
     /// Serializes one DID's scope changes (ADR-088 §10).
     pub(crate) scope_locks: ScopeLocks,
+    /// One DID's page actions' recent GitHub requests (review R3).
+    pub(crate) page_reads: PageReads,
 }
 
 /// The static public routes.

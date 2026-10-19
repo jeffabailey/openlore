@@ -140,5 +140,11 @@ name = "review_app_repos_and_accounts_fixture"
 path = "../../tests/acceptance/review_app_repos_and_accounts_fixture.rs"
 harness = true
 
+# Review R3 (crafter-owned): GitHub requests per page action.
+[[test]]
+name = "page_github_requests"
+path = "tests/page_github_requests.rs"
+harness = true
+
 [lints]
 workspace = true

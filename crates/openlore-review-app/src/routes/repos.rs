@@ -11,6 +11,7 @@ use ports::{
     AccountRepoListing, GithubError, GithubLink, ImportedRepo, KpiTally, RepoSource,
     SavedRepoChoice, WebSession,
 };
+use review_domain::budget::PageReadAdmission;
 use review_domain::kpi::{choice_saved_events, utc_day, KpiEvent};
 use review_domain::repo_scope::{
     admit_save, choice_to_save, choose_list, chosen_total, default_ticks, differs_from_default,
@@ -26,6 +27,7 @@ use crate::routes::review::not_found;
 use crate::routes::signin::{
     csrf_token_for, csrf_token_of, current_session, fields, id_field, signed_in_post, to_landing,
 };
+use crate::wiring::ScopeBusy;
 
 /// `GET /repos`: the choose page. Opening it stores nothing; it is counted.
 pub(crate) async fn choose_repos(app: &App, request: &PageRequest) -> Reply {
@@ -34,19 +36,34 @@ pub(crate) async fn choose_repos(app: &App, request: &PageRequest) -> Reply {
     };
     let today = utc_day(crate::limiter::unix_now_secs());
     let _ = app.kpi.count(&today, KpiEvent::ReposChoiceViewed.name());
-    repos_page(app, &session, &csrf_token_for(&cookie_value), None).await
+    let accounts = listed_accounts(app, &session.owner_did);
+    let listings = read_listings(app, &session.owner_did, &verified_logins(&accounts), 0)
+        .await
+        .unwrap_or_default();
+    repos_page(
+        app,
+        &session,
+        &csrf_token_for(&cookie_value),
+        None,
+        &listings,
+    )
 }
 
 /// `POST /repos`: "Save choice" for one of the owner's verified accounts.
-/// The ticks are read against a fresh listing, so only repos the page can
-/// show are stored; an account that is not the owner's is not found.
+/// The ticks are read against this request's one listing of each verified
+/// account (R3), read before the scope is held (R2); under the scope the
+/// account is looked up again and the store writes only while she still
+/// lists it, so a Save never brings back a removed account's choice (R1).
+/// An account that is not the owner's is not found.
 pub(crate) async fn save_choice(app: &App, request: &PageRequest) -> Reply {
     let (_, session) = match signed_in_post(app, request) {
         Ok(signed_in) => signed_in,
         Err(refused) => return refused,
     };
+    let owner_did = session.owner_did.as_str();
+    let accounts = listed_accounts(app, owner_did);
     let named = id_field(&request.form, ACCOUNT_ID_FIELD);
-    let Some(account) = named.and_then(|id| verified_account(app, &session.owner_did, id)) else {
+    let Some(account_id) = named.filter(|id| is_verified(&accounts, *id)) else {
         return not_found();
     };
     let ticked: BTreeSet<u64> = fields(&request.form, REPO_FIELD)
@@ -54,27 +71,57 @@ pub(crate) async fn save_choice(app: &App, request: &PageRequest) -> Reply {
         .filter_map(|id| id.parse().ok())
         .collect();
     let csrf_token = csrf_token_of(request);
-    let scope_guard = app.scope_locks.hold(&session.owner_did).await;
-    let Ok(listing) = app.github.list_account_repos(&account.github_login).await else {
-        drop(scope_guard);
-        return repos_page(app, &session, &csrf_token, None).await;
+    let Some(listings) = read_listings(app, owner_did, &verified_logins(&accounts), 0).await else {
+        let busy = Some(ReposNotice::GithubBusy);
+        return repos_page(app, &session, &csrf_token, busy, &Listings::default());
     };
-    let choice = choice_to_save(&listing.repos, &ticked);
+    let Some(listing) = listings.listed(account_id) else {
+        return repos_page(app, &session, &csrf_token, None, &listings);
+    };
+    let notice = match app.scope_locks.hold(owner_did).await {
+        Err(ScopeBusy) => Some(ReposNotice::ScopeBusy),
+        Ok(scope_guard) => {
+            let stored = store_choice(app, owner_did, account_id, listing, &ticked, &listings);
+            drop(scope_guard);
+            match stored {
+                Some(notice) => notice,
+                None => return not_found(),
+            }
+        }
+    };
+    repos_page(app, &session, &csrf_token, notice, &listings)
+}
+
+/// Under the scope: the Save of `ticked` on `listing` for the account
+/// `account_id`, checked against the store as it is now and this request's
+/// `listings`. `None` when she no longer lists the account verified (it was
+/// removed meanwhile): nothing is written.
+fn store_choice(
+    app: &App,
+    owner_did: &str,
+    account_id: u64,
+    listing: &AccountRepoListing,
+    ticked: &BTreeSet<u64>,
+    listings: &Listings,
+) -> Option<Option<ReposNotice>> {
+    if !is_verified(&listed_accounts(app, owner_did), account_id) {
+        return None;
+    }
+    let choice = choice_to_save(&listing.repos, ticked);
     let today = utc_day(crate::limiter::unix_now_secs());
-    let scope = owner_scope(app, &session.owner_did).await;
     let admitted = admit_save(
-        &scope,
-        &import_ids(app, &session.owner_did),
-        account.github_user_id,
+        &owner_scope(app, owner_did, listings),
+        &import_ids(app, owner_did),
+        account_id,
         &ticked_ids(&choice),
         SCAN_REPO_CAP,
     );
-    let notice = match admitted {
+    match admitted {
         Err(refusal) => {
             let _ = app
                 .kpi
                 .count(&today, KpiEvent::ReposChoiceRefusedOverLimit.name());
-            Some(ReposNotice::OverLimit(refusal))
+            Some(Some(ReposNotice::OverLimit(refusal)))
         }
         Ok(reads) => {
             let events: Vec<&'static str> =
@@ -86,14 +133,94 @@ pub(crate) async fn save_choice(app: &App, request: &PageRequest) -> Reply {
                 day: &today,
                 events: &events,
             };
-            app.choices_write
-                .save_choice(&session.owner_did, account.github_user_id, &choice, tally)
-                .ok()
-                .map(|()| ReposNotice::Saved { reads })
+            match app
+                .choices_write
+                .save_choice(owner_did, account_id, &choice, tally)
+            {
+                Ok(true) => Some(Some(ReposNotice::Saved { reads })),
+                Ok(false) => None,
+                Err(_) => Some(None),
+            }
         }
-    };
-    drop(scope_guard);
-    repos_page(app, &session, &csrf_token, notice).await
+    }
+}
+
+/// What this request asked GitHub for one verified account's repos.
+pub(crate) enum ListingAnswer {
+    Listed(AccountRepoListing),
+    Failed(GithubError),
+    /// Not asked in this request: the page-read allowance refused it (R3),
+    /// or the account was verified after this request read GitHub.
+    NotAsked,
+}
+
+/// This request's listings of the owner's verified accounts: each asked of
+/// GitHub at most once per request (R3), before any scope is held (R2).
+#[derive(Default)]
+pub(crate) struct Listings(Vec<(u64, ListingAnswer)>);
+
+static NOT_ASKED: ListingAnswer = ListingAnswer::NotAsked;
+
+impl Listings {
+    /// What this request asked GitHub for `github_user_id`'s repos.
+    pub(crate) fn answer(&self, github_user_id: u64) -> &ListingAnswer {
+        self.0
+            .iter()
+            .find(|(id, _)| *id == github_user_id)
+            .map_or(&NOT_ASKED, |(_, answer)| answer)
+    }
+
+    /// The listing of `github_user_id`, when this request read it.
+    pub(crate) fn listed(&self, github_user_id: u64) -> Option<&AccountRepoListing> {
+        match self.answer(github_user_id) {
+            ListingAnswer::Listed(listing) => Some(listing),
+            _ => None,
+        }
+    }
+}
+
+/// The id and login of each verified account, in the order they were added.
+pub(crate) fn verified_logins(accounts: &[GithubLink]) -> Vec<(u64, &str)> {
+    accounts
+        .iter()
+        .filter(|account| account.verified)
+        .map(|account| (account.github_user_id, account.github_login.as_str()))
+        .collect()
+}
+
+/// Admit `wanted` GitHub requests of a page action by `owner_did` against
+/// her hourly allowance (R3).
+pub(crate) fn page_reads_admitted(app: &App, owner_did: &str, wanted: usize) -> bool {
+    app.page_reads.admit(owner_did, wanted) == PageReadAdmission::Admitted
+}
+
+/// List each of `verified` once, admitted with `also` more requests the
+/// action makes (R3); `None` when the allowance refuses: nothing was asked.
+pub(crate) async fn read_listings(
+    app: &App,
+    owner_did: &str,
+    verified: &[(u64, &str)],
+    also: usize,
+) -> Option<Listings> {
+    if !page_reads_admitted(app, owner_did, verified.len() + also) {
+        return None;
+    }
+    let mut listings = Vec::with_capacity(verified.len());
+    for (github_user_id, login) in verified {
+        let answer = match app.github.list_account_repos(login).await {
+            Ok(listing) => {
+                let _ = app.listing_note.record_eligible_count(
+                    owner_did,
+                    *github_user_id,
+                    eligible_count(&listing.repos),
+                );
+                ListingAnswer::Listed(listing)
+            }
+            Err(error) => ListingAnswer::Failed(error),
+        };
+        listings.push((*github_user_id, answer));
+    }
+    Some(Listings(listings))
 }
 
 /// The owner's imports: they count toward the limit (BR-RRA-3).
@@ -125,65 +252,49 @@ pub(crate) fn pending_from(app: &App, owner_did: &str, source: RepoSource) -> us
         .count()
 }
 
-fn verified_account(app: &App, owner_did: &str, github_user_id: u64) -> Option<GithubLink> {
-    listed_accounts(app, owner_did)
-        .into_iter()
-        .find(|account| account.verified && account.github_user_id == github_user_id)
+fn is_verified(accounts: &[GithubLink], github_user_id: u64) -> bool {
+    accounts
+        .iter()
+        .any(|account| account.verified && account.github_user_id == github_user_id)
 }
 
 /// What the page knows of one account: its saved rows and, when verified,
-/// its live listing (an unverified account's repos are never asked for).
-struct AccountState {
+/// what this request asked GitHub for its repos (an unverified account's
+/// repos are never asked for).
+struct AccountState<'a> {
     link: GithubLink,
     saved: Vec<SavedRepoChoice>,
-    listing: Option<Result<AccountRepoListing, GithubError>>,
+    listing: Option<&'a ListingAnswer>,
 }
 
-async fn account_state(app: &App, owner_did: &str, link: GithubLink) -> AccountState {
-    let listing = if link.verified {
-        Some(app.github.list_account_repos(&link.github_login).await)
-    } else {
-        None
-    };
-    if let Some(Ok(listed)) = &listing {
-        let _ = app.listing_note.record_eligible_count(
-            owner_did,
-            link.github_user_id,
-            eligible_count(&listed.repos),
-        );
-    }
-    let saved = app
-        .choices_read
-        .saved_choice(owner_did, link.github_user_id)
-        .unwrap_or_default();
-    AccountState {
-        link,
-        saved,
-        listing,
-    }
+/// Every listed account's state, in the order they were added: the store
+/// as it is now, with this request's `listings`.
+fn account_states<'a>(app: &App, owner_did: &str, listings: &'a Listings) -> Vec<AccountState<'a>> {
+    listed_accounts(app, owner_did)
+        .into_iter()
+        .map(|link| AccountState {
+            saved: app
+                .choices_read
+                .saved_choice(owner_did, link.github_user_id)
+                .unwrap_or_default(),
+            listing: link.verified.then(|| listings.answer(link.github_user_id)),
+            link,
+        })
+        .collect()
 }
 
-/// Every listed account's state, in the order they were added.
-async fn account_states(app: &App, owner_did: &str) -> Vec<AccountState> {
-    let mut states = Vec::new();
-    for link in listed_accounts(app, owner_did) {
-        states.push(account_state(app, owner_did, link).await);
-    }
-    states
-}
-
-/// The owner's accounts as the limit counts them.
-pub(crate) async fn owner_scope(app: &App, owner_did: &str) -> Vec<ScopeAccount> {
-    account_states(app, owner_did)
-        .await
+/// The owner's accounts as the limit counts them, from the store as it is
+/// now and this request's `listings` (no GitHub request).
+pub(crate) fn owner_scope(app: &App, owner_did: &str, listings: &Listings) -> Vec<ScopeAccount> {
+    account_states(app, owner_did, listings)
         .iter()
         .map(scope_account)
         .collect()
 }
 
-fn scope_account(state: &AccountState) -> ScopeAccount {
-    let listed = match &state.listing {
-        Some(Ok(listing)) => Some(listing.repos.as_slice()),
+fn scope_account(state: &AccountState<'_>) -> ScopeAccount {
+    let listed = match state.listing {
+        Some(ListingAnswer::Listed(listing)) => Some(listing.repos.as_slice()),
         _ => None,
     };
     ScopeAccount::of(
@@ -203,11 +314,12 @@ fn listing_failure(error: &GithubError) -> ListingFailure {
 
 /// One account's section: its listing ticked as its saved choice says, or
 /// (never saved) as its default ticks within the room left say.
-fn account_listing(state: &AccountState, defaults: &[(u64, Vec<u64>)]) -> AccountListing {
-    match &state.listing {
+fn account_listing(state: &AccountState<'_>, defaults: &[(u64, Vec<u64>)]) -> AccountListing {
+    match state.listing {
         None => AccountListing::NeedsReverifying,
-        Some(Err(error)) => AccountListing::Unavailable(listing_failure(error)),
-        Some(Ok(listing)) => {
+        Some(ListingAnswer::NotAsked) => AccountListing::Unavailable(ListingFailure::Busy),
+        Some(ListingAnswer::Failed(error)) => AccountListing::Unavailable(listing_failure(error)),
+        Some(ListingAnswer::Listed(listing)) => {
             let default_ticked = defaults
                 .iter()
                 .find(|(id, _)| *id == state.link.github_user_id)
@@ -221,13 +333,16 @@ fn account_listing(state: &AccountState, defaults: &[(u64, Vec<u64>)]) -> Accoun
     }
 }
 
-pub(crate) async fn repos_page(
+/// The choose page from the store as it is now and this request's
+/// `listings`: rendering it asks GitHub nothing more (R3).
+pub(crate) fn repos_page(
     app: &App,
     session: &WebSession,
     csrf_token: &str,
     notice: Option<ReposNotice>,
+    listings: &Listings,
 ) -> Reply {
-    let states = account_states(app, &session.owner_did).await;
+    let states = account_states(app, &session.owner_did, listings);
     let scope: Vec<ScopeAccount> = states.iter().map(scope_account).collect();
     let imports = listed_imports(app, &session.owner_did);
     let ids: Vec<u64> = imports.iter().map(|import| import.repo_id).collect();
@@ -240,10 +355,8 @@ pub(crate) async fn repos_page(
             listing: account_listing(state, &defaults),
         })
         .collect();
-    let status = match notice {
-        Some(ReposNotice::OverLimit(_) | ReposNotice::ImportRefused { .. }) => {
-            StatusCode::UNPROCESSABLE_ENTITY
-        }
+    let status = match &notice {
+        Some(notice) if notice.is_refusal() => StatusCode::UNPROCESSABLE_ENTITY,
         _ => StatusCode::OK,
     };
     Reply::page(

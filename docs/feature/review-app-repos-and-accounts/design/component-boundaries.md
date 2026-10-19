@@ -116,14 +116,26 @@ Unchanged. `create_claim_record` is still reached only from `executor.rs`.
 
 | Component | Change |
 |---|---|
-| `routes/github.rs` | Account list; add (≤ 3, refusals named); verify per account; remove with confirm; BR-RRA-5 move after a verify (one listing) |
-| `routes/repos.rs` (new) | `GET` choose page (per-account fragments, live listing); `POST` Save under the scope lock |
-| `routes/imports.rs` (new) | `POST` add (shape → `read_repo` → classify → limit → insert) and remove, under the scope lock |
+| `routes/github.rs` | Account list; add (≤ 3, refusals named); verify per account; remove with confirm; BR-RRA-5 move after a verify (one listing). The profile (and the move's listings) are read before the scope lock; under it the store is re-read, the admission decided and the rows written |
+| `routes/repos.rs` (new) | `GET` choose page (per-account fragments, live listing); `POST` Save: each verified account listed once per request, then under the scope lock the account is looked up again and the limit checked against the store; the page re-renders from the same listings |
+| `routes/imports.rs` (new) | `POST` add (shape → `read_repo` → classify → limit → insert) and remove. `read_repo` and the listings run before the scope lock; classify, limit and insert run under it |
 | `routes/review.rs` | Visibility from `repo_scope`; `permit_for` replaces `owner_can_publish` for previews; decline/undo need visibility only |
 | `routes/publish.rs` | `permit_for` at confirm, confirm-selected and retry; mark unverified on `BioNoLongerHolds` |
 | `scan.rs` | Intent before admission; per-account bio check; plan; read loop with listed-source check; resume of the frozen plan |
-| `wiring.rs` | New ports; scope lock (per-DID async mutex map); new log events incl. `ownership.publish_check.passed` on the log-field allowlist |
+| `wiring.rs` | New ports; scope lock (per-DID async mutex map, held at most 10 s, then the change is refused with "try again"); per-DID page-read allowance (`review_domain::budget::admit_page_reads`); new log events incl. `ownership.publish_check.passed` on the log-field allowlist |
 | `config.rs` | No new setting: `SCAN_REPO_CAP = 10` is a constant (D-RRA-16) |
+
+**Review R2/R3 (2026-10-19): no GitHub request while a scope lock is held.**
+The first design held the lock across the GitHub reads, so one slow GitHub
+answer (the client had only a connect timeout) held every other change of
+that DID, and a Save looked its account up before the lock (R1). Now each
+GitHub request is bounded as a whole (10 s, `adapter_github::client::REQUEST_TIMEOUT`),
+GitHub is read first, and the lock covers only the store re-check and the
+write: the limit counts the store as it is under the lock, so it holds
+whatever another tab did meanwhile. The store's Save also writes only while
+the account row exists, in the same transaction. Page actions' GitHub
+requests are admitted against a per-DID hourly allowance, and each verified
+account is listed at most once per request.
 
 ## 6. Enforcement (`xtask check-arch`)
 
