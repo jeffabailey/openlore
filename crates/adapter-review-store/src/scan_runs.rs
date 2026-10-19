@@ -26,6 +26,11 @@ const RECORD_PLAN_ROW: &str = "INSERT INTO scan_run_repos
      outside_default)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'planned', ?)";
 
+// Review R4: a run's rows are written only while the run itself is stored,
+// so a forget-me purge mid-scan (which deletes the run) leaves none behind.
+const RUN_STORED: &str = "SELECT EXISTS (SELECT 1 FROM scan_runs
+    WHERE owner_did = ? AND run_id = ?)";
+
 // A skipped chosen repo, after every row already recorded for the run.
 const RECORD_SKIPPED_ROW: &str = "INSERT INTO scan_run_repos
     (owner_did, run_id, position, repo_id, full_name, source_kind, source_account_id, status,
@@ -78,6 +83,16 @@ const LATEST_SCAN: &str = "SELECT status, resume_after, new_count, published_cou
            AND planned.status = 'read')
     FROM scan_runs WHERE owner_did = ?
     ORDER BY started_at DESC, rowid DESC LIMIT 1";
+
+/// Whether the owner's run `run_id` is stored (R4: a purged one is not).
+fn run_stored(
+    conn: &duckdb::Connection,
+    owner_did: &str,
+    run_id: &str,
+) -> Result<bool, StoreError> {
+    conn.query_row(RUN_STORED, params![owner_did, run_id], |row| row.get(0))
+        .map_err(db_error)
+}
 
 /// The owners a `SELECT DISTINCT owner_did …` names.
 fn owners_where(conn: &duckdb::Connection, sql: &str) -> Result<Vec<String>, StoreError> {
@@ -218,6 +233,9 @@ impl ScanRunPort for ReviewStore {
     ) -> Result<(), ReviewStoreError> {
         self.with_connection(|conn| {
             in_transaction(conn, |conn| {
+                if !run_stored(conn, owner_did, run_id)? {
+                    return Ok(());
+                }
                 rows.iter().enumerate().try_for_each(|(position, row)| {
                     conn.execute(
                         RECORD_PLAN_ROW,
@@ -265,6 +283,9 @@ impl ScanRunPort for ReviewStore {
     ) -> Result<(), ReviewStoreError> {
         self.with_connection(|conn| {
             in_transaction(conn, |conn| {
+                if !run_stored(conn, owner_did, run_id)? {
+                    return Ok(());
+                }
                 skipped.iter().try_for_each(|row| {
                     conn.execute(
                         RECORD_SKIPPED_ROW,
@@ -578,5 +599,51 @@ mod tests {
                 store.latest_plan(priya).unwrap().into_iter().map(|row| row.repo).collect();
             prop_assert_eq!(resumed, carried);
         }
+    }
+
+    /// Review R4. Universe: `scan_run_repos` (counted directly) and
+    /// `scan_runs` of two DIDs. A purge of one DID between its scan's start
+    /// and the plan write leaves no row of that DID; the other DID's run
+    /// records its plan as before.
+    #[test]
+    fn a_purge_between_scan_start_and_plan_write_leaves_no_rows() {
+        use ports::ForgetPort;
+        let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
+        let (priya, sam) = ("did:plc:aaaaaaaaaaaa", "did:plc:bbbbbbbbbbbb");
+        let plan = vec![PlannedScanRepo {
+            repo_id: 7,
+            full_name: "priyaraman/tidepool".into(),
+            source: RepoSource::Account(1),
+            outside_default: None,
+        }];
+        let skipped = vec![SkippedScanRepo {
+            repo_id: 8,
+            full_name: "priyaraman/kelp".into(),
+            source_account_id: 1,
+            reason: RepoSkipReason::AccountUnverified,
+        }];
+        store.start_scan(priya, "run-1").unwrap();
+        store.start_scan(sam, "run-2").unwrap();
+
+        store.purge_owner(priya, KpiTally::NONE).unwrap();
+        store.record_plan(priya, "run-1", &plan).unwrap();
+        store.record_skipped(priya, "run-1", &skipped).unwrap();
+        store.record_plan(sam, "run-2", &plan).unwrap();
+
+        let rows_of = |did: &str| -> i64 {
+            store
+                .with_connection(|conn| {
+                    conn.query_row(
+                        "SELECT count(*) FROM scan_run_repos WHERE owner_did = ?",
+                        params![did],
+                        |row| row.get(0),
+                    )
+                    .map_err(db_error)
+                })
+                .unwrap()
+        };
+        assert_eq!(rows_of(priya), 0, "nothing of the purged DID");
+        assert_eq!(store.latest_scan(priya).unwrap(), None);
+        assert_eq!(rows_of(sam), 1, "another DID's plan is recorded");
     }
 }
