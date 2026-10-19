@@ -598,7 +598,8 @@ fn given_tidal_sdk_notes_imported_with_a_suggestion(world: &ReviewWorld) -> Brow
 ///   Given Priya imported rust-lang/cargo-plugin-demo and has a pending suggestion for it
 ///   And the repo was later transferred to priya-tidal, which is on her list and verified
 ///   When she presses "Scan again"
-///   Then the repo appears as priya-tidal/cargo-plugin-demo under "github.com/priya-tidal" and no longer under "Repos you don't own"
+///   Then that scan reads the repo exactly once, under one name
+///   And the repo appears as priya-tidal/cargo-plugin-demo under "github.com/priya-tidal" and no longer under "Repos you don't own"
 ///   And it is ticked in priya-tidal's saved choice
 ///   And her total of repos toward the limit is unchanged
 ///   And its pending suggestion is kept and shows Approve
@@ -617,8 +618,24 @@ fn a_scan_moves_an_imported_repo_that_one_of_her_accounts_now_owns() {
         CARGO_PLUGIN_DEMO_MOVED.owner,
     );
 
+    let scan_start = github_mark(&world);
+
     given_scanned(&world, &mut browser);
 
+    let names_read: Vec<String> = repos_read_since(&world, scan_start)
+        .into_iter()
+        .filter(|r| r.ends_with("/cargo-plugin-demo"))
+        .collect();
+    let readme_reads = world
+        .github
+        .requests()
+        .iter()
+        .filter(|r| r.seq > scan_start && r.path.ends_with("/cargo-plugin-demo/readme"))
+        .count();
+    assert!(
+        names_read.len() == 1 && readme_reads == 1,
+        "the moved repo is read exactly once: names {names_read:?}, readme reads {readme_reads}"
+    );
     assert!(imported_list(&mut browser).is_empty());
     let page = when_opens_choose_repos(&mut browser).clone();
     assert!(ticked_repos(&page, Account::PriyaTidal).contains(&CARGO_PLUGIN_DEMO_MOVED.full()));
