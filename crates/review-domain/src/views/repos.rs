@@ -6,7 +6,7 @@ use maud::{html, Markup};
 use super::*;
 use ports::ListingExtent;
 
-use crate::repo_scope::{ChooseList, LimitRefusal};
+use crate::repo_scope::{ChooseList, LimitRefusal, TicksRoom, SCAN_REPO_CAP};
 
 /// Where the choose page lives and its Save form posts.
 pub const REPOS_PATH: &str = "/repos";
@@ -93,6 +93,16 @@ pub fn save_over_limit_message(refusal: LimitRefusal) -> String {
     format!(
         "You can choose up to {} repos per scan in total. You have {} chosen. Untick {} to save.",
         refusal.limit, refusal.total, refusal.excess
+    )
+}
+
+/// "2 of 4 ticked: your limit of 10 repos is reached. Untick others to choose more."
+pub fn limit_reached_message(list: &ChooseList) -> String {
+    let ticked = list.rows.iter().filter(|row| row.ticked).count();
+    format!(
+        "{ticked} of {} ticked: your limit of {SCAN_REPO_CAP} repos is reached. Untick others \
+         to choose more.",
+        list.rows.len()
     )
 }
 
@@ -205,6 +215,9 @@ fn choose_form(
                             }
                         }
                     }
+                }
+                @if list.room == TicksRoom::LimitReached {
+                    p { (limit_reached_message(list)) }
                 }
                 @if let Some(skipped) = skipped_message(list.forks_skipped, list.archived_skipped) {
                     p { (skipped) }

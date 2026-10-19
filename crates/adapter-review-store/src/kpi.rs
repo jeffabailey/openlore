@@ -67,9 +67,9 @@ mod tests {
     use super::*;
     use crate::DataKey;
     use ports::{
-        ForgetPort, GithubLinkPort, LinkRecorded, NewWebSession, ReviewStateRead, ReviewStateWrite,
-        ScanCounts, ScanRunPort, ScanStatus, SessionPort, Suggestion, SuggestionKey,
-        SuggestionState,
+        AccountAdmission, AccountAdmitted, AccountRefusal, ForgetPort, GithubAccountsWrite,
+        GithubLinkPort, NewWebSession, ReviewStateRead, ReviewStateWrite, ScanCounts, ScanRunPort,
+        ScanStatus, SessionPort, Suggestion, SuggestionKey, SuggestionState,
     };
     use proptest::prelude::*;
 
@@ -194,14 +194,23 @@ mod tests {
             )
             .unwrap();
         let linked = store
-            .record_verified_link(PRIYA, "priyaraman", 7, tally(&["github.verify.ok"]))
+            .add_or_reverify(PRIYA, "priyaraman", 7, 3, tally(&["github.verify.ok"]))
             .unwrap();
         let held = store
-            .record_verified_link("did:plc:sam", "priyaraman", 7, tally(&["github.verify.ok"]))
+            .add_or_reverify(
+                "did:plc:sam",
+                "priyaraman",
+                7,
+                3,
+                tally(&["github.verify.ok"]),
+            )
             .unwrap();
         assert_eq!(
             (linked, held),
-            (LinkRecorded::Linked, LinkRecorded::HeldByAnotherOwner)
+            (
+                AccountAdmission::Admitted(AccountAdmitted::Added),
+                AccountAdmission::Refused(AccountRefusal::HeldByAnotherOwner)
+            )
         );
         store.start_scan(PRIYA, "run").unwrap();
         store

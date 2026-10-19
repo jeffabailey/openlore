@@ -15,9 +15,10 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ports::{
-    ForgetPort, GithubLinkPort, GithubPort, IdentityLookupPort, KpiCounterPort, OAuthPort,
-    PublishPlanPort, RepoChoiceRead, RepoChoiceWrite, RepoListingPort, ReviewStateRead,
-    ReviewStateWrite, ScanPlanRead, ScanRunPort, SessionPort, UserRepoReadPort, UserRepoWritePort,
+    AccountListingNote, AccountStatusWrite, ForgetPort, GithubAccountsWrite, GithubLinkPort,
+    GithubPort, IdentityLookupPort, KpiCounterPort, OAuthPort, PublishPlanPort, RepoChoiceRead,
+    RepoChoiceWrite, RepoListingPort, ReviewStateRead, ReviewStateWrite, ScanPlanRead, ScanRunPort,
+    SessionPort, UserRepoReadPort, UserRepoWritePort,
 };
 use review_domain::signin::PermissionMode;
 use scraper_domain::SignalPredicateMapping;
@@ -73,6 +74,10 @@ pub(crate) struct App {
     pub(crate) sessions: Arc<dyn SessionPort>,
     pub(crate) github: Arc<dyn GithubPort>,
     pub(crate) links: Arc<dyn GithubLinkPort>,
+    /// Held by the GitHub step's route only (add and verify again).
+    pub(crate) accounts_write: Arc<dyn GithubAccountsWrite>,
+    pub(crate) account_status: Arc<dyn AccountStatusWrite>,
+    pub(crate) listing_note: Arc<dyn AccountListingNote>,
     pub(crate) scans: Arc<dyn ScanRunPort>,
     pub(crate) scan_plans: Arc<dyn ScanPlanRead>,
     pub(crate) review_read: Arc<dyn ReviewStateRead>,

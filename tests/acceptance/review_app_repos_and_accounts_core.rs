@@ -394,12 +394,38 @@ fn sut_visible(_rows: &[SourceView], _accounts: &[(u64, bool)], _imports: &[u64]
 }
 
 fn sut_add_account(
-    _listed: &[u64],
-    _id: u64,
-    _verified_for_other_did: bool,
-    _listed_unverified: bool,
+    listed: &[u64],
+    id: u64,
+    verified_for_other_did: bool,
+    listed_unverified: bool,
 ) -> AddAccountView {
-    todo!("RED: bind to the pure review_domain::repo_scope::admit_account decision (DELIVER 02-*)")
+    use ports::{AccountAdmission, AccountAdmitted, AccountRefusal};
+    use review_domain::repo_scope::{admit_account, OtherOwner, Standing};
+    let listed: Vec<(u64, Standing)> = listed
+        .iter()
+        .map(|&listed_id| {
+            let standing = if listed_id == id && listed_unverified {
+                Standing::Unverified
+            } else {
+                Standing::Verified
+            };
+            (listed_id, standing)
+        })
+        .collect();
+    let other_owner = if verified_for_other_did {
+        OtherOwner::HoldsItVerified
+    } else {
+        OtherOwner::None
+    };
+    match admit_account(&listed, id, other_owner, MAX_ACCOUNTS) {
+        AccountAdmission::Admitted(AccountAdmitted::Added) => AddAccountView::Added,
+        AccountAdmission::Admitted(AccountAdmitted::Reverified) => AddAccountView::Reverified,
+        AccountAdmission::Refused(AccountRefusal::AlreadyListed) => AddAccountView::AlreadyListed,
+        AccountAdmission::Refused(AccountRefusal::HeldByAnotherOwner) => {
+            AddAccountView::HeldByAnotherOwner
+        }
+        AccountAdmission::Refused(AccountRefusal::AtLimit) => AddAccountView::AtLimit,
+    }
 }
 
 fn sut_classify_import(
@@ -903,7 +929,6 @@ proptest! {
 
     /// CORE-RRA-8 (@property @US-RRA-003 @D-RRA-15 @C1b @contract-shape:pure-function)
     #[test]
-    #[ignore = "CORE-RRA-8 (bind with DELIVER step 02-02): account admission (RED binding)"]
     fn core_rra8_at_most_three_accounts_one_owner_each(
         listed in proptest::collection::btree_set(1u64..8, 0..=MAX_ACCOUNTS),
         id in 1u64..8,
@@ -965,7 +990,6 @@ proptest! {
 /// CORE-RRA-2x (OQ-D3 example): an unverified account's 5 saved ticks still
 /// count — a 6th tick on the verified account makes 11 and is refused.
 #[test]
-#[ignore = "CORE-RRA-2x (bind with DELIVER step 02-19): unverified saved ticks count (RED binding)"]
 fn core_rra2x_an_unverified_accounts_saved_ticks_still_count() {
     let scope = ScopeView {
         accounts: vec![

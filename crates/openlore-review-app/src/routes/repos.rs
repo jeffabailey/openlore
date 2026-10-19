@@ -10,8 +10,8 @@ use hyper::StatusCode;
 use ports::{AccountRepoListing, GithubError, GithubLink, KpiTally, SavedRepoChoice, WebSession};
 use review_domain::kpi::{choice_saved_events, utc_day, KpiEvent};
 use review_domain::repo_scope::{
-    admit_save, choice_to_save, choose_list, default_ticks, differs_from_default, ticked_ids,
-    AccountChoice, ScopeAccount, Standing, SCAN_REPO_CAP,
+    admit_save, choice_to_save, choose_list, default_ticks, differs_from_default, eligible_count,
+    ticked_ids, AccountChoice, ScopeAccount, Standing, SCAN_REPO_CAP,
 };
 use review_domain::views::{
     self, AccountListing, AccountRepos, ListingFailure, ReposNotice, ReposView, ACCOUNT_ID_FIELD,
@@ -115,6 +115,13 @@ async fn account_state(app: &App, owner_did: &str, link: GithubLink) -> AccountS
     } else {
         None
     };
+    if let Some(Ok(listed)) = &listing {
+        let _ = app.listing_note.record_eligible_count(
+            owner_did,
+            link.github_user_id,
+            eligible_count(&listed.repos),
+        );
+    }
     let saved = app
         .choices_read
         .saved_choice(owner_did, link.github_user_id)

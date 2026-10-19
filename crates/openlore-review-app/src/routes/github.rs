@@ -1,5 +1,6 @@
-//! The GitHub step (US-BRA-002, ADR-076): show the exact DID to put in the
-//! bio, then check the bio. HTTP concerns and port calls only; the verdict,
+//! The GitHub step (US-BRA-002, ADR-076; US-RRA-003): show the exact DID
+//! to put in the bio, then check the bio of each account the owner adds, up
+//! to three. The one holder of the accounts write port. HTTP concerns and port calls only; the verdict,
 //! the capability and every message are `review_domain` functions. The bio
 //! itself is never logged.
 
@@ -10,12 +11,17 @@ use std::time::{Duration, Instant};
 use hyper::StatusCode;
 use ports::claim_domain::identity_link::LinkRecord;
 use ports::claim_domain::RecordOrigin;
-use ports::{GithubAccountProfile, GithubError, GithubLink, LinkRecorded, WebSession};
+use ports::{
+    AccountAdmission, AccountAdmitted, AccountRefusal, GithubAccountProfile, GithubError,
+    GithubLink, WebSession,
+};
 use review_domain::budget::{budget_allows, HOUR_SECS, VERIFY_ATTEMPTS_PER_HOUR};
+use review_domain::kpi::AccountAddRefused;
 use review_domain::ownership::{
     is_github_login, prove_ownership, GithubAccount, OwnershipRefusal, VerifiedOwnership,
 };
 use review_domain::published::active_owner_link_records;
+use review_domain::repo_scope::{admit_account, OtherOwner, Standing, MAX_GITHUB_ACCOUNTS};
 use review_domain::views::{self, GithubStep, OwnershipOutcome};
 
 use crate::http::{App, PageRequest, Reply};
@@ -88,7 +94,52 @@ async fn published_links(app: &App, owner_did: &str) -> Vec<LinkRecord> {
     active_owner_link_records(&identity.did, &listing.records, origin)
 }
 
-/// `POST /github`: check the named account's bio for the signed-in DID.
+/// Whether a Verify press adds an account to a list that already holds
+/// one (US-RRA-003, counted by KPI-RRA-2) or names the owner's first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Attempt {
+    FirstAccount,
+    AnotherAccount,
+}
+
+impl Attempt {
+    fn of(listed: &[GithubLink]) -> Self {
+        if listed.is_empty() {
+            Self::FirstAccount
+        } else {
+            Self::AnotherAccount
+        }
+    }
+
+    /// Adding another account names any GitHub trouble one way: it could
+    /// not be reached (AC-003.2).
+    fn read_refusal(self, error: &GithubError) -> OwnershipRefusal {
+        match (self, refusal_of(error)) {
+            (Self::AnotherAccount, OwnershipRefusal::RateLimited) => {
+                OwnershipRefusal::GithubUnavailable
+            }
+            (_, refusal) => refusal,
+        }
+    }
+
+    /// The counters an admitted account adds with its row.
+    fn admitted_event(self, admitted: AccountAdmitted) -> LogEvent<'static> {
+        match (self, admitted) {
+            (Self::AnotherAccount, AccountAdmitted::Added) => LogEvent::AccountAdded,
+            _ => LogEvent::GithubVerified,
+        }
+    }
+}
+
+/// Why a Verify press did not verify an account.
+enum NotVerified {
+    Check(OwnershipRefusal),
+    Listing(AccountRefusal),
+}
+
+/// `POST /github`: check the named account's bio for the signed-in DID and
+/// add it to her list (up to [`MAX_GITHUB_ACCOUNTS`]), or verify a listed
+/// one again.
 pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
     let (cookie_value, session) = match signed_in_post(app, request) {
         Ok(signed_in) => signed_in,
@@ -96,77 +147,152 @@ pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
     };
     let typed = field(&request.form, "github_login").unwrap_or_default();
     let typed = typed.trim();
-    let (login, outcome) = check_bio(app, &session, typed).await;
+    let listed = app
+        .links
+        .github_accounts(&session.owner_did)
+        .unwrap_or_default();
+    let attempt = Attempt::of(&listed);
+    if attempt == Attempt::AnotherAccount {
+        observe(app, LogEvent::AccountAddStarted);
+    }
+    let (login, outcome) = check_bio(app, &session, typed, &listed).await;
     let shown = match &outcome {
-        Ok(()) => {
-            emit(LogEvent::GithubVerified);
+        Ok(admitted) => {
+            emit(attempt.admitted_event(*admitted));
             OwnershipOutcome::Verified
         }
-        Err(refusal) => {
-            observe(app, LogEvent::GithubVerifyRefused(refusal.label()));
-            OwnershipOutcome::Refused(refusal)
+        Err(not_verified) => {
+            count_refusal(app, attempt, not_verified);
+            match not_verified {
+                NotVerified::Check(refusal) => OwnershipOutcome::Refused(refusal),
+                NotVerified::Listing(refusal) => OwnershipOutcome::NotAdded(*refusal),
+            }
         }
     };
     let message = views::ownership_message(shown, &login, &session.owner_did, &session.handle);
     github_page(app, &session, &cookie_value, Some((shown, &message))).await
 }
 
-/// Read the profile, prove ownership and record the link. Returns the login
-/// to name in the message (GitHub's spelling once the profile is read).
+fn count_refusal(app: &App, attempt: Attempt, not_verified: &NotVerified) {
+    let counted = match not_verified {
+        NotVerified::Check(refusal) => {
+            observe(app, LogEvent::GithubVerifyRefused(refusal.label()));
+            AccountAddRefused::of_check(refusal)
+        }
+        NotVerified::Listing(refusal) => Some(AccountAddRefused::of_listing(*refusal)),
+    };
+    if let (Attempt::AnotherAccount, Some(refused)) = (attempt, counted) {
+        observe(app, LogEvent::AccountAddRefused(refused));
+    }
+}
+
+/// Read the profile, decide whether the account may join the list, prove
+/// ownership and add it. Returns the login to name in the message
+/// (GitHub's spelling once the profile is read).
 async fn check_bio(
     app: &App,
     session: &WebSession,
     typed: &str,
-) -> (String, Result<(), OwnershipRefusal>) {
+    listed: &[GithubLink],
+) -> (String, Result<AccountAdmitted, NotVerified>) {
+    let refused = |refusal| (typed.to_string(), Err(NotVerified::Check(refusal)));
     if !app.verify_attempts.try_spend(&session.owner_did) {
-        return (typed.to_string(), Err(OwnershipRefusal::TooManyAttempts));
+        return refused(OwnershipRefusal::TooManyAttempts);
     }
     if !is_github_login(typed) {
-        return (typed.to_string(), Err(OwnershipRefusal::AccountNotFound));
+        return refused(OwnershipRefusal::AccountNotFound);
     }
+    let attempt = Attempt::of(listed);
     let profile = match app.github.read_account(typed).await {
         Ok(profile) => profile,
-        Err(error) => return (typed.to_string(), Err(refusal_of(&error))),
+        Err(error) => return refused(attempt.read_refusal(&error)),
     };
-    let proven = prove_ownership(&session.owner_did, &account_of(&profile), None);
-    let outcome = match proven {
-        Ok(ownership) => record_link(app, &ownership),
-        Err(refusal) => {
-            unverify_if_linked(app, session, &profile, &refusal);
-            Err(refusal)
+    let proven = || {
+        prove_ownership(&session.owner_did, &account_of(&profile), None).map_err(|refusal| {
+            unverify_if_listed(app, session, listed, &profile, &refusal);
+            NotVerified::Check(refusal)
+        })
+    };
+    let outcome = match admission(app, session, listed, profile.id) {
+        // A listed account's bio is still read: a failed check marks it
+        // unverified, as a re-check anywhere does.
+        AccountAdmission::Refused(AccountRefusal::AlreadyListed) => {
+            proven().and(Err(NotVerified::Listing(AccountRefusal::AlreadyListed)))
         }
+        AccountAdmission::Refused(refusal) => Err(NotVerified::Listing(refusal)),
+        AccountAdmission::Admitted(admitted) => proven()
+            .and_then(|ownership| add_account(app, &ownership, attempt.admitted_event(admitted))),
     };
     (profile.into_profile().login, outcome)
 }
 
-/// Record the proven link; its verification is counted with it.
-fn record_link(app: &App, ownership: &VerifiedOwnership) -> Result<(), OwnershipRefusal> {
-    let counted = Counted::of(&LogEvent::GithubVerified);
-    match app.links.record_verified_account(
-        ownership.owner_did(),
-        ownership.github_login(),
-        ownership.github_user_id(),
-        counted.tally(),
-    ) {
-        Ok(LinkRecorded::Linked) => Ok(()),
-        Ok(LinkRecorded::HeldByAnotherOwner) => Err(OwnershipRefusal::LinkedToAnotherAccount),
-        Err(_) => Err(OwnershipRefusal::GithubUnavailable),
+/// The pure account admission (CORE-RRA-8) on the owner's list as read now.
+fn admission(
+    app: &App,
+    session: &WebSession,
+    listed: &[GithubLink],
+    github_user_id: u64,
+) -> AccountAdmission {
+    let standings: Vec<(u64, Standing)> = listed
+        .iter()
+        .map(|account| (account.github_user_id, standing_of(account)))
+        .collect();
+    let other_owner = match app
+        .links
+        .verified_for_another_owner(&session.owner_did, github_user_id)
+    {
+        Ok(true) => OtherOwner::HoldsItVerified,
+        _ => OtherOwner::None,
+    };
+    admit_account(&standings, github_user_id, other_owner, MAX_GITHUB_ACCOUNTS)
+}
+
+fn standing_of(account: &GithubLink) -> Standing {
+    if account.verified {
+        Standing::Verified
+    } else {
+        Standing::Unverified
     }
 }
 
-/// A failed check of the account this DID links marks the link unverified.
-fn unverify_if_linked(
+/// Add the proven account (both limits checked again as it is written); its
+/// verification is counted with it.
+fn add_account(
+    app: &App,
+    ownership: &VerifiedOwnership,
+    event: LogEvent<'_>,
+) -> Result<AccountAdmitted, NotVerified> {
+    let counted = Counted::of(&event);
+    match app.accounts_write.add_or_reverify(
+        ownership.owner_did(),
+        ownership.github_login(),
+        ownership.github_user_id(),
+        MAX_GITHUB_ACCOUNTS,
+        counted.tally(),
+    ) {
+        Ok(AccountAdmission::Admitted(admitted)) => Ok(admitted),
+        Ok(AccountAdmission::Refused(refusal)) => Err(NotVerified::Listing(refusal)),
+        Err(_) => Err(NotVerified::Check(OwnershipRefusal::GithubUnavailable)),
+    }
+}
+
+/// A failed check of an account on the owner's list marks it unverified.
+fn unverify_if_listed(
     app: &App,
     session: &WebSession,
+    listed: &[GithubLink],
     profile: &GithubAccountProfile,
     refusal: &OwnershipRefusal,
 ) {
-    let linked = app.links.github_link(&session.owner_did).ok().flatten();
-    if refusal.disproves_ownership() && linked.is_some_and(|link| link.github_user_id == profile.id)
-    {
-        let _ = app
-            .links
-            .mark_account_unverified(&session.owner_did, profile.id, refusal.label());
+    let is_listed = listed
+        .iter()
+        .any(|account| account.github_user_id == profile.id);
+    if refusal.disproves_ownership() && is_listed {
+        let _ = app.account_status.mark_account_unverified(
+            &session.owner_did,
+            profile.id,
+            refusal.label(),
+        );
     }
 }
 
@@ -202,18 +328,17 @@ pub(crate) async fn github_page(
     notice: Option<(OwnershipOutcome<'_>, &str)>,
 ) -> Reply {
     let active_links = published_links(app, &session.owner_did).await;
-    let link = app.links.github_link(&session.owner_did).ok().flatten();
-    let verified_login = link
-        .as_ref()
-        .filter(|link| link.verified)
-        .map(|link| link.github_login.as_str());
+    let accounts = app
+        .links
+        .github_accounts(&session.owner_did)
+        .unwrap_or_default();
     Reply::page(
         StatusCode::OK,
-        views::github_step_page(
+        views::github_accounts_page(
             &session.owner_did,
             &csrf_token_for(cookie_value),
             notice,
-            verified_login,
+            &accounts,
             &active_links,
         ),
     )

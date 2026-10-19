@@ -47,7 +47,6 @@ const BOTH: [Account; 2] = [Account::Priyaraman, Account::PriyaTidal];
 ///   And no record is written to her Bluesky repo
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: a second verified account on the same sign-in"]
 fn priya_verifies_her_work_account_without_losing_her_personal_one() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -91,7 +90,6 @@ fn priya_verifies_her_work_account_without_losing_her_personal_one() {
 ///     | Priya is verified as priyaraman; GitHub says it is too busy to answer | Priya  | priya-tidal | GitHub could not be reached. Please wait a few minutes, then press Verify again. Nothing was lost. |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: add-account refusals name the fix and change nothing"]
 fn an_account_that_cannot_be_added_changes_nothing() {
     #[derive(Debug, Clone, Copy)]
     enum Refusal {
@@ -178,7 +176,6 @@ fn an_account_that_cannot_be_added_changes_nothing() {
 ///   And she sees "2 of 4 ticked: your limit of 10 repos is reached. Untick others to choose more."
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: default ticks fill only the room left"]
 fn a_new_accounts_default_ticks_fit_the_limit() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -481,7 +478,6 @@ fn github_failing_during_a_scan_hides_nothing() {
 ///   And neither account's saved choice changes, and each is still shown under its own account heading
 /// ```
 #[test]
-#[ignore = "DELIVER 02-07: the limit is one total across accounts"]
 fn two_accounts_together_cannot_exceed_the_limit() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);
@@ -1033,7 +1029,6 @@ fn a_claim_about_her_own_repo_is_published_only_if_she_still_owns_it_when_she_co
 ///   And neither account's saved choice changes: priya-tidal still has its 5 when she verifies it again
 /// ```
 #[test]
-#[ignore = "DELIVER 02-19: unverified accounts' saved ticks count toward the limit (OQ-D3)"]
 fn an_unverified_accounts_saved_repos_still_count_toward_the_limit() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);

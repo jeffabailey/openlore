@@ -52,9 +52,9 @@ mod tests {
     use super::*;
     use crate::DataKey;
     use ports::{
-        GithubLinkPort, KpiCounterPort, NewWebSession, PlannedScanRepo, RepoChoiceWrite,
-        ReviewStateRead, ReviewStateWrite, SavedRepoChoice, ScanRunPort, SecretStorePort,
-        SessionPort, Suggestion, SuggestionKey,
+        GithubAccountsWrite, GithubLinkPort, KpiCounterPort, NewWebSession, PlannedScanRepo,
+        RepoChoiceWrite, ReviewStateRead, ReviewStateWrite, SavedRepoChoice, ScanRunPort,
+        SecretStorePort, SessionPort, Suggestion, SuggestionKey,
     };
     use proptest::prelude::*;
 
@@ -131,10 +131,11 @@ mod tests {
             .put_auth_request(&format!("state-{owner}"), "iss", Some(owner), b"req")
             .unwrap();
         store
-            .record_verified_link(
+            .add_or_reverify(
                 owner,
                 &format!("gh-{}", &owner[8..]),
                 github_id,
+                3,
                 KpiTally::NONE,
             )
             .unwrap();

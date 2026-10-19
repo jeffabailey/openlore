@@ -8,8 +8,9 @@
 use std::collections::BTreeMap;
 
 use ports::claim_domain::UnsignedClaim;
-use ports::{KpiCounterRow, OutsideDefault, Suggestion};
+use ports::{AccountRefusal, KpiCounterRow, OutsideDefault, Suggestion};
 
+use crate::ownership::OwnershipRefusal;
 use crate::signin::SignInFailure;
 
 /// Every counted event.
@@ -40,13 +41,22 @@ pub enum KpiEvent {
     ScanRefusedNothingToRead,
     /// A scan was refused before admission: past the limit (BR-RRA-3).
     ScanRefusedOverLimit,
+    /// KPI-RRA-2: an owner who lists an account pressed Verify on another.
+    AccountAddStarted,
+    /// KPI-RRA-2: that account was added, verified.
+    AccountAddVerified,
+    AccountAddRefusedDidMissing,
+    AccountAddRefusedHeldByAnother,
+    AccountAddRefusedAlreadyListed,
+    AccountAddRefusedAtLimit,
+    AccountAddRefusedUnreachable,
     SharePosted,
     RetractPosted,
     Disconnect,
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 20] = [
+    pub const ALL: [KpiEvent; 27] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -64,6 +74,13 @@ impl KpiEvent {
         Self::ReposChoiceRefusedOverLimit,
         Self::ScanRefusedNothingToRead,
         Self::ScanRefusedOverLimit,
+        Self::AccountAddStarted,
+        Self::AccountAddVerified,
+        Self::AccountAddRefusedDidMissing,
+        Self::AccountAddRefusedHeldByAnother,
+        Self::AccountAddRefusedAlreadyListed,
+        Self::AccountAddRefusedAtLimit,
+        Self::AccountAddRefusedUnreachable,
         Self::SharePosted,
         Self::RetractPosted,
         Self::Disconnect,
@@ -89,6 +106,13 @@ impl KpiEvent {
             Self::ReposChoiceRefusedOverLimit => "repos.choice.refused.over_limit",
             Self::ScanRefusedNothingToRead => "scan.refused.nothing_to_read",
             Self::ScanRefusedOverLimit => "scan.refused.over_limit",
+            Self::AccountAddStarted => "account.add.started",
+            Self::AccountAddVerified => "account.add.verified",
+            Self::AccountAddRefusedDidMissing => "account.add.refused.did_missing",
+            Self::AccountAddRefusedHeldByAnother => "account.add.refused.held_by_another",
+            Self::AccountAddRefusedAlreadyListed => "account.add.refused.already_listed",
+            Self::AccountAddRefusedAtLimit => "account.add.refused.at_limit",
+            Self::AccountAddRefusedUnreachable => "account.add.refused.unreachable",
             Self::SharePosted => "share.posted",
             Self::RetractPosted => "retract.posted",
             Self::Disconnect => "disconnect",
@@ -105,6 +129,64 @@ pub fn sign_in_refusal_event(failure: SignInFailure) -> KpiEvent {
     match failure {
         SignInFailure::Cancelled => KpiEvent::SignInDenied,
         _ => KpiEvent::SignInFailed,
+    }
+}
+
+/// Why adding another account was refused, as KPI-RRA-2 counts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountAddRefused {
+    DidMissing,
+    HeldByAnother,
+    AlreadyListed,
+    AtLimit,
+    Unreachable,
+}
+
+impl AccountAddRefused {
+    /// The refusal of an account that may not join the list.
+    pub fn of_listing(refusal: AccountRefusal) -> Self {
+        match refusal {
+            AccountRefusal::AlreadyListed => Self::AlreadyListed,
+            AccountRefusal::HeldByAnotherOwner => Self::HeldByAnother,
+            AccountRefusal::AtLimit => Self::AtLimit,
+        }
+    }
+
+    /// The refusal of a bio check, when KPI-RRA-2 counts it (a mistyped
+    /// login or the hourly budget is not counted).
+    pub fn of_check(refusal: &OwnershipRefusal) -> Option<Self> {
+        match refusal {
+            OwnershipRefusal::DidMissing
+            | OwnershipRefusal::NoBio
+            | OwnershipRefusal::DifferentDid(_)
+            | OwnershipRefusal::IdentityChanged => Some(Self::DidMissing),
+            OwnershipRefusal::LinkedToAnotherAccount => Some(Self::HeldByAnother),
+            OwnershipRefusal::RateLimited | OwnershipRefusal::GithubUnavailable => {
+                Some(Self::Unreachable)
+            }
+            OwnershipRefusal::AccountNotFound | OwnershipRefusal::TooManyAttempts => None,
+        }
+    }
+
+    pub fn event(self) -> KpiEvent {
+        match self {
+            Self::DidMissing => KpiEvent::AccountAddRefusedDidMissing,
+            Self::HeldByAnother => KpiEvent::AccountAddRefusedHeldByAnother,
+            Self::AlreadyListed => KpiEvent::AccountAddRefusedAlreadyListed,
+            Self::AtLimit => KpiEvent::AccountAddRefusedAtLimit,
+            Self::Unreachable => KpiEvent::AccountAddRefusedUnreachable,
+        }
+    }
+
+    /// The operator-facing reason.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DidMissing => "did_missing",
+            Self::HeldByAnother => "held_by_another",
+            Self::AlreadyListed => "already_listed",
+            Self::AtLimit => "at_limit",
+            Self::Unreachable => "unreachable",
+        }
     }
 }
 

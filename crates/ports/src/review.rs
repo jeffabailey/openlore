@@ -255,36 +255,68 @@ pub struct GithubLink {
     pub verified: bool,
 }
 
-/// What recording a verified link did.
+/// An account that may join the owner's list (D-RRA-15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LinkRecorded {
-    Linked,
-    /// Another DID already holds a verified link to this GitHub account
-    /// (one owner per GitHub account); nothing changed.
+pub enum AccountAdmitted {
+    /// Not listed before: added, verified, last in `added_at` order.
+    Added,
+    /// Listed but unverified: verified again in its place.
+    Reverified,
+}
+
+/// Why an account cannot join the owner's list; nothing changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountRefusal {
+    /// Listed and verified already.
+    AlreadyListed,
+    /// Another DID holds it verified (one owner per GitHub account).
     HeldByAnotherOwner,
+    /// The owner already lists the most accounts one sign-in may have.
+    AtLimit,
+}
+
+/// The decision on adding (or verifying again) one GitHub account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountAdmission {
+    Admitted(AccountAdmitted),
+    Refused(AccountRefusal),
 }
 
 /// A DID's GitHub accounts (`github_accounts`, keyed by GitHub's numeric
 /// id, ADR-088 §2), oldest first.
 pub trait GithubAccountsRead: Send + Sync {
     fn github_accounts(&self, owner_did: &str) -> Result<Vec<GithubLink>, ReviewStoreError>;
+
+    /// Does a DID other than `owner_did` hold `github_user_id` verified?
+    /// (Only the answer; never which DID.)
+    fn verified_for_another_owner(
+        &self,
+        owner_did: &str,
+        github_user_id: u64,
+    ) -> Result<bool, ReviewStoreError>;
 }
 
-/// Writes to a DID's GitHub accounts. Today's one-account behaviour: a
-/// newly verified account takes the place of the DID's account.
+/// Adds a proven account to a DID's list, or verifies a listed one again
+/// (held by the GitHub step's route only).
 pub trait GithubAccountsWrite: Send + Sync {
-    /// Record `github_user_id` as the verified account of `owner_did`,
-    /// unless another DID holds it verified (one owner per GitHub account);
-    /// `tally` is added only when it is [`LinkRecorded::Linked`].
-    fn record_verified_account(
+    /// Add `github_user_id` verified to `owner_did`'s accounts, or verify it
+    /// again when it is listed unverified. Both limits are checked again in
+    /// the same transaction: at most `max_accounts` per DID, and one
+    /// verified DID per GitHub id. A refusal changes nothing; `tally` is
+    /// added only when the account was admitted.
+    fn add_or_reverify(
         &self,
         owner_did: &str,
         github_login: &str,
         github_user_id: u64,
+        max_accounts: usize,
         tally: KpiTally<'_>,
-    ) -> Result<LinkRecorded, ReviewStoreError>;
+    ) -> Result<AccountAdmission, ReviewStoreError>;
+}
 
-    /// A re-check of one account failed: it stays, marked unverified, with why.
+/// A re-check of one listed account failed (scan, publish, the GitHub step).
+pub trait AccountStatusWrite: Send + Sync {
+    /// The account stays, marked unverified, with why.
     fn mark_account_unverified(
         &self,
         owner_did: &str,
@@ -293,25 +325,25 @@ pub trait GithubAccountsWrite: Send + Sync {
     ) -> Result<(), ReviewStoreError>;
 }
 
+/// Notes how many eligible repos a live listing of one account showed
+/// (`eligible_count_seen`), the stand-in when no listing is at hand.
+pub trait AccountListingNote: Send + Sync {
+    fn record_eligible_count(
+        &self,
+        owner_did: &str,
+        github_user_id: u64,
+        eligible: usize,
+    ) -> Result<(), ReviewStoreError>;
+}
+
 /// The one-account view the pages read: a DID's first GitHub account.
-pub trait GithubLinkPort: GithubAccountsRead + GithubAccountsWrite {
+pub trait GithubLinkPort: GithubAccountsRead {
     fn github_link(&self, owner_did: &str) -> Result<Option<GithubLink>, ReviewStoreError> {
         Ok(self.github_accounts(owner_did)?.into_iter().next())
     }
-
-    /// [`GithubAccountsWrite::record_verified_account`], by its v1 name.
-    fn record_verified_link(
-        &self,
-        owner_did: &str,
-        github_login: &str,
-        github_user_id: u64,
-        tally: KpiTally<'_>,
-    ) -> Result<LinkRecorded, ReviewStoreError> {
-        self.record_verified_account(owner_did, github_login, github_user_id, tally)
-    }
 }
 
-impl<T: GithubAccountsRead + GithubAccountsWrite + ?Sized> GithubLinkPort for T {}
+impl<T: GithubAccountsRead + ?Sized> GithubLinkPort for T {}
 
 /// How a scan run ended (or that it is still running), as `scan_runs.status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

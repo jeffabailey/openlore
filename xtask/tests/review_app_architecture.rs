@@ -13,6 +13,7 @@
 //! * AR-8    the compose service mounts only its data + secrets and has no AWS credentials
 //! * AR-9    the Caddy site serves the app over HTTPS only (AC-000.2)
 //! * AR-10   tracing events in the app never use a forbidden field name
+//! * AR-11   only the GitHub step's route holds the accounts write port
 //!
 //! They complement (do not replace) DELIVER's `cargo xtask check-arch` rules,
 //! which are unit-tested against fixtures. All `#[ignore]`d until DELIVER
@@ -22,7 +23,9 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use xtask::check_arch::load_workspace;
+use xtask::check_arch::{
+    classify_review_accounts_write, load_workspace, scan_review_accounts_write_only_in_github_route,
+};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -380,5 +383,29 @@ fn tracing_events_in_the_app_never_use_a_forbidden_field_name() {
                 }
             }
         }
+    }
+}
+
+/// AR-11 @I-01 @component-boundaries-3 @contract-shape:pure-function
+/// check-arch fails when the accounts write port is named outside
+/// `routes/github.rs` (and the composition root); the real tree passes.
+#[test]
+fn only_the_github_route_holds_the_accounts_write_port() {
+    assert_eq!(
+        scan_review_accounts_write_only_in_github_route(&root()).expect("scan"),
+        Vec::<String>::new()
+    );
+    let github_route =
+        std::fs::read_to_string(root().join("crates/openlore-review-app/src/routes/github.rs"))
+            .expect("the GitHub step's route");
+    for elsewhere in [
+        "crates/openlore-review-app/src/scan.rs",
+        "crates/openlore-review-app/src/routes/repos.rs",
+        "crates/openlore-review-app/src/routes/review.rs",
+    ] {
+        assert!(
+            !classify_review_accounts_write(elsewhere, &github_route).is_empty(),
+            "{elsewhere} naming the accounts write port must fail check-arch"
+        );
     }
 }

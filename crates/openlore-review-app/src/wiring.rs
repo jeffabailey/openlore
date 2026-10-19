@@ -25,7 +25,7 @@ use ports::{
 };
 use review_domain::kpi::{
     approval_events, outside_default_events, rollup_day, seconds_until_next_rollup,
-    sign_in_refusal_event, sum_counters, utc_day, KpiEvent,
+    sign_in_refusal_event, sum_counters, utc_day, AccountAddRefused, KpiEvent,
 };
 use review_domain::signin::{permission_mode, SignInFailure};
 use review_domain::views::ScanRefused;
@@ -90,6 +90,12 @@ pub(crate) enum LogEvent<'a> {
     /// panic was contained to that exchange.
     CallbackPanicIsolated,
     GithubVerified,
+    /// An owner who lists an account pressed Verify on another (KPI-RRA-2).
+    AccountAddStarted,
+    /// That account was added, verified (counted with the add).
+    AccountAdded,
+    /// That account was not added (the reason only; never whose or which).
+    AccountAddRefused(AccountAddRefused),
     /// A GitHub ownership check did not pass (the refusal's label only).
     GithubVerifyRefused(&'static str),
     /// An owner's confirmed identity link landed (never whose or which).
@@ -137,6 +143,9 @@ fn counters_of(event: &LogEvent<'_>) -> Vec<KpiEvent> {
         LogEvent::SignInRefused(failure) => vec![sign_in_refusal_event(*failure)],
         LogEvent::GithubVerified => vec![KpiEvent::GithubVerifyOk],
         LogEvent::GithubVerifyRefused(_) => vec![KpiEvent::GithubVerifyFail],
+        LogEvent::AccountAddStarted => vec![KpiEvent::AccountAddStarted],
+        LogEvent::AccountAdded => vec![KpiEvent::AccountAddVerified],
+        LogEvent::AccountAddRefused(refused) => vec![refused.event()],
         LogEvent::ScanFinished(ScanStatus::Completed) => vec![KpiEvent::ScanCompleted],
         LogEvent::SuggestionDeclined => vec![KpiEvent::SuggestionDeclined],
         LogEvent::SuggestionApproved {
@@ -261,6 +270,13 @@ fn describe(event: LogEvent<'_>) -> (Level, &'static str, Vec<(&'static str, Val
         ),
         LogEvent::SecretsRekeyed(rows) => (Info, "secrets.rekeyed", vec![("rows", json!(rows))]),
         LogEvent::GithubVerified => (Info, "github.verified", vec![]),
+        LogEvent::AccountAddStarted => (Info, "account.add.started", vec![]),
+        LogEvent::AccountAdded => (Info, "account.add.verified", vec![]),
+        LogEvent::AccountAddRefused(refused) => (
+            Info,
+            "account.add.refused",
+            vec![("reason", json!(refused.label()))],
+        ),
         LogEvent::GithubVerifyRefused(reason) => (
             Info,
             "github.verify_refused",
@@ -653,6 +669,9 @@ fn app(wired: Wired) -> App {
         sessions: wired.store.clone(),
         github: Arc::new(github),
         links: wired.store.clone(),
+        accounts_write: wired.store.clone(),
+        account_status: wired.store.clone(),
+        listing_note: wired.store.clone(),
         scans: wired.store.clone(),
         scan_plans: wired.store.clone(),
         review_read: wired.store.clone(),

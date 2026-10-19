@@ -5,7 +5,9 @@ use maud::html;
 use super::*;
 use crate::link_plan::{LinkPlan, LinkRefusal};
 use crate::ownership::OwnershipRefusal;
+use crate::repo_scope::MAX_GITHUB_ACCOUNTS;
 use ports::claim_domain::identity_link::LinkRecord;
+use ports::{AccountRefusal, GithubLink};
 
 /// The label of the button that checks the bio.
 pub const VERIFY_LABEL: &str = "Verify";
@@ -25,6 +27,12 @@ pub const LINK_PREVIEW_ACTION: &str = "/github/link";
 /// Where the link preview's plan is confirmed (03-05).
 pub const LINK_CONFIRM_ACTION: &str = "/github/link/publish";
 
+/// The label of the button that removes one listed account.
+pub const REMOVE_ACCOUNT_LABEL: &str = "Remove";
+
+/// Where an account's "Remove" asks for the removal confirm.
+pub const REMOVE_ACCOUNT_ACTION: &str = "/github/remove";
+
 /// What publishing a link means (RA-1a, ADR-084 §5).
 pub const LINK_PUBLIC_NOTICE: &str = "This link is public: anyone can read it in your repo. \
      Retracting this link later withdraws it but does not erase it.";
@@ -34,6 +42,8 @@ pub const LINK_PUBLIC_NOTICE: &str = "This link is public: anyone can read it in
 pub enum OwnershipOutcome<'a> {
     Verified,
     Refused(&'a OwnershipRefusal),
+    /// The account cannot join the owner's list; nothing changed.
+    NotAdded(AccountRefusal),
 }
 
 /// The sentence explaining a verify outcome (AC-002.3: each names the fix).
@@ -46,6 +56,9 @@ pub fn ownership_message(
     let refusal = match outcome {
         OwnershipOutcome::Verified => {
             return format!("Verified: github.com/{login} belongs to @{handle}")
+        }
+        OwnershipOutcome::NotAdded(refusal) => {
+            return account_refusal_message(refusal, login, handle)
         }
         OwnershipOutcome::Refused(refusal) => refusal,
     };
@@ -76,22 +89,45 @@ pub fn ownership_message(
         OwnershipRefusal::GithubUnavailable => "GitHub could not be reached. Please wait a few \
              minutes, then press Verify again. Nothing was lost."
             .to_string(),
-        OwnershipRefusal::LinkedToAnotherAccount => format!(
-            "github.com/{login} is already verified for another Bluesky account. Each GitHub \
-             account can belong to one Bluesky account only."
-        ),
+        OwnershipRefusal::LinkedToAnotherAccount => held_by_another_message(login),
         OwnershipRefusal::TooManyAttempts => "Too many verification attempts in the last hour. \
              Please try again later. Nothing was lost."
             .to_string(),
     }
 }
 
+/// Why an account cannot join the owner's list, and the fix (AC-003.3-3.5).
+/// An account already listed had its bio checked again, and it passed.
+fn account_refusal_message(refusal: AccountRefusal, login: &str, handle: &str) -> String {
+    match refusal {
+        AccountRefusal::AlreadyListed => format!(
+            "Verified: github.com/{login} belongs to @{handle}. github.com/{login} is already \
+             on your list."
+        ),
+        AccountRefusal::HeldByAnotherOwner => held_by_another_message(login),
+        AccountRefusal::AtLimit => format!(
+            "You can link up to {MAX_GITHUB_ACCOUNTS} GitHub accounts. Remove one on this page \
+             to add another."
+        ),
+    }
+}
+
+fn held_by_another_message(login: &str) -> String {
+    format!(
+        "github.com/{login} is already verified for another Bluesky account. Each GitHub \
+         account can belong to one Bluesky account only. If it is yours, remove it from that \
+         Bluesky account first."
+    )
+}
+
 /// How a verify outcome is announced: a success is a status, a refusal an
 /// alert, so a refusal never reads as if it worked.
 fn outcome_role(outcome: OwnershipOutcome<'_>) -> &'static str {
     match outcome {
-        OwnershipOutcome::Verified => "status",
-        OwnershipOutcome::Refused(_) => "alert",
+        OwnershipOutcome::Verified | OwnershipOutcome::NotAdded(AccountRefusal::AlreadyListed) => {
+            "status"
+        }
+        OwnershipOutcome::Refused(_) | OwnershipOutcome::NotAdded(_) => "alert",
     }
 }
 
@@ -105,6 +141,49 @@ pub fn github_step_page(
     session_did: &str,
     csrf_token: &str,
     notice: Option<(OwnershipOutcome<'_>, &str)>,
+    verified_login: Option<&str>,
+    active_links: &[LinkRecord],
+) -> String {
+    github_page(
+        session_did,
+        csrf_token,
+        notice,
+        &[],
+        verified_login,
+        active_links,
+    )
+}
+
+/// The GitHub step with the owner's account list (US-RRA-003): each listed
+/// account, in the order it was added, says whether it is verified and
+/// offers "Remove". "Publish this link" is offered for the first verified
+/// one (RA-9).
+pub fn github_accounts_page(
+    session_did: &str,
+    csrf_token: &str,
+    notice: Option<(OwnershipOutcome<'_>, &str)>,
+    accounts: &[GithubLink],
+    active_links: &[LinkRecord],
+) -> String {
+    let verified_login = accounts
+        .iter()
+        .find(|account| account.verified)
+        .map(|account| account.github_login.as_str());
+    github_page(
+        session_did,
+        csrf_token,
+        notice,
+        accounts,
+        verified_login,
+        active_links,
+    )
+}
+
+fn github_page(
+    session_did: &str,
+    csrf_token: &str,
+    notice: Option<(OwnershipOutcome<'_>, &str)>,
+    accounts: &[GithubLink],
     verified_login: Option<&str>,
     active_links: &[LinkRecord],
 ) -> String {
@@ -129,6 +208,9 @@ pub fn github_step_page(
                 input id="github_login" name=(GITHUB_LOGIN_FIELD) type="text" required;
                 button type="submit" { (VERIFY_LABEL) }
             }
+            @if !accounts.is_empty() {
+                (account_list(accounts, csrf_token))
+            }
             @if let Some(login) = verified_login {
                 (link_offer(login, csrf_token))
             }
@@ -139,6 +221,31 @@ pub fn github_step_page(
             script src="/assets/copy.js" {}
         },
     )
+}
+
+/// The owner's listed accounts, each with its standing and "Remove".
+fn account_list(accounts: &[GithubLink], csrf_token: &str) -> Markup {
+    html! {
+        h2 { "Your GitHub accounts" }
+        ul {
+            @for account in accounts {
+                li {
+                    "github.com/" (account.github_login) " — "
+                    @if account.verified {
+                        "verified"
+                    } @else {
+                        "unverified: put your DID back in its bio, then press Verify again"
+                    }
+                    form method="post" action=(REMOVE_ACCOUNT_ACTION) {
+                        (csrf_field(csrf_token))
+                        input type="hidden" name=(super::ACCOUNT_ID_FIELD) value=(account.github_user_id);
+                        input type="hidden" name=(GITHUB_LOGIN_FIELD) value=(account.github_login);
+                        button type="submit" { (REMOVE_ACCOUNT_LABEL) }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// The offer to preview the link to the verified account `login`.

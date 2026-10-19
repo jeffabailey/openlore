@@ -11,8 +11,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ports::{
-    AccountRepoListing, ListedRepo, ListingExtent, OutsideDefault, OwnedRepo, PlanRowStatus,
-    RepoFacts, SavedRepoChoice, ScanStatus, SkippedScanRepo,
+    AccountAdmission, AccountAdmitted, AccountRefusal, AccountRepoListing, ListedRepo,
+    ListingExtent, OutsideDefault, OwnedRepo, PlanRowStatus, RepoFacts, SavedRepoChoice,
+    ScanStatus, SkippedScanRepo,
 };
 use scraper_domain::{select_person_repos, DEFAULT_PERSON_REPO_COUNT};
 
@@ -61,6 +62,44 @@ impl<'a> AccountChoice<'a> {
 /// Repos one scan may read across every account and import (BR-RRA-3,
 /// D-RRA-16): one constant, no setting.
 pub const SCAN_REPO_CAP: usize = 10;
+
+/// GitHub accounts one Bluesky sign-in may list (D-RRA-15): one constant.
+pub const MAX_GITHUB_ACCOUNTS: usize = 3;
+
+/// Whether another DID holds an account verified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OtherOwner {
+    None,
+    HoldsItVerified,
+}
+
+/// Account admission (CORE-RRA-8): adding `github_user_id` to the owner's
+/// `listed` accounts (id and standing, in `added_at` order). A listed
+/// account is verified again when unverified, else already listed; an
+/// account another DID holds verified is refused; past `max` accounts
+/// nothing is added.
+pub fn admit_account(
+    listed: &[(u64, Standing)],
+    github_user_id: u64,
+    other_owner: OtherOwner,
+    max: usize,
+) -> AccountAdmission {
+    let listed_as = listed
+        .iter()
+        .find(|(id, _)| *id == github_user_id)
+        .map(|(_, standing)| *standing);
+    match (listed_as, other_owner) {
+        (Some(Standing::Unverified), _) => AccountAdmission::Admitted(AccountAdmitted::Reverified),
+        (Some(Standing::Verified), _) => AccountAdmission::Refused(AccountRefusal::AlreadyListed),
+        (None, OtherOwner::HoldsItVerified) => {
+            AccountAdmission::Refused(AccountRefusal::HeldByAnotherOwner)
+        }
+        (None, OtherOwner::None) if listed.len() >= max => {
+            AccountAdmission::Refused(AccountRefusal::AtLimit)
+        }
+        (None, OtherOwner::None) => AccountAdmission::Admitted(AccountAdmitted::Added),
+    }
+}
 
 /// A change refused because the scan's total would pass the limit: it names
 /// the limit, the total it would reach and how many repos to untick.
@@ -234,6 +273,15 @@ pub struct ChooseList {
     pub rows: Vec<ChooseRow>,
     pub forks_skipped: usize,
     pub archived_skipped: usize,
+    pub room: TicksRoom,
+}
+
+/// Whether an account's default ticks are today's whole top 5 or were cut
+/// to the room the limit leaves (AC-003.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TicksRoom {
+    Fits,
+    LimitReached,
 }
 
 /// One repo a scan reads, in plan order.
@@ -244,6 +292,12 @@ pub struct PlannedRepo {
     pub full_name: String,
     /// `Some` when today's scan would never have read it.
     pub outside_default: Option<OutsideDefault>,
+}
+
+/// How many of a listing's repos are eligible (owned, not a fork, not
+/// archived): the account's `eligible_count_seen`.
+pub fn eligible_count(listing: &[ListedRepo]) -> usize {
+    ranked(listing).0.len()
 }
 
 /// The eligible listed repos in today's ranking, with what was skipped.
@@ -266,7 +320,14 @@ fn ranked(listing: &[ListedRepo]) -> (Vec<&ListedRepo>, usize, usize) {
 /// ticked as `choice` says.
 pub fn choose_list(listing: &[ListedRepo], choice: AccountChoice<'_>) -> ChooseList {
     let (ranked, forks_skipped, archived_skipped) = ranked(listing);
+    let room = match choice {
+        AccountChoice::DefaultTicks(ticked) if ticked.len() < DEFAULT_TICKS.min(ranked.len()) => {
+            TicksRoom::LimitReached
+        }
+        _ => TicksRoom::Fits,
+    };
     ChooseList {
+        room,
         rows: ranked
             .into_iter()
             .enumerate()

@@ -1957,6 +1957,76 @@ pub fn scan_link_preview_proves_from_a_fresh_read(
     Ok(findings)
 }
 
+// -----------------------------------------------------------------------------
+// `review_accounts_write_only_in_github_route` (component-boundaries §3, I-01)
+// -----------------------------------------------------------------------------
+
+/// The accounts write port's names: the port, its one method and the app's
+/// slot holding it.
+const REVIEW_ACCOUNTS_WRITE_TOKENS: &[&str] =
+    &["GithubAccountsWrite", "add_or_reverify", "accounts_write"];
+
+/// The one route allowed to add accounts.
+pub const REVIEW_ACCOUNTS_WRITE_ROUTE: &str = "crates/openlore-review-app/src/routes/github.rs";
+
+/// The review app's sources: the composition root (the `App` slot and its
+/// wiring) and the GitHub step's route may name the accounts write port.
+const REVIEW_APP_SOURCE_DIR: &str = "crates/openlore-review-app/src";
+const REVIEW_ACCOUNTS_WRITE_EXEMPT_SOURCES: &[&str] = &[
+    REVIEW_ACCOUNTS_WRITE_ROUTE,
+    "crates/openlore-review-app/src/http.rs",
+    "crates/openlore-review-app/src/wiring.rs",
+];
+
+/// Pure rule for one review-app source at `rel_path`: outside the GitHub
+/// step's route and the composition root, every non-test line naming the
+/// accounts write port, its method or its slot, as findings.
+pub fn classify_review_accounts_write(rel_path: &str, source: &str) -> Vec<String> {
+    if REVIEW_ACCOUNTS_WRITE_EXEMPT_SOURCES.contains(&rel_path) {
+        return Vec::new();
+    }
+    REVIEW_ACCOUNTS_WRITE_TOKENS
+        .iter()
+        .filter_map(|token| {
+            classify_cfg_gated_token(source, token).map(|line| {
+                format!(
+                    "review_accounts_write_only_in_github_route: {rel_path}: `{token}` in \
+                     `{line}` — only {REVIEW_ACCOUNTS_WRITE_ROUTE} adds accounts (I-01)"
+                )
+            })
+        })
+        .collect()
+}
+
+/// Effect shell for `review_accounts_write_only_in_github_route`; a route
+/// that does not call the write port is reported too, so the rule cannot
+/// pass vacuously.
+pub fn scan_review_accounts_write_only_in_github_route(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for path in rust_sources_under(&workspace_root.join(REVIEW_APP_SOURCE_DIR)) {
+        let rel_path = path
+            .strip_prefix(workspace_root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        findings.extend(classify_review_accounts_write(
+            &rel_path,
+            &std::fs::read_to_string(&path)?,
+        ));
+    }
+    let route = std::fs::read_to_string(workspace_root.join(REVIEW_ACCOUNTS_WRITE_ROUTE))
+        .unwrap_or_default();
+    if !route.contains("add_or_reverify") {
+        findings.push(format!(
+            "review_accounts_write_only_in_github_route: {REVIEW_ACCOUNTS_WRITE_ROUTE} does not \
+             call add_or_reverify — the rule would pass vacuously"
+        ));
+    }
+    Ok(findings)
+}
+
 /// The purge capability's names: the port, its one method and the composition
 /// root's slot holding it.
 const IDENTITY_LINK_PURGE_TOKENS: &[&str] = &[
@@ -3098,6 +3168,8 @@ pub fn run() -> anyhow::Result<i32> {
     let identity_verify_findings =
         scan_identity_verify_holds_no_storage_or_signing_handle(&workspace_root)?;
     let link_preview_findings = scan_link_preview_proves_from_a_fresh_read(&workspace_root)?;
+    let review_accounts_write_findings =
+        scan_review_accounts_write_only_in_github_route(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -3123,6 +3195,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(identity_link_purge_findings);
     rendered.extend(identity_verify_findings);
     rendered.extend(link_preview_findings);
+    rendered.extend(review_accounts_write_findings);
 
     if rendered.is_empty() {
         println!(
@@ -5375,5 +5448,31 @@ mod search_handler_read_only_tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn the_accounts_write_port_is_named_only_by_the_github_route_and_the_root() {
+        let holder = "fn add(app: &App) { app.accounts_write.add_or_reverify(o, l, 1, 3, t); }\n";
+        let held_by_scan =
+            classify_review_accounts_write("crates/openlore-review-app/src/scan.rs", holder);
+        assert_eq!(held_by_scan.len(), 2, "{held_by_scan:?}");
+        assert!(held_by_scan
+            .iter()
+            .all(|f| f.contains("review_accounts_write_only_in_github_route")));
+        let port = "use ports::GithubAccountsWrite;\n";
+        assert_eq!(
+            classify_review_accounts_write("crates/openlore-review-app/src/routes/repos.rs", port)
+                .len(),
+            1
+        );
+        for exempt in REVIEW_ACCOUNTS_WRITE_EXEMPT_SOURCES {
+            assert!(classify_review_accounts_write(exempt, holder).is_empty());
+        }
+        let test_only = "#[cfg(test)]\nmod tests {\n    fn seed(s: &S) { s.add_or_reverify(o, l, 1, 3, t); }\n}\n";
+        assert!(classify_review_accounts_write(
+            "crates/openlore-review-app/src/routes/review.rs",
+            test_only
+        )
+        .is_empty());
     }
 }

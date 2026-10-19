@@ -418,8 +418,8 @@ mod tests {
     use adapter_review_store::{DataKey, ReviewStore};
     use ports::claim_domain::identity_link::{link_predicate, GithubObservation};
     use ports::{
-        GithubLinkPort, KpiTally, LinkRecorded, PublishPlanPort, ReviewStateWrite, Suggestion,
-        SuggestionKey,
+        AccountAdmission, AccountAdmitted, GithubAccountsWrite, KpiTally, PublishPlanPort,
+        ReviewStateWrite, Suggestion, SuggestionKey,
     };
     use review_domain::lifecycle::tally;
     use review_domain::link_plan::link_preview;
@@ -448,9 +448,9 @@ mod tests {
         let store = ReviewStore::open_in_memory(DataKey::generate()).expect("store");
         assert_eq!(
             store
-                .record_verified_link(OWNER, LINKED_LOGIN, LINKED_ID, KpiTally::NONE)
+                .add_or_reverify(OWNER, LINKED_LOGIN, LINKED_ID, 3, KpiTally::NONE)
                 .expect("linked"),
-            LinkRecorded::Linked
+            AccountAdmission::Admitted(AccountAdmitted::Added)
         );
         store
             .add_pending(OWNER, &[pending_suggestion()])

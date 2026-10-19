@@ -24,9 +24,9 @@ use review_domain::lifecycle::suggestion_from_candidate;
 use review_domain::ownership::{prove_ownership, OwnershipRefusal, VerifiedOwnership};
 use review_domain::reconcile::{add_counts, reconcile};
 use review_domain::repo_scope::{
-    listing_with_reads, named_skips, resume_plan, resumes_frozen_plan, scan_intent, unlisted_ticks,
-    AccountCheck, BioCheck, FrozenRow, FrozenScope, LimitRefusal, Listing, PlanSource, PlannedRepo,
-    SavedTicks, ScanAccount, ScanIntent, SCAN_REPO_CAP,
+    eligible_count, listing_with_reads, named_skips, resume_plan, resumes_frozen_plan, scan_intent,
+    unlisted_ticks, AccountCheck, BioCheck, FrozenRow, FrozenScope, LimitRefusal, Listing,
+    PlanSource, PlannedRepo, SavedTicks, ScanAccount, ScanIntent, SCAN_REPO_CAP,
 };
 use review_domain::views::ScanRefused;
 use scraper_domain::derive_candidates;
@@ -245,9 +245,11 @@ pub(crate) async fn run_scan(
             }
         },
         Err(refusal) if refusal.disproves_ownership() => {
-            let _ =
-                app.links
-                    .mark_account_unverified(&owner_did, link.github_user_id, refusal.label());
+            let _ = app.account_status.mark_account_unverified(
+                &owner_did,
+                link.github_user_id,
+                refusal.label(),
+            );
             Ended::with_status(ScanStatus::OwnershipFailed)
         }
         Err(OwnershipRefusal::RateLimited) => paused(&app),
@@ -433,6 +435,11 @@ async fn account_listing(
         .github
         .list_account_repos(ownership.github_login())
         .await?;
+    let _ = app.listing_note.record_eligible_count(
+        ownership.owner_did(),
+        ownership.github_user_id(),
+        eligible_count(&listing.repos),
+    );
     let mut reads: Vec<(u64, RepoFacts)> = Vec::new();
     for chosen in unlisted_ticks(saved, &listing) {
         let Some((owner, name)) = chosen.full_name.split_once('/') else {
