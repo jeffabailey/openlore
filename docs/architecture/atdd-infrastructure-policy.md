@@ -70,3 +70,11 @@ non-deterministic = fake).
 > driven-EXTERNAL (network ingest + PLC resolution) → FAKE is the correct
 > default, not a waiver; the `IndexStorePort` + the B1 transport are
 > driven-INTERNAL / driving → REAL.
+
+## review-app-repos-and-accounts additions (DISTILL 2026-10-19)
+
+| Port | Class | Mechanism | Note |
+|---|---|---|---|
+| `adapter-review-store` v2 (`github_accounts`, `repo_choices`, `imported_repos`, `scan_run_repos`, suggestion source columns; ADR-088) | Driven internal (real) | the same real `review-app.duckdb` per test; the v1 → v2 upgrade runs on a COPY of a real v1 store written by the shipped app (`tests/fixtures/review-app-store-v1/`, `ReviewApp::start_on_store`) | never read by a scenario; observed through pages, the backup file beside the store (`data_dir`) and `/admin/kpi` |
+| `GithubPort::read_repo` + listing ids (ADR-089 §1) | Driven external (fake) | `FakeGithubAccounts` extended: numeric repo ids, `owner {login,id,type}`, organization accounts, `transfer_repo` / `rename_repo` (same-host 301), `archive_repo`, per-account `set_profile_unreachable` (503), oracles `harvested_repos` / `repo_facts_reads_of` | additive JSON fields; shipped suites unaffected. The recorded-fixture contract test of the real shapes is DELIVER's (`adapter-github`) |
+| `openlore-review-app serve` launch (harness) | Driving | as above, plus: a launch that refuses with `cannot listen on` (reserved port taken before the app bound it) is retried up to 6 times — fresh ports, or the same ports after a pause on a restart (the origin must not change); a refused start on an existing store hands its state back (`launch_on_store` / `NotReady::start_again`) for the interrupted-upgrade scenario | the app needs `APP_ORIGIN` before it starts, so it cannot bind `:0` and report back |

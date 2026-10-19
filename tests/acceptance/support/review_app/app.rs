@@ -17,6 +17,13 @@
 //! | `REVIEW_APP_PLC_URL` | PLC directory base |
 //! | `REVIEW_APP_HANDLE_RESOLVER_URL` | `com.atproto.identity.resolveHandle` base |
 //! | `REVIEW_APP_ALLOW_LOOPBACK_HTTP=1` | accept `http://127.0.0.1` origin + upstreams (test builds only; mirrors the `test-autoconfirm` feature discipline) |
+//! | `REVIEW_APP_CLOCK_SKEW_SECS` | run the clock ahead (development builds only; release refuses) |
+//! | `REVIEW_APP_TEST_FAULT=migrate_before_commit` | review-app-repos-and-accounts MG-3: stop the v1 → v2 update just before COMMIT and exit (development builds only; a release build must refuse to start with it — DELIVER adds it to the xtask release-build guard) |
+//!
+//! Launches retry while the app loses the port race (it must know `APP_ORIGIN`
+//! before it starts, so it cannot bind `:0`): fresh ports on a first start; on
+//! [`ReviewApp::restart`] the SAME ports after a pause (the origin, and with it
+//! the OAuth client id and cookies, must not change).
 //!
 //! Secrets files (DV-BRA-4): `client-jwk` (from `openlore-review-app
 //! gen-client-jwk`, a DELIVER deliverable), `data-key`, `github-token`,
@@ -103,13 +110,140 @@ fn free_port() -> u16 {
         .expect("reserve a loopback port")
 }
 
+/// Two distinct free loopback ports (public, admin).
+fn free_ports() -> (u16, u16) {
+    loop {
+        let (port, admin) = (free_port(), free_port());
+        if port != admin {
+            return (port, admin);
+        }
+    }
+}
+
+/// How many times a launch is retried when the app could not listen (the
+/// reserved port was taken between `free_port` and the app's own bind — the
+/// app must know its origin before it starts, so it cannot bind `:0`).
+const BIND_ATTEMPTS: u32 = 6;
+
+/// The app refused because a listener port was taken (wiring.rs `bind`).
+fn lost_port_race(logs: &str) -> bool {
+    logs.contains("cannot listen on")
+}
+
+/// A launch that did not become ready, with its state handed back (the
+/// store stays on disk, so a later start can open it again).
+pub struct NotReady {
+    pub exit_code: Option<i32>,
+    pub logs: String,
+    state: TempDir,
+}
+
+impl NotReady {
+    /// The data directory the refused start left on disk.
+    pub fn data_dir(&self) -> PathBuf {
+        self.state.path().join("data")
+    }
+
+    /// Start the app again on the same state (same store) with `settings`.
+    pub fn start_again(self, settings: AppSettings) -> ReviewApp {
+        match ReviewApp::launch_retrying(settings, self.state, None, 2) {
+            Startup::Ready(app) => *app,
+            Startup::Refused { exit_code, logs } => panic!(
+                "MISSING_FUNCTIONALITY: the review app refused to start again on the same store (exit {exit_code:?}).\n--- logs ---\n{logs}"
+            ),
+        }
+    }
+}
+
 impl ReviewApp {
     /// Launch with fresh state; wait for readiness or report the refusal.
     pub fn launch(settings: AppSettings) -> Startup {
         let state = tempfile::tempdir().expect("review-app state dir");
-        let port = free_port();
-        let admin_port = free_port();
-        Self::launch_in(settings, state, port, admin_port, 1)
+        Self::launch_retrying(settings, state, None, 1)
+    }
+
+    /// Launch, retrying while the app loses the port race: fresh ports when
+    /// `fixed` is `None`, the same ports (after a pause) on a restart.
+    fn launch_retrying(
+        settings: AppSettings,
+        state: TempDir,
+        fixed: Option<(u16, u16)>,
+        run: u32,
+    ) -> Startup {
+        let mut state = state;
+        for attempt in 1..=BIND_ATTEMPTS {
+            let (port, admin_port) = fixed.unwrap_or_else(free_ports);
+            match Self::try_launch_in(settings.clone(), state, port, admin_port, run) {
+                Ok(app) => return Startup::Ready(Box::new(app)),
+                Err(not_ready) if attempt < BIND_ATTEMPTS && lost_port_race(&not_ready.logs) => {
+                    state = not_ready.state;
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                Err(NotReady {
+                    exit_code, logs, ..
+                }) => return Startup::Refused { exit_code, logs },
+            }
+        }
+        unreachable!("the last attempt returns")
+    }
+
+    /// review-app-repos-and-accounts (ADR-088 migration scenarios): launch on
+    /// a COPY of an existing store — every file in `store_dir` (the
+    /// `review-app.duckdb` and any `.wal` beside it) is copied into the data
+    /// directory first — and require readiness.
+    pub fn start_on_store(settings: AppSettings, store_dir: &Path) -> Self {
+        match Self::launch_on_store(settings, store_dir) {
+            Ok(app) => app,
+            Err(NotReady {
+                exit_code, logs, ..
+            }) => panic!(
+                "MISSING_FUNCTIONALITY: the review app refused to start on the existing store (exit {exit_code:?}).\n--- logs ---\n{logs}"
+            ),
+        }
+    }
+
+    /// Launch on a COPY of an existing store, handing the state back when the
+    /// app does not become ready (the MG-3 interrupted-upgrade scenario).
+    pub fn launch_on_store(settings: AppSettings, store_dir: &Path) -> Result<Self, NotReady> {
+        let state = tempfile::tempdir().expect("review-app state dir");
+        let data = state.path().join("data");
+        fs::create_dir_all(&data).expect("data dir");
+        let entries = fs::read_dir(store_dir)
+            .unwrap_or_else(|e| panic!("read store fixture {}: {e}", store_dir.display()));
+        for entry in entries.filter_map(Result::ok) {
+            if entry.path().is_file() {
+                fs::copy(entry.path(), data.join(entry.file_name()))
+                    .unwrap_or_else(|e| panic!("copy {}: {e}", entry.path().display()));
+            }
+        }
+        let mut state = state;
+        for attempt in 1..=BIND_ATTEMPTS {
+            let (port, admin_port) = free_ports();
+            match Self::try_launch_in(settings.clone(), state, port, admin_port, 1) {
+                Ok(app) => return Ok(app),
+                Err(not_ready) if attempt < BIND_ATTEMPTS && lost_port_race(&not_ready.logs) => {
+                    state = not_ready.state;
+                }
+                Err(not_ready) => return Err(not_ready),
+            }
+        }
+        unreachable!("the last attempt returns")
+    }
+
+    /// Stop the app and hand back its state directory (the store stays on
+    /// disk for a fixture regenerator to copy).
+    pub fn stop_keeping_state(mut self) -> TempDir {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        std::mem::replace(
+            &mut self.state,
+            tempfile::tempdir().expect("placeholder dir"),
+        )
+    }
+
+    /// The directory holding `review-app.duckdb` (and any migration backup).
+    pub fn data_dir(&self) -> PathBuf {
+        self.state.path().join("data")
     }
 
     /// Launch and require readiness.
@@ -122,13 +256,13 @@ impl ReviewApp {
         }
     }
 
-    fn launch_in(
+    fn try_launch_in(
         settings: AppSettings,
         state: TempDir,
         port: u16,
         admin_port: u16,
         run: u32,
-    ) -> Startup {
+    ) -> Result<ReviewApp, NotReady> {
         let bin = review_app_binary();
         let secrets = state.path().join("secrets");
         let data = state.path().join("data");
@@ -158,10 +292,20 @@ impl ReviewApp {
             run,
         };
         match app.wait_ready(Duration::from_secs(45)) {
-            Ok(()) => Startup::Ready(Box::new(app)),
+            Ok(()) => Ok(app),
             Err(exit_code) => {
                 let logs = app.logs();
-                Startup::Refused { exit_code, logs }
+                let _ = app.child.kill();
+                let _ = app.child.wait();
+                let state = std::mem::replace(
+                    &mut app.state,
+                    tempfile::tempdir().expect("placeholder dir"),
+                );
+                Err(NotReady {
+                    exit_code,
+                    logs,
+                    state,
+                })
             }
         }
     }
@@ -211,7 +355,15 @@ impl ReviewApp {
             }
             if let Ok(resp) = client.get(format!("{}/healthz", self.origin)).send() {
                 if resp.status().is_success() {
-                    return Ok(());
+                    // A foreign listener on the reserved port could answer
+                    // /healthz while our app is refusing (port race): ready
+                    // only if our own process is still running a moment later.
+                    std::thread::sleep(Duration::from_millis(150));
+                    match self.child.try_wait() {
+                        Ok(None) => return Ok(()),
+                        Ok(Some(status)) => return Err(status.code()),
+                        Err(_) => return Err(None),
+                    }
                 }
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -232,7 +384,10 @@ impl ReviewApp {
         self.restart()
     }
 
-    /// Stop and start the same app (same origin, database and secrets).
+    /// Stop and start the same app (same origin, database and secrets). If
+    /// the old process's ports are not free yet (or another process took
+    /// one), the start is retried on the SAME ports after a pause, up to
+    /// `BIND_ATTEMPTS` times, because the origin must not change.
     pub fn restart(mut self) -> Self {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -255,7 +410,7 @@ impl ReviewApp {
             .and_then(|p| p.parse().ok())
             .expect("port");
         drop(self);
-        match Self::launch_in(settings, state, port, admin_port, run + 1) {
+        match Self::launch_retrying(settings, state, Some((port, admin_port)), run + 1) {
             Startup::Ready(app) => *app,
             Startup::Refused { exit_code, logs } => {
                 panic!(

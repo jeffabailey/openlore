@@ -1,0 +1,8 @@
+priyaraman/driftwood embodies documentation-first
+priyaraman/driftwood embodies semantic-versioning
+priyaraman/harbor-cli embodies test-driven
+priyaraman/quill-docs embodies documentation-first
+priyaraman/tidepool embodies dependency-pinning
+priyaraman/tidepool embodies memory-safety
+priyaraman/tidepool embodies semantic-versioning
+priyaraman/tidepool embodies test-driven

@@ -101,5 +101,38 @@ name = "review_app_identity_link"
 path = "../../tests/acceptance/review_app_identity_link.rs"
 harness = true
 
+# review-app-repos-and-accounts (DISTILL 2026-10-19; ADR-088/089): choose repos
+# (R1, 01-*), several GitHub accounts + the fresh publish check (R2, 02-*),
+# repos you don't own (R3, 03-*), and the layer-2 properties of the pure cores
+# `review_domain::repo_scope` / `claim_domain::authority` (RED `sut_*`
+# bindings). Vocabulary `tests/acceptance/support/review_app/repos_and_accounts.rs`.
+# Every scenario is `#[ignore = "DELIVER NN-NN: …"]`; DELIVER enables one at a time.
+[[test]]
+name = "review_app_repos_and_accounts"
+path = "../../tests/acceptance/review_app_repos_and_accounts.rs"
+harness = true
+
+[[test]]
+name = "review_app_repos_and_accounts_several"
+path = "../../tests/acceptance/review_app_repos_and_accounts_several.rs"
+harness = true
+
+[[test]]
+name = "review_app_repos_and_accounts_imports"
+path = "../../tests/acceptance/review_app_repos_and_accounts_imports.rs"
+harness = true
+
+[[test]]
+name = "review_app_repos_and_accounts_core"
+path = "../../tests/acceptance/review_app_repos_and_accounts_core.rs"
+harness = true
+
+# The frozen v1 store regenerator — its own target so scenario runs never
+# include it (env-gated; writes *.regenerated next to the committed fixture).
+[[test]]
+name = "review_app_repos_and_accounts_fixture"
+path = "../../tests/acceptance/review_app_repos_and_accounts_fixture.rs"
+harness = true
+
 [lints]
 workspace = true

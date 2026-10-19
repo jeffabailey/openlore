@@ -48,6 +48,10 @@ pub struct RepoFacts {
 /// One repo listed by `GET /users/{u}/repos`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GithubRepo {
+    /// The numeric repo id (review-app-repos-and-accounts, ADR-088/089: repos
+    /// are keyed by id; a rename or transfer keeps it). `0` = assigned by the
+    /// fake when the repo is first served.
+    pub id: u64,
     pub name: String,
     pub stars: u32,
     pub language: Option<String>,
@@ -61,6 +65,7 @@ impl GithubRepo {
     /// An owned, non-fork, non-archived repo with no detectable facts.
     pub fn owned(name: &str) -> Self {
         Self {
+            id: 0,
             name: name.to_string(),
             stars: 10,
             language: None,
@@ -85,6 +90,18 @@ impl GithubRepo {
             archived: true,
             ..Self::owned(name)
         }
+    }
+
+    /// Pin the numeric repo id (otherwise the fake assigns one).
+    pub fn id(mut self, id: u64) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// The last push time (`pushed_at`, RFC 3339), a ranking tie-break.
+    pub fn pushed_at(mut self, pushed_at: &str) -> Self {
+        self.pushed_at = pushed_at.to_string();
+        self
     }
 
     pub fn stars(mut self, stars: u32) -> Self {
@@ -132,6 +149,9 @@ pub struct GithubAccount {
     pub id: u64,
     pub bio: Option<String>,
     pub repos: Vec<GithubRepo>,
+    /// `type: "Organization"` instead of `"User"` (an org cannot hold a DID
+    /// in a bio; its repos are never owner-publishable, ADR-089 `OrgOwned`).
+    pub organization: bool,
 }
 
 impl GithubAccount {
@@ -141,7 +161,14 @@ impl GithubAccount {
             id,
             bio: None,
             repos: Vec::new(),
+            organization: false,
         }
+    }
+
+    /// The account is a GitHub organization.
+    pub fn organization(mut self) -> Self {
+        self.organization = true;
+        self
     }
 
     pub fn bio(mut self, bio: &str) -> Self {
@@ -255,6 +282,25 @@ struct GhState {
     stale_bio: Mutex<BTreeMap<String, Option<String>>>,
     /// Accounts whose profile is served with a broken shape (lowercase login).
     flawed: Mutex<BTreeMap<String, ProfileFlaw>>,
+    /// The next repo id the fake hands out (review-app-repos-and-accounts).
+    next_repo_id: AtomicU64,
+    /// Renamed or transferred repos: old `owner/name` (lowercase) → new
+    /// `owner/name`, answered with a same-host `301` (ADR-089 §1).
+    repo_redirects: Mutex<BTreeMap<String, String>>,
+    /// Accounts whose profile reads (by login or id) answer `503` — GitHub
+    /// unreachable for that one check (lowercase login).
+    profile_outage: Mutex<std::collections::BTreeSet<String>>,
+}
+
+impl GhState {
+    /// Give every repo with id `0` a fresh numeric id.
+    fn assign_repo_ids(&self, account: &mut GithubAccount) {
+        for repo in &mut account.repos {
+            if repo.id == 0 {
+                repo.id = self.next_repo_id.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
 }
 
 /// The multi-account GitHub double, served on loopback.
@@ -286,9 +332,13 @@ impl FakeGithubAccounts {
         let state = Arc::new(GhState::default());
         state.remaining.store(4_990, Ordering::SeqCst);
         state.reset_in.store(3_600, Ordering::SeqCst);
+        state.next_repo_id.store(900_000_001, Ordering::SeqCst);
         *state.accounts.lock().unwrap() = accounts
             .into_iter()
-            .map(|a| (a.login.to_ascii_lowercase(), a))
+            .map(|mut a| {
+                state.assign_repo_ids(&mut a);
+                (a.login.to_ascii_lowercase(), a)
+            })
             .collect();
         let (listener, base_url) = runtime.block_on(async {
             let l = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -352,8 +402,103 @@ impl FakeGithubAccounts {
         let account = accounts
             .get_mut(&login.to_ascii_lowercase())
             .unwrap_or_else(|| panic!("FakeGithubAccounts: unknown login {login}"));
+        let mut repo = repo;
+        if repo.id == 0 {
+            // Replacing a repo by name keeps its id (the same repo, changed).
+            repo.id = account
+                .repos
+                .iter()
+                .find(|r| r.name == repo.name)
+                .map(|r| r.id)
+                .unwrap_or(0);
+        }
         account.repos.retain(|r| r.name != repo.name);
         account.repos.push(repo);
+        self.state.assign_repo_ids(account);
+    }
+
+    /// The owner archives a repo on GitHub (same id; listed with `archived`).
+    pub fn archive_repo(&self, login: &str, name: &str) {
+        let mut accounts = self.state.accounts.lock().unwrap();
+        let repo = accounts
+            .get_mut(&login.to_ascii_lowercase())
+            .and_then(|a| {
+                a.repos
+                    .iter_mut()
+                    .find(|r| r.name.eq_ignore_ascii_case(name))
+            })
+            .unwrap_or_else(|| panic!("FakeGithubAccounts: unknown repo {login}/{name}"));
+        repo.archived = true;
+    }
+
+    /// `from/name` is transferred to `to` (same repo id). The old path answers
+    /// a same-host `301` to `/repos/{to}/{name}` (GitHub's transfer redirect).
+    pub fn transfer_repo(&self, from: &str, name: &str, to: &str) {
+        let mut accounts = self.state.accounts.lock().unwrap();
+        let source = accounts
+            .get_mut(&from.to_ascii_lowercase())
+            .unwrap_or_else(|| panic!("FakeGithubAccounts: unknown login {from}"));
+        let at = source
+            .repos
+            .iter()
+            .position(|r| r.name.eq_ignore_ascii_case(name))
+            .unwrap_or_else(|| panic!("FakeGithubAccounts: unknown repo {from}/{name}"));
+        let repo = source.repos.remove(at);
+        let target = accounts
+            .get_mut(&to.to_ascii_lowercase())
+            .unwrap_or_else(|| panic!("FakeGithubAccounts: unknown login {to}"));
+        let new_path = format!("{}/{}", target.login, repo.name);
+        target.repos.retain(|r| !r.name.eq_ignore_ascii_case(name));
+        target.repos.push(repo);
+        self.state
+            .repo_redirects
+            .lock()
+            .unwrap()
+            .insert(format!("{from}/{name}").to_ascii_lowercase(), new_path);
+    }
+
+    /// The owner renames `login/old` to `login/new` (same repo id; the old
+    /// path answers a same-host `301`).
+    pub fn rename_repo(&self, login: &str, old: &str, new: &str) {
+        let mut accounts = self.state.accounts.lock().unwrap();
+        let account = accounts
+            .get_mut(&login.to_ascii_lowercase())
+            .unwrap_or_else(|| panic!("FakeGithubAccounts: unknown login {login}"));
+        let repo = account
+            .repos
+            .iter_mut()
+            .find(|r| r.name.eq_ignore_ascii_case(old))
+            .unwrap_or_else(|| panic!("FakeGithubAccounts: unknown repo {login}/{old}"));
+        repo.name = new.to_string();
+        let new_path = format!("{}/{new}", account.login);
+        self.state
+            .repo_redirects
+            .lock()
+            .unwrap()
+            .insert(format!("{login}/{old}").to_ascii_lowercase(), new_path);
+    }
+
+    /// Profile reads of `login` (by login or by numeric id) answer `503` while
+    /// `down` — a bio check GitHub cannot finish (an unfinished check, not a
+    /// failed one; review-app-repos-and-accounts AC-004.8).
+    pub fn set_profile_unreachable(&self, login: &str, down: bool) {
+        let mut outage = self.state.profile_outage.lock().unwrap();
+        if down {
+            outage.insert(login.to_ascii_lowercase());
+        } else {
+            outage.remove(&login.to_ascii_lowercase());
+        }
+    }
+
+    /// The numeric id GitHub reports for `login/name`, if it exists now.
+    pub fn repo_id_of(&self, login: &str, name: &str) -> Option<u64> {
+        self.state
+            .accounts
+            .lock()
+            .unwrap()
+            .get(&login.to_ascii_lowercase())
+            .and_then(|a| a.repos.iter().find(|r| r.name.eq_ignore_ascii_case(name)))
+            .map(|r| r.id)
     }
 
     /// Give the login a different numeric id IN PLACE (the review app reads
@@ -439,6 +584,8 @@ impl FakeGithubAccounts {
     /// A new account appears — e.g. someone re-registers a freed login under
     /// a DIFFERENT numeric id. Takes precedence over any rename redirect.
     pub fn register(&self, account: GithubAccount) {
+        let mut account = account;
+        self.state.assign_repo_ids(&mut account);
         let login = account.login.to_ascii_lowercase();
         self.state.redirects.lock().unwrap().remove(&login);
         self.state.accounts.lock().unwrap().insert(login, account);
@@ -494,6 +641,42 @@ impl FakeGithubAccounts {
             .unwrap()
             .iter()
             .any(|t| t == token)
+    }
+
+    /// Every repo (`owner/name` as requested) the app HARVESTED — read past
+    /// its root (`/repos/{o}/{r}/…`: contents, tags, readme, …). A repo-facts
+    /// read (`GET /repos/{o}/{r}`, the publish-time ownership read) is not a
+    /// harvest. review-app-repos-and-accounts: "the repos a scan read".
+    pub fn harvested_repos(&self) -> std::collections::BTreeSet<String> {
+        self.requests()
+            .iter()
+            .filter_map(|r| {
+                let segments: Vec<&str> = r.path.trim_start_matches('/').split('/').collect();
+                match segments.as_slice() {
+                    ["repos", owner, name, _rest, ..] => Some(format!("{owner}/{name}")),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// Number of repo-facts reads (`GET /repos/{owner}/{name}` exactly) of
+    /// `full_name` — the publish-time ownership read (ADR-089 §1).
+    pub fn repo_facts_reads_of(&self, full_name: &str) -> usize {
+        let wanted = format!("/repos/{full_name}").to_ascii_lowercase();
+        self.requests()
+            .iter()
+            .filter(|r| r.path.to_ascii_lowercase() == wanted)
+            .count()
+    }
+
+    /// Number of profile reads of `login` (by login) or of its numeric `id`.
+    pub fn profile_reads_of(&self, login: &str, id: u64) -> usize {
+        let by_id = format!("/user/{id}");
+        self.requests()
+            .iter()
+            .filter(|r| r.is_profile_read_of(login) || r.path == by_id)
+            .count()
     }
 
     /// Number of scrape reads (repo list or per-repo reads) of `login`.
@@ -610,7 +793,35 @@ fn route(state: &GhState, req: HttpRequest) -> HttpResponse {
     let accounts = state.accounts.lock().unwrap();
     let not_found =
         || json_with_headers(404, &serde_json::json!({"message": "Not Found"}), &headers);
+    let outage = |a: &GithubAccount| {
+        state
+            .profile_outage
+            .lock()
+            .unwrap()
+            .contains(&a.login.to_ascii_lowercase())
+    };
+    let unavailable = || {
+        json_with_headers(
+            503,
+            &serde_json::json!({"message": "Service Unavailable"}),
+            &headers,
+        )
+    };
     match segments.as_slice() {
+        ["users", login]
+            if accounts
+                .get(&login.to_ascii_lowercase())
+                .is_some_and(outage) =>
+        {
+            unavailable()
+        }
+        ["user", id]
+            if accounts
+                .values()
+                .any(|a| a.id.to_string() == *id && outage(a)) =>
+        {
+            unavailable()
+        }
         ["users", login] => match accounts.get(&login.to_ascii_lowercase()) {
             Some(a) => json_with_headers(200, &served_profile(state, a), &headers),
             None => match state
@@ -646,15 +857,40 @@ fn route(state: &GhState, req: HttpRequest) -> HttpResponse {
             None => not_found(),
         },
         ["repos", owner, name, rest @ ..] => {
-            let Some(account) = accounts.get(&owner.to_ascii_lowercase()) else {
-                return not_found();
-            };
-            let Some(repo) = account
-                .repos
-                .iter()
-                .find(|r| r.name.eq_ignore_ascii_case(name))
-            else {
-                return not_found();
+            let found = accounts
+                .get(&owner.to_ascii_lowercase())
+                .and_then(|account| {
+                    account
+                        .repos
+                        .iter()
+                        .find(|r| r.name.eq_ignore_ascii_case(name))
+                        .map(|repo| (account, repo))
+                });
+            let Some((account, repo)) = found else {
+                // A renamed or transferred repo: same-host 301 (ADR-089 §1).
+                let moved = state
+                    .repo_redirects
+                    .lock()
+                    .unwrap()
+                    .get(&format!("{owner}/{name}").to_ascii_lowercase())
+                    .cloned();
+                return match moved {
+                    Some(new_path) => {
+                        let mut location = format!("/repos/{new_path}");
+                        for segment in rest {
+                            location.push('/');
+                            location.push_str(segment);
+                        }
+                        let mut headers = headers.clone();
+                        headers.push(("location", location));
+                        json_with_headers(
+                            301,
+                            &serde_json::json!({"message": "Moved Permanently"}),
+                            &headers,
+                        )
+                    }
+                    None => not_found(),
+                };
             };
             let (body, status) = repo_endpoint(account, repo, rest);
             json_with_headers(status, &body, &headers)
@@ -700,12 +936,23 @@ fn profile_json(a: &GithubAccount) -> serde_json::Value {
         "public_repos": a.repos.len(),
         "created_at": "2015-01-01T00:00:00Z",
         "html_url": format!("https://github.com/{}", a.login),
-        "type": "User",
+        "type": if a.organization { "Organization" } else { "User" },
+    })
+}
+
+fn owner_json(a: &GithubAccount) -> serde_json::Value {
+    serde_json::json!({
+        "login": a.login,
+        "id": a.id,
+        "type": if a.organization { "Organization" } else { "User" },
     })
 }
 
 fn repo_row(a: &GithubAccount, r: &GithubRepo) -> serde_json::Value {
     serde_json::json!({
+        "id": r.id,
+        "owner": owner_json(a),
+        "private": false,
         "name": r.name,
         "full_name": format!("{}/{}", a.login, r.name),
         "description": serde_json::Value::Null,
@@ -734,6 +981,15 @@ fn repo_endpoint(a: &GithubAccount, r: &GithubRepo, rest: &[&str]) -> (serde_jso
     match rest {
         [] => (
             serde_json::json!({
+                "id": r.id,
+                "name": r.name,
+                "full_name": format!("{}/{}", a.login, r.name),
+                "owner": owner_json(a),
+                "private": false,
+                "fork": r.fork,
+                "archived": r.archived,
+                "stargazers_count": r.stars,
+                "pushed_at": r.pushed_at,
                 "target": {"kind": "repo", "owner": a.login, "repo": r.name, "full_name": format!("{}/{}", a.login, r.name), "private": false},
                 "language": r.language,
                 "html_url": format!("https://github.com/{}/{}", a.login, r.name),
@@ -940,6 +1196,66 @@ mod tests {
         assert_eq!(
             gh.scrapes_without_preceding_bio_check("priyaraman").len(),
             1
+        );
+    }
+
+    // review-app-repos-and-accounts (DISTILL 2026-10-19): repo ids, owners,
+    // transfers and per-account outages.
+
+    #[test]
+    fn listing_rows_and_repo_facts_carry_ids_and_the_owner() {
+        let gh = FakeGithubAccounts::start(vec![
+            priya(),
+            GithubAccount::new("rust-lang", 5_430_000)
+                .organization()
+                .repo(GithubRepo::owned("cargo").id(77)),
+        ]);
+        let (_, listing) = get(&gh, "/users/priyaraman/repos");
+        let rows: serde_json::Value = serde_json::from_str(&listing).unwrap();
+        assert!(rows[0]["id"].as_u64().unwrap() > 0);
+        assert_eq!(rows[0]["owner"]["id"], 4_210_001);
+        assert_eq!(rows[0]["owner"]["type"], "User");
+        let (status, facts) = get(&gh, "/repos/rust-lang/cargo");
+        assert_eq!(status, 200);
+        let facts: serde_json::Value = serde_json::from_str(&facts).unwrap();
+        assert_eq!(facts["id"], 77);
+        assert_eq!(facts["full_name"], "rust-lang/cargo");
+        assert_eq!(facts["owner"]["type"], "Organization");
+        assert_eq!(facts["private"], false);
+    }
+
+    #[test]
+    fn a_transferred_repo_keeps_its_id_and_its_old_path_redirects() {
+        let gh = FakeGithubAccounts::start(vec![
+            priya(),
+            GithubAccount::new("tidal-labs", 8_100_000).organization(),
+        ]);
+        let id = gh.repo_id_of("priyaraman", "tidepool").unwrap();
+        gh.transfer_repo("priyaraman", "tidepool", "tidal-labs");
+        assert_eq!(gh.repo_id_of("tidal-labs", "tidepool"), Some(id));
+        assert_eq!(gh.repo_id_of("priyaraman", "tidepool"), None);
+        assert_eq!(get(&gh, "/repos/priyaraman/tidepool").0, 301);
+        assert_eq!(get(&gh, "/repos/tidal-labs/tidepool").0, 200);
+        gh.rename_repo("tidal-labs", "tidepool", "tidepool-2");
+        assert_eq!(gh.repo_id_of("tidal-labs", "tidepool-2"), Some(id));
+        assert_eq!(get(&gh, "/repos/tidal-labs/tidepool").0, 301);
+    }
+
+    #[test]
+    fn a_profile_outage_is_per_account_and_a_harvest_is_not_a_facts_read() {
+        let gh = FakeGithubAccounts::start(vec![priya(), GithubAccount::new("other", 9)]);
+        gh.set_profile_unreachable("priyaraman", true);
+        assert_eq!(get(&gh, "/users/priyaraman").0, 503);
+        assert_eq!(get(&gh, "/user/4210001").0, 503);
+        assert_eq!(get(&gh, "/users/other").0, 200);
+        gh.set_profile_unreachable("priyaraman", false);
+        assert_eq!(get(&gh, "/users/priyaraman").0, 200);
+        get(&gh, "/repos/priyaraman/tidepool");
+        get(&gh, "/repos/priyaraman/tidepool/contents/Cargo.lock");
+        assert_eq!(gh.repo_facts_reads_of("priyaraman/tidepool"), 1);
+        assert_eq!(
+            gh.harvested_repos().into_iter().collect::<Vec<_>>(),
+            ["priyaraman/tidepool"]
         );
     }
 }

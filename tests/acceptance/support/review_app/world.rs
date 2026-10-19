@@ -655,13 +655,16 @@ pub fn then_logs_are_closed_and_leak_nothing(logs: &str, secrets: &[String]) {
         "plan.",
         "pds.",
     ];
-    const MORE_PREFIXES: [&str; 6] = [
+    // `ownership.` — review-app-repos-and-accounts D-RRA-D11: the KPI-RRA-4
+    // audit events `ownership.publish_check.passed` / `.refused`.
+    const MORE_PREFIXES: [&str; 7] = [
         "publish.",
         "share.",
         "retract.",
         "upstream.",
         "kpi.",
         "guardrail.",
+        "ownership.",
     ];
     for line in logs.lines().filter(|l| !l.trim().is_empty()) {
         let parsed: serde_json::Value = serde_json::from_str(line)

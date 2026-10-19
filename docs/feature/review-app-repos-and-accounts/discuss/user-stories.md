@@ -57,8 +57,8 @@
   for (≤10 repos in ≤60 s p90). Every surface prints the same number.
 - **BR-RRA-4 A scan uses what was in force when it started.** Choices, accounts and imports
   saved during a running scan apply from the next scan. Removing an account or an imported
-  repo during a scan stops reads of it at once, and its pending suggestions are deleted after the
-  scan (D-RRA-17).
+  repo during a scan stops reads of it at once, and its pending suggestions are deleted at once;
+  the running scan cannot add new ones for it (D-RRA-17; user decision OQ-D4, DESIGN 2026-10-19).
 - **D-RRA-17 Remove deletes pending.** Removing a GitHub account or an imported repo deletes its
   pending suggestions. Published claims stay in the PDS, untouched. The private records of
   declined keys (and, for accounts, published keys) are kept so BR-1 and BR-2 still hold; they
@@ -717,7 +717,7 @@ And after the scan ends, no priya-tidal pending suggestion exists
 - [ ] AC-008.1 Remove needs a confirm that states how many pending suggestions will be deleted; cancelling changes nothing. Tested by: "Priya removes…", "Cancelling the removal…".
 - [ ] AC-008.2 Removing stops scans of the account and deletes its pending suggestions; it writes nothing to any PDS and retracts no claim or link. Tested by: "Priya removes…".
 - [ ] AC-008.3 Removing keeps the private records of the account's declined and published keys: after re-adding and re-verifying, a scan offers its other suggestions as new, never re-offers a declined key (BR-1), and counts published keys as already published (BR-2). Tested by: "Re-adding offers suggestions again…".
-- [ ] AC-008.4 Removing during a scan stops further reads of that account; the pending suggestions that scan found for it are deleted when it ends (BR-RRA-4). Tested by: "Removing an account during a scan…".
+- [ ] AC-008.4 Removing during a scan stops further reads of that account; the pending suggestions that scan found for it are deleted at once, and the scan cannot add new ones for it (BR-RRA-4; OQ-D4). Tested by: "Removing an account during a scan…".
 
 ### Outcome KPIs
 

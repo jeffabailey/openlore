@@ -11,6 +11,12 @@
 //! * [`browser`] / [`html`] — a JS-less browser over the app's HTTP driving port
 //! * [`world`]  — the hermetic world + the chained step vocabulary
 //!
+//! No scenario opens the app's private store. The one exception is
+//! observational and file-level: the review-app-repos-and-accounts migration
+//! scenarios list and compare the backup files the update leaves beside the
+//! store (`repos_and_accounts::store_backups` / `backup_bytes`) and start a
+//! fresh app on such a copy.
+//!
 //! Driven-external systems are faked in `openlore-test-support`
 //! (`FakeAtprotoNetwork`, `FakeGithubAccounts`); nothing internal is mocked.
 
@@ -31,3 +37,7 @@ pub use browser::{Browser, Page};
 pub use domain::*;
 pub use identity_link::*;
 pub use world::*;
+
+// review-app-repos-and-accounts (DISTILL 2026-10-19): accounts, repo choices
+// and imports vocabulary; suites `use review_app::repos_and_accounts::*`.
+pub mod repos_and_accounts;
