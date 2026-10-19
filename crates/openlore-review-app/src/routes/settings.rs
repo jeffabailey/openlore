@@ -47,12 +47,22 @@ pub(crate) async fn confirm_forget_me(app: &App, request: &PageRequest) -> Reply
     }
 }
 
-/// Forget `owner_did`: revoke (reported, never blocking), then purge.
-/// Shared by her own confirm and the operator's purge on request.
+/// Forget `owner_did`: revoke (reported, never blocking), then purge while
+/// her scope is held, so no Save, "Add repo", account change or scan move
+/// in flight can write after the purge (R4). A scan still reading writes
+/// no suggestion afterwards: its inserts require a listed source. Shared
+/// by her own confirm and the operator's purge on request.
 pub(crate) async fn forget(app: &App, owner_did: &str) -> Result<RevokeOutcome, ReviewStoreError> {
     let revoked = app.oauth.revoke_grant(owner_did).await;
     let counted = Counted::of(&LogEvent::Disconnect(revoked));
-    app.forget.purge_owner(owner_did, counted.tally())?;
+    let Ok(scope_guard) = app.scope_locks.hold(owner_did).await else {
+        return Err(ReviewStoreError(
+            "another change of this DID held its scope; nothing was purged".into(),
+        ));
+    };
+    let purged = app.forget.purge_owner(owner_did, counted.tally());
+    drop(scope_guard);
+    purged?;
     emit(LogEvent::Disconnect(revoked));
     Ok(revoked)
 }
