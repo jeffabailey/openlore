@@ -5,8 +5,8 @@
 use duckdb::params;
 use duckdb::OptionalExt;
 use ports::{
-    KpiTally, OutsideDefault, ReviewStateRead, ReviewStateWrite, ReviewStoreError, Suggestion,
-    SuggestionKey, SuggestionSource, SuggestionState,
+    KpiTally, OutsideDefault, RepoSource, ReviewStateRead, ReviewStateWrite, ReviewStoreError,
+    Suggestion, SuggestionKey, SuggestionSource, SuggestionState,
 };
 
 use crate::secrets::port_error;
@@ -15,6 +15,10 @@ use crate::{db_error, db_id, ReviewStore, StoreError};
 const READ_PENDING: &str = "SELECT subject, predicate, object, confidence_bp, evidence, signals,
     source_repo FROM suggestions WHERE owner_did = ? AND state = 'pending'
     ORDER BY subject, object, predicate";
+
+const READ_PENDING_SOURCES: &str = "SELECT subject, predicate, object, source_kind,
+    source_account_id, source_repo_id FROM suggestions
+    WHERE owner_did = ? AND state = 'pending' AND source_kind IS NOT NULL";
 
 const READ_STATES: &str = "SELECT subject, predicate, object, state
     FROM suggestions WHERE owner_did = ?";
@@ -46,6 +50,16 @@ fn from_json(stored: &str) -> Vec<String> {
     serde_json::from_str(stored).unwrap_or_default()
 }
 
+/// A stored source back as where the suggestion came from.
+fn source_of(kind: &str, account: Option<i64>, repo: Option<i64>) -> Option<RepoSource> {
+    let id = |stored: Option<i64>| stored.and_then(|id| u64::try_from(id).ok());
+    match kind {
+        "account" => id(account).map(RepoSource::Account),
+        "imported" => id(repo).map(RepoSource::Imported),
+        _ => None,
+    }
+}
+
 fn not_a_state(stored: &str) -> StoreError {
     StoreError::Database(format!("unknown suggestion state {stored:?}"))
 }
@@ -70,6 +84,34 @@ impl ReviewStateRead for ReviewStore {
                 })
                 .map_err(db_error)?;
             rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+        })
+        .map_err(port_error)
+    }
+
+    fn pending_sources(
+        &self,
+        owner_did: &str,
+    ) -> Result<Vec<(SuggestionKey, RepoSource)>, ReviewStoreError> {
+        self.with_connection(|conn| {
+            let mut statement = conn.prepare(READ_PENDING_SOURCES).map_err(db_error)?;
+            let rows = statement
+                .query_map([owner_did], |row| {
+                    let key = SuggestionKey {
+                        subject: row.get(0)?,
+                        predicate: row.get(1)?,
+                        object: row.get(2)?,
+                    };
+                    let kind: String = row.get(3)?;
+                    let account: Option<i64> = row.get(4)?;
+                    let repo: Option<i64> = row.get(5)?;
+                    Ok((key, source_of(&kind, account, repo)))
+                })
+                .map_err(db_error)?;
+            rows.filter_map(|row| match row {
+                Ok((key, source)) => source.map(|source| Ok((key, source))),
+                Err(error) => Some(Err(db_error(error))),
+            })
+            .collect()
         })
         .map_err(port_error)
     }

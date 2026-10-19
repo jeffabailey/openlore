@@ -389,8 +389,27 @@ fn sut_may_sign(
     todo!("RED: bind to claim_domain::authority::may_sign (DELIVER 02-*)")
 }
 
-fn sut_visible(_rows: &[SourceView], _accounts: &[(u64, bool)], _imports: &[u64]) -> Vec<bool> {
-    todo!("RED: bind to review_domain::repo_scope::visible (DELIVER 02-*)")
+fn sut_visible(rows: &[SourceView], accounts: &[(u64, bool)], imports: &[u64]) -> Vec<bool> {
+    use review_domain::repo_scope::{visible, PlanSource, Standing};
+    let sources: Vec<PlanSource> = rows
+        .iter()
+        .map(|row| match row {
+            SourceView::Account(id) => PlanSource::Account(*id),
+            SourceView::Imported(repo) => PlanSource::Imported(*repo),
+        })
+        .collect();
+    let listed: Vec<(u64, Standing)> = accounts
+        .iter()
+        .map(|(id, verified)| {
+            let standing = if *verified {
+                Standing::Verified
+            } else {
+                Standing::Unverified
+            };
+            (*id, standing)
+        })
+        .collect();
+    visible(&sources, &listed, imports)
 }
 
 fn sut_add_account(
@@ -907,7 +926,6 @@ proptest! {
 
     /// CORE-RRA-7 (@property @AC-004.3 @AC-004.4 @AC-002.6 @I-BRA-1 @contract-shape:pure-function)
     #[test]
-    #[ignore = "CORE-RRA-7 (bind with DELIVER step 02-05): repo_scope visibility (RED binding)"]
     fn core_rra7_visibility_follows_the_source_never_the_tick(
         accounts in proptest::collection::vec((1u64..5, any::<bool>()), 0..3),
         imports in proptest::collection::vec(9_000u64..9_004, 0..3),

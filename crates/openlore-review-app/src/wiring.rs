@@ -20,12 +20,13 @@ use adapter_github::client::{
 use adapter_github::GithubAdapter;
 use adapter_review_store::{DataKey, DuckDbCaps, MigrationFault, ReviewStore};
 use ports::{
-    KpiTally, OAuthPort, OutsideDefault, ProbeOutcome, ReviewStorePort, RevokeOutcome, ScanRunPort,
-    ScanStatus, SecretStorePort,
+    AccountCheckOutcome, KpiTally, OAuthPort, OutsideDefault, ProbeOutcome, ReviewStorePort,
+    RevokeOutcome, ScanRunPort, ScanStatus, SecretStorePort,
 };
 use review_domain::kpi::{
-    approval_events, outside_default_events, rollup_day, seconds_until_next_rollup,
-    sign_in_refusal_event, sum_counters, utc_day, AccountAddRefused, KpiEvent,
+    account_check_event, approval_events, outside_default_events, rollup_day,
+    seconds_until_next_rollup, sign_in_refusal_event, sum_counters, utc_day, AccountAddRefused,
+    KpiEvent,
 };
 use review_domain::signin::{permission_mode, SignInFailure};
 use review_domain::views::ScanRefused;
@@ -103,6 +104,12 @@ pub(crate) enum LogEvent<'a> {
     /// A link confirm wrote nothing (the reason's label only, U-29).
     GithubLinkRefused(&'static str),
     ScanFinished(ScanStatus),
+    /// A scan's bio check of one listed account ended (the outcome only;
+    /// never whose or which account).
+    ScanAccountChecked(AccountCheckOutcome),
+    /// A scan read one repo, of an account whose check passed in that scan
+    /// (KPI-RRA-5 audit; never which repo, account or whose).
+    ScanRepoRead(AccountCheckOutcome),
     /// A scan was refused before it started (the reason only; never whose).
     ScanRefused(ScanRefused),
     /// The server GitHub token expires within the warning window (A-8).
@@ -147,6 +154,9 @@ fn counters_of(event: &LogEvent<'_>) -> Vec<KpiEvent> {
         LogEvent::AccountAdded => vec![KpiEvent::AccountAddVerified],
         LogEvent::AccountAddRefused(refused) => vec![refused.event()],
         LogEvent::ScanFinished(ScanStatus::Completed) => vec![KpiEvent::ScanCompleted],
+        LogEvent::ScanAccountChecked(outcome) => {
+            account_check_event(*outcome).into_iter().collect()
+        }
         LogEvent::SuggestionDeclined => vec![KpiEvent::SuggestionDeclined],
         LogEvent::SuggestionApproved {
             edited,
@@ -290,6 +300,16 @@ fn describe(event: LogEvent<'_>) -> (Level, &'static str, Vec<(&'static str, Val
             Info,
             "scan.finished",
             vec![("status", json!(status.as_str()))],
+        ),
+        LogEvent::ScanAccountChecked(outcome) => (
+            Info,
+            "scan.account.checked",
+            vec![("outcome", json!(outcome.as_str()))],
+        ),
+        LogEvent::ScanRepoRead(account_check) => (
+            Info,
+            "scan.repo.read",
+            vec![("account_check", json!(account_check.as_str()))],
         ),
         LogEvent::ScanRefused(refused) => (
             Info,

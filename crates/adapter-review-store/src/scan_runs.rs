@@ -3,8 +3,9 @@
 use duckdb::types::{TimeUnit, Value};
 use duckdb::{params, OptionalExt};
 use ports::{
-    KpiTally, PlanRowStatus, PlannedScanRepo, RepoSkipReason, ReviewStoreError, ScanCounts,
-    ScanPlanRead, ScanPlanRow, ScanRun, ScanRunPort, ScanStatus, SkippedScanRepo,
+    AccountCheckOutcome, AccountCheckRecord, KpiTally, PlanRowStatus, PlannedScanRepo,
+    RepoSkipReason, ReviewStoreError, ScanCounts, ScanPlanRead, ScanPlanRow, ScanRun, ScanRunPort,
+    ScanStatus, SkippedScanRepo,
 };
 
 use crate::secrets::port_error;
@@ -45,6 +46,14 @@ const LATEST_PLAN: &str = "SELECT repo_id, full_name, source_account_id, status
         SELECT run_id FROM scan_runs WHERE owner_did = ?
         ORDER BY started_at DESC, rowid DESC LIMIT 1)
     ORDER BY position";
+
+// Each account's bio check in a run: `[{"account": id, "outcome": "passed"}]`
+// (ids and outcomes only, design §6.2 step 7).
+const RECORD_ACCOUNT_CHECKS: &str = "UPDATE scan_runs SET summary = ?
+    WHERE owner_did = ? AND run_id = ?";
+
+const LATEST_ACCOUNT_CHECKS: &str = "SELECT summary FROM scan_runs WHERE owner_did = ?
+    ORDER BY started_at DESC, rowid DESC LIMIT 1";
 
 const MARK_REPO_READ: &str = "UPDATE scan_run_repos SET status = 'read'
     WHERE owner_did = ? AND run_id = ? AND position = ?";
@@ -95,6 +104,37 @@ pub(crate) fn unix_secs_of(stored: &Value) -> Option<i64> {
 /// A count as its `INTEGER` column holds it (saturating; never negative).
 fn stored_count(count: usize) -> i32 {
     i32::try_from(count).unwrap_or(i32::MAX)
+}
+
+/// The stored summary of a run's account checks.
+fn checks_json(checks: &[AccountCheckRecord]) -> String {
+    serde_json::Value::from(
+        checks
+            .iter()
+            .map(|check| {
+                serde_json::json!({
+                    "account": check.github_user_id,
+                    "outcome": check.outcome.as_str(),
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .to_string()
+}
+
+/// A run's account checks back from its stored summary (unreadable entries
+/// are dropped).
+fn checks_of_json(stored: &str) -> Vec<AccountCheckRecord> {
+    let entries: Vec<serde_json::Value> = serde_json::from_str(stored).unwrap_or_default();
+    entries
+        .iter()
+        .filter_map(|entry| {
+            Some(AccountCheckRecord {
+                github_user_id: entry["account"].as_u64()?,
+                outcome: AccountCheckOutcome::parse(entry["outcome"].as_str()?)?,
+            })
+        })
+        .collect()
 }
 
 /// A stored count back as a count.
@@ -242,6 +282,23 @@ impl ScanRunPort for ReviewStore {
         .map_err(port_error)
     }
 
+    fn record_account_checks(
+        &self,
+        owner_did: &str,
+        run_id: &str,
+        checks: &[AccountCheckRecord],
+    ) -> Result<(), ReviewStoreError> {
+        self.with_connection(|conn| {
+            conn.execute(
+                RECORD_ACCOUNT_CHECKS,
+                params![checks_json(checks), owner_did, run_id],
+            )
+            .map(drop)
+            .map_err(db_error)
+        })
+        .map_err(port_error)
+    }
+
     fn latest_scan(&self, owner_did: &str) -> Result<Option<ScanRun>, ReviewStoreError> {
         self.with_connection(|conn| {
             conn.query_row(LATEST_SCAN, [owner_did], |row| {
@@ -274,6 +331,22 @@ impl ScanRunPort for ReviewStore {
 }
 
 impl ScanPlanRead for ReviewStore {
+    fn latest_account_checks(
+        &self,
+        owner_did: &str,
+    ) -> Result<Vec<AccountCheckRecord>, ReviewStoreError> {
+        self.with_connection(|conn| {
+            conn.query_row(LATEST_ACCOUNT_CHECKS, [owner_did], |row| {
+                row.get::<_, Option<String>>(0)
+            })
+            .optional()
+            .map(|stored| stored.flatten().as_deref().map(checks_of_json))
+            .map(Option::unwrap_or_default)
+            .map_err(db_error)
+        })
+        .map_err(port_error)
+    }
+
     fn latest_plan(&self, owner_did: &str) -> Result<Vec<ScanPlanRow>, ReviewStoreError> {
         self.with_connection(|conn| {
             let mut statement = conn.prepare(LATEST_PLAN).map_err(db_error)?;

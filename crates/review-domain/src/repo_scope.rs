@@ -690,9 +690,16 @@ impl FrozenScope {
                 .accounts
                 .iter()
                 .zip(checks)
-                .scan(room, |room, (account, check)| {
+                .enumerate()
+                .scan(room, |room, (position, (account, check))| {
                     let chosen = account.chosen(check, room);
-                    Some((account.github_user_id, plan_account(&chosen, check)))
+                    let plan = plan_account(&chosen, check);
+                    let plan = if position == 0 {
+                        plan
+                    } else {
+                        from_other_account(plan)
+                    };
+                    Some((account.github_user_id, plan))
                 })
                 .collect(),
             imports: self.imports.clone(),
@@ -700,12 +707,45 @@ impl FrozenScope {
     }
 }
 
-/// Where a row of a frozen plan comes from: a listed account, or an
-/// imported repo.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PlanSource {
-    Account(u64),
-    Imported(u64),
+/// An account plan of an account other than the owner's first: each of its
+/// repos is one the pre-feature scan (first account only) never read.
+fn from_other_account(plan: AccountPlan) -> AccountPlan {
+    match plan {
+        AccountPlan::Read { planned, skipped } => AccountPlan::Read {
+            planned: planned
+                .into_iter()
+                .map(|repo| PlannedRepo {
+                    outside_default: Some(OutsideDefault::OtherAccount),
+                    ..repo
+                })
+                .collect(),
+            skipped,
+        },
+        other => other,
+    }
+}
+
+/// Where a row of a frozen plan (and each suggestion it yields) comes
+/// from: a listed account, or an imported repo.
+pub use ports::RepoSource as PlanSource;
+
+/// Visibility (CORE-RRA-7, OQ-5): each suggestion from `sources` is shown
+/// iff it comes from a listed account that is verified, or from a repo on
+/// the `imports` list. Derived, never stored: hidden is not deleted.
+pub fn visible(sources: &[PlanSource], accounts: &[(u64, Standing)], imports: &[u64]) -> Vec<bool> {
+    sources
+        .iter()
+        .map(|source| shown(*source, accounts, imports))
+        .collect()
+}
+
+fn shown(source: PlanSource, accounts: &[(u64, Standing)], imports: &[u64]) -> bool {
+    match source {
+        PlanSource::Account(account_id) => accounts
+            .iter()
+            .any(|(id, standing)| *id == account_id && *standing == Standing::Verified),
+        PlanSource::Imported(repo_id) => imports.contains(&repo_id),
+    }
 }
 
 /// One row of a paused run's frozen plan, as a resume finds it.

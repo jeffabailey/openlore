@@ -219,7 +219,6 @@ fn a_new_accounts_default_ticks_fit_the_limit() {
 ///   And the card for priya-tidal/ingest-bench says "from github.com/priya-tidal"
 /// ```
 #[test]
-#[ignore = "DELIVER 02-04: one scan, every account, each card names its account"]
 fn one_scan_covers_both_accounts_and_each_card_names_its_account() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);
@@ -269,7 +268,6 @@ fn one_scan_covers_both_accounts_and_each_card_names_its_account() {
 ///   And priya-tidal's suggestions are hidden while priyaraman's stay shown
 /// ```
 #[test]
-#[ignore = "DELIVER 02-05: a failing account is skipped and its suggestions hidden"]
 fn an_account_that_fails_its_check_is_skipped_named_and_hidden() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);
@@ -411,7 +409,6 @@ fn a_scan_re_checks_an_unverified_account_and_reads_it_once_its_did_is_back() {
 ///     | GitHub says it is too busy to answer    |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-06: an unfinished bio check is not a failed check"]
 fn github_failing_during_a_scan_hides_nothing() {
     #[derive(Debug, Clone, Copy)]
     enum Failure {
@@ -519,7 +516,6 @@ fn two_accounts_together_cannot_exceed_the_limit() {
 ///   And her published claims are unchanged
 /// ```
 #[test]
-#[ignore = "DELIVER 02-08: every account failing reads nothing"]
 fn when_every_account_fails_nothing_is_read() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);

@@ -3,7 +3,8 @@
 
 use maud::{html, Markup};
 use ports::{
-    RepoSkipReason, ScanCounts, ScanRun, ScanStatus, SkippedScanRepo, Suggestion, SuggestionKey,
+    AccountCheckOutcome, RepoSkipReason, ScanCounts, ScanRun, ScanStatus, SkippedScanRepo,
+    Suggestion, SuggestionKey,
 };
 
 use super::*;
@@ -196,6 +197,62 @@ fn scan_notice(latest: Option<ScanRun>, pending: &[Suggestion], tally: &Tally) -
 /// keys it derived were already published or declined (declined stay
 /// hidden). Every count is of that scan's derived keys only.
 pub fn scan_summary(counts: ScanCounts) -> String {
+    summary_after("Ownership re-checked ✓".to_string(), counts)
+}
+
+/// One listed account's bio check in the latest scan, by the login it is
+/// listed under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccountChecked<'a> {
+    pub login: &'a str,
+    pub outcome: AccountCheckOutcome,
+}
+
+/// "Ownership re-checked: priyaraman ✓ · priya-tidal ✗": each account's
+/// check in the latest scan, in account order.
+pub fn accounts_rechecked(checks: &[AccountChecked<'_>]) -> String {
+    let each: Vec<String> = checks
+        .iter()
+        .map(|check| match check.outcome {
+            AccountCheckOutcome::Passed => format!("{} ✓", check.login),
+            AccountCheckOutcome::Failed => format!("{} ✗", check.login),
+            AccountCheckOutcome::NotReached => format!("{} not reached", check.login),
+        })
+        .collect();
+    format!("Ownership re-checked: {}", each.join(" · "))
+}
+
+/// What a completed scan found, its head naming each account's check when
+/// the scan recorded them.
+pub fn scan_summary_by_account(counts: ScanCounts, checks: &[AccountChecked<'_>]) -> String {
+    if checks.is_empty() {
+        scan_summary(counts)
+    } else {
+        summary_after(accounts_rechecked(checks), counts)
+    }
+}
+
+/// Why an account's repos were not read in the latest scan, and what to do
+/// (journey mockup 4); nothing for an account whose check passed. It names
+/// the account, never its bio or the DID.
+pub fn account_check_message(check: &AccountChecked<'_>) -> Option<String> {
+    match check.outcome {
+        AccountCheckOutcome::Passed => None,
+        AccountCheckOutcome::Failed => Some(format!(
+            "Your DID is not in the bio of github.com/{}, so its repos were not read and its \
+             suggestions are hidden. Put your DID back, then verify.",
+            check.login
+        )),
+        AccountCheckOutcome::NotReached => Some(format!(
+            "{}: GitHub could not be reached, so its repos were not read. Nothing was lost. \
+             Scan again later.",
+            check.login
+        )),
+    }
+}
+
+/// `head` then the counts of what a scan found.
+fn summary_after(head: String, counts: ScanCounts) -> String {
     let new = match counts.new {
         1 => "1 new suggestion".to_string(),
         n => format!("{n} new suggestions"),
@@ -204,7 +261,7 @@ pub fn scan_summary(counts: ScanCounts) -> String {
         .then(|| format!("{} already published", counts.already_published));
     let declined = (counts.declined_hidden > 0)
         .then(|| format!("{} declined (hidden)", counts.declined_hidden));
-    ["Ownership re-checked ✓".to_string(), new]
+    [head, new]
         .into_iter()
         .chain(published)
         .chain(declined)
@@ -227,10 +284,42 @@ pub fn skipped_repo_message(skipped: &SkippedScanRepo) -> String {
 }
 
 /// The summary of the latest scan, once it has completed.
-fn completed_summary(latest: Option<ScanRun>) -> Option<String> {
+fn completed_summary(latest: Option<ScanRun>, checks: &[AccountChecked<'_>]) -> Option<String> {
     latest
         .filter(|run| run.status == ScanStatus::Completed)
-        .map(|run| scan_summary(run.counts))
+        .map(|run| scan_summary_by_account(run.counts, checks))
+}
+
+/// Why each account the latest finished scan did not read was not read.
+fn account_check_notices(latest: Option<ScanRun>, checks: &[AccountChecked<'_>]) -> Markup {
+    let finished = latest.is_some_and(|run| run.status != ScanStatus::Running);
+    html! {
+        @if finished {
+            @for message in checks.iter().filter_map(account_check_message) {
+                p role="status" { (message) }
+            }
+        }
+    }
+}
+
+/// What the latest scan adds to the queue beyond its counts: the chosen
+/// repos it skipped, each account's check, and the account each pending
+/// suggestion came from (by the login it is listed under).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScanDetails<'a> {
+    pub skipped: &'a [SkippedScanRepo],
+    pub account_checks: &'a [AccountChecked<'a>],
+    pub card_accounts: &'a [(SuggestionKey, &'a str)],
+}
+
+impl<'a> ScanDetails<'a> {
+    /// The account the pending suggestion `key` came from.
+    fn account_of(&self, key: &SuggestionKey) -> Option<&'a str> {
+        self.card_accounts
+            .iter()
+            .find(|(card, _)| card == key)
+            .map(|(_, login)| *login)
+    }
 }
 
 /// The hidden fields naming a suggestion in its card's forms.
@@ -309,11 +398,14 @@ fn card_action(
 /// Its stable id and `hx-morph-skip-children` let the 2 s refresh during a
 /// scan add and remove cards without touching one's contents, so a preview
 /// opened inside a card stays open.
-fn suggestion_card(suggestion: &Suggestion, csrf_token: &str) -> Markup {
+fn suggestion_card(suggestion: &Suggestion, account: Option<&str>, csrf_token: &str) -> Markup {
     html! {
         article id=(card_id(&suggestion.key)) hx-morph-skip-children {
             (selection_box(&suggestion.key))
             h2 { (suggestion_headline(&suggestion.key)) }
+            @if let Some(login) = account {
+                p { "from github.com/" (login) }
+            }
             p {
                 "Confidence " (confidence_with_bucket(suggestion.confidence_bp))
             }
@@ -410,7 +502,7 @@ fn declined_notice(key: &SuggestionKey, csrf_token: &str) -> Markup {
 
 /// The verified owner's queue: privacy statement, scan state (naming the
 /// chosen repos its latest scan skipped), cards.
-fn verified_queue(login: &str, view: &QueueView<'_>, skipped: &[SkippedScanRepo]) -> Markup {
+fn verified_queue(login: &str, view: &QueueView<'_>, details: &ScanDetails<'_>) -> Markup {
     html! {
         p {
             "GitHub: github.com/" (login) " (verified) · "
@@ -438,12 +530,13 @@ fn verified_queue(login: &str, view: &QueueView<'_>, skipped: &[SkippedScanRepo]
                 }
                 None => {}
             }
-            @if let Some(summary) = completed_summary(view.latest_scan) {
+            @if let Some(summary) = completed_summary(view.latest_scan, details.account_checks) {
                 p role="status" { (summary) }
             }
+            (account_check_notices(view.latest_scan, details.account_checks))
             @if let Some(run) = view.latest_scan.filter(|run| run.status == ScanStatus::Completed) {
                 p role="status" { (repos_read_message(run.repos_read)) }
-                @for skip in skipped {
+                @for skip in details.skipped {
                     p role="status" { (skipped_repo_message(skip)) }
                 }
             }
@@ -464,7 +557,7 @@ fn verified_queue(login: &str, view: &QueueView<'_>, skipped: &[SkippedScanRepo]
                 (approve_selected_form(view.csrf_token))
             }
             @for suggestion in view.pending {
-                (suggestion_card(suggestion, view.csrf_token))
+                (suggestion_card(suggestion, details.account_of(&suggestion.key), view.csrf_token))
             }
         }
         p data-triage-keys="a e n j k" {
@@ -483,6 +576,17 @@ pub fn review_page(view: &QueueView<'_>) -> String {
 /// The review queue, its completed latest scan's summary naming each chosen
 /// repo that scan `skipped`, with why and the fix.
 pub fn review_page_naming_skips(view: &QueueView<'_>, skipped: &[SkippedScanRepo]) -> String {
+    review_page_of_scan(
+        view,
+        &ScanDetails {
+            skipped,
+            ..ScanDetails::default()
+        },
+    )
+}
+
+/// The review queue with what its latest scan adds ([`ScanDetails`]).
+pub fn review_page_of_scan(view: &QueueView<'_>, details: &ScanDetails<'_>) -> String {
     page(
         "Your review queue",
         html! {
@@ -499,10 +603,11 @@ pub fn review_page_naming_skips(view: &QueueView<'_>, skipped: &[SkippedScanRepo
                          hidden until you re-verify: put your DID back in the bio (or, if that \
                          account changed hands, link your own), then verify."
                     }
+                    (account_check_notices(view.latest_scan, details.account_checks))
                     a href="/github" { "Verify GitHub ownership" }
                 }
                 GithubStep::Verified { login } => {
-                    (verified_queue(login, view, skipped))
+                    (verified_queue(login, view, details))
                 }
             }
             form method="post" action="/signout" {

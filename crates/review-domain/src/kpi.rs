@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use ports::claim_domain::UnsignedClaim;
-use ports::{AccountRefusal, KpiCounterRow, OutsideDefault, Suggestion};
+use ports::{AccountCheckOutcome, AccountRefusal, KpiCounterRow, OutsideDefault, Suggestion};
 
 use crate::ownership::OwnershipRefusal;
 use crate::signin::SignInFailure;
@@ -29,6 +29,9 @@ pub enum KpiEvent {
     /// KPI-RRA-1: an action on a suggestion today's top 5 would never have
     /// produced.
     SuggestionActedOutsideDefault,
+    /// KPI-RRA-1 restricted to suggestions from an account other than the
+    /// owner's first (UC-RRA-7).
+    SuggestionActedOutsideDefaultOtherAccount,
     /// The choose-repos page was opened.
     ReposChoiceViewed,
     /// A Save stored a repo choice.
@@ -50,13 +53,17 @@ pub enum KpiEvent {
     AccountAddRefusedAlreadyListed,
     AccountAddRefusedAtLimit,
     AccountAddRefusedUnreachable,
+    /// A scan's bio check of one listed account failed (D-RRA-T1).
+    ScanAccountFailed,
+    /// A scan's bio check of one listed account did not finish (AC-004.8).
+    ScanAccountUnfinished,
     SharePosted,
     RetractPosted,
     Disconnect,
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 27] = [
+    pub const ALL: [KpiEvent; 30] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -68,6 +75,7 @@ impl KpiEvent {
         Self::SuggestionApprovedEdited,
         Self::SuggestionDeclined,
         Self::SuggestionActedOutsideDefault,
+        Self::SuggestionActedOutsideDefaultOtherAccount,
         Self::ReposChoiceViewed,
         Self::ReposChoiceSaved,
         Self::ReposChoiceChangedFromDefault,
@@ -81,6 +89,8 @@ impl KpiEvent {
         Self::AccountAddRefusedAlreadyListed,
         Self::AccountAddRefusedAtLimit,
         Self::AccountAddRefusedUnreachable,
+        Self::ScanAccountFailed,
+        Self::ScanAccountUnfinished,
         Self::SharePosted,
         Self::RetractPosted,
         Self::Disconnect,
@@ -100,6 +110,9 @@ impl KpiEvent {
             Self::SuggestionApprovedEdited => "suggestion.approved.edited",
             Self::SuggestionDeclined => "suggestion.declined",
             Self::SuggestionActedOutsideDefault => "suggestion.acted.outside_default",
+            Self::SuggestionActedOutsideDefaultOtherAccount => {
+                "suggestion.acted.outside_default.other_account"
+            }
             Self::ReposChoiceViewed => "repos.choice.viewed",
             Self::ReposChoiceSaved => "repos.choice.saved",
             Self::ReposChoiceChangedFromDefault => "repos.choice.changed_from_default",
@@ -113,6 +126,8 @@ impl KpiEvent {
             Self::AccountAddRefusedAlreadyListed => "account.add.refused.already_listed",
             Self::AccountAddRefusedAtLimit => "account.add.refused.at_limit",
             Self::AccountAddRefusedUnreachable => "account.add.refused.unreachable",
+            Self::ScanAccountFailed => "scan.account.failed",
+            Self::ScanAccountUnfinished => "scan.account.unfinished",
             Self::SharePosted => "share.posted",
             Self::RetractPosted => "retract.posted",
             Self::Disconnect => "disconnect",
@@ -209,12 +224,27 @@ pub fn approval_events(edited: bool) -> Vec<KpiEvent> {
 
 /// The counters an owner's action on a suggestion adds for where it came
 /// from: one `suggestion.acted.outside_default` when today's top 5 would
-/// never have produced it (KPI-RRA-1).
+/// never have produced it (KPI-RRA-1), plus `.other_account` when it came
+/// from an account other than her first.
 pub fn outside_default_events(outside_default: Option<OutsideDefault>) -> Vec<KpiEvent> {
-    outside_default
-        .map(|OutsideDefault::OwnedChoice| KpiEvent::SuggestionActedOutsideDefault)
-        .into_iter()
-        .collect()
+    match outside_default {
+        None => Vec::new(),
+        Some(OutsideDefault::OwnedChoice) => vec![KpiEvent::SuggestionActedOutsideDefault],
+        Some(OutsideDefault::OtherAccount) => vec![
+            KpiEvent::SuggestionActedOutsideDefault,
+            KpiEvent::SuggestionActedOutsideDefaultOtherAccount,
+        ],
+    }
+}
+
+/// The counter one scan's bio check of an account adds: a failed or an
+/// unfinished check counts; a passed one does not.
+pub fn account_check_event(outcome: AccountCheckOutcome) -> Option<KpiEvent> {
+    match outcome {
+        AccountCheckOutcome::Passed => None,
+        AccountCheckOutcome::Failed => Some(KpiEvent::ScanAccountFailed),
+        AccountCheckOutcome::NotReached => Some(KpiEvent::ScanAccountUnfinished),
+    }
 }
 
 /// The counters a stored Save adds: always `repos.choice.saved`, plus

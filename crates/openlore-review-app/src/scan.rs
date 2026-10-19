@@ -1,8 +1,11 @@
 //! The scan task (component-boundaries: Scan task row; ADR-076 §3). It runs
-//! in the background: a fresh ownership re-check mints the
-//! [`VerifiedOwnership`] no repo read can happen without (I-BRA-4), then
-//! the account's saved choice (or today's top 5) is frozen as the run's plan
-//! (`repo_scope::account_plan`, ADR-088 §6) → per planned repo: harvest →
+//! in the background under ONE admission: every listed account, in order,
+//! has its bio checked again (D-RRA-T1) before its listing is read —
+//! a passing check mints the [`VerifiedOwnership`] its listing needs
+//! (I-BRA-4), a failing one marks the account unverified, an unfinished one
+//! changes nothing — then each passing account's saved choice (or today's
+//! top 5) is frozen as the run's plan (`repo_scope`, ADR-088 §6) → per
+//! planned repo: harvest →
 //! `derive_candidates` →
 //! `reconcile` → persist. Each repo's suggestions are stored as soon as that
 //! repo completes, so a paused scan keeps its partial results, and a resumed
@@ -15,8 +18,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ports::{
-    AccountRepoListing, GithubError, GithubLink, PlannedScanRepo, RepoFacts, ReviewStoreError,
-    SavedRepoChoice, ScanCounts, ScanPlanRow, ScanStatus, SkippedScanRepo, SuggestionSource,
+    AccountCheckOutcome, AccountCheckRecord, AccountRepoListing, GithubError, GithubLink,
+    PlanRowStatus, PlannedScanRepo, RepoFacts, ReviewStoreError, SavedRepoChoice, ScanCounts,
+    ScanPlanRow, ScanStatus, SkippedScanRepo, SuggestionSource,
 };
 use review_domain::budget::{auto_resume_wait, github_budget_allows, ScanAdmission};
 use review_domain::kpi::{utc_day, KpiEvent};
@@ -35,7 +39,7 @@ use crate::http::App;
 use crate::limiter::unix_now_secs;
 use crate::routes::github::{account_of, refusal_of};
 use crate::routes::signin::random_token;
-use crate::wiring::{emit, Counted, LogEvent};
+use crate::wiring::{emit, observe, Counted, LogEvent};
 
 /// How long a paused scan waits when GitHub named no reset time.
 const DEFAULT_PAUSE_SECS: i64 = 15 * 60;
@@ -85,11 +89,11 @@ pub(crate) enum ScanStart {
 /// admits it; it then runs in the background. The one way any scan starts,
 /// whether the owner pressed Scan or a paused scan resumes on its own.
 pub(crate) fn begin_scan(app: &Arc<App>, owner_did: &str) -> ScanStart {
-    let link = app.links.github_link(owner_did).ok().flatten();
-    let Some(link) = link.filter(|link| link.verified) else {
+    let accounts = app.links.github_accounts(owner_did).unwrap_or_default();
+    if !accounts.iter().any(|account| account.verified) {
         return ScanStart::NotVerified;
-    };
-    let basis = match scan_basis(app, owner_did, &link) {
+    }
+    let basis = match scan_basis(app, owner_did, &accounts) {
         Ok(basis) => basis,
         Err(refused) => return refused,
     };
@@ -113,7 +117,7 @@ pub(crate) fn begin_scan(app: &Arc<App>, owner_did: &str) -> ScanStart {
         app.clone(),
         owner_did.to_string(),
         run_id,
-        link,
+        accounts,
         basis,
     ));
     ScanStart::Started
@@ -132,7 +136,7 @@ pub(crate) enum ScanBasis {
 
 /// Resume the latest run's frozen plan when it paused with one; otherwise
 /// freeze the choice in force now. A resume ignores choices saved since.
-fn scan_basis(app: &App, owner_did: &str, link: &GithubLink) -> Result<ScanBasis, ScanStart> {
+fn scan_basis(app: &App, owner_did: &str, accounts: &[GithubLink]) -> Result<ScanBasis, ScanStart> {
     let unavailable = |_| ScanStart::Unavailable;
     let latest = app.scans.latest_scan(owner_did).map_err(unavailable)?;
     let plan = app.scan_plans.latest_plan(owner_did).map_err(unavailable)?;
@@ -143,29 +147,42 @@ fn scan_basis(app: &App, owner_did: &str, link: &GithubLink) -> Result<ScanBasis
             .map_err(unavailable)?;
         return Ok(ScanBasis::Resume { plan, skipped });
     }
-    frozen_intent(app, owner_did, link).map(ScanBasis::Fresh)
+    frozen_intent(app, owner_did, accounts).map(ScanBasis::Fresh)
 }
 
-/// A scan's scope frozen at its start, with the saved choice it came from
-/// (the names its skipped repos are reported by).
+/// A scan's scope frozen at its start, with each account's saved choice in
+/// account order (the names its skipped repos are reported by).
 pub(crate) struct FrozenChoice {
     scope: FrozenScope,
-    saved: Vec<SavedRepoChoice>,
+    saved: Vec<Vec<SavedRepoChoice>>,
 }
 
-/// The scan's intent, frozen from the store before admission (§6.2 step 1):
-/// a refusal here spends none of the day's scans and asks GitHub nothing.
-fn frozen_intent(app: &App, owner_did: &str, link: &GithubLink) -> Result<FrozenChoice, ScanStart> {
-    let saved = app
-        .choices_read
-        .saved_choice(owner_did, link.github_user_id)
-        .map_err(|_| ScanStart::Unavailable)?;
-    let account = ScanAccount {
-        github_user_id: link.github_user_id,
-        saved: SavedTicks::of(&saved),
-        eligible_seen: None,
-    };
-    match scan_intent(&[account], &[], SCAN_REPO_CAP) {
+/// The scan's intent over every listed account, frozen from the store
+/// before admission (§6.2 step 1): a refusal here spends none of the day's
+/// scans and asks GitHub nothing.
+fn frozen_intent(
+    app: &App,
+    owner_did: &str,
+    accounts: &[GithubLink],
+) -> Result<FrozenChoice, ScanStart> {
+    let saved: Vec<Vec<SavedRepoChoice>> = accounts
+        .iter()
+        .map(|account| {
+            app.choices_read
+                .saved_choice(owner_did, account.github_user_id)
+                .map_err(|_| ScanStart::Unavailable)
+        })
+        .collect::<Result<_, _>>()?;
+    let scan_accounts: Vec<ScanAccount> = accounts
+        .iter()
+        .zip(&saved)
+        .map(|(account, saved)| ScanAccount {
+            github_user_id: account.github_user_id,
+            saved: SavedTicks::of(saved),
+            eligible_seen: None,
+        })
+        .collect();
+    match scan_intent(&scan_accounts, &[], SCAN_REPO_CAP) {
         ScanIntent::Read(scope) => Ok(FrozenChoice { scope, saved }),
         ScanIntent::NothingToRead => Err(refused_before_admission(
             app,
@@ -222,38 +239,16 @@ pub(crate) async fn run_scan(
     app: Arc<App>,
     owner_did: String,
     run_id: String,
-    link: GithubLink,
+    accounts: Vec<GithubLink>,
     basis: ScanBasis,
 ) {
-    let verified = reverify(&app, &owner_did, &link).await;
-    if let (ScanBasis::Resume { plan, skipped }, Err(refusal)) = (&basis, &verified) {
-        let check = if refusal.disproves_ownership() {
-            BioCheck::Failed
-        } else {
-            BioCheck::Unfinished
-        };
-        let resumed = ResumedPlan::of(plan, skipped, link.github_user_id, check);
-        let _ = resumed.record(&app, &owner_did, &run_id);
-    }
-    let ended = match verified {
-        Ok(ownership) => match &basis {
-            ScanBasis::Fresh(frozen) => scan_owned_repos(&app, &ownership, &run_id, frozen).await,
-            ScanBasis::Resume { plan, skipped } => {
-                let resumed =
-                    ResumedPlan::of(plan, skipped, ownership.github_user_id(), BioCheck::Passed);
-                resume_frozen_plan(&app, &ownership, &run_id, &resumed).await
-            }
-        },
-        Err(refusal) if refusal.disproves_ownership() => {
-            let _ = app.account_status.mark_account_unverified(
-                &owner_did,
-                link.github_user_id,
-                refusal.label(),
-            );
-            Ended::with_status(ScanStatus::OwnershipFailed)
+    let ended = match &basis {
+        ScanBasis::Fresh(frozen) => {
+            scan_accounts(&app, &owner_did, &run_id, &accounts, frozen).await
         }
-        Err(OwnershipRefusal::RateLimited) => paused(&app),
-        Err(_) => Ended::with_status(ScanStatus::Interrupted),
+        ScanBasis::Resume { plan, skipped } => {
+            resume_scan(&app, &owner_did, &run_id, &accounts, plan, skipped).await
+        }
     };
     app.scan_limiter.release(&owner_did);
     let counted = Counted::of(&LogEvent::ScanFinished(ended.status));
@@ -271,51 +266,223 @@ pub(crate) async fn run_scan(
     }
 }
 
-/// Read the linked profile now and prove ownership again, pinned to the
-/// numeric id that was verified.
-async fn reverify(
-    app: &App,
-    owner_did: &str,
-    link: &GithubLink,
-) -> Result<VerifiedOwnership, OwnershipRefusal> {
-    let profile = app
-        .github
-        .read_account(&link.github_login)
-        .await
-        .map_err(|error| refusal_of(&error))?;
-    prove_ownership(owner_did, &account_of(&profile), Some(link.github_user_id))
+/// Why a bio check (or the listing after it) could not finish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Halt {
+    RateLimited,
+    Unavailable,
 }
 
-/// The repo stages; they can only run with proof in hand. The choice frozen
-/// at the scan's start is planned against the listing, the plan is written
-/// before the first read (BR-RRA-4), and exactly the planned repos are read.
-async fn scan_owned_repos(
+/// One listed account's bio check, as this scan ran it.
+enum Checked {
+    /// Proven now: the proof its listing is read with.
+    Passed(VerifiedOwnership),
+    /// Disproven: marked unverified, none of its repos is read.
+    Failed,
+    /// Not reached: its status is kept, none of its repos is read.
+    Unfinished(Halt),
+}
+
+impl Checked {
+    fn outcome(&self) -> AccountCheckOutcome {
+        match self {
+            Self::Passed(_) => AccountCheckOutcome::Passed,
+            Self::Failed => AccountCheckOutcome::Failed,
+            Self::Unfinished(_) => AccountCheckOutcome::NotReached,
+        }
+    }
+
+    fn bio_check(&self) -> BioCheck {
+        match self {
+            Self::Passed(_) => BioCheck::Passed,
+            Self::Failed => BioCheck::Failed,
+            Self::Unfinished(_) => BioCheck::Unfinished,
+        }
+    }
+}
+
+/// Read the account's profile now and prove ownership again, pinned to the
+/// numeric id that was verified (a login now naming another account is
+/// disproof). A disproof marks the account unverified through the narrow
+/// status port; a check that could not finish changes nothing.
+async fn check_account(app: &App, owner_did: &str, account: &GithubLink) -> Checked {
+    let proof = match app.github.read_account(&account.github_login).await {
+        Ok(profile) => prove_ownership(
+            owner_did,
+            &account_of(&profile),
+            Some(account.github_user_id),
+        ),
+        Err(error) => Err(refusal_of(&error)),
+    };
+    match proof {
+        Ok(ownership) => Checked::Passed(ownership),
+        Err(refusal) if refusal.disproves_ownership() => {
+            let _ = app.account_status.mark_account_unverified(
+                owner_did,
+                account.github_user_id,
+                refusal.label(),
+            );
+            Checked::Failed
+        }
+        Err(OwnershipRefusal::RateLimited) => Checked::Unfinished(Halt::RateLimited),
+        Err(_) => Checked::Unfinished(Halt::Unavailable),
+    }
+}
+
+/// Why a GitHub failure stopped a check or a listing.
+fn halt_of(error: &GithubError) -> Halt {
+    match error {
+        GithubError::RateLimited { .. } => Halt::RateLimited,
+        _ => Halt::Unavailable,
+    }
+}
+
+/// Record how each account's check ended in this run and count the failed
+/// and unfinished ones (ids and outcomes only).
+fn record_checks(app: &App, owner_did: &str, run_id: &str, checked: &[(u64, Checked)]) {
+    let records: Vec<AccountCheckRecord> = checked
+        .iter()
+        .map(|(github_user_id, check)| AccountCheckRecord {
+            github_user_id: *github_user_id,
+            outcome: check.outcome(),
+        })
+        .collect();
+    let _ = app.scans.record_account_checks(owner_did, run_id, &records);
+    for record in &records {
+        observe(app, LogEvent::ScanAccountChecked(record.outcome));
+    }
+}
+
+/// How a scan that reads nothing ends, from its accounts' checks: every
+/// account failed → ownership failed; one stopped by GitHub's budget →
+/// paused; one stopped by an outage → interrupted; else completed.
+fn ended_reading_nothing(app: &App, checked: &[(u64, Checked)]) -> Ended {
+    let halted = |halt: Halt| {
+        checked
+            .iter()
+            .any(|(_, check)| matches!(check, Checked::Unfinished(h) if *h == halt))
+    };
+    let every_account_failed = !checked.is_empty()
+        && checked
+            .iter()
+            .all(|(_, check)| matches!(check, Checked::Failed));
+    if every_account_failed {
+        Ended::with_status(ScanStatus::OwnershipFailed)
+    } else if halted(Halt::RateLimited) {
+        paused(app)
+    } else if halted(Halt::Unavailable) {
+        Ended::with_status(ScanStatus::Interrupted)
+    } else {
+        Ended::with_status(ScanStatus::Completed)
+    }
+}
+
+/// One account's check and, when it passed, its listing now.
+async fn check_and_list(
     app: &App,
-    ownership: &VerifiedOwnership,
+    owner_did: &str,
+    account: &GithubLink,
+    saved: &[SavedRepoChoice],
+) -> (Checked, AccountCheck) {
+    match check_account(app, owner_did, account).await {
+        Checked::Passed(ownership) => match account_listing(app, &ownership, saved).await {
+            Ok(listing) => (Checked::Passed(ownership), AccountCheck::Passed(listing)),
+            Err(error) => (
+                Checked::Unfinished(halt_of(&error)),
+                AccountCheck::Unfinished,
+            ),
+        },
+        Checked::Failed => (Checked::Failed, AccountCheck::Failed),
+        Checked::Unfinished(halt) => (Checked::Unfinished(halt), AccountCheck::Unfinished),
+    }
+}
+
+/// A fresh scan: each account in order is checked, then (when it passed)
+/// listed, before the next; the choice frozen at the scan's start is
+/// planned against the listings, the plan is written before the first read
+/// (BR-RRA-4), and exactly the planned repos are read.
+async fn scan_accounts(
+    app: &App,
+    owner_did: &str,
     run_id: &str,
+    accounts: &[GithubLink],
     frozen: &FrozenChoice,
 ) -> Ended {
-    let listing = match account_listing(app, ownership, &frozen.saved).await {
-        Ok(listing) => listing,
-        Err(error) => return failed(app, &error),
-    };
-    let owner_did = ownership.owner_did();
-    let scan_plan = frozen.scope.plan(&[AccountCheck::Passed(listing)]);
+    let mut checked = Vec::with_capacity(accounts.len());
+    let mut account_checks = Vec::with_capacity(accounts.len());
+    for (account, saved) in accounts.iter().zip(&frozen.saved) {
+        let (check, account_check) = check_and_list(app, owner_did, account, saved).await;
+        checked.push((account.github_user_id, check));
+        account_checks.push(account_check);
+    }
+    record_checks(app, owner_did, run_id, &checked);
+    let scan_plan = frozen.scope.plan(&account_checks);
     let plan = scan_plan.owned_repos();
+    let every_saved = frozen.saved.concat();
     let recorded = app
         .scans
         .record_plan(owner_did, run_id, &plan_rows(&plan))
         .and_then(|()| {
             app.scans
-                .record_skipped(owner_did, run_id, &named_skips(&scan_plan, &frozen.saved))
+                .record_skipped(owner_did, run_id, &named_skips(&scan_plan, &every_saved))
         });
     if recorded.is_err() {
         return Ended::with_status(ScanStatus::Interrupted);
+    }
+    if plan.is_empty() {
+        return ended_reading_nothing(app, &checked);
     }
     let to_read: Vec<(usize, u64, PlannedRepo)> = plan
         .into_iter()
         .enumerate()
         .map(|(position, (account_id, repo))| (position, account_id, repo.clone()))
+        .collect();
+    read_planned(app, owner_did, run_id, &to_read).await
+}
+
+/// The resume of a paused run: the bios of the accounts in its unread rows
+/// are checked again first, then exactly its frozen plan's unread repos of
+/// the passing accounts are read, whatever was saved since (BR-RRA-4).
+async fn resume_scan(
+    app: &App,
+    owner_did: &str,
+    run_id: &str,
+    accounts: &[GithubLink],
+    plan: &[ScanPlanRow],
+    skipped: &[SkippedScanRepo],
+) -> Ended {
+    let carried: BTreeSet<u64> = plan
+        .iter()
+        .filter(|row| row.status == PlanRowStatus::Planned)
+        .map(|row| row.repo.source_account_id)
+        .collect();
+    let mut checked = Vec::new();
+    for account in accounts
+        .iter()
+        .filter(|account| carried.contains(&account.github_user_id))
+    {
+        let check = check_account(app, owner_did, account).await;
+        checked.push((account.github_user_id, check));
+    }
+    record_checks(app, owner_did, run_id, &checked);
+    let bio_checks: BTreeMap<u64, BioCheck> = checked
+        .iter()
+        .map(|(id, check)| (*id, check.bio_check()))
+        .collect();
+    let resumed = ResumedPlan::of(plan, skipped, &bio_checks);
+    if resumed.record(app, owner_did, run_id).is_err() {
+        return Ended::with_status(ScanStatus::Interrupted);
+    }
+    if resumed.to_read.is_empty() {
+        return ended_reading_nothing(app, &checked);
+    }
+    let to_read: Vec<(usize, u64, PlannedRepo)> = resumed
+        .to_read
+        .iter()
+        .map(|position| {
+            let row = &resumed.rows[*position];
+            (*position, row.source_account_id, carried_repo(row))
+        })
         .collect();
     read_planned(app, owner_did, run_id, &to_read).await
 }
@@ -334,8 +501,7 @@ impl ResumedPlan {
     fn of(
         plan: &[ScanPlanRow],
         skipped: &[SkippedScanRepo],
-        account_id: u64,
-        check: BioCheck,
+        checks: &BTreeMap<u64, BioCheck>,
     ) -> Self {
         let frozen: Vec<FrozenRow> = plan
             .iter()
@@ -344,11 +510,7 @@ impl ResumedPlan {
                 status: row.status,
             })
             .collect();
-        let resume = resume_plan(
-            &frozen,
-            &BTreeMap::from([(account_id, check)]),
-            &BTreeSet::new(),
-        );
+        let resume = resume_plan(&frozen, checks, &BTreeSet::new());
         let kept = resume.kept();
         Self {
             rows: kept.iter().map(|old| plan[*old].repo.clone()).collect(),
@@ -367,29 +529,6 @@ impl ResumedPlan {
         app.scans.record_plan(owner_did, run_id, &self.rows)?;
         app.scans.record_skipped(owner_did, run_id, &self.skipped)
     }
-}
-
-/// The resume of a paused run: exactly its frozen plan's unread repos,
-/// whatever was saved since (BR-RRA-4).
-async fn resume_frozen_plan(
-    app: &App,
-    ownership: &VerifiedOwnership,
-    run_id: &str,
-    resumed: &ResumedPlan,
-) -> Ended {
-    let owner_did = ownership.owner_did();
-    if resumed.record(app, owner_did, run_id).is_err() {
-        return Ended::with_status(ScanStatus::Interrupted);
-    }
-    let to_read: Vec<(usize, u64, PlannedRepo)> = resumed
-        .to_read
-        .iter()
-        .map(|position| {
-            let row = &resumed.rows[*position];
-            (*position, row.source_account_id, carried_repo(row))
-        })
-        .collect();
-    read_planned(app, owner_did, run_id, &to_read).await
 }
 
 /// A carried plan row as the repo to read.
@@ -419,6 +558,7 @@ async fn read_planned(
             Err(ended) => return ended.after_finding(found),
         }
         let _ = app.scans.mark_repo_read(owner_did, run_id, *position);
+        emit(LogEvent::ScanRepoRead(AccountCheckOutcome::Passed));
     }
     Ended::with_status(ScanStatus::Completed).after_finding(found)
 }

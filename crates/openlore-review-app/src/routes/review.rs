@@ -3,8 +3,10 @@
 //! suggestion named by anyone else's form is simply not found.
 
 use hyper::StatusCode;
+use std::collections::BTreeMap;
+
 use ports::{
-    GithubLink, GithubLinkPort, KpiTally, ReviewStateRead, Suggestion, SuggestionKey,
+    GithubLink, GithubLinkPort, KpiTally, RepoSource, ReviewStateRead, Suggestion, SuggestionKey,
     SuggestionState, WebSession,
 };
 use review_domain::edits::{edit_claim, philosophy_choices};
@@ -15,8 +17,9 @@ use review_domain::plans::{
     plan_expires_at, publish_edited_plan, publish_plan, rfc3339_utc, ClaimDraft, PlanError,
     PublishPlan,
 };
+use review_domain::repo_scope::{visible, Standing};
 use review_domain::selection::{chosen_suggestions, SELECTION_FIELD};
-use review_domain::views::{self, EditView, QueueNotice, QueueView};
+use review_domain::views::{self, AccountChecked, EditView, QueueNotice, QueueView, ScanDetails};
 
 use crate::http::{App, PageRequest, Reply};
 use crate::limiter::unix_now_secs;
@@ -59,10 +62,39 @@ pub(crate) fn queue_page(
         .scan_plans
         .latest_skipped(&session.owner_did)
         .unwrap_or_default();
+    let accounts = app
+        .links
+        .github_accounts(&session.owner_did)
+        .unwrap_or_default();
+    let checks = app
+        .scan_plans
+        .latest_account_checks(&session.owner_did)
+        .unwrap_or_default();
+    let account_checks: Vec<AccountChecked<'_>> = checks
+        .iter()
+        .filter_map(|check| {
+            login_of(&accounts, check.github_user_id).map(|login| AccountChecked {
+                login,
+                outcome: check.outcome,
+            })
+        })
+        .collect();
+    let sources = sources_of(app.review_read.as_ref(), &session.owner_did, &accounts);
+    let card_accounts: Vec<(SuggestionKey, &str)> = pending
+        .iter()
+        .filter_map(|suggestion| {
+            let source = sources.get(&suggestion.key)?;
+            match source {
+                RepoSource::Account(id) => login_of(&accounts, *id),
+                RepoSource::Imported(_) => None,
+            }
+            .map(|login| (suggestion.key.clone(), login))
+        })
+        .collect();
     let csrf_token = csrf_token_for(cookie_value);
     Reply::page(
         status,
-        views::review_page_naming_skips(
+        views::review_page_of_scan(
             &QueueView {
                 handle: &session.handle,
                 csrf_token: &csrf_token,
@@ -72,9 +104,82 @@ pub(crate) fn queue_page(
                 tally,
                 notice,
             },
-            &skipped,
+            &ScanDetails {
+                skipped: &skipped,
+                account_checks: &account_checks,
+                card_accounts: &card_accounts,
+            },
         ),
     )
+}
+
+/// The login the listed account `github_user_id` is shown under.
+fn login_of(accounts: &[GithubLink], github_user_id: u64) -> Option<&str> {
+    accounts
+        .iter()
+        .find(|account| account.github_user_id == github_user_id)
+        .map(|account| account.github_login.as_str())
+}
+
+/// Where each of the owner's pending suggestions came from. One stored
+/// without a source came from her first account (the one link a scan read
+/// before several accounts).
+fn sources_of(
+    review_read: &dyn ReviewStateRead,
+    owner_did: &str,
+    accounts: &[GithubLink],
+) -> BTreeMap<SuggestionKey, RepoSource> {
+    let mut sources: BTreeMap<SuggestionKey, RepoSource> = review_read
+        .pending_sources(owner_did)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    if let Some(first) = accounts.first() {
+        for suggestion in review_read
+            .pending_suggestions(owner_did)
+            .unwrap_or_default()
+        {
+            sources
+                .entry(suggestion.key)
+                .or_insert(RepoSource::Account(first.github_user_id));
+        }
+    }
+    sources
+}
+
+/// The owner's pending suggestions she sees now (CORE-RRA-7): those whose
+/// source account is listed and verified. The rest are hidden, not deleted.
+fn visible_pending(
+    review_read: &dyn ReviewStateRead,
+    owner_did: &str,
+    accounts: &[GithubLink],
+) -> Vec<Suggestion> {
+    let pending = review_read
+        .pending_suggestions(owner_did)
+        .unwrap_or_default();
+    let sources = sources_of(review_read, owner_did, accounts);
+    let (kept, origins): (Vec<Suggestion>, Vec<RepoSource>) = pending
+        .into_iter()
+        .filter_map(|suggestion| {
+            let source = *sources.get(&suggestion.key)?;
+            Some((suggestion, source))
+        })
+        .unzip();
+    let standings: Vec<(u64, Standing)> = accounts
+        .iter()
+        .map(|account| {
+            let standing = if account.verified {
+                Standing::Verified
+            } else {
+                Standing::Unverified
+            };
+            (account.github_user_id, standing)
+        })
+        .collect();
+    kept.into_iter()
+        .zip(visible(&origins, &standings, &[]))
+        .filter_map(|(suggestion, shown)| shown.then_some(suggestion))
+        .collect()
 }
 
 /// What the owner's queue page lists: the GitHub link, the pending
@@ -92,12 +197,14 @@ pub(crate) fn owner_queue(
     review_read: &dyn ReviewStateRead,
     owner_did: &str,
 ) -> OwnerQueue {
-    let link = links.github_link(owner_did).ok().flatten();
+    let accounts = links.github_accounts(owner_did).unwrap_or_default();
+    let link = accounts.first().cloned();
     let verified = link.as_ref().is_some_and(|link| link.verified);
-    let pending = verified
-        .then(|| review_read.pending_suggestions(owner_did).ok())
-        .flatten()
-        .unwrap_or_default();
+    let pending = if verified {
+        visible_pending(review_read, owner_did, &accounts)
+    } else {
+        Vec::new()
+    };
     let tally = tally(
         verified
             .then(|| review_read.suggestion_states(owner_did).ok())
@@ -139,10 +246,11 @@ pub(crate) fn approve_selected(app: &App, request: &PageRequest) -> Reply {
         SuggestionState::Pending,
         link_verified(app, &session.owner_did),
     );
-    let pending = visible
-        .then(|| app.review_read.pending_suggestions(&session.owner_did).ok())
-        .flatten()
-        .unwrap_or_default();
+    let pending = if visible {
+        owner_pending(app, &session.owner_did)
+    } else {
+        Vec::new()
+    };
     let values = fields(&request.form, SELECTION_FIELD);
     let composed_at = composed_now();
     let kept: Vec<PublishPlan> = chosen_suggestions(pending, &values)
@@ -357,6 +465,13 @@ fn with_own_step(
 }
 
 /// Is the owner's GitHub link currently verified?
+/// The owner's pending suggestions she sees now (hidden ones are not hers
+/// to act on until their account is verified again).
+fn owner_pending(app: &App, owner_did: &str) -> Vec<Suggestion> {
+    let accounts = app.links.github_accounts(owner_did).unwrap_or_default();
+    visible_pending(app.review_read.as_ref(), owner_did, &accounts)
+}
+
 fn link_verified(app: &App, owner_did: &str) -> bool {
     app.links
         .github_link(owner_did)
@@ -384,9 +499,7 @@ fn with_own_suggestion(
     );
     let named = key_of(request, object_field);
     let found = named.filter(|_| visible).and_then(|key| {
-        app.review_read
-            .pending_suggestions(&session.owner_did)
-            .ok()?
+        owner_pending(app, &session.owner_did)
             .into_iter()
             .find(|suggestion| suggestion.key == key)
     });

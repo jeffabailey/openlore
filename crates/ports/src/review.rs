@@ -464,6 +464,15 @@ pub trait ScanRunPort: Send + Sync {
         run_id: &str,
         skipped: &[SkippedScanRepo],
     ) -> Result<(), ReviewStoreError>;
+
+    /// Record how each listed account's bio check ended in run `run_id`
+    /// (ids and outcomes only: no login, no bio, no DID).
+    fn record_account_checks(
+        &self,
+        owner_did: &str,
+        run_id: &str,
+        checks: &[AccountCheckRecord],
+    ) -> Result<(), ReviewStoreError>;
 }
 
 /// READS of the owner's latest frozen scan plan (design I-13: split from
@@ -475,6 +484,57 @@ pub trait ScanPlanRead: Send + Sync {
 
     /// The chosen repos the owner's most recent run skipped, in order.
     fn latest_skipped(&self, owner_did: &str) -> Result<Vec<SkippedScanRepo>, ReviewStoreError>;
+
+    /// How each account's bio check ended in the owner's most recent run,
+    /// in account order (empty when it recorded none).
+    fn latest_account_checks(
+        &self,
+        owner_did: &str,
+    ) -> Result<Vec<AccountCheckRecord>, ReviewStoreError>;
+}
+
+/// Where a repo a scan reads, and so each suggestion it yields, comes from:
+/// one of the owner's listed accounts, or a repo she imported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RepoSource {
+    Account(u64),
+    Imported(u64),
+}
+
+/// How one listed account's bio check ended in a scan (D-RRA-T1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountCheckOutcome {
+    /// The bio holds the DID: its repos were read.
+    Passed,
+    /// The bio read failed or the DID is gone: marked unverified, nothing read.
+    Failed,
+    /// Rate limit or outage: status kept, nothing read (AC-004.8).
+    NotReached,
+}
+
+impl AccountCheckOutcome {
+    pub const ALL: [AccountCheckOutcome; 3] = [Self::Passed, Self::Failed, Self::NotReached];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+            Self::NotReached => "not_reached",
+        }
+    }
+
+    pub fn parse(stored: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|outcome| outcome.as_str() == stored)
+    }
+}
+
+/// One listed account's check in a scan, in account order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccountCheckRecord {
+    pub github_user_id: u64,
+    pub outcome: AccountCheckOutcome,
 }
 
 /// One row of a recorded plan and how far its run got with it.
@@ -643,14 +703,18 @@ pub struct Suggestion {
 pub enum OutsideDefault {
     /// An owned repo the owner chose outside today's default top 5.
     OwnedChoice,
+    /// A repo of an account other than the owner's first: the pre-feature
+    /// scan read only the first (KPI-RRA-1, UC-RRA-7).
+    OtherAccount,
 }
 
 impl OutsideDefault {
-    pub const ALL: [OutsideDefault; 1] = [Self::OwnedChoice];
+    pub const ALL: [OutsideDefault; 2] = [Self::OwnedChoice, Self::OtherAccount];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OwnedChoice => "owned_choice",
+            Self::OtherAccount => "other_account",
         }
     }
 
@@ -678,6 +742,13 @@ pub trait ReviewStateRead: Send + Sync {
         &self,
         owner_did: &str,
     ) -> Result<Vec<(SuggestionKey, SuggestionState)>, ReviewStoreError>;
+
+    /// Where each of the owner's pending suggestions came from (a pending
+    /// suggestion stored without a source is absent).
+    fn pending_sources(
+        &self,
+        owner_did: &str,
+    ) -> Result<Vec<(SuggestionKey, RepoSource)>, ReviewStoreError>;
 
     /// Whether the owner's suggestion `key` came from a repo outside
     /// today's default top 5 (`None`: inside it, or not found).
