@@ -790,7 +790,8 @@ GitHub account to re-check · 1 repo read · 4 new suggestions".
 #### 5: Boundary: over the limit
 
 Priya has 10 repos chosen and names an eleventh: "You can choose up to 10 repos per scan in
-total. You have 10 chosen. Untick or remove 1 repo before adding another."
+total. Adding it would make 11. Untick or remove 1 repo before adding another." (the would-be
+total, as a Save's refusal reports it — review R6, 2026-10-19)
 
 ### UAT Scenarios (BDD)
 
@@ -839,7 +840,7 @@ And his count of scans today is 3
 
 Given Priya has 10 repos chosen and the per-scan limit is 10
 When she adds "rust-lang/cargo"
-Then she sees "You can choose up to 10 repos per scan in total. You have 10 chosen. Untick or remove 1 repo before adding another."
+Then she sees "You can choose up to 10 repos per scan in total. Adding it would make 11. Untick or remove 1 repo before adding another."
 And nothing is added
 
 #### Scenario: GitHub being unreachable adds nothing and loses nothing

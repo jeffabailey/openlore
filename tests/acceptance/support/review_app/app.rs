@@ -144,6 +144,13 @@ impl NotReady {
         self.state.path().join("data")
     }
 
+    /// Launch the app again on the same state, handing the state back if it
+    /// is refused again (e.g. a crash-looping start).
+    pub fn launch_again(self, settings: AppSettings) -> Result<ReviewApp, NotReady> {
+        let (port, admin_port) = free_ports();
+        ReviewApp::try_launch_in(settings, self.state, port, admin_port, 2)
+    }
+
     /// Start the app again on the same state (same store) with `settings`.
     pub fn start_again(self, settings: AppSettings) -> ReviewApp {
         match ReviewApp::launch_retrying(settings, self.state, None, 2) {

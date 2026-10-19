@@ -643,8 +643,12 @@ const V1_DECLINED: Suggestion = DRIFTWOOD.embodies(Philosophy::DependencyPinning
 const V1_PUBLISHED: Suggestion = KELP.embodies(Philosophy::DependencyPinning);
 
 /// MG-1
+///
+/// R5 (user decision 2026-10-19, "Delete after upgrade"): the plaintext v1
+/// copy is deleted once the v2 store opens and passes its checks — "Disconnect
+/// and forget me" cannot reach a backup, so none may linger. Roll forward only.
 /// ```gherkin
-/// @ADR-088 @migration-v2 @with-stale-config @real-io @contract-shape:unbounded-preservation
+/// @ADR-088 @R5 @migration-v2 @with-stale-config @real-io @contract-shape:unbounded-preservation
 /// Scenario: Priya's suggestions are all still there after the update, each naming her account
 ///   Given Priya's suggestions, one decline and one published claim were kept by the release before this feature
 ///   And the new release has started on that data
@@ -653,10 +657,10 @@ const V1_PUBLISHED: Suggestion = KELP.embodies(Philosophy::DependencyPinning);
 ///   Then she sees exactly the pending suggestions she saw before, each "from github.com/priyaraman"
 ///   And neither her declined nor her published suggestion is pending
 ///   And "Choose repos" shows today's top 5 ticked
-///   And one dated copy of her data as it was before the update is kept
-///   And that copy still holds her old suggestions: started on its own, it shows the same queue
+///   And no copy of her data from before the update lingers beside it
 /// ```
 #[test]
+#[ignore = "REVIEW-FIX: R5"]
 fn priyas_suggestions_are_all_still_there_after_the_update() {
     let world = rra_world_on_v1_store();
     let mut browser = given_signed_in(&world, Persona::Priya);
@@ -684,49 +688,37 @@ fn priyas_suggestions_are_all_still_there_after_the_update() {
         fulls(&PRIYA_TOP_5)
     );
     let backups = store_backups(&world);
-    assert_eq!(backups.len(), 1, "one v1 copy: {backups:?}");
-    assert!(is_v1_backup_name(&backups[0]), "{}", backups[0]);
-    let from_backup = rra_world_on_store_file(&world.app.data_dir().join(&backups[0]));
-    let mut again = given_signed_in(&from_backup, Persona::Priya);
-    assert_eq!(
-        pending_on_queue(&mut again),
-        v1_golden_pending(),
-        "the copy is the v1 data"
+    assert!(
+        backups.is_empty(),
+        "the v1 copy is deleted after a successful upgrade (R5): {backups:?}"
     );
 }
 
 /// MG-2 (chained on MG-1)
 /// ```gherkin
-/// @ADR-088 @migration-v2 @idempotent @C4a @contract-shape:unbounded-preservation
+/// @ADR-088 @R5 @migration-v2 @idempotent @C4a @contract-shape:unbounded-preservation
 /// Scenario: Restarting after the update changes nothing Priya sees
-///   Given the new release updated Priya's data once, keeping one copy of the old data
+///   Given the new release updated Priya's data once
 ///   When the app restarts
 ///   Then her queue, accounts, repos you don't own and published claims are exactly as before the restart
-///   And the one copy of the old data is unchanged and no second copy is made
+///   And still no copy of her data from before the update lingers
 /// ```
 #[test]
+#[ignore = "REVIEW-FIX: R5"]
 fn restarting_after_the_update_changes_nothing_priya_sees() {
     let world = rra_world_on_v1_store();
     let mut browser = given_signed_in(&world, Persona::Priya);
     let before = capture_rra(&world, &mut browser, Persona::Priya);
-    let backups = store_backups(&world);
-    assert_eq!(
-        backups.len(),
-        1,
-        "precondition: the first start updated the data once"
-    );
-    let copy_before = backup_bytes(&world, &backups[0]);
 
     let world = world.restart_app();
 
     let mut browser = given_signed_in(&world, Persona::Priya);
     let after = capture_rra(&world, &mut browser, Persona::Priya);
     assert_state_delta(&before, &after, &rra_universe(), &Delta::new());
-    assert_eq!(store_backups(&world), backups, "no second copy");
-    assert_eq!(
-        backup_bytes(&world, &backups[0]),
-        copy_before,
-        "never overwritten"
+    assert!(
+        store_backups(&world).is_empty(),
+        "no v1 copy after a restart (R5): {:?}",
+        store_backups(&world)
     );
 }
 
@@ -735,29 +727,45 @@ fn restarting_after_the_update_changes_nothing_priya_sees() {
 /// Fault seam (DELIVER): `REVIEW_APP_TEST_FAULT=migrate_before_commit` makes
 /// the v1 → v2 transaction stop just before COMMIT and the process exit. The
 /// seam is honoured by development builds only; a release build must refuse
-/// to start with it set (add it to the xtask release-build env guard, like
-/// `REVIEW_APP_CLOCK_SKEW_SECS`).
+/// to start with it set. R5: while the store is still v1 the one copy is the
+/// rollback point; it goes once an upgrade succeeds; a crash-looping start
+/// never piles up copies.
 /// ```gherkin
-/// @ADR-088 @migration-v2 @with-stale-config @C7b @interruption @contract-shape:unbounded-preservation
+/// @ADR-088 @R5 @migration-v2 @with-stale-config @C7b @interruption @contract-shape:unbounded-preservation
 /// Scenario: An update cut off before it finished runs again cleanly
 ///   Given Priya's data was kept by the release before this feature
-///   And the new release's first start was cut off before the update finished
+///   And the new release's first two starts were cut off before the update finished
+///   And beside her data there is exactly one copy of it, which still holds her old suggestions
 ///   When the app starts again
 ///   Then she sees exactly the pending suggestions she saw before, each "from github.com/priyaraman"
-///   And the copy of her old data made by the first start is unchanged, beside any new copy
+///   And no copy of her data from before the update lingers
 /// ```
 #[test]
+#[ignore = "REVIEW-FIX: R5"]
 fn an_update_cut_off_before_it_finished_runs_again_cleanly() {
-    let (world, cut_off) = rra_world_on_v1_store_cut_off_mid_update();
-    let first_copies = cut_off.backups.clone();
-    let first_copy_bytes = cut_off.first_copy_bytes.clone();
+    let (doubles, cut_off) = rra_world_on_v1_store_cut_off_mid_update();
     assert_eq!(
-        first_copies.len(),
+        cut_off.backups.len(),
         1,
         "precondition: the cut-off start copied the old data first"
     );
+    let cut_off = cut_off.cut_off_again(&doubles);
+    let copies = cut_off.backups_now();
+    assert_eq!(
+        copies.len(),
+        1,
+        "a crash-looping start keeps at most one copy: {copies:?}"
+    );
+    let copy = cut_off.copy_of_backup(&copies[0]);
+    let from_copy = rra_world_on_store_file(copy.path());
+    let mut on_copy = given_signed_in(&from_copy, Persona::Priya);
+    assert_eq!(
+        pending_on_queue(&mut on_copy),
+        v1_golden_pending(),
+        "the one copy is her v1 data, the rollback point"
+    );
 
-    let world = cut_off.start_again(world);
+    let world = cut_off.start_again(doubles);
 
     let mut browser = given_signed_in(&world, Persona::Priya);
     assert_eq!(pending_on_queue(&mut browser), v1_golden_pending());
@@ -768,11 +776,9 @@ fn an_update_cut_off_before_it_finished_runs_again_cleanly() {
             card.text
         );
     }
-    let copies = store_backups(&world);
-    assert!(copies.contains(&first_copies[0]), "{copies:?}");
-    assert_eq!(
-        backup_bytes(&world, &first_copies[0]),
-        first_copy_bytes,
-        "the first copy is never overwritten"
+    assert!(
+        store_backups(&world).is_empty(),
+        "the copy is deleted once the upgrade succeeds (R5): {:?}",
+        store_backups(&world)
     );
 }

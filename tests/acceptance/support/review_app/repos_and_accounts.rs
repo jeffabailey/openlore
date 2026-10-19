@@ -89,10 +89,13 @@ pub fn save_over_limit_message(total: usize) -> String {
 }
 
 /// "You can choose up to 10 repos per scan in total. You have 10 chosen. Untick or remove 1 repo before adding another."
-pub fn import_over_limit_message(total: usize) -> String {
+///
+/// R6: like a Save's refusal, an import's names the WOULD-BE total (with the
+/// repo added), e.g. "Adding it would make 11. Untick or remove 1 repo …".
+pub fn import_over_limit_message(would_be: usize) -> String {
     format!(
-        "You can choose up to {SCAN_REPO_CAP} repos per scan in total. You have {total} chosen. Untick or remove {} repo before adding another.",
-        total + 1 - SCAN_REPO_CAP
+        "You can choose up to {SCAN_REPO_CAP} repos per scan in total. Adding it would make {would_be}. Untick or remove {} repo before adding another.",
+        would_be - SCAN_REPO_CAP
     )
 }
 
@@ -471,6 +474,21 @@ pub fn is_v1_backup_name(name: &str) -> bool {
         .is_some_and(|secs| !secs.is_empty() && secs.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// The `review-app.v1.<secs>.bak` files in a data directory, sorted.
+fn backups_in(data: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(data)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| is_v1_backup_name(n))
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
 /// The bytes of one backup beside the store.
 pub fn backup_bytes(world: &ReviewWorld, name: &str) -> Vec<u8> {
     let path = world.app.data_dir().join(name);
@@ -512,6 +530,37 @@ pub struct CutOff {
 }
 
 impl CutOff {
+    /// The copies of the old data now beside the store (`review-app.v1.*.bak`).
+    pub fn backups_now(&self) -> Vec<String> {
+        backups_in(&self.not_ready.data_dir())
+    }
+
+    /// Copy one backup out (a later successful start deletes it, R5).
+    pub fn copy_of_backup(&self, name: &str) -> tempfile::NamedTempFile {
+        let copy = tempfile::NamedTempFile::new().expect("backup copy");
+        std::fs::copy(self.not_ready.data_dir().join(name), copy.path()).expect("copy backup");
+        copy
+    }
+
+    /// GIVEN the start is cut off again the same way (a crash-looping start).
+    pub fn cut_off_again(self, doubles: &Doubles) -> Self {
+        let mut settings = settings_for(&doubles.github, &doubles.atproto);
+        settings
+            .extra_env
+            .push((MIGRATION_FAULT.0.to_string(), MIGRATION_FAULT.1.to_string()));
+        match self.not_ready.launch_again(settings) {
+            Err(not_ready) => {
+                let backups = backups_in(&not_ready.data_dir());
+                CutOff {
+                    not_ready,
+                    backups,
+                    first_copy_bytes: self.first_copy_bytes,
+                }
+            }
+            Ok(_) => panic!("precondition: the second start was cut off too"),
+        }
+    }
+
     /// WHEN the app starts again, normally, on the same data.
     pub fn start_again(self, doubles: Doubles) -> ReviewWorld {
         let app = self
@@ -544,16 +593,7 @@ pub fn rra_world_on_v1_store_cut_off_mid_update() -> (Doubles, CutOff) {
         ),
         };
     let data = not_ready.data_dir();
-    let mut backups: Vec<String> = std::fs::read_dir(&data)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|n| is_v1_backup_name(n))
-                .collect()
-        })
-        .unwrap_or_default();
-    backups.sort();
+    let backups = backups_in(&data);
     let first_copy_bytes = backups
         .first()
         .map(|b| std::fs::read(data.join(b)).expect("read the first copy"))

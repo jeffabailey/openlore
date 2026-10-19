@@ -80,7 +80,7 @@ All 50 active AC are covered (the 4 AC of deferred US-RRA-007 are not tested bey
 | 10-repo cap incl. default and unverified accounts' ticks; 3-account cap | RC-3, AA-3, AS-4, IM-2, IR-3, IV-3; AA-2 (fourth account); CORE-RRA-1/2/3/8 (OQ-D3: `S` counts unverified accounts' saved ticks) |
 | Scan admission with several accounts; resumed scan reads only the frozen plan's rest | AS-1 (one of 6), IM-3, RS-5; RS-2, AS-6, AR-4, IR-4; CORE-RRA-5 |
 | Removal deletes pending, keeps declined/published keys, never re-offered | AR-1..4 (AR-4a: re-adding during the paused scan brings nothing back — deleted, not hidden), IR-1..2, IV-2 (purge) |
-| Store v1 → v2 tags existing suggestions to their account; idempotent; interrupted update re-runs; backup kept and never overwritten | MG-1, MG-2, MG-3 |
+| Store v1 → v2 tags existing suggestions to their account; idempotent; interrupted update re-runs; at most one v1 backup while still on v1 (the rollback point, holding her v1 data), deleted once the upgrade succeeds (user decision 2026-10-19, review R5) | MG-1, MG-2, MG-3 |
 | Rename-safe ids (repo rename keeps the tick) | RS-7 |
 | Purge covers the new tables (C-RRA-4) | IV-2 |
 | Per-DID scope lock (D-RRA-D8) | IV-3 (two sessions at once) |
@@ -97,7 +97,7 @@ All 50 active AC are covered (the 4 AC of deferred US-RRA-007 are not tested bey
 | confirm, confirm-selected, retry | IC-3, IC-5, AP-3, AP-4 |
 | profile, share preview | IC-4 |
 | Disconnect and forget me | IV-2 |
-| startup on an existing store (migration) | MG-1, MG-2 |
+| startup on an existing store (migration) | MG-1, MG-2, MG-3 |
 
 ## 6. Adapter coverage (Mandate 6)
 

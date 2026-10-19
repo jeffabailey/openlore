@@ -34,8 +34,12 @@ change must migrate real v1 data. DuckDB cannot change a primary key in place.
 
 1. **Schema v2, one forward migration at startup.** `schema_verdict(Some(1))` becomes `Migrate`;
    the app runs `CHECKPOINT`, closes, copies the file to `review-app.v1.<unix-seconds>.bak`
-   (never overwriting), reopens, and runs the whole v1 → v2 step in one transaction, ending with
+   (at most one such copy exists: a re-run after a crash replaces it rather than adding one),
+   reopens, and runs the whole v1 → v2 step in one transaction, ending with
    `INSERT INTO schema_version VALUES (2)`. A crash before commit leaves v1 and the step re-runs.
+   **The backup is deleted once the v2 store opens and passes its startup checks** (user decision
+   2026-10-19, review R5, "Delete after upgrade"): it is a plaintext copy of every owner's private
+   state that "Disconnect and forget me" cannot reach, so none may linger.
    Any other old or newer version is still refused. Expand-only: `github_links` is kept, read by
    the migration and never written again except by purge; a later migration drops it.
    Suggestions of a DID with no `github_links` row keep `source_account_id` NULL and stay hidden,
@@ -107,9 +111,9 @@ change must migrate real v1 data. DuckDB cannot change a primary key in place.
   removal follow the source; a scan reads exactly its frozen plan; removal is race-free; purge
   stays one transaction.
 - **Negative**: first schema migration of the live store; a v1 binary refuses a v2 file
-  (`TooNew`), so rollback means restoring the v1 backup, which **loses every private change
-  made since the deploy** (accounts, choices, imports, new suggestions, declines and publish
-  states; PDS records are unaffected). Roll forward is preferred (DEVOPS runbook). A scan paused at
+  (`TooNew`) and, once the upgrade succeeded, no v1 backup remains (R5): **roll forward only**.
+  Until the upgrade succeeds (a start cut off before commit), the one backup and the untouched v1
+  file are the rollback point; PDS records are never affected (DEVOPS runbook). A scan paused at
   deploy time has no plan rows and re-plans once on resume. `eligible_count_seen` can be stale;
   it only shapes the limit arithmetic for accounts without a saved choice (see
   architecture-design §6.3), and default ticks never push a scan over the limit.
