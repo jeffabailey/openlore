@@ -63,6 +63,9 @@ pub enum KpiEvent {
     AccountRemoved,
     /// KPI-RRA-3: an owner named a public repo she doesn't own (US-RRA-005).
     ImportAdded,
+    /// An import moved to the owned list of the account that owns it now
+    /// (BR-RRA-5).
+    ImportMovedToOwned,
     /// "Add repo" was refused: the name is not `owner/name`.
     ImportRefusedShape,
     /// "Add repo" was refused: no public repo is there.
@@ -87,7 +90,7 @@ pub enum KpiEvent {
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 40] = [
+    pub const ALL: [KpiEvent; 41] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -117,6 +120,7 @@ impl KpiEvent {
         Self::ScanAccountUnfinished,
         Self::AccountRemoved,
         Self::ImportAdded,
+        Self::ImportMovedToOwned,
         Self::ImportRefusedShape,
         Self::ImportRefusedNotFound,
         Self::ImportRefusedOwned,
@@ -164,6 +168,7 @@ impl KpiEvent {
             Self::ScanAccountUnfinished => "scan.account.unfinished",
             Self::AccountRemoved => "account.removed",
             Self::ImportAdded => "import.added",
+            Self::ImportMovedToOwned => "import.moved_to_owned",
             Self::ImportRefusedShape => "import.refused.shape",
             Self::ImportRefusedNotFound => "import.refused.not_found",
             Self::ImportRefusedOwned => "import.refused.owned",

@@ -17,6 +17,10 @@ const DELETE_ACCOUNT: &str = "DELETE FROM github_accounts
 const DELETE_ACCOUNT_CHOICE: &str = "DELETE FROM repo_choices
     WHERE owner_did = ? AND github_user_id = ?";
 
+/// An import leaves "Repos you don't own" (a BR-RRA-5 move, `imports.rs`).
+pub(crate) const DELETE_IMPORT: &str = "DELETE FROM imported_repos
+    WHERE owner_did = ? AND repo_id = ?";
+
 const DELETE_ACCOUNT_PENDING: &str = "DELETE FROM suggestions
     WHERE owner_did = ? AND state = 'pending' AND source_kind = 'account'
       AND source_account_id = ?";

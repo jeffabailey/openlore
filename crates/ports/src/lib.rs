@@ -45,9 +45,9 @@ pub use review::{
     PublishPlanPort, RepoChoiceRead, RepoChoiceWrite, RepoSkipReason, RepoSource, RepoWriteError,
     ReviewStateRead, ReviewStateWrite, ReviewStoreError, ReviewStorePort, RevokeOutcome,
     SavedRepoChoice, ScanCounts, ScanPlanRead, ScanPlanRow, ScanRun, ScanRunPort, ScanStatus,
-    ScopeRemovalPort, SecretStorePort, SessionPort, SkippedScanRepo, StoredPublishPlan, Suggestion,
-    SuggestionKey, SuggestionSource, SuggestionState, TakenPublishPlan, UserRepoReadPort,
-    UserRepoWritePort, WebSession,
+    ScopeMovePort, ScopeRemovalPort, SecretStorePort, SessionPort, SkippedScanRepo,
+    StoredPublishPlan, Suggestion, SuggestionKey, SuggestionSource, SuggestionState,
+    TakenPublishPlan, UserRepoReadPort, UserRepoWritePort, WebSession,
 };
 
 // -----------------------------------------------------------------------------

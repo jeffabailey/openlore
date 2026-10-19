@@ -585,8 +585,46 @@ fn sut_classify_import(
     }
 }
 
-fn sut_move(_scope: &ScopeView, _repo: u64, _account: usize) -> ScopeView {
-    todo!("RED: bind to review_domain::repo_scope::moves (DELIVER 03-*)")
+fn sut_move(scope: &ScopeView, repo: u64, account: usize) -> ScopeView {
+    use review_domain::repo_scope::{moves, SavedTicks, Scope, ScopeAccount, Standing};
+    let accounts: Vec<ScopeAccount> = scope
+        .accounts
+        .iter()
+        .map(|a| ScopeAccount {
+            github_user_id: a.id,
+            standing: if a.verified {
+                Standing::Verified
+            } else {
+                Standing::Unverified
+            },
+            saved: a
+                .saved
+                .clone()
+                .map_or(SavedTicks::NeverSaved, SavedTicks::Saved),
+            ranked_eligible: a.eligible.clone(),
+        })
+        .collect();
+    let before = Scope {
+        accounts,
+        imports: scope.imports.clone(),
+    };
+    let moved = moves(&before, repo, scope.accounts[account].id, CAP);
+    ScopeView {
+        accounts: moved
+            .accounts
+            .into_iter()
+            .map(|a| AccountView {
+                id: a.github_user_id,
+                verified: a.standing == Standing::Verified,
+                saved: match a.saved {
+                    SavedTicks::NeverSaved => None,
+                    SavedTicks::Saved(ticked) => Some(ticked),
+                },
+                eligible: a.ranked_eligible,
+            })
+            .collect(),
+        imports: moved.imports,
+    }
 }
 
 // =============================================================================
@@ -1109,7 +1147,6 @@ proptest! {
 
     /// CORE-RRA-10 (@property @BR-RRA-5 @AC-006.5 @contract-shape:pure-function)
     #[test]
-    #[ignore = "CORE-RRA-10 (bind with DELIVER step 03-09): repo_scope BR-RRA-5 move (RED binding)"]
     fn core_rra10_a_move_keeps_the_total_and_ticks_the_repo(
         (scope, account) in arb_scope()
             .prop_filter("an import and a verified account", |s| !s.imports.is_empty() && s.accounts.iter().any(|a| a.verified))

@@ -31,14 +31,15 @@ use review_domain::repo_scope::{
     carried_repo, eligible_count, listing_with_reads, named_skips, resume_plan,
     resumes_frozen_plan, scan_intent, standing_after_check, unlisted_ticks, AccountCheck, BioCheck,
     CarriedSkip, FrozenRow, FrozenScope, LimitRefusal, ListedSources, Listing, PlanSource,
-    PlannedRepo, SavedTicks, ScanAccount, ScanIntent, Standing, StandingChange, SCAN_REPO_CAP,
+    PlannedRepo, SavedTicks, ScanAccount, ScanIntent, ScopeMove, Standing, StandingChange,
+    SCAN_REPO_CAP,
 };
 use review_domain::views::ScanRefused;
 use scraper_domain::derive_candidates;
 
 use crate::http::App;
 use crate::limiter::unix_now_secs;
-use crate::routes::github::{account_of, refusal_of};
+use crate::routes::github::{account_of, refusal_of, store_move};
 use crate::routes::signin::random_token;
 use crate::wiring::{emit, observe, Counted, LogEvent};
 
@@ -450,7 +451,11 @@ async fn scan_accounts(
         account_checks.push(account_check);
     }
     record_checks(app, owner_did, run_id, &checked);
-    let scan_plan = frozen.scope.plan(&account_checks);
+    let (scope, moved) = frozen.scope.after_moves(&account_checks);
+    if store_moves(app, owner_did, accounts, &account_checks, &moved).is_err() {
+        return Ended::with_status(ScanStatus::Interrupted);
+    }
+    let scan_plan = scope.plan(&account_checks);
     let plan = scan_plan.rows(&frozen.imports);
     let every_saved = frozen.saved.concat();
     let recorded = app
@@ -472,6 +477,40 @@ async fn scan_accounts(
         .map(|(position, row)| (position, row.source, carried_repo(row)))
         .collect();
     read_planned(app, owner_did, run_id, &to_read).await
+}
+
+/// Store the BR-RRA-5 moves the scan's listings showed, each named as its
+/// account's listing shows it now, before the plan is written.
+fn store_moves(
+    app: &App,
+    owner_did: &str,
+    accounts: &[GithubLink],
+    checks: &[AccountCheck],
+    moved: &[ScopeMove],
+) -> Result<(), ReviewStoreError> {
+    moved.iter().try_for_each(|scope_move| {
+        let listing = accounts
+            .iter()
+            .zip(checks)
+            .find_map(|(account, check)| match check {
+                AccountCheck::Passed(listing)
+                    if account.github_user_id == scope_move.github_user_id =>
+                {
+                    Some(listing.repos.as_slice())
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+        store_move(
+            app,
+            owner_did,
+            listing,
+            scope_move.repo_id,
+            scope_move.github_user_id,
+            &scope_move.ticked,
+        )
+        .map(drop)
+    })
 }
 
 /// The resume of a paused run: the bios of the accounts in its unread rows

@@ -14,18 +14,23 @@ use ports::claim_domain::identity_link::LinkRecord;
 use ports::claim_domain::RecordOrigin;
 use ports::{
     AccountAdmission, AccountAdmitted, AccountRefusal, AccountRemoval, GithubAccountProfile,
-    GithubError, GithubLink, RepoSource, WebSession,
+    GithubError, GithubLink, ImportedRepo, KpiTally, ListedRepo, RepoSource, ReviewStoreError,
+    WebSession,
 };
 use review_domain::budget::{budget_allows, HOUR_SECS, VERIFY_ATTEMPTS_PER_HOUR};
-use review_domain::kpi::AccountAddRefused;
+use review_domain::kpi::{utc_day, AccountAddRefused, KpiEvent};
 use review_domain::ownership::{
     is_github_login, prove_ownership, GithubAccount, OwnershipRefusal, VerifiedOwnership,
 };
 use review_domain::published::active_owner_link_records;
-use review_domain::repo_scope::{admit_account, OtherOwner, Standing, MAX_GITHUB_ACCOUNTS};
+use review_domain::repo_scope::{
+    admit_account, choice_to_save, current_ticks, moves, owned_imports, OtherOwner, Scope,
+    Standing, MAX_GITHUB_ACCOUNTS, SCAN_REPO_CAP,
+};
 use review_domain::views::{self, GithubStep, OwnershipOutcome};
 
 use crate::http::{App, PageRequest, Reply};
+use crate::routes::repos::owner_scope;
 use crate::routes::review::not_found;
 use crate::routes::signin::{csrf_token_for, current_session, field, signed_in_post, to_landing};
 use crate::wiring::{emit, observe, Counted, LogEvent};
@@ -133,6 +138,13 @@ impl Attempt {
     }
 }
 
+/// An account a Verify press added or verified again.
+#[derive(Debug, Clone, Copy)]
+struct Verified {
+    admitted: AccountAdmitted,
+    github_user_id: u64,
+}
+
 /// Why a Verify press did not verify an account.
 enum NotVerified {
     Check(OwnershipRefusal),
@@ -159,8 +171,9 @@ pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
     }
     let (login, outcome) = check_bio(app, &session, typed, &listed).await;
     let shown = match &outcome {
-        Ok(admitted) => {
-            emit(attempt.admitted_event(*admitted));
+        Ok(verified) => {
+            emit(attempt.admitted_event(verified.admitted));
+            move_owned_imports(app, &session.owner_did, &login, verified.github_user_id).await;
             OwnershipOutcome::Verified
         }
         Err(not_verified) => {
@@ -196,7 +209,7 @@ async fn check_bio(
     session: &WebSession,
     typed: &str,
     listed: &[GithubLink],
-) -> (String, Result<AccountAdmitted, NotVerified>) {
+) -> (String, Result<Verified, NotVerified>) {
     let refused = |refusal| (typed.to_string(), Err(NotVerified::Check(refusal)));
     if !app.verify_attempts.try_spend(&session.owner_did) {
         return refused(OwnershipRefusal::TooManyAttempts);
@@ -222,8 +235,14 @@ async fn check_bio(
             proven().and(Err(NotVerified::Listing(AccountRefusal::AlreadyListed)))
         }
         AccountAdmission::Refused(refusal) => Err(NotVerified::Listing(refusal)),
-        AccountAdmission::Admitted(admitted) => proven()
-            .and_then(|ownership| add_account(app, &ownership, attempt.admitted_event(admitted))),
+        AccountAdmission::Admitted(admitted) => proven().and_then(|ownership| {
+            add_account(app, &ownership, attempt.admitted_event(admitted)).map(|admitted| {
+                Verified {
+                    admitted,
+                    github_user_id: ownership.github_user_id(),
+                }
+            })
+        }),
     };
     (profile.into_profile().login, outcome)
 }
@@ -276,6 +295,73 @@ fn add_account(
         Ok(AccountAdmission::Refused(refusal)) => Err(NotVerified::Listing(refusal)),
         Err(_) => Err(NotVerified::Check(OwnershipRefusal::GithubUnavailable)),
     }
+}
+
+/// BR-RRA-5 after a verify: each import the account `github_user_id` now
+/// owns moves to its choice. One listing; the scope is read again only
+/// when a repo moves.
+async fn move_owned_imports(app: &App, owner_did: &str, login: &str, github_user_id: u64) {
+    let imports: Vec<u64> = app
+        .imports_read
+        .imports(owner_did)
+        .unwrap_or_default()
+        .iter()
+        .map(|import| import.repo_id)
+        .collect();
+    if imports.is_empty() {
+        return;
+    }
+    let Ok(listing) = app.github.list_account_repos(login).await else {
+        return;
+    };
+    let owned = owned_imports(&listing.repos, &imports);
+    if owned.is_empty() {
+        return;
+    }
+    let mut scope = Scope {
+        accounts: owner_scope(app, owner_did).await,
+        imports,
+    };
+    for repo_id in owned {
+        scope = moves(&scope, repo_id, github_user_id, SCAN_REPO_CAP);
+        let ticked = current_ticks(&scope, github_user_id, SCAN_REPO_CAP);
+        let _ = store_move(
+            app,
+            owner_did,
+            &listing.repos,
+            repo_id,
+            github_user_id,
+            &ticked,
+        );
+    }
+}
+
+/// Store one BR-RRA-5 move in one transaction, counted with it: the repo,
+/// named as the account's `listing` shows it now, joins that account's
+/// choice, which (when it had none) becomes `ticked`.
+pub(crate) fn store_move(
+    app: &App,
+    owner_did: &str,
+    listing: &[ListedRepo],
+    repo_id: u64,
+    github_user_id: u64,
+    ticked: &[u64],
+) -> Result<bool, ReviewStoreError> {
+    let Some(listed) = listing.iter().find(|listed| listed.repo_id == repo_id) else {
+        return Ok(false);
+    };
+    let moved = ImportedRepo {
+        repo_id,
+        full_name: listed.repo.full_name.clone(),
+    };
+    let choice = choice_to_save(listing, &ticked.iter().copied().collect());
+    let today = utc_day(crate::limiter::unix_now_secs());
+    let tally = KpiTally {
+        day: &today,
+        events: &[KpiEvent::ImportMovedToOwned.name()],
+    };
+    app.scope_moves
+        .move_import_to_account(owner_did, &moved, github_user_id, &choice, tally)
 }
 
 /// A failed check of an account on the owner's list marks it unverified.

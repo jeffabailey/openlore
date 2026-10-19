@@ -15,7 +15,7 @@ const READ_CHOICE: &str = "SELECT repo_id, full_name_seen, ticked FROM repo_choi
 const UNTICK_ACCOUNT: &str = "UPDATE repo_choices SET ticked = false
     WHERE owner_did = ? AND github_user_id = ?";
 
-const SAVE_ROW: &str = "INSERT INTO repo_choices
+pub(crate) const SAVE_ROW: &str = "INSERT INTO repo_choices
     (owner_did, github_user_id, repo_id, full_name_seen, ticked, saved_at)
     VALUES (?, ?, ?, ?, ?, now())
     ON CONFLICT (owner_did, github_user_id, repo_id) DO UPDATE

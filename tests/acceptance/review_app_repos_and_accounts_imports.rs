@@ -378,7 +378,6 @@ fn a_forged_publish_request_for_a_repo_he_doesnt_own_writes_nothing() {
 ///   And the suggestion stays pending or hidden as it was, never published
 /// ```
 #[test]
-#[ignore = "DELIVER 03-06: BR-RRA-1 over every publish route (the permit)"]
 fn no_request_publishes_a_suggestion_about_a_repo_the_owner_doesnt_own() {
     // The owned carrier sorts before priyaraman/kelp, so a permit wrongly
     // shared per account in a batch would be minted for it first.
@@ -512,7 +511,6 @@ fn github_failing_at_confirm_publishes_nothing() {
 ///   And the move is counted
 /// ```
 #[test]
-#[ignore = "DELIVER 03-09: BR-RRA-5 move at verify"]
 fn an_imported_repo_moves_to_the_owned_list_when_its_owner_account_is_verified() {
     let world = rra_world();
     let mut browser = given_tidal_sdk_notes_imported_with_a_suggestion(&world);
@@ -606,7 +604,6 @@ fn given_tidal_sdk_notes_imported_with_a_suggestion(world: &ReviewWorld) -> Brow
 ///   And its pending suggestion is kept and shows Approve
 /// ```
 #[test]
-#[ignore = "DELIVER 03-10: BR-RRA-5 move seen by a scan keeps the total"]
 fn a_scan_moves_an_imported_repo_that_one_of_her_accounts_now_owns() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);

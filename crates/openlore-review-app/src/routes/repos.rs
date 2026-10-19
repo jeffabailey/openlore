@@ -13,8 +13,8 @@ use ports::{
 };
 use review_domain::kpi::{choice_saved_events, utc_day, KpiEvent};
 use review_domain::repo_scope::{
-    admit_save, choice_to_save, choose_list, default_ticks, differs_from_default, eligible_count,
-    ticked_ids, AccountChoice, ScopeAccount, Standing, SCAN_REPO_CAP,
+    admit_save, choice_to_save, choose_list, chosen_total, default_ticks, differs_from_default,
+    eligible_count, ticked_ids, AccountChoice, ScopeAccount, Standing, SCAN_REPO_CAP,
 };
 use review_domain::views::{
     self, AccountListing, AccountRepos, ListingFailure, ReposNotice, ReposView, ACCOUNT_ID_FIELD,
@@ -245,6 +245,7 @@ pub(crate) async fn repos_page(
             csrf_token,
             accounts: sections,
             imports: &imports,
+            chosen: chosen_total(&scope, &ids, SCAN_REPO_CAP),
             notice,
         }),
     )

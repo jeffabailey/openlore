@@ -93,7 +93,14 @@ pub struct ReposView<'a> {
     pub accounts: Vec<AccountRepos<'a>>,
     /// The public repos she named, in the order she added them.
     pub imports: &'a [ImportedRepo],
+    /// The repos her next scan reads: saved and default ticks and imports.
+    pub chosen: usize,
     pub notice: Option<ReposNotice>,
+}
+
+/// "7 of 10 repos chosen." (BR-RRA-3).
+pub fn chosen_line(chosen: usize) -> String {
+    format!("{chosen} of {SCAN_REPO_CAP} repos chosen.")
 }
 
 /// "Saved. Your next scan reads 5 repos."
@@ -206,6 +213,7 @@ pub fn repos_page(view: &ReposView<'_>) -> String {
                 (account_section(account, view.csrf_token))
             }
             (imports_section(view.imports, view.csrf_token))
+            p { (chosen_line(view.chosen)) }
             (back_to_queue())
         },
     )

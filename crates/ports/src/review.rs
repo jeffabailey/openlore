@@ -720,6 +720,25 @@ pub trait ImportedReposWrite: Send + Sync {
     ) -> Result<(), ReviewStoreError>;
 }
 
+/// Moves an import to the owned list of the listed account that owns it
+/// now (BR-RRA-5, US-RRA-006). Held by the verify route and the scan.
+pub trait ScopeMovePort: Send + Sync {
+    /// In ONE transaction: the owner's import `moved.repo_id` is deleted;
+    /// when the account `github_user_id` has no saved choice,
+    /// `choice_if_absent` (its current ticks) is stored as it; `moved`,
+    /// named as listed now, is ticked in that choice; and the repo's
+    /// suggestions now come from that account. `tally` with it. `false`,
+    /// nothing changed, when the repo is not her import.
+    fn move_import_to_account(
+        &self,
+        owner_did: &str,
+        moved: &ImportedRepo,
+        github_user_id: u64,
+        choice_if_absent: &[SavedRepoChoice],
+        tally: KpiTally<'_>,
+    ) -> Result<bool, ReviewStoreError>;
+}
+
 /// A suggestion's identity (BR-1): one per (subject, predicate, object).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SuggestionKey {

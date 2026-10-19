@@ -18,8 +18,8 @@ use ports::{
     AccountListingNote, AccountStatusWrite, ForgetPort, GithubAccountsWrite, GithubLinkPort,
     GithubPort, IdentityLookupPort, ImportedReposRead, ImportedReposWrite, KpiCounterPort,
     OAuthPort, PublishPlanPort, RepoChoiceRead, RepoChoiceWrite, RepoListingPort, ReviewStateRead,
-    ReviewStateWrite, ScanPlanRead, ScanRunPort, ScopeRemovalPort, SessionPort, UserRepoReadPort,
-    UserRepoWritePort,
+    ReviewStateWrite, ScanPlanRead, ScanRunPort, ScopeMovePort, ScopeRemovalPort, SessionPort,
+    UserRepoReadPort, UserRepoWritePort,
 };
 use review_domain::signin::PermissionMode;
 use scraper_domain::SignalPredicateMapping;
@@ -80,6 +80,8 @@ pub(crate) struct App {
     pub(crate) account_status: Arc<dyn AccountStatusWrite>,
     /// Held by the remove routes only (ADR-088 §8, ADR-082 precedent).
     pub(crate) scope_removal: Arc<dyn ScopeRemovalPort>,
+    /// Held by the verify route and the scan only (BR-RRA-5 moves).
+    pub(crate) scope_moves: Arc<dyn ScopeMovePort>,
     pub(crate) listing_note: Arc<dyn AccountListingNote>,
     pub(crate) scans: Arc<dyn ScanRunPort>,
     pub(crate) scan_plans: Arc<dyn ScanPlanRead>,

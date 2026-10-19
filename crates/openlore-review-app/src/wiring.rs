@@ -718,6 +718,7 @@ fn app(wired: Wired) -> App {
         accounts_write: wired.store.clone(),
         account_status: wired.store.clone(),
         scope_removal: wired.store.clone(),
+        scope_moves: wired.store.clone(),
         listing_note: wired.store.clone(),
         scans: wired.store.clone(),
         scan_plans: wired.store.clone(),
