@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use ports::claim_domain::authority::SigningRefusal;
 use ports::claim_domain::UnsignedClaim;
 use ports::{AccountCheckOutcome, AccountRefusal, KpiCounterRow, OutsideDefault, Suggestion};
 
@@ -59,13 +60,16 @@ pub enum KpiEvent {
     ScanAccountUnfinished,
     /// An owner removed one of her GitHub accounts (US-RRA-008).
     AccountRemoved,
+    /// KPI-RRA-4: a publish was refused because none of the owner's listed
+    /// accounts owns the repo now (another account or an organization does).
+    PublishRefusedNotOwned,
     SharePosted,
     RetractPosted,
     Disconnect,
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 31] = [
+    pub const ALL: [KpiEvent; 32] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -94,6 +98,7 @@ impl KpiEvent {
         Self::ScanAccountFailed,
         Self::ScanAccountUnfinished,
         Self::AccountRemoved,
+        Self::PublishRefusedNotOwned,
         Self::SharePosted,
         Self::RetractPosted,
         Self::Disconnect,
@@ -132,6 +137,7 @@ impl KpiEvent {
             Self::ScanAccountFailed => "scan.account.failed",
             Self::ScanAccountUnfinished => "scan.account.unfinished",
             Self::AccountRemoved => "account.removed",
+            Self::PublishRefusedNotOwned => "publish.refused.not_owned",
             Self::SharePosted => "share.posted",
             Self::RetractPosted => "retract.posted",
             Self::Disconnect => "disconnect",
@@ -206,6 +212,27 @@ impl AccountAddRefused {
             Self::AtLimit => "at_limit",
             Self::Unreachable => "unreachable",
         }
+    }
+}
+
+/// What a refused publish counts (KPI-RRA-4).
+pub fn publish_refusal_events(refusal: SigningRefusal) -> Vec<KpiEvent> {
+    match refusal {
+        SigningRefusal::NotOwnedByListedAccount | SigningRefusal::OrgOwned => {
+            vec![KpiEvent::PublishRefusedNotOwned]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The operator-facing reason of a refused publish (never whose or which).
+pub fn publish_refusal_label(refusal: SigningRefusal) -> &'static str {
+    match refusal {
+        SigningRefusal::NotOwnedByListedAccount => "not_owned",
+        SigningRefusal::OrgOwned => "org_owned",
+        SigningRefusal::RepoGone => "repo_gone",
+        SigningRefusal::BioNoLongerHolds(_) => "bio_failed",
+        SigningRefusal::Unfinished => "unreachable",
     }
 }
 

@@ -382,13 +382,58 @@ fn sut_resume(
 }
 
 fn sut_may_sign(
-    _signer: &str,
-    _subject: &str,
-    _listed: &[u64],
-    _repo: &RepoReadView,
-    _owner_profile: &ProfileReadView,
+    signer: &str,
+    subject: &str,
+    listed: &[u64],
+    repo: &RepoReadView,
+    owner_profile: &ProfileReadView,
 ) -> PermitView {
-    todo!("RED: bind to claim_domain::authority::may_sign (DELIVER 02-*)")
+    use claim_domain::authority::{
+        may_sign, OwnerBioRead, PermitBasis, RepoFacts, RepoOwnerKind, RepoRead, SigningRefusal,
+    };
+    let facts = match repo {
+        RepoReadView::Found {
+            full_name,
+            owner_id,
+            owner_is_user,
+        } => Some(RepoFacts {
+            repo_id: 1,
+            full_name: full_name.clone(),
+            owner_id: *owner_id,
+            owner_login: full_name.split('/').next().unwrap_or_default().to_string(),
+            owner_kind: if *owner_is_user {
+                RepoOwnerKind::User
+            } else {
+                RepoOwnerKind::Organization
+            },
+            fork: false,
+            archived: false,
+        }),
+        _ => None,
+    };
+    let read = match (repo, &facts) {
+        (_, Some(facts)) => RepoRead::Found(facts),
+        (RepoReadView::NotFound, None) => RepoRead::Gone,
+        _ => RepoRead::Unfinished,
+    };
+    let bio = match owner_profile {
+        ProfileReadView::Bio(bio) => OwnerBioRead::Bio(bio.as_deref()),
+        ProfileReadView::Unreachable => OwnerBioRead::Unfinished,
+    };
+    match may_sign(signer, subject, listed, read, bio) {
+        Ok(permit) => PermitView::Permit {
+            signer: permit.signer().to_string(),
+            subject: permit.subject().to_string(),
+            basis: match permit.basis() {
+                PermitBasis::Owner(id) => BasisView::Owner(id),
+            },
+        },
+        Err(SigningRefusal::NotOwnedByListedAccount) => PermitView::NotOwnedByListedAccount,
+        Err(SigningRefusal::OrgOwned) => PermitView::OrgOwned,
+        Err(SigningRefusal::RepoGone) => PermitView::RepoGone,
+        Err(SigningRefusal::BioNoLongerHolds(id)) => PermitView::BioNoLongerHolds(id),
+        Err(SigningRefusal::Unfinished) => PermitView::Unfinished,
+    }
 }
 
 fn sut_visible(rows: &[SourceView], accounts: &[(u64, bool)], imports: &[u64]) -> Vec<bool> {
@@ -908,7 +953,6 @@ proptest! {
 
     /// CORE-RRA-6 (@property @US-RRA-010 @US-RRA-006 @BR-RRA-1 @BR-RRA-2 @KPI-RRA-4 @contract-shape:pure-function)
     #[test]
-    #[ignore = "CORE-RRA-6 (bind with DELIVER step 02-14): claim_domain::authority::may_sign owner tier (RED binding)"]
     fn core_rra6_only_a_listed_user_owner_whose_bio_holds_the_did_may_publish(
         listed in proptest::collection::vec(1u64..6, 0..3),
         repo in arb_repo_read(),

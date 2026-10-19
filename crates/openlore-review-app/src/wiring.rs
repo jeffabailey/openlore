@@ -19,14 +19,15 @@ use adapter_github::client::{
 };
 use adapter_github::GithubAdapter;
 use adapter_review_store::{DataKey, DuckDbCaps, MigrationFault, ReviewStore};
+use ports::claim_domain::authority::SigningRefusal;
 use ports::{
     AccountCheckOutcome, KpiTally, OAuthPort, OutsideDefault, ProbeOutcome, ReviewStorePort,
     RevokeOutcome, ScanRunPort, ScanStatus, SecretStorePort,
 };
 use review_domain::kpi::{
-    account_check_event, approval_events, outside_default_events, rollup_day,
-    seconds_until_next_rollup, sign_in_refusal_event, sum_counters, utc_day, AccountAddRefused,
-    KpiEvent,
+    account_check_event, approval_events, outside_default_events, publish_refusal_events,
+    publish_refusal_label, rollup_day, seconds_until_next_rollup, sign_in_refusal_event,
+    sum_counters, utc_day, AccountAddRefused, KpiEvent,
 };
 use review_domain::signin::{permission_mode, SignInFailure};
 use review_domain::views::ScanRefused;
@@ -119,6 +120,9 @@ pub(crate) enum LogEvent<'a> {
     GithubTokenExpiring(i64),
     /// An owner declined a suggestion (KPI count; never which one or whose).
     SuggestionDeclined,
+    /// A preview or confirm minted no signing permit (the reason only;
+    /// never which repo or whose, KPI-RRA-4).
+    PublishRefused(SigningRefusal),
     /// An owner confirmed a share post and it landed (KPI count; never the
     /// text, whose or where).
     SharePosted,
@@ -162,6 +166,7 @@ fn counters_of(event: &LogEvent<'_>) -> Vec<KpiEvent> {
             account_check_event(*outcome).into_iter().collect()
         }
         LogEvent::SuggestionDeclined => vec![KpiEvent::SuggestionDeclined],
+        LogEvent::PublishRefused(refusal) => publish_refusal_events(*refusal),
         LogEvent::SuggestionApproved {
             edited,
             outside_default,
@@ -267,6 +272,11 @@ fn describe(event: LogEvent<'_>) -> (Level, &'static str, Vec<(&'static str, Val
         ),
         LogEvent::CallbackPanicIsolated => (Warn, "signin.callback_panic_isolated", vec![]),
         LogEvent::SuggestionDeclined => (Info, "suggestion.declined", vec![]),
+        LogEvent::PublishRefused(refusal) => (
+            Info,
+            "publish.refused",
+            vec![("reason", json!(publish_refusal_label(refusal)))],
+        ),
         LogEvent::SharePosted => (Info, "share.posted", vec![]),
         LogEvent::RetractPosted => (Info, "retract.posted", vec![]),
         LogEvent::SuggestionApproved { edited, .. } => {

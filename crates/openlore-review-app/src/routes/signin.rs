@@ -113,13 +113,13 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         }
         PageRoute::RemoveAccount if same_origin => github::remove_account(app, request).await,
         PageRoute::StartScan if same_origin => scan::start_scan(app, request).await,
-        PageRoute::ApproveSuggestion if same_origin => review::approve(app, request),
+        PageRoute::ApproveSuggestion if same_origin => review::approve(app, request).await,
         PageRoute::EditSuggestion if same_origin => review::edit(app, request),
-        PageRoute::PreviewEdit if same_origin => review::preview_edit(app, request),
+        PageRoute::PreviewEdit if same_origin => review::preview_edit(app, request).await,
         PageRoute::DeclineSuggestion if same_origin => review::decline_suggestion(app, request),
         PageRoute::UndoDecline if same_origin => review::undo_decline(app, request),
         PageRoute::ConfirmPublish if same_origin => publish::confirm_publish(app, request).await,
-        PageRoute::ApproveSelected if same_origin => review::approve_selected(app, request),
+        PageRoute::ApproveSelected if same_origin => review::approve_selected(app, request).await,
         PageRoute::ConfirmPublishSelected if same_origin => {
             publish::confirm_publish_selected(app, request).await
         }

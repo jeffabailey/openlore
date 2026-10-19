@@ -5,9 +5,12 @@
 use hyper::StatusCode;
 use std::collections::BTreeMap;
 
+use ports::claim_domain::authority::{
+    may_sign, owner_to_read, OwnerBioRead, RepoRead, SigningPermit, SigningRefusal,
+};
 use ports::{
-    GithubLink, GithubLinkPort, KpiTally, RepoSource, ReviewStateRead, Suggestion, SuggestionKey,
-    SuggestionState, WebSession,
+    GithubError, GithubLink, GithubLinkPort, KpiTally, RepoFacts, RepoSource, ReviewStateRead,
+    Suggestion, SuggestionKey, SuggestionState, WebSession,
 };
 use review_domain::edits::{edit_claim, philosophy_choices};
 use review_domain::lifecycle::{
@@ -27,7 +30,7 @@ use crate::routes::github::github_step_of;
 use crate::routes::signin::{
     csrf_token_for, csrf_token_of, current_session, field, fields, signed_in_post, to_landing,
 };
-use crate::wiring::{emit, Counted, LogEvent};
+use crate::wiring::{emit, observe, Counted, LogEvent};
 
 /// `GET /review`: the signed-in queue.
 pub(crate) fn review(app: &App, request: &PageRequest) -> Reply {
@@ -224,12 +227,22 @@ pub(crate) fn owner_queue(
 /// visible pending suggestions. Builds and keeps the publish plan (the
 /// Plan-value: what is shown is what a confirm writes); writes nothing to
 /// any repo.
-pub(crate) fn approve(app: &App, request: &PageRequest) -> Reply {
-    with_own_suggestion(app, request, "object", |session, suggestion| {
-        let draft = draft_of(suggestion);
-        let plan = publish_plan(&session.owner_did, &draft, &composed_now());
-        keep_and_preview(app, request, session, plan)
-    })
+pub(crate) async fn approve(app: &App, request: &PageRequest) -> Reply {
+    let (session, suggestion) = match own_suggestion(app, request, "object") {
+        Ok(found) => found,
+        Err(refused) => return refused,
+    };
+    let subject = suggestion.key.subject.clone();
+    match PublishChecks::new(app, &session.owner_did)
+        .permit(&subject)
+        .await
+    {
+        Ok(permit) => {
+            let plan = publish_plan(&permit, &draft_of(suggestion), &composed_now());
+            keep_and_preview(app, request, &session, plan)
+        }
+        Err(refusal) => refused_publish(app, &subject, refusal),
+    }
 }
 
 /// `POST /review/approve-selected`: the batch preview of every ticked card
@@ -237,7 +250,7 @@ pub(crate) fn approve(app: &App, request: &PageRequest) -> Reply {
 /// `MAX_SELECTED`). One plan is built and kept per suggestion, exactly as a
 /// single Approve keeps one; nothing is written to any repo. A selection
 /// naming nothing of the owner's goes back to the queue.
-pub(crate) fn approve_selected(app: &App, request: &PageRequest) -> Reply {
+pub(crate) async fn approve_selected(app: &App, request: &PageRequest) -> Reply {
     let (_, session) = match signed_in_post(app, request) {
         Ok(signed_in) => signed_in,
         Err(refused) => return refused,
@@ -253,13 +266,19 @@ pub(crate) fn approve_selected(app: &App, request: &PageRequest) -> Reply {
     };
     let values = fields(&request.form, SELECTION_FIELD);
     let composed_at = composed_now();
-    let kept: Vec<PublishPlan> = chosen_suggestions(pending, &values)
-        .into_iter()
-        .filter_map(|suggestion| {
-            publish_plan(&session.owner_did, &draft_of(suggestion), &composed_at).ok()
-        })
-        .filter(|plan| keep_plan(app, &session, plan))
-        .collect();
+    let mut checks = PublishChecks::new(app, &session.owner_did);
+    let mut kept: Vec<PublishPlan> = Vec::new();
+    for suggestion in chosen_suggestions(pending, &values) {
+        let permit = match checks.permit(&suggestion.key.subject).await {
+            Ok(permit) => permit,
+            Err(refusal) => {
+                observe(app, LogEvent::PublishRefused(refusal));
+                continue;
+            }
+        };
+        let plan = publish_plan(&permit, &draft_of(suggestion), &composed_at).ok();
+        kept.extend(plan.filter(|plan| keep_plan(app, &session, plan)));
+    }
     if kept.is_empty() {
         return Reply::redirect("/review");
     }
@@ -300,30 +319,41 @@ pub(crate) fn edit(app: &App, request: &PageRequest) -> Reply {
 /// edit. A refused confidence re-shows the form with guidance and no way to
 /// publish; a valid edit becomes a new plan whose record is exactly the
 /// edit (its CID is the record key). Writes nothing to any repo.
-pub(crate) fn preview_edit(app: &App, request: &PageRequest) -> Reply {
-    with_own_suggestion(app, request, "suggested_object", |session, suggestion| {
-        let chosen = field(&request.form, "object");
-        let typed = field(&request.form, "confidence").unwrap_or_default();
-        match edit_claim(&suggestion.key.object, chosen.as_deref(), &typed) {
-            Ok(edit) => {
-                let draft = draft_of(suggestion);
-                let plan = publish_edited_plan(&session.owner_did, &draft, &edit, &composed_now());
-                keep_and_preview(app, request, session, plan)
-            }
-            Err(invalid) => {
-                let chosen = chosen.unwrap_or_else(|| suggestion.key.object.clone());
-                let guidance = invalid.to_string();
-                edit_form(
-                    request,
-                    &suggestion,
-                    &chosen,
-                    &typed,
-                    Some(&guidance),
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                )
+pub(crate) async fn preview_edit(app: &App, request: &PageRequest) -> Reply {
+    let (session, suggestion) = match own_suggestion(app, request, "suggested_object") {
+        Ok(found) => found,
+        Err(refused) => return refused,
+    };
+    let chosen = field(&request.form, "object");
+    let typed = field(&request.form, "confidence").unwrap_or_default();
+    match edit_claim(&suggestion.key.object, chosen.as_deref(), &typed) {
+        Ok(edit) => {
+            let subject = suggestion.key.subject.clone();
+            match PublishChecks::new(app, &session.owner_did)
+                .permit(&subject)
+                .await
+            {
+                Ok(permit) => {
+                    let draft = draft_of(suggestion);
+                    let plan = publish_edited_plan(&permit, &draft, &edit, &composed_now());
+                    keep_and_preview(app, request, &session, plan)
+                }
+                Err(refusal) => refused_publish(app, &subject, refusal),
             }
         }
-    })
+        Err(invalid) => {
+            let chosen = chosen.unwrap_or_else(|| suggestion.key.object.clone());
+            let guidance = invalid.to_string();
+            edit_form(
+                request,
+                &suggestion,
+                &chosen,
+                &typed,
+                Some(&guidance),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            )
+        }
+    }
 }
 
 fn edit_form(
@@ -375,6 +405,131 @@ fn keep_and_preview(
             views::approval_preview_page(&plan, &csrf_token_of(request)),
         ),
         None => not_found(),
+    }
+}
+
+/// The fresh reads one request makes to mint signing permits (ADR-089 §4):
+/// the repo as GitHub serves it now and its owner's bio now. Shared between
+/// suggestions of the same repo or owner account within the request; never
+/// kept across requests.
+pub(crate) struct PublishChecks<'a> {
+    app: &'a App,
+    owner_did: &'a str,
+    listed: Vec<u64>,
+    repos: BTreeMap<String, RepoAnswer>,
+    bios: BTreeMap<u64, BioAnswer>,
+}
+
+#[derive(Clone)]
+enum RepoAnswer {
+    Found(RepoFacts),
+    Gone,
+    Unfinished,
+}
+
+impl RepoAnswer {
+    fn as_read(&self) -> RepoRead<'_> {
+        match self {
+            Self::Found(facts) => RepoRead::Found(facts),
+            Self::Gone => RepoRead::Gone,
+            Self::Unfinished => RepoRead::Unfinished,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum BioAnswer {
+    Bio(Option<String>),
+    Unfinished,
+}
+
+impl BioAnswer {
+    fn as_read(&self) -> OwnerBioRead<'_> {
+        match self {
+            Self::Bio(bio) => OwnerBioRead::Bio(bio.as_deref()),
+            Self::Unfinished => OwnerBioRead::Unfinished,
+        }
+    }
+}
+
+impl<'a> PublishChecks<'a> {
+    pub(crate) fn new(app: &'a App, owner_did: &'a str) -> Self {
+        let listed = app
+            .links
+            .github_accounts(owner_did)
+            .unwrap_or_default()
+            .iter()
+            .map(|account| account.github_user_id)
+            .collect();
+        Self {
+            app,
+            owner_did,
+            listed,
+            repos: BTreeMap::new(),
+            bios: BTreeMap::new(),
+        }
+    }
+
+    /// A permit for `subject` from this request's reads, or why not.
+    pub(crate) async fn permit(&mut self, subject: &str) -> Result<SigningPermit, SigningRefusal> {
+        let repo = self.repo(subject).await;
+        let bio = match owner_to_read(&self.listed, repo.as_read()) {
+            Some(owner_id) => self.bio(owner_id).await,
+            None => BioAnswer::Unfinished,
+        };
+        may_sign(
+            self.owner_did,
+            subject,
+            &self.listed,
+            repo.as_read(),
+            bio.as_read(),
+        )
+    }
+
+    async fn repo(&mut self, subject: &str) -> RepoAnswer {
+        if let Some(known) = self.repos.get(subject) {
+            return known.clone();
+        }
+        let named = subject
+            .strip_prefix("github:")
+            .and_then(|repo| repo.split_once('/'));
+        let answer = match named {
+            None => RepoAnswer::Gone,
+            Some((owner, name)) => match self.app.github.read_repo(owner, name).await {
+                Ok(facts) => RepoAnswer::Found(facts),
+                Err(GithubError::NotFound { .. } | GithubError::NotPublic { .. }) => {
+                    RepoAnswer::Gone
+                }
+                Err(_) => RepoAnswer::Unfinished,
+            },
+        };
+        self.repos.insert(subject.to_string(), answer.clone());
+        answer
+    }
+
+    async fn bio(&mut self, owner_id: u64) -> BioAnswer {
+        if let Some(known) = self.bios.get(&owner_id) {
+            return known.clone();
+        }
+        let answer = match self.app.github.read_person_by_id(owner_id).await {
+            Ok(profile) => BioAnswer::Bio(profile.bio.clone()),
+            Err(_) => BioAnswer::Unfinished,
+        };
+        self.bios.insert(owner_id, answer.clone());
+        answer
+    }
+}
+
+/// A publish refused for want of a permit: counted, nothing written. A repo
+/// none of the owner's accounts owns now is explained; anything else is not
+/// found.
+pub(crate) fn refused_publish(app: &App, subject: &str, refusal: SigningRefusal) -> Reply {
+    observe(app, LogEvent::PublishRefused(refusal));
+    match refusal {
+        SigningRefusal::NotOwnedByListedAccount | SigningRefusal::OrgOwned => {
+            Reply::page(StatusCode::CONFLICT, views::not_owned_page(subject))
+        }
+        _ => not_found(),
     }
 }
 
@@ -489,10 +644,20 @@ fn with_own_suggestion(
     object_field: &str,
     act: impl FnOnce(&WebSession, Suggestion) -> Reply,
 ) -> Reply {
-    let (_, session) = match signed_in_post(app, request) {
-        Ok(signed_in) => signed_in,
-        Err(refused) => return refused,
-    };
+    match own_suggestion(app, request, object_field) {
+        Ok((session, suggestion)) => act(&session, suggestion),
+        Err(refused) => refused,
+    }
+}
+
+/// The signed-in owner's visible pending suggestion the form names (its
+/// object in `object_field`); anything else is not found.
+fn own_suggestion(
+    app: &App,
+    request: &PageRequest,
+    object_field: &str,
+) -> Result<(WebSession, Suggestion), Reply> {
+    let (_, session) = signed_in_post(app, request)?;
     let visible = visible_and_approvable(
         SuggestionState::Pending,
         link_verified(app, &session.owner_did),
@@ -503,10 +668,9 @@ fn with_own_suggestion(
             .into_iter()
             .find(|suggestion| suggestion.key == key)
     });
-    match found {
-        Some(suggestion) => act(&session, suggestion),
-        None => not_found(),
-    }
+    found
+        .map(|suggestion| (session, suggestion))
+        .ok_or_else(not_found)
 }
 
 /// The suggestion key a form names, its object in `object_field`.

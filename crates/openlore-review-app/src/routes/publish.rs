@@ -16,9 +16,9 @@ use review_domain::views::{self, BatchOutcome, PublishNextStep, PublishRetry};
 use crate::executor::{execute_publish, PublishFailure};
 use crate::http::{App, PageRequest, Reply};
 use crate::routes::confirm::{take_confirmed_plan, take_owned_plan, ConfirmedPlan};
-use crate::routes::review::{not_found, owner_can_publish};
+use crate::routes::review::{not_found, owner_can_publish, refused_publish, PublishChecks};
 use crate::routes::signin::{csrf_token_of, fields, signed_in_post};
-use crate::wiring::{emit, Counted, LogEvent};
+use crate::wiring::{emit, observe, Counted, LogEvent};
 
 /// Confirm "Publish to my repo" (or "Retry").
 pub(crate) async fn confirm_publish(app: &App, request: &PageRequest) -> Reply {
@@ -30,10 +30,18 @@ pub(crate) async fn confirm_publish(app: &App, request: &PageRequest) -> Reply {
         return Reply::page(StatusCode::GONE, views::plan_expired_page());
     }
     let owner_did = confirmed.owner_did.as_str();
-    let restored = restore_plan(owner_did, &confirmed.stored)
-        .ok()
-        .filter(|plan| owner_can_publish(app, owner_did, plan.key()));
-    match restored {
+    let key = &confirmed.stored.key;
+    if !owner_can_publish(app, owner_did, key) {
+        return not_found();
+    }
+    let permit = match PublishChecks::new(app, owner_did)
+        .permit(&key.subject)
+        .await
+    {
+        Ok(permit) => permit,
+        Err(refusal) => return refused_publish(app, &key.subject, refusal),
+    };
+    match restore_plan(&permit, &confirmed.stored).ok() {
         Some(plan) => publish(app, &plan, &confirmed).await,
         None => not_found(),
     }
@@ -112,9 +120,10 @@ pub(crate) async fn confirm_publish_selected(app: &App, request: &PageRequest) -
     if taken.is_empty() {
         return not_found();
     }
+    let mut checks = PublishChecks::new(app, &session.owner_did);
     let mut results = Vec::with_capacity(taken.len());
     for confirmed in &taken {
-        results.push(confirm_one(app, confirmed).await);
+        results.push(confirm_one(app, &mut checks, confirmed).await);
     }
     let tally = tally_batch(results);
     let status = if tally.failures.is_empty() {
@@ -136,14 +145,26 @@ pub(crate) async fn confirm_publish_selected(app: &App, request: &PageRequest) -
 }
 
 /// Confirm one taken plan of a batch, exactly as a single confirm would.
-async fn confirm_one(app: &App, confirmed: &ConfirmedPlan) -> PlanResult {
+async fn confirm_one(
+    app: &App,
+    checks: &mut PublishChecks<'_>,
+    confirmed: &ConfirmedPlan,
+) -> PlanResult {
     if confirmed.expired() {
         return PlanResult::Expired;
     }
-    let restored = restore_plan(&confirmed.owner_did, &confirmed.stored)
-        .ok()
-        .filter(|plan| owner_can_publish(app, &confirmed.owner_did, plan.key()));
-    let Some(plan) = restored else {
+    let key = &confirmed.stored.key;
+    if !owner_can_publish(app, &confirmed.owner_did, key) {
+        return PlanResult::Skipped;
+    }
+    let permit = match checks.permit(&key.subject).await {
+        Ok(permit) => permit,
+        Err(refusal) => {
+            observe(app, LogEvent::PublishRefused(refusal));
+            return PlanResult::Skipped;
+        }
+    };
+    let Some(plan) = restore_plan(&permit, &confirmed.stored).ok() else {
         return PlanResult::Skipped;
     };
     match write_plan(app, &plan, confirmed).await {

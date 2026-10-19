@@ -41,6 +41,31 @@ fn key() -> SuggestionKey {
     }
 }
 
+/// A permit minted the production way, through `may_sign`, over facts where
+/// `did`'s listed account owns `subject`'s repo and its bio holds `did`
+/// (ADR-089: a publish plan needs one).
+fn permit_for(did: &str, subject: &str) -> ports::claim_domain::authority::SigningPermit {
+    use ports::claim_domain::authority::{may_sign, OwnerBioRead, RepoRead};
+    let owner_account = 4_210_001;
+    let facts = ports::RepoFacts {
+        repo_id: 1,
+        full_name: subject.trim_start_matches("github:").to_string(),
+        owner_id: owner_account,
+        owner_login: "owner".to_string(),
+        owner_kind: ports::RepoOwnerKind::User,
+        fork: false,
+        archived: false,
+    };
+    may_sign(
+        did,
+        subject,
+        &[owner_account],
+        RepoRead::Found(&facts),
+        OwnerBioRead::Bio(Some(did)),
+    )
+    .expect("a listed user owner whose bio holds the DID")
+}
+
 fn draft() -> ClaimDraft {
     ClaimDraft {
         key: key(),
@@ -50,7 +75,12 @@ fn draft() -> ClaimDraft {
 }
 
 fn plan() -> PublishPlan {
-    publish_plan(OWNER, &draft(), COMPOSED_AT).expect("plan")
+    publish_plan(
+        &permit_for(OWNER, &draft().key.subject),
+        &draft(),
+        COMPOSED_AT,
+    )
+    .expect("plan")
 }
 
 fn suggestion() -> Suggestion {
@@ -162,7 +192,13 @@ fn an_approval_is_edited_only_when_its_philosophy_or_confidence_changed() {
         confidence_bp: 7000,
     };
     for edit in [other_object, other_confidence] {
-        let edited = publish_edited_plan(OWNER, &draft(), &edit, COMPOSED_AT).expect("plan");
+        let edited = publish_edited_plan(
+            &permit_for(OWNER, &draft().key.subject),
+            &draft(),
+            &edit,
+            COMPOSED_AT,
+        )
+        .expect("plan");
         assert!(approval_was_edited(edited.claim(), Some(&offered)));
     }
 }

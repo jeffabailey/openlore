@@ -172,6 +172,31 @@ struct PlanView {
     preview_text: String,
 }
 
+/// A permit minted the production way, through `may_sign`, over facts where
+/// `did`'s listed account owns `subject`'s repo and its bio holds `did`
+/// (ADR-089: a publish plan needs one).
+fn permit_for(did: &str, subject: &str) -> ports::claim_domain::authority::SigningPermit {
+    use ports::claim_domain::authority::{may_sign, OwnerBioRead, RepoRead};
+    let owner_account = 4_210_001;
+    let facts = ports::RepoFacts {
+        repo_id: 1,
+        full_name: subject.trim_start_matches("github:").to_string(),
+        owner_id: owner_account,
+        owner_login: "owner".to_string(),
+        owner_kind: ports::RepoOwnerKind::User,
+        fork: false,
+        archived: false,
+    };
+    may_sign(
+        did,
+        subject,
+        &[owner_account],
+        RepoRead::Found(&facts),
+        OwnerBioRead::Bio(Some(did)),
+    )
+    .expect("a listed user owner whose bio holds the DID")
+}
+
 fn sut_publish_plan(
     did: &str,
     subject: &str,
@@ -190,7 +215,8 @@ fn sut_publish_plan(
         evidence: evidence.to_vec(),
         confidence_bp: u16::try_from(basis_points).expect("0..=10000 basis points"),
     };
-    let plan = publish_plan(did, &draft, composed_at).expect("a plan");
+    let plan =
+        publish_plan(&permit_for(did, &draft.key.subject), &draft, composed_at).expect("a plan");
     PlanView {
         record: plan.record(),
         rkey: plan.rkey().to_string(),
@@ -233,7 +259,12 @@ fn sut_share_post(profile_url: &str, published: &[(String, bool)]) -> ShareView 
                 evidence: vec![format!("https://github.com/priyaraman/repo{i}")],
                 confidence_bp: 2500,
             };
-            let plan = publish_plan(did, &draft, "2026-10-04T15:02:11Z").expect("a plan");
+            let plan = publish_plan(
+                &permit_for(did, &draft.key.subject),
+                &draft,
+                "2026-10-04T15:02:11Z",
+            )
+            .expect("a plan");
             let mut records = vec![record(plan.rkey(), plan.record())];
             if *retracted {
                 let mut retraction = plan.claim().clone();

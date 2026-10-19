@@ -275,6 +275,26 @@ pub fn publish_failed_page(
     )
 }
 
+/// A preview or confirm refused because none of the owner's verified
+/// accounts owns the repo now (ADR-089, AC-010.1): nothing was published.
+pub fn not_owned_page(subject: &str) -> String {
+    let repo = subject.strip_prefix("github:").unwrap_or(subject);
+    page(
+        "Nothing was published",
+        html! {
+            section class="outcome" {
+            h1 { "Nothing was published" }
+            p role="alert" {
+                "github.com/" (repo) " is no longer owned by an account you verified, so \
+                 nothing was published. If you own it under another account, verify that \
+                 account; otherwise decline this suggestion."
+            }
+            (back_to_queue())
+            }
+        },
+    )
+}
+
 /// A confirm that arrived after its preview expired (ADR-074): refused,
 /// nothing written.
 pub fn plan_expired_page() -> String {

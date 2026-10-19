@@ -27,13 +27,43 @@ fn key() -> SuggestionKey {
     }
 }
 
+/// A permit minted the production way, through `may_sign`, over facts where
+/// `did`'s listed account owns `subject`'s repo and its bio holds `did`
+/// (ADR-089: a publish plan needs one).
+fn permit_for(did: &str, subject: &str) -> ports::claim_domain::authority::SigningPermit {
+    use ports::claim_domain::authority::{may_sign, OwnerBioRead, RepoRead};
+    let owner_account = 4_210_001;
+    let facts = ports::RepoFacts {
+        repo_id: 1,
+        full_name: subject.trim_start_matches("github:").to_string(),
+        owner_id: owner_account,
+        owner_login: "owner".to_string(),
+        owner_kind: ports::RepoOwnerKind::User,
+        fork: false,
+        archived: false,
+    };
+    may_sign(
+        did,
+        subject,
+        &[owner_account],
+        RepoRead::Found(&facts),
+        OwnerBioRead::Bio(Some(did)),
+    )
+    .expect("a listed user owner whose bio holds the DID")
+}
+
 fn plan() -> PublishPlan {
     let draft = ClaimDraft {
         key: key(),
         evidence: vec!["https://github.com/priyaraman/tidepool/".to_string()],
         confidence_bp: 2500,
     };
-    publish_plan(OWNER, &draft, "2026-10-04T15:02:11Z").expect("plan")
+    publish_plan(
+        &permit_for(OWNER, &draft.key.subject),
+        &draft,
+        "2026-10-04T15:02:11Z",
+    )
+    .expect("plan")
 }
 
 fn suggestion() -> Suggestion {

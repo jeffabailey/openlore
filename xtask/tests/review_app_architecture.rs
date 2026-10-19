@@ -14,6 +14,9 @@
 //! * AR-9    the Caddy site serves the app over HTTPS only (AC-000.2)
 //! * AR-10   tracing events in the app never use a forbidden field name
 //! * AR-11   only the GitHub step's route holds the accounts write port
+//! * AR-12   a publish plan is built only with a `SigningPermit`; only the executor writes claims
+//! * AR-13   authority evidence is built only by the adapters and test support
+//! * AR-14   a `SigningPermit` is never serializable
 //!
 //! They complement (do not replace) DELIVER's `cargo xtask check-arch` rules,
 //! which are unit-tested against fixtures. All `#[ignore]`d until DELIVER
@@ -24,7 +27,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use xtask::check_arch::{
-    classify_review_accounts_write, load_workspace, scan_review_accounts_write_only_in_github_route,
+    classify_authority_evidence, classify_publish_plan_needs_permit,
+    classify_review_accounts_write, classify_signing_permit_serde, load_workspace,
+    scan_authority_evidence_only_from_adapters, scan_review_accounts_write_only_in_github_route,
+    scan_review_publish_plan_needs_permit, scan_signing_permit_not_serializable,
 };
 
 fn root() -> PathBuf {
@@ -415,4 +421,100 @@ fn only_the_github_route_holds_the_accounts_write_port() {
             "{elsewhere} naming the accounts write port must fail check-arch"
         );
     }
+}
+
+/// AR-12 @BR-RRA-1 @ADR-089 @contract-shape:pure-function
+/// check-arch fails a publish plan built from a DID instead of a permit, a
+/// constructor that no longer takes a permit, and a claim write outside the
+/// executor; the real tree passes.
+#[test]
+fn a_publish_plan_is_built_only_with_a_signing_permit() {
+    assert_eq!(
+        scan_review_publish_plan_needs_permit(&root()).expect("scan"),
+        Vec::<String>::new()
+    );
+    let route = "crates/openlore-review-app/src/routes/review.rs";
+    for violating in [
+        "fn approve(d: &str, x: &D) { publish_plan(d, x, \"t\"); }",
+        "fn confirm(session: &S, s: &P) { restore_plan(&session.owner_did, s); }",
+        "fn edit(d: &str, x: &D, e: &E) { publish_edited_plan(d, x, e, \"t\"); }",
+        "async fn write(w: &W) { w.create_claim_record(\"d\", \"k\", &v).await; }",
+    ] {
+        assert!(
+            !classify_publish_plan_needs_permit(route, violating).is_empty(),
+            "{violating} must fail check-arch"
+        );
+    }
+    let unpermitted = "pub fn publish_plan(owner_did: &str, d: &D, t: &str) -> R { todo!() }";
+    assert!(
+        !classify_publish_plan_needs_permit("crates/review-domain/src/plans.rs", unpermitted)
+            .is_empty(),
+        "a constructor without a permit must fail check-arch"
+    );
+    assert!(classify_publish_plan_needs_permit(
+        route,
+        "fn approve(permit: &SigningPermit, x: &D) { publish_plan(&permit, x, \"t\"); }"
+    )
+    .is_empty());
+}
+
+/// AR-13 @BR-RRA-2 @ADR-089 @contract-shape:pure-function
+/// check-arch fails app or domain code that fabricates `RepoFacts` or a
+/// `GithubAccountProfile`; the adapters and test support may; the real
+/// tree passes.
+#[test]
+fn authority_evidence_is_built_only_by_the_adapters() {
+    assert_eq!(
+        scan_authority_evidence_only_from_adapters(&root()).expect("scan"),
+        Vec::<String>::new()
+    );
+    let fabricated = "fn stored(r: &Row) -> RepoFacts { RepoFacts { repo_id: r.id, owner_id: r.owner, ..r.facts() } }";
+    let profile = "fn stored(p: PersonProfile) { let _ = ports::GithubAccountProfile::new(p); }";
+    for (rel_path, source) in [
+        (
+            "crates/openlore-review-app/src/routes/review.rs",
+            fabricated,
+        ),
+        ("crates/review-domain/src/plans.rs", profile),
+        ("crates/claim-domain/src/authority.rs", fabricated),
+    ] {
+        assert!(
+            !classify_authority_evidence(rel_path, source).is_empty(),
+            "{rel_path} building evidence must fail check-arch"
+        );
+    }
+    assert!(
+        classify_authority_evidence("crates/adapter-github/src/client.rs", fabricated).is_empty()
+    );
+    assert!(classify_authority_evidence(
+        "crates/review-domain/src/plans.rs",
+        &format!("#[cfg(test)]\nmod tests {{ {fabricated} }}")
+    )
+    .is_empty());
+}
+
+/// AR-14 @BR-RRA-1 @ADR-089 @contract-shape:pure-function
+/// check-arch fails a `SigningPermit` that derives or implements serde; the
+/// real tree passes.
+#[test]
+fn a_signing_permit_is_never_serializable() {
+    assert_eq!(
+        scan_signing_permit_not_serializable(&root()).expect("scan"),
+        Vec::<String>::new()
+    );
+    let path = "crates/claim-domain/src/authority.rs";
+    for violating in [
+        "#[derive(Debug, Serialize)]\npub struct SigningPermit { signer: String }",
+        "#[derive(serde::Deserialize)]\npub struct SigningPermit { signer: String }",
+        "pub struct SigningPermit { signer: String }\nimpl serde::Serialize for SigningPermit { }",
+    ] {
+        let (defined, findings) = classify_signing_permit_serde(path, violating);
+        assert!(defined, "{violating}");
+        assert!(!findings.is_empty(), "{violating} must fail check-arch");
+    }
+    let (defined, findings) = classify_signing_permit_serde(
+        path,
+        "#[derive(Debug)]\npub struct SigningPermit { signer: String }",
+    );
+    assert!(defined && findings.is_empty());
 }

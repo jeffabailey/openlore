@@ -7,6 +7,7 @@
 //! points (ADR-070), and its record key is the claim's canonical CID
 //! (claim-domain's one canonicalizer) — the SPIKE-1 wire shape.
 
+use ports::claim_domain::authority::SigningPermit;
 use ports::claim_domain::identity_link::is_reserved_predicate;
 use ports::claim_domain::{
     decode_claim_record, Cid, ClaimError, ClaimRecord, ClaimReference, Confidence, Did,
@@ -49,6 +50,9 @@ pub enum PlanError {
     /// The record's predicate is reserved for identity links: a link is
     /// never built or restored as a claim publish (F-02, ADR-084 §4).
     ReservedPredicate,
+    /// The permit is for another subject: a plan is built only for the repo
+    /// its permit was minted for (ADR-089 §3).
+    NotPermitted,
 }
 
 impl From<ClaimError> for PlanError {
@@ -96,10 +100,11 @@ impl PublishPlan {
     }
 }
 
-/// Build the publish plan for `draft`, authored by `owner_did`, composed at
-/// `composed_at` (RFC 3339 UTC). Pure: nothing is written.
+/// Build the publish plan for `draft`, authored by the `permit`'s signer,
+/// composed at `composed_at` (RFC 3339 UTC). Only a permit minted for the
+/// draft's subject builds one (ADR-089 §3). Pure: nothing is written.
 pub fn publish_plan(
-    owner_did: &str,
+    permit: &SigningPermit,
     draft: &ClaimDraft,
     composed_at: &str,
 ) -> Result<PublishPlan, PlanError> {
@@ -107,7 +112,7 @@ pub fn publish_plan(
         object: draft.key.object.clone(),
         confidence_bp: draft.confidence_bp,
     };
-    publish_edited_plan(owner_did, draft, &unedited, composed_at)
+    publish_edited_plan(permit, draft, &unedited, composed_at)
 }
 
 /// Build the publish plan for the owner's `edit` of `draft` (US-BRA-005):
@@ -115,12 +120,14 @@ pub fn publish_plan(
 /// CID — the record key — is the edited claim's (ADR-071); the plan still
 /// names the suggestion it publishes. Pure: nothing is written.
 pub fn publish_edited_plan(
-    owner_did: &str,
+    permit: &SigningPermit,
     draft: &ClaimDraft,
     edit: &ClaimEdit,
     composed_at: &str,
 ) -> Result<PublishPlan, PlanError> {
+    refuse_other_subject(permit, &draft.key.subject)?;
     refuse_reserved_predicate(&draft.key.predicate)?;
+    let owner_did = permit.signer();
     let unsigned = UnsignedClaim {
         subject: draft.key.subject.clone(),
         predicate: draft.key.predicate.clone(),
@@ -139,6 +146,15 @@ pub fn publish_edited_plan(
     })
 }
 
+/// A plan is built only for the subject its permit was minted for.
+fn refuse_other_subject(permit: &SigningPermit, subject: &str) -> Result<(), PlanError> {
+    if permit.subject() == subject {
+        Ok(())
+    } else {
+        Err(PlanError::NotPermitted)
+    }
+}
+
 /// A claim publish never carries a predicate reserved for identity links:
 /// a link is published only as a [`crate::link_plan::LinkPlan`] (F-02).
 fn refuse_reserved_predicate(predicate: &str) -> Result<(), PlanError> {
@@ -149,11 +165,18 @@ fn refuse_reserved_predicate(predicate: &str) -> Result<(), PlanError> {
     }
 }
 
-/// Restore a stored plan for `owner_did`, admitting it only if its record
-/// still is a self-attested claim authored by the owner whose recomputed
-/// CID is its plan id, and is not an identity link.
-pub fn restore_plan(owner_did: &str, stored: &StoredPublishPlan) -> Result<PublishPlan, PlanError> {
+/// Restore a stored plan for the `permit`'s signer, admitting it only if its
+/// record still is a self-attested claim authored by the signer whose
+/// recomputed CID is its plan id, is about the permit's subject and is not an
+/// identity link.
+pub fn restore_plan(
+    permit: &SigningPermit,
+    stored: &StoredPublishPlan,
+) -> Result<PublishPlan, PlanError> {
+    let owner_did = permit.signer();
     let claim = owners_stored_claim(owner_did, stored, PlanKind::Publish)?;
+    refuse_other_subject(permit, &stored.key.subject)?;
+    refuse_other_subject(permit, &claim.unsigned().subject)?;
     refuse_reserved_predicate(&claim.unsigned().predicate)?;
     // A publish creates a fresh claim: a record that references another
     // (a retraction above all) is never published through this confirm.
@@ -395,6 +418,32 @@ pub fn plan_freshness(expires_at: i64, now: i64) -> PlanFreshness {
     }
 }
 
+/// A permit minted the production way, through `may_sign`, over facts
+/// where `did`'s listed account owns `subject`'s repo and its bio holds `did`.
+#[cfg(test)]
+pub(crate) fn test_permit(did: &str, subject: &str) -> SigningPermit {
+    use ports::claim_domain::authority::{may_sign, OwnerBioRead, RepoRead};
+    use ports::{RepoFacts, RepoOwnerKind};
+    let owner_account = 4_210_001;
+    let facts = RepoFacts {
+        repo_id: 1,
+        full_name: subject.trim_start_matches("github:").to_string(),
+        owner_id: owner_account,
+        owner_login: "owner".to_string(),
+        owner_kind: RepoOwnerKind::User,
+        fork: false,
+        archived: false,
+    };
+    may_sign(
+        did,
+        subject,
+        &[owner_account],
+        RepoRead::Found(&facts),
+        OwnerBioRead::Bio(Some(did)),
+    )
+    .expect("a listed user owner whose bio holds the DID")
+}
+
 #[cfg(test)]
 mod tests {
     //! Universe: owner DIDs × suggestion keys × evidence × basis points ×
@@ -433,11 +482,26 @@ mod tests {
         fn a_stored_plan_restores_to_the_same_plan_and_reads_back_under_its_key(
             (did, draft) in arb_draft(), secs in 0i64..4_102_444_800
         ) {
-            let plan = publish_plan(&did, &draft, &rfc3339_utc(secs)).expect("plan");
-            prop_assert_eq!(&restore_plan(&did, &plan.stored()), &Ok(plan.clone()));
+            let plan = publish_plan(&test_permit(&did, &draft.key.subject), &draft, &rfc3339_utc(secs)).expect("plan");
+            prop_assert_eq!(&restore_plan(&test_permit(&did, &plan.stored().key.subject), &plan.stored()), &Ok(plan.clone()));
             prop_assert!(read_back_matches(&plan.record(), plan.rkey()));
             prop_assert_eq!(&plan.record()["author"], &json!(did));
             prop_assert_eq!(&plan.record()["confidence"], &json!(draft.confidence_bp));
+        }
+
+        /// A permit minted for another repo builds, edits and restores no
+        /// plan (ADR-089 §3): the plan's subject is the permit's.
+        #[test]
+        fn a_permit_for_another_subject_builds_no_plan(
+            (did, draft) in arb_draft(), (_, other) in arb_draft()
+        ) {
+            prop_assume!(draft.key.subject != other.key.subject);
+            let elsewhere = test_permit(&did, &other.key.subject);
+            let edit = ClaimEdit { object: draft.key.object.clone(), confidence_bp: draft.confidence_bp };
+            prop_assert_eq!(publish_plan(&elsewhere, &draft, "2026-10-04T15:02:11Z"), Err(PlanError::NotPermitted));
+            prop_assert_eq!(publish_edited_plan(&elsewhere, &draft, &edit, "2026-10-04T15:02:11Z"), Err(PlanError::NotPermitted));
+            let stored = publish_plan(&test_permit(&did, &draft.key.subject), &draft, "2026-10-04T15:02:11Z").expect("plan").stored();
+            prop_assert_eq!(restore_plan(&elsewhere, &stored), Err(PlanError::NotPermitted));
         }
 
         /// A stored plan is never executed for someone else, nor after its
@@ -447,13 +511,13 @@ mod tests {
             (did, draft) in arb_draft(), (other, _) in arb_draft()
         ) {
             prop_assume!(did != other);
-            let stored = publish_plan(&did, &draft, "2026-10-04T15:02:11Z").expect("plan").stored();
-            prop_assert_eq!(restore_plan(&other, &stored), Err(PlanError::NotTheOwnersRecord));
+            let stored = publish_plan(&test_permit(&did, &draft.key.subject), &draft, "2026-10-04T15:02:11Z").expect("plan").stored();
+            prop_assert_eq!(restore_plan(&test_permit(&other, &stored.key.subject), &stored), Err(PlanError::NotTheOwnersRecord));
             let altered = StoredPublishPlan {
                 record_json: stored.record_json.replace("embodiesPhilosophy", "rejectsPhilosophy"),
                 ..stored.clone()
             };
-            prop_assert_eq!(restore_plan(&did, &altered), Err(PlanError::NotTheOwnersRecord));
+            prop_assert_eq!(restore_plan(&test_permit(&did, &altered.key.subject), &altered), Err(PlanError::NotTheOwnersRecord));
         }
 
         #[test]
@@ -487,8 +551,8 @@ mod tests {
         ) {
             let edit = ClaimEdit { object: format!("org.openlore.philosophy.{slug}"), confidence_bp: bp };
             let composed_at = "2026-10-04T15:02:11Z";
-            let before = publish_plan(&did, &draft, composed_at).expect("plan").record();
-            let plan = publish_edited_plan(&did, &draft, &edit, composed_at).expect("edited plan");
+            let before = publish_plan(&test_permit(&did, &draft.key.subject), &draft, composed_at).expect("plan").record();
+            let plan = publish_edited_plan(&test_permit(&did, &draft.key.subject), &draft, &edit, composed_at).expect("edited plan");
             let after = plan.record();
             for (field, value) in after.as_object().expect("object") {
                 match field.as_str() {
@@ -500,7 +564,7 @@ mod tests {
             prop_assert_eq!(after.as_object().map(|o| o.len()), before.as_object().map(|o| o.len()));
             prop_assert!(read_back_matches(&after, plan.rkey()));
             prop_assert_eq!(plan.key(), &draft.key);
-            prop_assert_eq!(&restore_plan(&did, &plan.stored()), &Ok(plan.clone()));
+            prop_assert_eq!(&restore_plan(&test_permit(&did, &plan.stored().key.subject), &plan.stored()), &Ok(plan.clone()));
         }
     }
 
@@ -514,7 +578,7 @@ mod tests {
         fn a_retraction_is_the_originals_record_plus_one_retracts_reference(
             (did, draft) in arb_draft(), published_at in 0i64..2_000_000_000, later in 1i64..1_000_000,
         ) {
-            let original = publish_plan(&did, &draft, &rfc3339_utc(published_at)).expect("plan");
+            let original = publish_plan(&test_permit(&did, &draft.key.subject), &draft, &rfc3339_utc(published_at)).expect("plan");
             let composed_at = rfc3339_utc(published_at + later);
             let plan = retract_plan(&did, original.rkey(), original.claim(), &composed_at).expect("retraction");
             let (before, after) = (original.record(), plan.record());
@@ -581,7 +645,7 @@ mod tests {
         #[test]
         fn nobody_retracts_someone_elses_claim((did, draft) in arb_draft(), (other, _) in arb_draft()) {
             prop_assume!(did != other);
-            let original = publish_plan(&did, &draft, "2026-10-04T15:02:11Z").expect("plan");
+            let original = publish_plan(&test_permit(&did, &draft.key.subject), &draft, "2026-10-04T15:02:11Z").expect("plan");
             prop_assert_eq!(
                 retract_plan(&other, original.rkey(), original.claim(), "2026-10-04T16:00:00Z"),
                 Err(PlanError::NotTheOwnersRecord)
@@ -603,7 +667,7 @@ mod tests {
             label in proptest::sample::select(PlanKind::ALL.to_vec()),
             confirm in proptest::sample::select(PlanKind::ALL.to_vec()),
         ) {
-            let publish = publish_plan(&did, &draft, "2026-10-04T15:02:11Z").expect("plan");
+            let publish = publish_plan(&test_permit(&did, &draft.key.subject), &draft, "2026-10-04T15:02:11Z").expect("plan");
             let retract = retract_plan(&did, publish.rkey(), publish.claim(), "2026-10-04T16:00:00Z")
                 .expect("retraction");
             let share = crate::share::share_post_plan(
@@ -623,7 +687,7 @@ mod tests {
             ] {
                 let relabelled = StoredPublishPlan { kind: label, ..stored };
                 let admitted = match confirm {
-                    PlanKind::Publish => restore_plan(&did, &relabelled).is_ok(),
+                    PlanKind::Publish => restore_plan(&test_permit(&did, &relabelled.key.subject), &relabelled).is_ok(),
                     PlanKind::Retract => restore_retract_plan(&did, &relabelled).is_ok(),
                     PlanKind::Share => crate::share::restore_share_plan(&did, &relabelled).is_ok(),
                 };
@@ -660,8 +724,8 @@ mod tests {
             };
             let draft = ClaimDraft { key: key.clone(), evidence: link.evidence.clone(), confidence_bp: 10_000 };
             let edit = ClaimEdit { object: link.object.clone(), confidence_bp: 10_000 };
-            prop_assert_eq!(publish_plan(&did, &draft, composed_at), Err(PlanError::ReservedPredicate));
-            prop_assert_eq!(publish_edited_plan(&did, &draft, &edit, composed_at), Err(PlanError::ReservedPredicate));
+            prop_assert_eq!(publish_plan(&test_permit(&did, &draft.key.subject), &draft, composed_at), Err(PlanError::ReservedPredicate));
+            prop_assert_eq!(publish_edited_plan(&test_permit(&did, &draft.key.subject), &draft, &edit, composed_at), Err(PlanError::ReservedPredicate));
 
             let record = claim_record_json(&link);
             let stored = StoredPublishPlan {
@@ -670,8 +734,8 @@ mod tests {
                 key,
                 record_json: record.to_string(),
             };
-            prop_assert!(restore_plan(&did, &stored).is_err(), "labelled {:?}", label);
-            prop_assert!(restore_plan(&did, &StoredPublishPlan { kind: PlanKind::Publish, ..stored }).is_err(), "refused");
+            prop_assert!(restore_plan(&test_permit(&did, &stored.key.subject), &stored).is_err(), "labelled {:?}", label);
+            prop_assert!(restore_plan(&test_permit(&did, &stored.key.subject), &StoredPublishPlan { kind: PlanKind::Publish, ..stored }).is_err(), "refused");
 
             let reserved = link_predicate();
             let predicate = [
@@ -684,8 +748,8 @@ mod tests {
                 key: SuggestionKey { predicate, ..ordinary.key.clone() },
                 ..ordinary
             };
-            let plan = publish_plan(&did, &resembling, composed_at).expect("a look-alike is an ordinary claim");
-            prop_assert_eq!(&restore_plan(&did, &plan.stored()), &Ok(plan.clone()));
+            let plan = publish_plan(&test_permit(&did, &resembling.key.subject), &resembling, composed_at).expect("a look-alike is an ordinary claim");
+            prop_assert_eq!(&restore_plan(&test_permit(&did, &plan.stored().key.subject), &plan.stored()), &Ok(plan.clone()));
         }
     }
 

@@ -2227,6 +2227,393 @@ pub fn scan_identity_link_compose_only_via_proven_link(
 }
 
 // -----------------------------------------------------------------------------
+// Publish permit rules (review-app-repos-and-accounts, ADR-089 §6)
+// -----------------------------------------------------------------------------
+//
+// * `review_publish_plan_needs_permit`: in the review app and review-domain,
+//   the three publish-plan constructors take a `&SigningPermit` first and are
+//   called only with a permit; `create_claim_record` is called only from the
+//   executor.
+// * `authority_evidence_only_from_adapters`: `RepoFacts` and
+//   `GithubAccountProfile` (the evidence `may_sign` decides from) are built
+//   only by the GitHub and DuckDB adapters and test support (shared allowlist
+//   with owner-only-signing, ADR-086).
+// * `signing_permit_not_serializable`: no serde on `SigningPermit`.
+
+/// The constructors that build a `PublishPlan`.
+const PUBLISH_PLAN_CONSTRUCTORS: &[&str] = &["publish_plan", "publish_edited_plan", "restore_plan"];
+
+/// Where `review_publish_plan_needs_permit` looks.
+const PUBLISH_PLAN_SCOPES: &[&str] = &[REVIEW_APP_SOURCE_DIR, "crates/review-domain/src"];
+
+/// The one review-app source that creates claim records.
+const CLAIM_WRITE_SOURCE: &str = "crates/openlore-review-app/src/executor.rs";
+
+/// The permit type a publish plan needs.
+const SIGNING_PERMIT: &str = "SigningPermit";
+
+/// Every identifier in a syntax node (a call argument, a parameter type).
+#[derive(Default)]
+struct IdentCollector {
+    idents: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for IdentCollector {
+    fn visit_ident(&mut self, ident: &'ast proc_macro2::Ident) {
+        self.idents.push(ident.to_string());
+    }
+}
+
+fn idents_of_expr(expr: &syn::Expr) -> Vec<String> {
+    let mut collector = IdentCollector::default();
+    collector.visit_expr(expr);
+    collector.idents
+}
+
+fn idents_of_type(ty: &syn::Type) -> Vec<String> {
+    let mut collector = IdentCollector::default();
+    collector.visit_type(ty);
+    collector.idents
+}
+
+fn last_segment(path: &syn::Path) -> Option<String> {
+    path.segments
+        .last()
+        .map(|segment| segment.ident.to_string())
+}
+
+/// Production calls and definitions of the publish-plan constructors, and
+/// `create_claim_record` calls, as findings (test-only items skipped).
+#[derive(Default)]
+struct PublishPlanCollector {
+    findings: Vec<String>,
+}
+
+impl PublishPlanCollector {
+    fn check_definition(&mut self, signature: &syn::Signature) {
+        let name = signature.ident.to_string();
+        if !PUBLISH_PLAN_CONSTRUCTORS.contains(&name.as_str()) {
+            return;
+        }
+        let takes_permit = match signature.inputs.first() {
+            Some(syn::FnArg::Typed(first)) => idents_of_type(&first.ty)
+                .iter()
+                .any(|ident| ident == SIGNING_PERMIT),
+            _ => false,
+        };
+        if !takes_permit {
+            self.findings.push(format!(
+                "`fn {name}` does not take a `&{SIGNING_PERMIT}` first"
+            ));
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for PublishPlanCollector {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if !is_test_only(&item.attrs) {
+            syn::visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if !is_test_only(&item.attrs) {
+            self.check_definition(&item.sig);
+            syn::visit::visit_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(callee) = call.func.as_ref() {
+            let name = last_segment(&callee.path).unwrap_or_default();
+            if PUBLISH_PLAN_CONSTRUCTORS.contains(&name.as_str()) {
+                let with_permit = call.args.first().is_some_and(|first| {
+                    idents_of_expr(first)
+                        .iter()
+                        .any(|ident| ident.to_ascii_lowercase().contains("permit"))
+                });
+                if !with_permit {
+                    self.findings.push(format!(
+                        "`{name}` called without a `{SIGNING_PERMIT}` argument"
+                    ));
+                }
+            }
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "create_claim_record" {
+            self.findings
+                .push("`create_claim_record` called".to_string());
+        }
+        syn::visit::visit_expr_method_call(self, call);
+    }
+}
+
+/// Pure rule for one source at `rel_path`: every production publish-plan
+/// constructor defined or called without a permit, and every
+/// `create_claim_record` call outside the executor, as findings.
+pub fn classify_publish_plan_needs_permit(rel_path: &str, source: &str) -> Vec<String> {
+    let file = match syn::parse_file(source) {
+        Ok(file) => file,
+        Err(error) => {
+            return vec![format!(
+                "review_publish_plan_needs_permit: {rel_path}: unparsable ({error})"
+            )]
+        }
+    };
+    let mut collector = PublishPlanCollector::default();
+    collector.visit_file(&file);
+    collector
+        .findings
+        .into_iter()
+        .filter(|finding| {
+            rel_path != CLAIM_WRITE_SOURCE || !finding.contains("create_claim_record")
+        })
+        .map(|finding| {
+            format!(
+                "review_publish_plan_needs_permit: {rel_path}: {finding} — a publish plan is \
+                 built only from a permit minted by `may_sign` in the request, and only \
+                 {CLAIM_WRITE_SOURCE} writes a claim (ADR-089 §3, BR-RRA-1)"
+            )
+        })
+        .collect()
+}
+
+fn workspace_relative(workspace_root: &Path, path: &Path) -> String {
+    path.strip_prefix(workspace_root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// Effect shell for `review_publish_plan_needs_permit`; the plan module and
+/// the executor must exist, so the rule cannot pass vacuously.
+pub fn scan_review_publish_plan_needs_permit(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for scope in PUBLISH_PLAN_SCOPES {
+        for path in rust_sources_under(&workspace_root.join(scope)) {
+            findings.extend(classify_publish_plan_needs_permit(
+                &workspace_relative(workspace_root, &path),
+                &std::fs::read_to_string(&path)?,
+            ));
+        }
+    }
+    for required in ["crates/review-domain/src/plans.rs", CLAIM_WRITE_SOURCE] {
+        if !workspace_root.join(required).is_file() {
+            findings.push(format!(
+                "review_publish_plan_needs_permit: {required} missing — the rule would pass vacuously"
+            ));
+        }
+    }
+    Ok(findings)
+}
+
+/// Crates allowed to build authority evidence (one allowlist with
+/// owner-only-signing, ADR-086/089).
+const AUTHORITY_EVIDENCE_CRATES: &[&str] = &[
+    "crates/adapter-github/",
+    "crates/adapter-duckdb/",
+    "crates/test-support/",
+];
+
+/// The evidence types `may_sign` decides from.
+const AUTHORITY_EVIDENCE_TYPES: &[&str] = &["RepoFacts", "GithubAccountProfile"];
+
+#[derive(Default)]
+struct EvidenceCollector {
+    built: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for EvidenceCollector {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if !is_test_only(&item.attrs) {
+            syn::visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if !is_test_only(&item.attrs) {
+            syn::visit::visit_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_struct(&mut self, built: &'ast syn::ExprStruct) {
+        if let Some(name) = last_segment(&built.path) {
+            if AUTHORITY_EVIDENCE_TYPES.contains(&name.as_str()) {
+                self.built.push(format!("`{name} {{ .. }}`"));
+            }
+        }
+        syn::visit::visit_expr_struct(self, built);
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(callee) = call.func.as_ref() {
+            let segments: Vec<String> = callee
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect();
+            let builds = segments
+                .iter()
+                .rev()
+                .take(2)
+                .any(|segment| AUTHORITY_EVIDENCE_TYPES.contains(&segment.as_str()));
+            if builds {
+                self.built.push(format!("`{}(..)`", segments.join("::")));
+            }
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+}
+
+/// Pure rule for one source at `rel_path`: outside the adapters and test
+/// support, every production construction of authority evidence.
+pub fn classify_authority_evidence(rel_path: &str, source: &str) -> Vec<String> {
+    if AUTHORITY_EVIDENCE_CRATES
+        .iter()
+        .any(|allowed| rel_path.starts_with(allowed))
+    {
+        return Vec::new();
+    }
+    let Ok(file) = syn::parse_file(source) else {
+        return vec![format!(
+            "authority_evidence_only_from_adapters: {rel_path}: unparsable"
+        )];
+    };
+    let mut collector = EvidenceCollector::default();
+    collector.visit_file(&file);
+    collector
+        .built
+        .into_iter()
+        .map(|built| {
+            format!(
+                "authority_evidence_only_from_adapters: {rel_path}: builds {built} — only \
+                 adapter-github, adapter-duckdb and test support build what `may_sign` decides \
+                 from; a stored status is never proof (ADR-089 §6)"
+            )
+        })
+        .collect()
+}
+
+/// Every production source under `crates/*/src`.
+fn crate_sources(workspace_root: &Path) -> Vec<PathBuf> {
+    rust_sources_under(&workspace_root.join("crates"))
+        .into_iter()
+        .filter(|path| path.components().any(|c| c.as_os_str() == "src"))
+        .collect()
+}
+
+/// Effect shell for `authority_evidence_only_from_adapters`.
+pub fn scan_authority_evidence_only_from_adapters(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for path in crate_sources(workspace_root) {
+        findings.extend(classify_authority_evidence(
+            &workspace_relative(workspace_root, &path),
+            &std::fs::read_to_string(&path)?,
+        ));
+    }
+    Ok(findings)
+}
+
+/// The module that defines `SigningPermit`.
+const SIGNING_PERMIT_SOURCE: &str = "crates/claim-domain/src/authority.rs";
+
+fn names_serde(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| match &attr.meta {
+        syn::Meta::List(list) => {
+            let tokens = list.tokens.to_string();
+            tokens.contains("Serialize")
+                || tokens.contains("Deserialize")
+                || attr.path().is_ident("serde")
+        }
+        _ => false,
+    })
+}
+
+#[derive(Default)]
+struct PermitSerdeCollector {
+    defined: bool,
+    findings: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for PermitSerdeCollector {
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        if item.ident == SIGNING_PERMIT {
+            self.defined = true;
+            if names_serde(&item.attrs) {
+                self.findings
+                    .push(format!("`{SIGNING_PERMIT}` derives serde"));
+            }
+        }
+        syn::visit::visit_item_struct(self, item);
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let for_permit = match item.self_ty.as_ref() {
+            syn::Type::Path(ty) => last_segment(&ty.path).as_deref() == Some(SIGNING_PERMIT),
+            _ => false,
+        };
+        let serde_trait = item
+            .trait_
+            .as_ref()
+            .and_then(|(_, path, _)| last_segment(path))
+            .is_some_and(|name| name == "Serialize" || name == "Deserialize");
+        if for_permit && serde_trait {
+            self.findings
+                .push(format!("`{SIGNING_PERMIT}` implements serde"));
+        }
+        syn::visit::visit_item_impl(self, item);
+    }
+}
+
+/// Pure rule for one source: serde derived or implemented on
+/// `SigningPermit`, as findings; `true` when the source defines it.
+pub fn classify_signing_permit_serde(rel_path: &str, source: &str) -> (bool, Vec<String>) {
+    let Ok(file) = syn::parse_file(source) else {
+        return (false, Vec::new());
+    };
+    let mut collector = PermitSerdeCollector::default();
+    collector.visit_file(&file);
+    let findings = collector
+        .findings
+        .into_iter()
+        .map(|finding| {
+            format!(
+                "signing_permit_not_serializable: {rel_path}: {finding} — a permit is never \
+                 stored or sent; only `may_sign` mints one in the request (ADR-089 §2)"
+            )
+        })
+        .collect();
+    (collector.defined, findings)
+}
+
+/// Effect shell for `signing_permit_not_serializable`; the permit must be
+/// defined in its module, so the rule cannot pass vacuously.
+pub fn scan_signing_permit_not_serializable(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    let mut defined = false;
+    for path in crate_sources(workspace_root) {
+        let rel_path = workspace_relative(workspace_root, &path);
+        let (defines, found) =
+            classify_signing_permit_serde(&rel_path, &std::fs::read_to_string(&path)?);
+        defined |= defines && rel_path == SIGNING_PERMIT_SOURCE;
+        findings.extend(found);
+    }
+    if !defined {
+        findings.push(format!(
+            "signing_permit_not_serializable: {SIGNING_PERMIT_SOURCE} does not define \
+             `{SIGNING_PERMIT}` — the rule would pass vacuously"
+        ));
+    }
+    Ok(findings)
+}
+
+// -----------------------------------------------------------------------------
 // Review-app rules (bluesky-claim-review-app, component-boundaries §5)
 // -----------------------------------------------------------------------------
 //
@@ -3181,6 +3568,9 @@ pub fn run() -> anyhow::Result<i32> {
     let link_preview_findings = scan_link_preview_proves_from_a_fresh_read(&workspace_root)?;
     let review_accounts_write_findings =
         scan_review_accounts_write_only_in_github_route(&workspace_root)?;
+    let publish_permit_findings = scan_review_publish_plan_needs_permit(&workspace_root)?;
+    let authority_evidence_findings = scan_authority_evidence_only_from_adapters(&workspace_root)?;
+    let signing_permit_serde_findings = scan_signing_permit_not_serializable(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -3207,6 +3597,9 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(identity_verify_findings);
     rendered.extend(link_preview_findings);
     rendered.extend(review_accounts_write_findings);
+    rendered.extend(publish_permit_findings);
+    rendered.extend(authority_evidence_findings);
+    rendered.extend(signing_permit_serde_findings);
 
     if rendered.is_empty() {
         println!(

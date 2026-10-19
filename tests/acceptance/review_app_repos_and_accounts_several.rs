@@ -859,7 +859,6 @@ fn given_tidal_scan_paused_after_one_repo(world: &ReviewWorld) -> Browser {
 ///   And nothing is written to her Bluesky repo, the suggestion stays pending, and the refusal is counted
 /// ```
 #[test]
-#[ignore = "DELIVER 02-14: preview re-reads the repo owner (ADR-089 permit)"]
 fn a_repo_transferred_away_after_the_scan_can_no_longer_be_published() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);

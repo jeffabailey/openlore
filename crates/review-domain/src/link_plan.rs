@@ -293,7 +293,7 @@ mod tests {
     //! owner's link plan, its relabellings, its tamperings, another DID's
     //! link plan, an ordinary publish plan, a retraction and a share draft.
     use super::*;
-    use crate::plans::{publish_plan, restore_plan, retract_plan, ClaimDraft};
+    use crate::plans::{publish_plan, restore_plan, retract_plan, test_permit, ClaimDraft};
     use ports::claim_domain::identity_link::{
         check_link, link_predicate, self_attested_link_record, GithubObservation, LinkDraft,
         ProofCheck,
@@ -406,7 +406,7 @@ mod tests {
             prop_assert!(restore_link_plan(&did, &others.stored()).is_err());
 
             // An ordinary claim publish is not a link.
-            let ordinary = publish_plan(&did, &ClaimDraft {
+            let ordinary = publish_plan(&test_permit(&did, &format!("github:{login}/repo")), &ClaimDraft {
                 key: SuggestionKey {
                     subject: format!("github:{login}/repo"),
                     predicate: "embodiesPhilosophy".into(),
@@ -459,7 +459,7 @@ mod tests {
             }
 
             // The link plan is never a claim publish (F-02).
-            prop_assert!(restore_plan(&did, &stored).is_err());
+            prop_assert!(restore_plan(&test_permit(&did, &stored.key.subject), &stored).is_err());
         }
 
         /// Universe: owner DIDs × another DID × GitHub answers (a real or a
@@ -498,7 +498,7 @@ mod tests {
                     prop_assert_eq!(&plan.claim().subject, &did);
                     prop_assert_eq!(&plan.claim().object, &format!("github:{login}"));
                     prop_assert_eq!(&restore_link_plan(&did, &plan.stored()), &Ok(plan.clone()));
-                    prop_assert!(restore_plan(&did, &plan.stored()).is_err());
+                    prop_assert!(restore_plan(&test_permit(&did, &plan.stored().key.subject), &plan.stored()).is_err());
                 }
                 // RA-11b: a bio naming another DID is explained with that DID.
                 Err(refusal) if real_account && bio_kind == 2 => {
@@ -565,10 +565,10 @@ mod tests {
                 confidence_bp: 10_000,
             };
             prop_assert_eq!(
-                publish_plan(&did, &as_queue_entry, COMPOSED_AT).err(),
+                publish_plan(&test_permit(&did, &as_queue_entry.key.subject), &as_queue_entry, COMPOSED_AT).err(),
                 Some(PlanError::ReservedPredicate)
             );
-            prop_assert!(restore_plan(&did, &stored).is_err());
+            prop_assert!(restore_plan(&test_permit(&did, &stored.key.subject), &stored).is_err());
         }
 
         /// Universe: every way a link confirm can end without publishing —
