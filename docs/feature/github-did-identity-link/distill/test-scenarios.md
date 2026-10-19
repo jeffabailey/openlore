@@ -299,3 +299,109 @@ The default DEVOPS matrix (clean / with-pre-commit / with-stale-config) describe
 | GitHub chained or cross-host redirect | IV-10 |
 | PDS unreachable | IL-9a |
 | app session expired (server-side and cookie) / repo-host session expired | RA-8 |
+
+## Slice 4 — the viewer's linked-identity line (DISTILL 2026-10-19, revised after review cycle 1)
+
+- **Designer**: Quinn · **Inherits**: `design/slice-4-viewer-linked-identity.md` (VL-1..19), design
+  `wave-decisions.md` § Slice 4 (D-VL-1..11, C-VL-1..3; status PROPOSED, the user started the slice;
+  open questions defaulted: no `/peers` line, no `/identities` page, legend and notice as proposed),
+  `upstream-changes.md` UC-11 (stories US-VL-1..3 = the scope boundary), `deliver/upstream-issues.md`
+  U-6, U-7, U-19/U-20, U-39.
+- **Hand-off state**: every slice-4 scenario is `#[ignore = "DELIVER 04-NN: …"]`, the walking
+  skeleton included (D-d unchanged), plus one ignored xtask case for the fault-seam guard. The
+  `04-NN` numbers are DISTILL's proposed order; the roadmap may renumber. IR-15 was narrowed
+  (D-VL-T5) and still passes.
+- **Product-surface term (review F9)**: "identity list" in scenario text names the `openlore
+  identity list` command the reader already uses to see his linked identities; it is a user-facing
+  surface, not an implementation term, and is the stated parity reference (D-VL-5).
+
+### Inputs read (slice 4)
+
+| Input | Status |
+|---|---|
+| `design/slice-4-viewer-linked-identity.md`, `design/wave-decisions.md` § Slice 4, `design/upstream-changes.md` UC-11 | + |
+| `distill/{test-scenarios,walking-skeleton,wave-decisions,red-classification}.md`, `deliver/upstream-issues.md` (U-6, U-7, U-19, U-20, U-39) | + |
+| `docs/product/architecture/brief.md` (GDL "Driving ports" names the four slice-4 GETs) | + |
+| `docs/product/kpi-contracts.yaml` | + — KPI-GDL-1 ("0 associations without this reader's Verified check") applies (VL-1, VL-4, VL-5); no new KPI |
+| `docs/product/journeys/explore-the-graph.yaml` | + (context: the `/score` and traversal surfaces); no journey names the line |
+| `discuss/`, `devops/` | - (not found) — stories UC-11 stand in; default environment matrix |
+| Code: `identity_link_readers.rs`, `viewer_contributor_scoring*.rs`, `support/{mod,identity_links,people}.rs`, `claim-domain/src/identity_link.rs`, `viewer-domain/src`, `adapter-http-viewer/src/lib.rs`, `cli/src/verbs/{ui,identity_reads}.rs`, `cli/src/render/identity.rs`, `xtask/src/check_arch.rs` | + |
+
+### Test files (slice 4)
+
+| File | Layer | Test fns | Scenarios | Active today |
+|---|---|---|---|---|
+| `tests/acceptance/viewer_linked_identity.rs` | 3/4 subprocess (REAL `openlore ui` + DuckDB; REAL indexer for `/search`) | 13 | VL-1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 15, 17a, 17b, 18, 19 | 0 |
+| `tests/acceptance/viewer_linked_identity_invariants.rs` | 3/4 subprocess + layer 2 proptest (256 cases) | 5 | VL-8, 9, 13, 14, 16, 20 + VL-2p (parity property) | 0 |
+| `xtask/tests/viewer_fail_seam.rs` (one case appended) | 1 (guard scan over a temp workspace) | 1 | VL-G (the fault seam is release-forbidden) | 0 |
+| **Total** | | **19** | **21 VL scenarios + 1 property + 1 guard case** | **0** |
+
+Vocabulary: `support/viewer_identities.rs` (`PersonPage`, `LinkRead`, `GithubStanding`, `ViewerOpts`,
+`open_viewer`, `region_listing`, `what_jeff_lists`, region selection by heading/role). A page is read
+back as an `identity list` listing, so the slice-2 `assert_shown` / `assert_check_age` / `Shown`
+apply unchanged. `support/mod.rs`: `ViewerServer::start_with_env`, `startup_lines()`, stdout drained
+on its own thread with a 20 s startup deadline; `encode_query_component_for_test` made `pub`.
+
+### Traceability — scenario → story / decision
+
+| ID | Outcome (test fn, in words) | Story | Traces to | Proposed step |
+|---|---|---|---|---|
+| VL-1 (WS) | Rachel's contributor page shows her GitHub account as verified | US-VL-1 | D-VL-1, D-VL-5, C-VL-2, KPI-GDL-1 | 04-01 |
+| VL-2 + VL-18 | Every link standing reads in the viewer exactly as Jeff's identity list prints it (10 rows: verified today; 31 days + hint; contested, and contested past 30 days without hint; not checked naming two records; not checked naming one record; proof gone × 4 verdicts, each recorded by a real `identity verify`) | US-VL-1 | D-VL-5, U-8, U-9 | 04-02 |
+| VL-2p | For every listing, the viewer's lines are the identity list lines without backticks (property) | US-VL-1 | D-VL-5 | 04-02 |
+| VL-3 | A GitHub person's page shows the DID that linked the account, in any spelling | US-VL-2 | D-VL-6, U-6 | 04-03 |
+| VL-17a | Until Jeff re-checks, a renamed account's line stays on its old login's page | US-VL-2 | D-VL-6 (known limit) | 04-03 |
+| VL-17b | When Jeff re-checks, a renamed account's line moves to its new login's page | US-VL-2 | D-VL-6 | 04-03 |
+| VL-4 | A contested account reads contested on every page about it | US-VL-1, US-VL-2 | GDL-D14, C-VL-3, KPI-GDL-1 | 04-03 |
+| VL-5 | A stranger's link about Tobias and flawed link records never show as anyone's linked identity | US-VL-1 | C-GDL-1, ADR-084 §3, KPI-GDL-1 | 04-04 |
+| VL-6 | A retracted or superseded link, and the retraction itself, never show | US-VL-1 | U-39, GDL-D5/D9 | 04-04 |
+| VL-7 | A link from a peer Jeff removed does not show until he follows her again | US-VL-1, US-VL-2 | U-19, U-20 | 04-04 |
+| VL-10 | A claim's detail page shows its author's linked identity | US-VL-1 | D-VL-1 | 04-05 |
+| VL-11 + VL-19 | Network search shows each author's linked identity and labels link rows (index reachable / not configured) | US-VL-3 | D-VL-10, U-7, ADR-085 §8 | 04-06 |
+| VL-9 + VL-14 | Pages still load and say so when linked identities cannot be read (3 per-request reads × 4 pages; the startup probe × 5 pages) | US-VL-1, US-VL-3 | D-VL-7 | 04-07 |
+| VL-G | An ungated identity-link fault seam is refused by the release-build guard | — (enforcement) | D-VL-11 | 04-07 |
+| VL-12 | A person with no link shows no linked-identities region (incl. a non-username login, a non-DID contributor, and an empty store) | US-VL-1, US-VL-2 | D-VL-1, design state table | 04-01 |
+| VL-15 | A check dated in the future is ignored | US-VL-1 | Q-GDL-D4 / Q-RM-3 | 04-02 |
+| VL-20 | A store made before identity links shows every page, and no linked identity it does not hold | US-VL-1, US-VL-2 | IL-13 fixture, platform review F-2 | 04-01 |
+| VL-8 + VL-16 | Showing linked identities asks GitHub nothing, changes nothing, and reads the same with GitHub down | shared AC | D-VL-8, C-VL-1, C-VL-2 | 04-08 |
+| VL-13 | Results updated in place carry the same linked identities as the full page | shared AC | ADR-033 | 04-08 |
+
+Story coverage: **US-VL-1** VL-1, 2, 2p, 4, 5, 6, 7, 9, 10, 12, 14, 15, 18, 20 · **US-VL-2** VL-3,
+4, 7, 12, 17a/b, 20 · **US-VL-3** VL-11, 19, VL-9/14 search rows · shared AC ("same words", "no
+GitHub request", "nothing written", "only self-authored active non-removed links", "contested and
+failed proofs are stated") VL-2/2p, VL-8/16, VL-5/6/7, VL-4.
+
+Mix (informational; counted per scenario ID, VL-2p and VL-G excluded): walking skeleton 1 · happy
+3 (VL-3, VL-10, VL-11) · error / edge / boundary / guardrail 17 (VL-2, 4, 5, 6, 7, 8, 9, 12, 13, 14,
+15, 16, 17a, 17b, 18, 19, 20). Non-happy: 17 / 21 (81 %).
+
+### Driving-adapter and adapter coverage (slice 4)
+
+| Port | Scenario(s) |
+|---|---|
+| viewer `GET /score?contributor=` | VL-1, 2, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 20 |
+| viewer `GET /project?subject=github:` | VL-3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 16, 17a/b, 20 |
+| viewer `GET /claims/{cid}` | VL-8, 9, 10, 13, 14, 16 |
+| viewer `GET /search` | VL-9, 11, 13, 14, 19 |
+| `IdentityLinkCheckReadPort` / `LinkCandidateReadPort` / `LinkLineageReadPort` (real DuckDB, viewer side) | every scenario; each failing per request: VL-9; probe: VL-14; upgraded store: VL-20 |
+| `IndexQueryPort` (REAL `openlore-indexer`) | VL-9, 11, 13, 14 |
+| GitHub (never asked by the viewer) | VL-1, VL-8 (request log of `FakeGithubAccounts` wired as the viewer's GitHub base) |
+| `identity verify` (records the checks VL-2 reads) | VL-2, VL-4, VL-17b |
+
+### Environments (default matrix — no DEVOPS wave)
+
+| Environment | Scenario(s) |
+|---|---|
+| clean (fresh store, one link) | VL-1 (walking skeleton), VL-10, VL-12 |
+| clean, empty (no claim, no link) | VL-12 row group 2 |
+| populated pre-v7 store (upgrade) | VL-20 (frozen fixture `tests/fixtures/identity-link-pre-v7-store/`) |
+| with-stale-config: checks older than 30 days | VL-2 rows "31 days later" (hint; contested without hint = VL-18) |
+| with-stale-config: a check dated in the future | VL-15 (seeded row — no verb can date a check in the future) |
+| with-stale-config: a damaged store (check table gone) | VL-14 (direct `DROP TABLE` — no verb damages a store) |
+| with-pre-commit | **N/A** — the viewer runs no hooks and reads no hook config |
+| GitHub unreachable | VL-16 |
+| network index not configured | VL-19 |
+
+**Walking skeleton and with-stale-config (review F5)**: documented N/A for the skeleton. VL-1 runs
+in the clean environment only; the stale states are covered by VL-2 (31-day rows), VL-15 (future
+check) and VL-14 (damaged store), each a focused scenario with its own Given.

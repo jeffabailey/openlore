@@ -213,7 +213,7 @@ per read, or one seam with a target value; the release-build guard covers it).
 
 Parity property (D-VL-5): one property over generated `ListedLink`s asserts the viewer region's
 text equals the CLI line (`render_linked_identities`) with backticks removed. Home: the `cli`
-crate's tests, which can reach both renders (`cli` already depends on `viewer-domain`); owned by
+crate's tests, which can reach both renders (`cli` does not depend on `viewer-domain`; it reaches the viewer render through `adapter-http-viewer` or a `viewer-domain` dev-dependency, chosen in DELIVER, see distill D-VL-T11); owned by
 the acceptance designer. Inside `viewer-domain`: `Unreadable` renders the notice and no line.
 
 Viewer-only wording (not CLI parity; `viewer-domain` constants, open question 3 for the user):

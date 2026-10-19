@@ -59,6 +59,11 @@ pub mod people;
 // review_app_identity_link_readers.
 pub mod identity_links;
 
+// github-did-identity-link slice 4 (DISTILL 2026-10-19): the viewer's
+// linked-identity region vocabulary shared by viewer_linked_identity /
+// viewer_linked_identity_invariants.
+pub mod viewer_identities;
+
 /// The GitHub request budget of a scrape, shared by every driving port (the
 /// CLI and the viewer), so a port cannot drift from it: a person target
 /// (`user`) reads its public profile once and nothing else; a repo target
@@ -7389,6 +7394,9 @@ pub struct ViewerServer {
     /// Held so the indexer's port stays bound; dropped (releasing it) with the
     /// handle.
     _indexer: Option<IndexerHandle>,
+    /// Every stdout line the viewer printed before `viewer.serve.listening`
+    /// (its startup events, e.g. the slice-4 `viewer.identity_links.probe`).
+    startup_lines: Vec<String>,
 }
 
 impl ViewerServer {
@@ -7508,6 +7516,67 @@ impl ViewerServer {
         fail_countered_peer_count: bool,
         fail_own_dids_read: bool,
         fail_cached_peer_dids_read: bool,
+    ) -> Self {
+        Self::start_inner_with_env(
+            env,
+            github,
+            indexer_url,
+            indexer,
+            fail_active_set_read,
+            fail_peer_claims_count,
+            fail_countered_count,
+            fail_countered_peer_count,
+            fail_own_dids_read,
+            fail_cached_peer_dids_read,
+            &[],
+        )
+    }
+
+    /// github-did-identity-link slice 4 (DISTILL 2026-10-19): start a viewer over
+    /// the env's REAL store with extra env seams — the pinned clock
+    /// (`OPENLORE_TEST_NOW`), the GitHub base (`OPENLORE_GITHUB_API_BASE`, so a
+    /// request the viewer made would reach the `FakeGithubAccounts` log) and the
+    /// identity-link read fault seam — and, when `indexer` is given, `/search`
+    /// wired to it. Vocabulary: `support::viewer_identities::open_viewer`.
+    pub fn start_with_env(
+        env: &TestEnv,
+        indexer: Option<IndexerHandle>,
+        extra_env: &[(&str, String)],
+    ) -> Self {
+        let indexer_url = indexer.as_ref().map(|i| i.indexer_url());
+        Self::start_inner_with_env(
+            env,
+            None,
+            indexer_url,
+            indexer,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            extra_env,
+        )
+    }
+
+    /// Every stdout line the viewer printed before it reported its bound
+    /// address (its startup events).
+    pub fn startup_lines(&self) -> &[String] {
+        &self.startup_lines
+    }
+
+    fn start_inner_with_env(
+        env: &TestEnv,
+        github: Option<GithubServer>,
+        indexer_url: Option<String>,
+        indexer: Option<IndexerHandle>,
+        fail_active_set_read: bool,
+        fail_peer_claims_count: bool,
+        fail_countered_count: bool,
+        fail_countered_peer_count: bool,
+        fail_own_dids_read: bool,
+        fail_cached_peer_dids_read: bool,
+        extra_env: &[(&str, String)],
     ) -> Self {
         use std::io::{BufRead, BufReader};
 
@@ -7632,6 +7701,9 @@ impl ViewerServer {
         if fail_cached_peer_dids_read {
             cmd.env("OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ", "1");
         }
+        for (key, value) in extra_env {
+            cmd.env(key, value);
+        }
 
         let mut child = cmd
             .spawn()
@@ -7640,33 +7712,55 @@ impl ViewerServer {
         // Read the bound-address event off stdout. The serve process prints
         // `{"event":"viewer.serve.listening","addr":"127.0.0.1:<port>"}` once
         // bound (mirrors `indexer.serve.listening`).
-        let stdout = child.stdout.take().expect("openlore ui: stdout pipe");
-        let mut reader = BufReader::new(stdout);
-        let mut addr: Option<String> = None;
-        for _ in 0..50 {
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) => break, // EOF — the viewer exited before binding
-                Ok(_) => {
-                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(line.trim()) {
-                        if event["event"] == "viewer.serve.listening" {
-                            if let Some(a) = event["addr"].as_str() {
-                                addr = Some(a.to_string());
-                                break;
-                            }
-                        }
+        // Drain stderr on its own thread too (review: a full stderr pipe would
+        // block the viewer); the text is kept for the startup-failure message.
+        let stderr_text = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        if let Some(stderr) = child.stderr.take() {
+            let sink = std::sync::Arc::clone(&stderr_text);
+            std::thread::spawn(move || {
+                for line in BufReader::new(stderr).lines() {
+                    let Ok(line) = line else { break };
+                    if let Ok(mut text) = sink.lock() {
+                        text.push_str(&line);
+                        text.push('\n');
                     }
                 }
-                Err(_) => break,
+            });
+        }
+        let stdout = child.stdout.take().expect("openlore ui: stdout pipe");
+        // Drain stdout on its own thread for the viewer's whole life: the pipe
+        // stays open (a later write never meets a closed pipe) and the startup
+        // wait below has a deadline instead of a blocking `read_line`.
+        let (lines_tx, lines_rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                // After startup nobody listens; keep draining regardless.
+                let _ = lines_tx.send(line);
+            }
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut addr: Option<String> = None;
+        let mut startup_lines: Vec<String> = Vec::new();
+        while addr.is_none() {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let Ok(line) = lines_rx.recv_timeout(left) else {
+                break; // deadline passed, or EOF — the viewer exited before binding
+            };
+            let line = line.trim().to_string();
+            match serde_json::from_str::<serde_json::Value>(&line) {
+                Ok(event) if event["event"] == "viewer.serve.listening" => {
+                    addr = event["addr"].as_str().map(str::to_string);
+                }
+                _ => startup_lines.push(line),
             }
         }
         let addr = addr.unwrap_or_else(|| {
             let _ = child.kill();
-            let mut err = String::new();
-            if let Some(mut stderr) = child.stderr.take() {
-                use std::io::Read;
-                let _ = stderr.read_to_string(&mut err);
-            }
+            let _ = child.wait();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let err = stderr_text.lock().map(|t| t.clone()).unwrap_or_default();
             panic!("`openlore ui` did not report a bound address on stdout; stderr: {err}");
         });
 
@@ -7690,6 +7784,7 @@ impl ViewerServer {
             child,
             _github: github,
             _indexer: indexer,
+            startup_lines,
         }
     }
 
@@ -9723,7 +9818,7 @@ pub fn assert_traversal_html_contributors_link_to_score(body: &str, expected_did
 /// Lives in the test harness (NOT a viewer-domain import) so the assertion scans the
 /// OBSERVABLE rendered surface against an INDEPENDENT oracle of the expected href —
 /// Mandate 8 (the rendered byte sequence, not a re-call of the production fn).
-fn encode_query_component_for_test(value: &str) -> String {
+pub fn encode_query_component_for_test(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for &byte in value.as_bytes() {
         let unreserved = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~');

@@ -1164,28 +1164,53 @@ fn a_link_never_changes_a_contributors_score_page() {
         let viewer = ViewerServer::start(&world.env);
         let page = viewer.get(&path);
         assert_eq!(page.status, 200, "{}", page.body);
-        let marker = format!("id=\"{SCORE_RESULTS_ID}\"");
-        let at = page
-            .body
-            .find(&marker)
-            .unwrap_or_else(|| panic!("score results region;\n{}", page.body));
-        page.body[at..].to_string()
+        page.body
     };
     let without = render(&rachels_store(false));
     let with = render(&rachels_store(true));
 
+    // Slice 4 (D-VL-1, review VL-M2): the score page also carries Rachel's
+    // linked-identity line, so this guardrail compares the SCORED pairings by
+    // their own selector, and checks no scored pairing sits in that region.
+    let (rows_without, rows_with) = (scored_pairings(&without), scored_pairings(&with));
     // Precondition (review H1): the page scores Rachel's memory-safety
     // pairing, so the equality below compares a weighted row, not two empty
     // pages.
     let pairing = format!("github:rust-lang/regex — {MEMORY_SAFETY}");
-    for (store, page) in [("without the link", &without), ("with the link", &with)] {
+    for (store, rows) in [
+        ("without the link", &rows_without),
+        ("with the link", &rows_with),
+    ] {
         assert!(
-            page.contains(&pairing) && page.contains("Weight: "),
-            "[{store}] precondition: the score page weighs `{pairing}`;\n{page}"
+            rows.iter().any(|r| r.contains(&pairing)),
+            "[{store}] precondition: the score page weighs `{pairing}`;\n{rows:#?}"
         );
     }
-    assert_eq!(without, with, "the score page must not change with a link");
-    assert!(!with.contains(&RACHEL_GH.subject()), "{with}");
+    assert_eq!(
+        rows_without, rows_with,
+        "the scored pairings must not change with a link"
+    );
+    assert!(
+        rows_with.iter().all(|r| !r.contains(&RACHEL_GH.subject())),
+        "github:rachelk is not scored: {rows_with:#?}"
+    );
+    for region in support::viewer_identities::regions_html(&with) {
+        assert!(
+            !region.contains("Weight: "),
+            "the linked-identities region holds no scored pairing: {region}"
+        );
+    }
+}
+
+/// The scored pairings of a `/score` page, by their own selector: each is a
+/// `<section>` headed by the pairing and carrying its `Weight:` line.
+fn scored_pairings(body: &str) -> Vec<String> {
+    body.split("<section>")
+        .skip(1)
+        .map(|rest| rest.split("</section>").next().unwrap_or(rest))
+        .filter(|section| section.contains("<p>Weight: "))
+        .map(str::to_string)
+        .collect()
 }
 
 /// IR-16 (federation label, decision D-c)

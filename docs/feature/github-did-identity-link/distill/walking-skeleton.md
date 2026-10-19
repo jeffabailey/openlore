@@ -76,3 +76,51 @@ fleshed out scenario by scenario afterwards.
 ## Hand-off note
 
 See the CI policy (D-d) in `test-scenarios.md`: the skeleton ships `#[ignore]`d; DELIVER un-ignores it with the first green step.
+
+## Slice 4 — the viewer's linked-identity line (DISTILL 2026-10-19)
+
+- **Executable SSOT**: `tests/acceptance/viewer_linked_identity.rs` → **VL-1**
+  (`rachels_contributor_page_shows_her_github_account_as_verified`),
+  `#[ignore = "DELIVER 04-01: walking skeleton — the linked-identity region on /score"]`.
+- **Strategy C** (unchanged): REAL `openlore ui` viewer subprocess over the REAL DuckDB store,
+  seeded by the REAL `peer add`/`peer pull` and `identity verify`; FAKE (driven-external only)
+  `FakeGithubAccounts` (Rachel's bio for Jeff's check; wired as the viewer's GitHub base only to
+  prove the viewer asks it nothing), `PeerPds`, `FakePds`, `FakeIdentity`.
+
+```gherkin
+@walking_skeleton @driving_port @driving_adapter @real-io @us-vl-1 @d-vl-1 @d-vl-5 @kpi-gdl-1
+@contract-shape:unbounded-preservation
+Scenario: Rachel's contributor page shows her GitHub account as verified
+  Given Jeff follows Rachel, who published a link to github "rachelk" that her bio proves
+  And Jeff checked her link on 2026-10-01 at 09:00
+  When Jeff opens Rachel's contributor page in his viewer on 2026-10-01 at 18:00
+  Then he sees "did:plc:rachel-test is github:rachelk — verified today" under "Linked identities"
+  And her DID leads to her contributor page and the account to the GitHub person's page
+  And a legend says these are as he last checked them and the viewer never asks GitHub
+  And GitHub was not asked anything while the page was shown
+```
+
+Clock pinned (review F-5): the check runs at `LINKED_AT` and the page at `SAME_DAY`, both through
+`OPENLORE_TEST_NOW`, so "today" never depends on the wall clock. Environment: clean only; the
+with-stale-config states are a documented N/A for the skeleton (VL-2, VL-14, VL-15 cover them).
+
+Litmus: the title is a reader's goal; Given/When are Jeff's actions (follow, check, open a page);
+Then is what he reads on the page; stakeholder sentence: "browsing a contributor, I see who they
+are on GitHub, as I last checked it, without the viewer asking GitHub" (US-VL-1).
+
+End-to-end path:
+
+```
+GET /score?contributor=did:plc:rachel-test        REAL openlore ui (HTTP over loopback)
+  → adapter-http-viewer score handler: now (clock seam), LinkReads handles
+  → ports::read_listed_links(check, candidate, lineage, Everyone, now)   REAL DuckDB
+  → claim_domain::identity_link: active_link_records → link_view → listing_in_scope(Person)
+  → viewer-domain LinkedIdentities::Lines → region inside #score-results
+```
+
+Thinnest thread for DELIVER 04-01: move `read_listed_links` into `ports` (typed `LinkReadError`,
+cli delegates); wire the three read handles in `ui.rs` (read-only probe); the `linked_identity`
+module with the `Lines` render (heading, `<li>` per line with the DID and account links, legend);
+embed it in the `/score` results fragment. VL-12 (no region) goes green in the same step.
+
+Current RED: see `red-classification.md` § Slice 4.

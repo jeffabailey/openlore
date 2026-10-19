@@ -192,3 +192,135 @@ confirmed, D-b ratified (with the DESIGN amendments above), D-c confirmed, D-g a
 1. **DELIVER** — the GitHub REST recorded-fixture contract test (DD-GDL-11); the fixtures do not exist yet. A-10 stays partly unverified until then.
 2. **Owner-only-signing migration list** — add IL-8b, IL-11, IR-11, IR-17 (DD-GDL-10). The frozen v6 fixture (IL-13a/b) holds a `github:` repo claim signed before owner-only-signing; it must keep reading as before (it is a prior row).
 3. **CI** — `review_app_identity_link_readers` needs `cargo build -p openlore-review-app` first (as `review_app_walking_skeleton`).
+
+## Slice 4
+
+DISTILL 2026-10-19 · Quinn · `[lang-mode] rust` · `[policy-mode] inherit` (one row appended to
+`docs/architecture/atdd-infrastructure-policy.md`: the viewer's three link read handles, the fault
+seam and the damaged-store probe) · `[port-mode] inherit` (`tests/common/state_delta.rs`).
+Map: `test-scenarios.md` § Slice 4 · WS: `walking-skeleton.md` § Slice 4 · RED:
+`red-classification.md` § Slice 4.
+
+**Reconciliation passed — 0 contradictions.** DISCUSS absent (WARN; US-VL-1..3 in UC-11 stand in);
+DEVOPS absent (WARN; default matrix, with-pre-commit N/A). DESIGN slice 4 status PROPOSED; the user
+started the slice, open questions defaulted as the orchestrator stated (no `/peers` line, no
+`/identities` page, legend and notice as proposed). Checked against slices 1–3: U-19/U-20 (VL-7 can
+re-follow: IR-20c shows `peer add` re-follows), U-39 (VL-6), U-6 (VL-3/17), U-7 (VL-11). One existing
+test needed narrowing, not a contradiction (D-VL-T5).
+
+### Key Decisions
+
+| # | Decision | Rationale |
+|---|---|---|
+| D-VL-T1 | Same house framework: Rust `#[test]` files, Gherkin in doc comments, two targets (`viewer_linked_identity`, `viewer_linked_identity_invariants`), each test `#[ignore = "DELIVER 04-NN: …"]`, walking skeleton included (D-d). The `04-NN` numbers are a proposed order (04-01 WS + VL-12 … 04-08 guardrails). | Slices 1–3 precedent; roadmap may renumber. |
+| D-VL-T2 | **Density**: 19 VL scenarios + 1 property in 16 test fns. Same-shape scenarios are table loops with the row label in every message: VL-2 (9 standings, + VL-18), VL-3 (spellings), VL-4 (pages), VL-5 (stranger + 5 flaws × 4 pages), VL-7 (lifecycle rows), VL-9 + VL-14 (3 reads + probe × pages), VL-11 + VL-19, VL-8 + VL-16, VL-12 (5 pages incl. malformed params), VL-13 (5 pages). The unbounded wording space is one layer-2 proptest (VL-2p, 256 cases). | MAX-PBT + parametrize; Mandate 9 (proptest only at layer 2). |
+| D-VL-T3 | **Parity by construction**: a page is read back as an `identity list` listing (`region_listing`), so the slice-2 `assert_shown`/`assert_check_age`/`Shown` vocabulary is reused verbatim; VL-2 and VL-15 also compare the page's lines with a real `identity list --did` run at the same pinned instant, backticks removed. | D-VL-5 "character for character"; Mandate-12 reuse. |
+| D-VL-T4 | **Markup the tests read (DISTILL-owned, one place: `support/viewer_identities.rs`), selected by role, not class (review VL-M1)**: the region is the `<section>` labelled (`aria-labelledby`) by a heading reading "Linked identities"; its lines are the `<li>` of a `<ul>`; the legend is text inside the section; an unreadable region keeps its heading and shows only the notice; line text = element text with tags removed; DID → `href="/score?contributor=<%-encoded>"`, account → `href="/project?subject=<%-encoded github:login>"` (ADR-044); on `/search` a region sits inside each author group; the link-row label sits inside its row. | The design fixes wording and accessibility (labelled section, list), not class names; one helper keeps DELIVER free to adjust in one place. |
+| D-VL-T5 | **IR-15 rewritten** (`identity_link_readers.rs`, review VL-M2): it compared the whole `/score` results fragment; slice 4 puts Rachel's line on that page by design (D-VL-1). It now selects the SCORED pairings by their own selector (`scored_pairings`: the `<section>`s carrying a `Weight:` line), asserts they are identical with and without the link, that `github:rachelk` is not scored, and that the linked-identities region holds no scored pairing. Passes today. | KPI-GDL-2 is about scoring, not about the page carrying a line. |
+| D-VL-T6 | **Clock**: the viewer reads `now` through the same clock seam as the CLI identity verbs (`OPENLORE_TEST_NOW`, development builds; `adapter-system-clock`). Tests pin it for VL-2, VL-15. | Design: "now = wall clock at the request edge (as the CLI's identity verbs)". |
+| D-VL-T7 | **Fault seam (VL-9)**: one debug-only seam with a target value, `OPENLORE_VIEWER_FAIL_IDENTITY_LINKS=checks\|candidates\|lineage`, failing that read on every page request and **never** the startup probe (VL-9 asserts no refused-probe event). Pinned by VL-G, an ignored case in `xtask/tests/viewer_fail_seam.rs` that fails until DELIVER 04-07 appends the token to `VIEWER_FAIL_SEAM_TOKENS` (`xtask/src/check_arch.rs`). Documented limit (review F-7): real per-request damage is not reproducible in the subprocess harness. | Design allows "one seam with a target value"; release-forbidden like every viewer seam (D-VL-11). |
+| D-VL-T8 | **Probe refusal (VL-14) is a real condition**, not a seam: the check table is dropped while its schema version stays (`given_my_proof_history_cannot_be_read`), so the read-only probe (`read_listed_links`) fails at startup. Needs at least one stored link (the read skips checks when no link is stored). Observed through the `viewer.identity_links.probe {refused:true}` startup event (`ViewerServer::startup_lines`) and the notice on all four pages, incl. a person with no link and `/search`. | Earned Trust over a real damaged store (C7a). |
+| D-VL-T9 | **GitHub never asked**: every viewer is started with `OPENLORE_GITHUB_API_BASE` = the `FakeGithubAccounts` double, so any request the viewer made would be in its log; VL-1 and VL-8 assert the log gains nothing. VL-16 sets the double offline and asserts identical lines. | C-VL-2 observable through a port, not by absence of wiring. |
+| D-VL-T10 | **Every negative carries a positive anchor** so it is RED today for a business reason, never vacuously green: VL-5/6 (Rachel's one sound line), VL-7 (followed rows), VL-12 (Jeff's line), VL-17 (old-login line before re-check), VL-19 (folded with VL-11). | Pre-DELIVER gate; Fixture-Theater guard. |
+| D-VL-T11 | **VL-2p binding and oracle waiver (review F4)**: `sut_render_region` is `todo!("RED: bind to viewer_domain::linked_identity …")` (DD-GDL-16 practice). Its oracle is the internal `cli::render::render_linked_identities` — waived because a layer-2 property cannot spawn a process per case; that function is the text the `identity list` driving port prints (pinned through the binary by IR-1..IR-18b), and the subprocess cross-check of the same parity is VL-2 (10 rows) and VL-15, which compare the page with a real `openlore identity list --did` run at the same instant. | Mandate 7 RED-not-BROKEN; one property per wording space. |
+| D-VL-T12 | Tier B not added: the region is a pure projection already explored by VL-2p and CORE-5; no command protocol. | Mandate 10. |
+| D-VL-T13 | **"Changes nothing" through driving ports (review VL-B1)**: VL-8's PRIMARY Thens are the pages, the GitHub double's request log and Jeff's `identity list` output before vs after browsing. The fail-closed store universe (`assert_link_store_unchanged_in`) stays only as a labelled SECONDARY guardrail under the D-e waiver, never the Then. | D-e; read-only surface observed where the user observes it. |
+| D-VL-T14 | **Checks come from the real verb (review VL-M3)**: VL-2's contested and proof-gone rows are recorded by `identity verify --github <login>` against the GitHub double (bio names both DIDs; bio drops the DID; names a stranger's DID; no bio; account deleted). Direct SQL remains only where no verb can produce the state: VL-15 (a check dated in the future) and VL-14 (a damaged store). | Pillar 3: state through production verbs. |
+| D-VL-T15 | **Clock pinned for "today" (review F-5)**: every scenario that asserts an age pins both ends — link/verify at `LINKED_AT`, viewer at `SAME_DAY` (VL-1, VL-2, VL-15, VL-17a, VL-17b, VL-20). Viewer stdout AND stderr are drained on their own threads (stderr kept for the startup-failure message) with a 20 s startup deadline (review F-6 and cycle-2 stderr finding), so neither pipe can fill or close under the viewer and a hung start fails fast. | Determinism. |
+| D-VL-T16 | **Gherkin hygiene (Sentinel F1–F3, F6–F9)**: placeholders match Examples headers exactly; record IDs are named R1..R3 in the Given; expected lines are written in full; VL-4 carries a DID-valued column; `@property` removed from VL-8 (example-only); VL-17 split into VL-17a (Then: the line stays) and VL-17b (Given = 17a's Given + When; When = re-check); every page-list When is one action on one `<page>` from the Examples (VL-5, VL-6, VL-7, VL-17a, VL-20; VL-8/VL-9 keep "browses the pages about …" as one action over a stated page set); VL-17b's Given is a state ("has not re-checked since, and has the old login's page open"), not 17a's Then; VL-2's Given is conditional-free ("Jeff's latest check of rachelk is <latest check of rachelk>", `none` = never checked); VL-5/VL-6 state exact expected lines with named records R1/R2; VL-4 is one DID per row; "identity list" is kept as a product-surface term (the CLI command the reader knows; `test-scenarios.md` § Slice 4). | Sentinel review. |
+
+### Test Coverage Summary
+
+- **Total**: 21 VL scenarios (VL-1..20, VL-17 split into a/b) + 1 layer-2 property (VL-2p) + 1
+  xtask guard case (VL-G) in **19 test fns** (13 in `viewer_linked_identity.rs`, 5 in
+  `viewer_linked_identity_invariants.rs`, 1 in `xtask/tests/viewer_fail_seam.rs`); 1 walking
+  skeleton (VL-1).
+- **Framework**: Rust `#[test]` + Gherkin doc comments; `proptest` (256 cases) for VL-2p only.
+- **Integration approach**: REAL `openlore ui` subprocess over the REAL DuckDB store seeded by the
+  REAL CLI verbs; REAL `openlore-indexer` for `/search`; fakes only at the external edge
+  (`FakeGithubAccounts`, `PeerPds`, `FakePds`, `FakeIdentity`, `FakeIngestServer`).
+- **Error/edge share**: 17 / 21 scenarios (81 %).
+- **KPI**: KPI-GDL-1 (VL-1, VL-4, VL-5); KPI-GDL-2 unchanged (IR-15 narrowed, D-VL-T5). No new KPI.
+- **Helper reuse (Mandate-12, informational)**: the two scenario files call 64 distinct support
+  helpers 245 times (≈ 3.8×, a natural ceiling for 18 table-driven fns); 36 of them come from the
+  slice-1/2 and house vocabulary (`given_i_linked`, `given_peer_published`, `assert_shown_in`,
+  `assert_check_age`, `records_named`, `capture_link_universe`, …). Typed values: `PersonPage`, `LinkRead`,
+  `GithubStanding`, `ViewerOpts` plus the slice-1/2 `Account`, `Verdict`, `Shown`, `Peer`, `LinkFlaw`.
+- **AT-completeness: 15 / 15 → COMPLETE** (two items N/A with rationale):
+
+| Item | Pass | Evidence |
+|---|---|---|
+| C1a empty/min | ✓ | no link → no region, empty store (VL-12); 0 records (VL-2p) |
+| C1b boundaries | ✓ | 31 days → hint, contested past 30 days → no hint (VL-2/18); future-dated check (VL-15); ages 0–90 days (VL-2p) |
+| C2a state machine documented | ✓ | `viewer_linked_identity.rs` module doc |
+| C2b illegal event per state | ✓ | hidden states shown nowhere: retracted/superseded (VL-6), removed peer (VL-7), third-party/flawed (VL-5); contested never "is" (VL-4); stale line after rename (VL-17); reads failing in any state (VL-9) |
+| C3 0/1/N | ✓ | 0 (VL-12), 1 (VL-1), N lines and two DIDs (VL-2, VL-4), one record and two records (VL-2), 0–3 records and 1–5 links (VL-2p) |
+| C4a apply twice | ✓ | pages opened twice with an unchanged store read the same (VL-8/16); remove → re-follow (VL-7) |
+| C4b inverse without prerequisite | ✓ (N/A) | the viewer has no inverse operation; nearest: a page for someone who never linked (VL-12) |
+| C5a mode flags | ✓ | page shape full/fragment (VL-13); index configured or not (VL-11/19); GitHub up/down (VL-16); each failing read (VL-9) |
+| C5b orthogonality | ✓ | shape (VL-13), GitHub standing (VL-16) and login spelling (VL-3) never change the lines |
+| C6a malformed input | ✓ | five flawed records (VL-5); a non-username login and a non-DID contributor (VL-12) |
+| C6b each declared error | ✓ | each of the three reads (VL-9), probe refused (VL-14), index unavailable (VL-19) |
+| C6c closed error set | ✓ | VL-9/14: only the notice; no line, no standing word |
+| C7a degraded resource | ✓ | damaged store (VL-14), store made before identity links (VL-20), GitHub unreachable (VL-16), no index (VL-19) |
+| C7b interruption | ✓ | a read failing after a passed startup probe, mid-request (VL-9) |
+| C7c concurrent actors | ✓ (N/A) | slice 4 adds no concurrency claim; the viewer holds the store alone (one process at a time, as the slice-6 harness) |
+
+Audit log (falsifier telemetry): `(github-did-identity-link/slice-4, C1..C7, findings 0 after
+authoring — C6a found at self-audit and closed by two VL-12 rows, severity_max LOW)`.
+
+### Review Gate Result
+
+**Cycle 1 (2026-10-19): all four reviewers rejected.** Every finding addressed; no waivers taken.
+
+| Finding | Resolution |
+|---|---|
+| PO F-1 (high) VL-9 rows omit `/search` | `/search` added to every per-request row (an index per row) |
+| PO F-2 (med) no single-record not-checked line | VL-2 row: Rachel's `rachel-old` link reads `… — not checked (record R3)` |
+| PO F-3 (low) VL-13/14 titles | retitled as outcomes (`test-scenarios.md`, Gherkin) |
+| Architect VL-B1 (blocker) store snapshot as the Then | D-VL-T13 |
+| Architect VL-H2 / Platform F-1 (high) seam token not guarded | VL-G + DELIVER note (D-VL-T7, `red-classification.md`) |
+| Architect VL-M1 (med) class pins | D-VL-T4 (heading/role, `aria-labelledby`, `ul`/`li`) |
+| Architect VL-M2 (med) IR-15 cut by `rfind` | D-VL-T5 |
+| Architect VL-M3 (med) seeded proof-gone rows | D-VL-T14 |
+| Platform F-2 (high) pre-v7 store | VL-20 |
+| Platform F-3 (med) empty store | VL-12 row group 2 |
+| Platform F-4 (med) per-request rows and the probe | VL-9 asserts no refused-probe event per row |
+| Platform F-5 (med) clock for "today" | D-VL-T15 |
+| Platform F-6 (med) stdout pipe and deadline | D-VL-T15 |
+| Platform F-7 (low) per-request real damage | documented limit (D-VL-T7, VL-9 doc) |
+| Sentinel F1–F3, F6–F9 | D-VL-T16 |
+| Sentinel F4 (high) VL-2p internal oracle | D-VL-T11 |
+| Sentinel F5 (high) WS and with-stale-config | documented N/A for the skeleton (`test-scenarios.md`, `walking-skeleton.md`) |
+| Sentinel F10 (low) regression seed from a `todo!()` | deleted (`viewer_linked_identity_invariants.proptest-regressions`); proptest re-writes it on every `--run-ignored` run until VL-2p is bound — do not commit it |
+| Sentinel F12 (low) mix count | recounted per scenario ID |
+
+Cycle 2: see "Review gate (slice 4)" below.
+
+### Upstream Issues
+
+1. **DESIGN** — the `cli`/`viewer-domain` dependency line was corrected in the design by the
+   orchestrator; DELIVER chooses the VL-2p binding route (D-VL-T11).
+2. **DESIGN (SPECIFICATION_AMBIGUITY, defaulted)** — the region's markup and where it sits on
+   `/search` when reads fail are not specified. Defaulted: one region per author group, each showing
+   the notice when unreadable (VL-14 search row); markup per D-VL-T4. Route to DESIGN if a single
+   page-level notice is preferred.
+3. **DESIGN (SPECIFICATION_AMBIGUITY, defaulted)** — the fault-seam value set and its scope (never
+   the startup probe) are DISTILL's choice (D-VL-T7); DELIVER 04-07 adds the token to the xtask
+   guard and un-ignores VL-G. Also defaulted: an unreadable region keeps its heading (D-VL-T4).
+4. **DELIVER** — whichever step lands the region must keep IR-15 green (it now cuts the region out,
+   D-VL-T5) and re-run the viewer suites that compare whole `/score` or `/project` fragments.
+5. **CI** — the `/search` rows (VL-11, VL-13, VL-14) need `cargo build -p openlore-indexer` first,
+   as the other `/search` suites.
+
+## Review gate (slice 4)
+
+| Cycle | PO (Eclipse) | Solution architect | Platform architect (Forge) | Sentinel | Outcome |
+|---|---|---|---|---|---|
+| 1 | rejected | rejected | rejected | rejected | all findings fixed (table under § Slice 4 › Review Gate Result) |
+| 2 | **approved** | **approved** — VL-H2 carried to DELIVER 04-07 (append `OPENLORE_VIEWER_FAIL_IDENTITY_LINKS` to `VIEWER_FAIL_SEAM_TOKENS`, un-ignore VL-G) | residuals: F-5 clock in VL-17b/VL-20; viewer stderr not drained | residuals: F1/F2 placeholders (VL-4, VL-7); F3 exact lines (VL-5, VL-6); F4 waiver cites the oracle line; F7 VL-17b Given; F8 one action per When; N1 conditional Given in VL-2 | all residuals fixed in this pass (D-VL-T11, T15, T16) |
+
+No third review: the process allows two cycles and the user asked to proceed. Hand-off to DELIVER
+with PO and SA approval and the PA / Sentinel cycle-2 residuals closed as listed; the current red
+run is in `red-classification.md` § Slice 4.
+

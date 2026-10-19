@@ -486,3 +486,37 @@ fn all_four_viewer_fault_seams_gated_passes_the_scan() {
          got: {findings:?}"
     );
 }
+
+// -----------------------------------------------------------------------------
+// github-did-identity-link slice 4 (DISTILL 2026-10-19, D-VL-11 / D-VL-T7): the
+// identity-link read fault seam `OPENLORE_VIEWER_FAIL_IDENTITY_LINKS`
+// (`checks` | `candidates` | `lineage`) joins the release-forbidden token set. RED
+// until DELIVER 04-07 appends the token to `VIEWER_FAIL_SEAM_TOKENS`.
+// -----------------------------------------------------------------------------
+
+/// slice 4: an UNSAFE shape — the identity-link read fault seam read with NO cfg gate
+/// (a release viewer could be forced to show "could not be read"). MUST be flagged.
+const IDENTITY_LINKS_UNGATED_LEAK: &str = r#"
+fn link_reads_with_fault_seam(read: LinkRead) -> Option<LinkRead> {
+    if std::env::var("OPENLORE_VIEWER_FAIL_IDENTITY_LINKS").ok().as_deref() == Some(read.token()) {
+        return None;
+    }
+    Some(read)
+}
+"#;
+
+#[test]
+#[ignore = "DELIVER 04-07: OPENLORE_VIEWER_FAIL_IDENTITY_LINKS joins VIEWER_FAIL_SEAM_TOKENS"]
+fn ungated_identity_links_seam_in_release_path_is_rejected() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_viewer_src(tmp.path(), IDENTITY_LINKS_UNGATED_LEAK);
+
+    let findings = scan_viewer_fail_seam_guard(tmp.path()).expect("scan runs");
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.contains("OPENLORE_VIEWER_FAIL_IDENTITY_LINKS")),
+        "an ungated OPENLORE_VIEWER_FAIL_IDENTITY_LINKS read would ship a link-read \
+         backdoor in a release binary and MUST be flagged, got: {findings:?}"
+    );
+}

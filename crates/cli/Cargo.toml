@@ -1515,3 +1515,19 @@ harness = true
 name = "review_app_identity_link_readers"
 path = "../../tests/acceptance/review_app_identity_link_readers.rs"
 harness = true
+
+# github-did-identity-link slice 4 (DISTILL 2026-10-19): the viewer's
+# linked-identity region on /score, /project, /claims/{cid} and /search
+# (VL-1..19) and its guardrails + the layer-2 parity property (VL-2p, RED
+# `sut_render_region` binding). All `#[ignore = "DELIVER 04-NN: …"]`; vocabulary
+# `tests/acceptance/support/viewer_identities.rs`. Build `openlore` (and
+# `openlore-indexer` for the /search rows) first.
+[[test]]
+name = "viewer_linked_identity"
+path = "../../tests/acceptance/viewer_linked_identity.rs"
+harness = true
+
+[[test]]
+name = "viewer_linked_identity_invariants"
+path = "../../tests/acceptance/viewer_linked_identity_invariants.rs"
+harness = true
