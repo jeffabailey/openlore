@@ -490,8 +490,7 @@ fn all_four_viewer_fault_seams_gated_passes_the_scan() {
 // -----------------------------------------------------------------------------
 // github-did-identity-link slice 4 (DISTILL 2026-10-19, D-VL-11 / D-VL-T7): the
 // identity-link read fault seam `OPENLORE_VIEWER_FAIL_IDENTITY_LINKS`
-// (`checks` | `candidates` | `lineage`) joins the release-forbidden token set. RED
-// until DELIVER 04-07 appends the token to `VIEWER_FAIL_SEAM_TOKENS`.
+// (`checks` | `candidates` | `lineage`) joins the release-forbidden token set.
 // -----------------------------------------------------------------------------
 
 /// slice 4: an UNSAFE shape — the identity-link read fault seam read with NO cfg gate
@@ -506,7 +505,6 @@ fn link_reads_with_fault_seam(read: LinkRead) -> Option<LinkRead> {
 "#;
 
 #[test]
-#[ignore = "DELIVER 04-07: OPENLORE_VIEWER_FAIL_IDENTITY_LINKS joins VIEWER_FAIL_SEAM_TOKENS"]
 fn ungated_identity_links_seam_in_release_path_is_rejected() {
     let tmp = tempfile::tempdir().expect("tempdir");
     write_viewer_src(tmp.path(), IDENTITY_LINKS_UNGATED_LEAK);

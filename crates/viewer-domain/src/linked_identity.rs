@@ -182,3 +182,19 @@ fn record_ids_text(record_ids: &[String]) -> String {
         many => format!(" (records {})", many.join(", ")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unreadable_region_says_only_the_notice_and_shows_no_line() {
+        let region = render_linked_identities_region(&LinkedIdentities::Unreadable).into_string();
+        let expected = format!(
+            "<section aria-labelledby=\"{LINKED_IDENTITIES_HEADING_ID}\">\
+             <h2 id=\"{LINKED_IDENTITIES_HEADING_ID}\">{LINKED_IDENTITIES_HEADING}</h2>\
+             <p>{LINKED_IDENTITIES_UNREADABLE}</p></section>"
+        );
+        assert_eq!(region, expected);
+    }
+}

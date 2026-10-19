@@ -169,7 +169,6 @@ fn showing_linked_identities_asks_github_nothing_changes_nothing_and_reads_the_s
 /// not reproducible in the subprocess harness. The startup row uses a real
 /// damaged store.
 #[test]
-#[ignore = "DELIVER 04-07: unreadable link reads show the notice on every page"]
 fn when_the_link_store_cannot_be_read_every_page_still_loads_and_says_so() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);

@@ -867,10 +867,52 @@ fn score_page(
 /// startup probe refused) or any read failing → [`LinkedIdentities::Unreadable`],
 /// never partial lines; no link → no region. Writes nothing, asks GitHub nothing.
 fn linked_identities(link_reads: Option<&LinkReads>, scope: &RecheckScope) -> LinkedIdentities {
-    match link_reads.map(|reads| reads.listed_links(scope)) {
+    match link_reads.map(|reads| identity_links_read_with_fault_seam(reads.listed_links(scope))) {
         Some(Ok(linked)) => linked,
         None | Some(Err(_)) => LinkedIdentities::Unreadable,
     }
+}
+
+/// Fault-injection seam (TEST-ONLY, `#[cfg(debug_assertions)]`-gated — NEVER ships
+/// in a release binary, enforced by `xtask check-arch`'s viewer-fail-seam guard
+/// token set, like the slice-16..20 viewer seams; ADR-053/054).
+///
+/// github-did-identity-link slice 4 (D-VL-7 / D-VL-T7): when
+/// `OPENLORE_VIEWER_FAIL_IDENTITY_LINKS` names one of the three link reads
+/// (`checks` | `candidates` | `lineage`), that read's genuine `Err` replaces the
+/// page request's result, so the production degrade path (the whole region
+/// [`LinkedIdentities::Unreadable`], never partial lines) is what runs. It sits on
+/// the page-request path only: the startup probe calls [`LinkReads::listed_links`]
+/// directly and is never failed by it.
+#[cfg(debug_assertions)]
+fn identity_links_read_with_fault_seam(
+    read: Result<LinkedIdentities, LinkReadError>,
+) -> Result<LinkedIdentities, LinkReadError> {
+    let injected = |what: &str| format!("{what} read fault injected (test-only seam)");
+    match std::env::var("OPENLORE_VIEWER_FAIL_IDENTITY_LINKS")
+        .ok()
+        .as_deref()
+    {
+        Some("checks") => Err(LinkReadError::Checks(ports::IdentityLinkCheckError::Store(
+            injected("identity-link check"),
+        ))),
+        Some("candidates") => Err(LinkReadError::Checks(ports::IdentityLinkCheckError::Store(
+            injected("link candidate"),
+        ))),
+        Some("lineage") => Err(LinkReadError::Lineage(ports::StorageError::QueryFailed {
+            message: injected("link lineage"),
+        })),
+        _ => read,
+    }
+}
+
+/// Release identity: NO seam, NO env-var read compiled into the binary.
+#[cfg(not(debug_assertions))]
+#[inline]
+fn identity_links_read_with_fault_seam(
+    read: Result<LinkedIdentities, LinkReadError>,
+) -> Result<LinkedIdentities, LinkReadError> {
+    read
 }
 
 /// Read the per-contribution counter PRESENCE for a WHOLE `/score` breakdown in ONE
