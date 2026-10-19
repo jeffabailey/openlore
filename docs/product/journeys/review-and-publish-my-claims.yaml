@@ -1,0 +1,188 @@
+schema_version: 1
+
+# SSOT for the review-app journey. Created 2026-10-19 by review-app-repos-and-accounts DISCUSS
+# from docs/feature/bluesky-claim-review-app/discuss/journey-review-and-publish-my-claims.yaml
+# (steps 1-8, unchanged in intent) plus the new steps 9-12. Per-feature detail and full Gherkin:
+#   - docs/feature/bluesky-claim-review-app/discuss/journey-review-and-publish-my-claims.yaml
+#   - docs/feature/review-app-repos-and-accounts/discuss/journey-choose-repos-and-accounts.yaml
+
+journey:
+  name: "Review and publish my claims"
+  goal: >
+    A Bluesky developer signs in with their handle, proves which GitHub accounts are theirs,
+    chooses which repos are read (their own, and any public repo they want to look at),
+    privately reviews philosophy suggestions, publishes the ones they approve about repos
+    they own as self-attested org.openlore.claim records in their OWN PDS, and optionally
+    shares a profile of those claims on Bluesky.
+  persona: "P-003 Bluesky developer (Priya Raman, @priyaraman.bsky.social; GitHub priyaraman and priya-tidal)"
+  job: "J-009 (sub-jobs J-009a..f); imported repos also serve J-004a"
+  platform: web (https://app.openlore.jeffbailey.us)
+  emotional_arc:
+    start: "Curious but wary: 'what will it say about me, and who sees it?'"
+    middle: "In control: 'only I see this; I choose what is read; nothing goes out until I say so'"
+    end: "Recognised and confident: 'that is how I build, and nothing about others' repos can go out under my name'"
+
+invariants:
+  - { id: I-BRA-1, text: "Pending suggestions (owned or imported) are visible only to the authenticated owner." }
+  - { id: I-BRA-2, text: "Declines are private app-side state, used only to suppress re-suggestion." }
+  - { id: I-BRA-3, text: "Every PDS write traces to an explicit owner confirm after a preview." }
+  - { id: I-BRA-4, text: "No owned repo of an account is read unless the signed-in DID is in that account's bio, checked in the same scan (per account since 2026-10-19)." }
+  - { id: I-BRA-5, text: "App-approved claims are accepted as self-attested (repo-signed)." }
+  - { id: I-BRA-6, text: "Share posts are opt-in, previewed, and reference only published claims." }
+  - { id: BR-RRA-1, text: "A suggestion whose repo no currently verified account of the owner owns never reaches a preview, a PDS write, a share post or a profile, on any request." }
+  - { id: BR-RRA-2, text: "At preview and confirm, the repo's current owner and that account's bio are read from GitHub in the same request; a stored status is never proof." }
+  - { id: BR-RRA-3, text: "Ticked repos across all accounts (saved or default) plus imported repos total at most the per-scan limit; checked at Save, import and scan start; default ticks fill only the room left." }
+  - { id: BR-RRA-4, text: "A scan uses the choices, accounts and imports in force when it started; removals stop reads at once." }
+  - { id: BR-RRA-5, text: "A repo is on one list only; an imported repo owned by a listed account moves to that account's saved choice." }
+  - { id: UNFINISHED-CHECK, text: "A bio check GitHub could not answer is not a failed check: no unverified mark, nothing hidden, nothing published." }
+
+# Step ids are stable references; this is the order a user meets them.
+flow_order: [1, 2, 3, 10, 9, 11, 4, 5, 6, 12, 7, 8]
+
+steps:
+  - id: 1
+    name: "Arrive and sign in with Bluesky"
+    emotional_state: { entry: "curious, wary", exit: "reassured enough to try" }
+    shared_artifacts: [handle]
+  - id: 2
+    name: "Authorize the app at my PDS"
+    emotional_state: { entry: "cautious", exit: "reassured" }
+    shared_artifacts: [user_did, pds_endpoint]
+  - id: 3
+    name: "Prove a GitHub account is mine"
+    note: "Since 2026-10-19 the step lists several accounts; see step 10 for adding more."
+    emotional_state: { entry: "slightly burdened", exit: "accomplished" }
+    shared_artifacts: [linked_accounts]
+  - id: 9
+    after_step: 3
+    name: "Choose which of my owned repos a scan reads"
+    feature: review-app-repos-and-accounts
+    action: "'Choose repos' on the queue; tick/untick; 'Save choice'"
+    emotional_state: { entry: "boxed in", exit: "in control" }
+    shared_artifacts: [owned_repo_list, repo_choice, scan_repo_cap]
+    integration_checkpoint: "No saved choice = top 5 (select_person_repos), limited by the room left under BR-RRA-3; saved choice = exactly the ticked repos."
+    failure_modes:
+      - "More than the per-scan limit ticked -> refused with the fix"
+      - "Only forks/archived -> empty list explains why"
+      - "GitHub rate-limited -> saved choice unchanged"
+    gherkin: |
+      Scenario: First visit shows today's top 5 already ticked
+        Given Priya is verified as github.com/priyaraman with 7 owned public repos
+        And she has never saved a repo choice
+        When she opens "Choose repos"
+        Then tidepool, quill-docs, kelp, harbor-cli and driftwood are ticked
+  - id: 10
+    after_step: 3
+    name: "Verify another GitHub account on the same sign-in"
+    feature: review-app-repos-and-accounts
+    action: "'Add another GitHub account' on the GitHub step; DID in that bio; Verify"
+    emotional_state: { entry: "hopeful", exit: "accomplished" }
+    shared_artifacts: [user_did, linked_accounts]
+    integration_checkpoint: "A failed check of a new account never changes the existing accounts. Verifying an account that owns an imported repo moves the repo to its list (BR-RRA-5)."
+    failure_modes:
+      - "DID missing from the new bio"
+      - "Account verified for another Bluesky sign-in"
+      - "Account already on the list"
+      - "More than 3 accounts"
+      - "Remove an account (or an imported repo): its pending suggestions are deleted; declined records kept (BR-1); published claims and links unchanged"
+    gherkin: |
+      Scenario: Priya verifies her work account without losing her personal one
+        Given Priya is verified as github.com/priyaraman
+        And the bio of github.com/priya-tidal contains her DID
+        When she adds and verifies GitHub username "priya-tidal"
+        Then her account list shows priyaraman and priya-tidal, both verified
+  - id: 11
+    after_step: 3
+    name: "Add any public repo I don't own"
+    feature: review-app-repos-and-accounts
+    action: "'Repos you don't own': owner/name; 'Add repo'"
+    emotional_state: { entry: "curious", exit: "curious, safe" }
+    shared_artifacts: [imported_repos, scan_repo_cap]
+    integration_checkpoint: "Public, exists, and not owned by a verified account of the owner."
+    failure_modes:
+      - "Wrong shape -> example given"
+      - "Missing or private -> refused"
+      - "Owned by a verified account -> pointed to the repo list"
+    gherkin: |
+      Scenario: Priya adds a repo she doesn't own
+        When Priya adds "rust-lang/cargo"
+        Then it is listed under "Repos you don't own"
+        And she sees that its suggestions stay private and can't be published
+  - id: 4
+    name: "Scan my public GitHub work"
+    note: "Since 2026-10-19: re-checks each account's bio, reads the chosen repos of passing accounts plus imported repos, at most the per-scan limit, under one scan admission."
+    emotional_state: { entry: "waiting", exit: "informed" }
+    shared_artifacts: [linked_accounts, repo_choice, imported_repos, scan_admission, suggestion]
+    failure_modes:
+      - "One account fails its check -> its repos skipped and named; others read"
+      - "A chosen repo was archived, forked, deleted or transferred -> skipped and named"
+      - "Nothing chosen and nothing imported -> refused before using the day's budget"
+  - id: 5
+    name: "Review suggestions privately"
+    note: "Since 2026-10-19: each card names its account; imported cards say 'Not yours to publish' and offer Decline only."
+    emotional_state: { entry: "judging", exit: "in control, safe" }
+    shared_artifacts: [confidence, rejection_set, source_account, publish_eligibility]
+  - id: 6
+    name: "Preview the exact record and publish to my PDS"
+    note: "Since 2026-10-19: ownership is re-read at preview and confirm (BR-RRA-2); not owned -> nothing written."
+    emotional_state: { entry: "deliberate", exit: "confident" }
+    shared_artifacts: [record_uri, publish_eligibility]
+    gherkin: |
+      Scenario: A publish request for a repo he doesn't own writes nothing
+        Given Sam Ortega imported BurntSushi/ripgrep and has a pending suggestion for it
+        When a publish request for that suggestion reaches the app
+        Then no record is written to Sam's PDS
+  - id: 12
+    after_step: 6
+    name: "(Separable) Publish for a repo I administer but don't own"
+    feature: review-app-repos-and-accounts
+    status: "deferred (user, 2026-10-19; D-RRA-12): how admin rights are proven is undecided"
+    emotional_state: { entry: "hopeful", exit: "confident" }
+    shared_artifacts: [publish_eligibility]
+  - id: 7
+    name: "See it published"
+    emotional_state: { entry: "relieved", exit: "recognised" }
+    shared_artifacts: [provenance_mode]
+  - id: 8
+    name: "My profile and optional share post"
+    emotional_state: { entry: "proud", exit: "proud, done" }
+    shared_artifacts: [profile_url]
+
+shared_artifacts:
+  user_did: "OAuth session subject"
+  pds_endpoint: "DID document #atproto_pds of user_did"
+  handle: "ATProto handle resolution of user input"
+  linked_accounts: "Private app state: (user_did, github_user_id, login, status); several per DID since 2026-10-19"
+  owned_repo_list: "Live public listing of each verified account's owned repos, ranked by select_person_repos; forks/archived not offered"
+  repo_choice: "Private app state per (user_did, github_user_id)"
+  imported_repos: "Private app state per user_did"
+  scan_repo_cap: "One review-app constant: 10 (user, 2026-10-19; D-RRA-16)"
+  scan_admission: "review_domain::budget"
+  suggestion: "Private app state derived by the scraper-domain pipeline"
+  source_account: "Owner login in the suggestion subject"
+  publish_eligibility: "Derived per request from a fresh GitHub read: Owned | NotYours (| Administered after US-RRA-007)"
+  confidence: "Default 0.25 or owner edit; basis points on the wire (ADR-070)"
+  rejection_set: "Private app state keyed by user_did (D-4)"
+  record_uri: "PDS createRecord response"
+  provenance_mode: "OpenLore verify path: app-signed | self-attested"
+  profile_url: "app origin + per-user route"
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: user_did
+      must_match_across: [2, 3, 10, 6, 7, 8]
+      failure_message: "DID used for a bio check, private state or a PDS write differs from the session DID"
+    - artifact: repo_choice
+      must_match_across: [9, 4]
+      failure_message: "A scan read a repo the owner did not choose or import"
+    - artifact: publish_eligibility
+      must_match_across: [5, 6]
+      failure_message: "A suggestion about a repo no verified account owns reached a preview or a PDS write"
+
+changelog:
+  - date: "2026-10-03"
+    feature: bluesky-claim-review-app
+    change: "Initial journey (steps 1-8), recorded in the feature's DISCUSS directory."
+  - date: "2026-10-19"
+    feature: review-app-repos-and-accounts
+    change: "SSOT entry created. Added steps 9 (choose owned repos), 10 (another GitHub account), 11 (add any public repo, unsigned), 12 (administered repos, open). Widened steps 3-6: several accounts per DID, per-account bio re-check, imported repos read without proof, fresh ownership check at publish (BR-RRA-1/2)."

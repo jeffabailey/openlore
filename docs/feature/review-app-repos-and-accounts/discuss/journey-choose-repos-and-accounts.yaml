@@ -1,0 +1,328 @@
+schema_version: 1
+
+journey:
+  name: "Choose the repos and accounts a scan reads"
+  feature: review-app-repos-and-accounts
+  extends: "docs/feature/bluesky-claim-review-app/discuss/journey-review-and-publish-my-claims.yaml (steps 3-6)"
+  job_id: J-009            # J-009b, J-009c, J-009d; imported repos also serve J-004a
+  goal: >
+    A signed-in owner of the live review app chooses which of her owned repos a scan reads,
+    verifies a second GitHub account on the same Bluesky sign-in, and adds any public repo by
+    owner/name to get private suggestions that can never be published unless one of her
+    verified accounts owns (or, later, administers) the repo.
+  persona: "P-003 Bluesky developer (Priya Raman, @priyaraman.bsky.social, did:plc:7x3kq2mzv5rj4w6hbn2tqclp; GitHub priyaraman and priya-tidal)"
+  platform: "web (app origin: see docs/product/journeys/review-and-publish-my-claims.yaml)"
+  emotional_arc:
+    start: "Boxed in: 'where do I add my repos, or my other account?'"
+    middle: "In control: 'I pick exactly what is read, and I can see why each one is there'"
+    end: "Confident: 'it read what I chose, and nothing about other people's repos can go out under my name'"
+  pattern: "Problem relief (frustrated -> hopeful -> relieved)"
+
+# Shared artifacts (folded in; every ${variable} below has one source of truth).
+shared_artifacts:
+  user_did:
+    source_of_truth: "OAuth session subject (unchanged from bluesky-claim-review-app)"
+    consumers: [1, 2, 3, 4, 5, 6]
+    integration_risk: "HIGH - the DID in every bio check, every private-state key and every PDS write must be the same"
+    validation: "Bio check DID == session DID == record authority"
+  linked_accounts:
+    source_of_truth: "Private app state: the owner's linked GitHub accounts, each identified by its immutable GitHub id, with login, last bio-check result and time. The stored status is display only; publishing re-checks (BR-RRA-2)."
+    displayed_as: "${github_login} (verified | needs re-verify)"
+    consumers: [1, 2, 4, 5, 6]
+    integration_risk: "HIGH - today the store holds one link per DID; every consumer must read the list, not a single link"
+    validation: "The account list on the GitHub step, the repo list headings and the scan summary name the same accounts"
+  owned_repo_list:
+    source_of_truth: "Live public GitHub listing of repos owned by each verified account, ranked by the existing select_person_repos rule (stars, last push, name); forks and archived not offered"
+    displayed_as: "${repo_full_name} ★${stars}"
+    consumers: [1, 4]
+    integration_risk: "MEDIUM - the default pre-tick must use the same ranking as today's top 5"
+    validation: "With no saved choice, the ticked set == the first min(5, room left under BR-RRA-3) of select_person_repos(repos, 5).chosen, room taken in the order accounts were added (AC-001.1, AC-003.7)"
+  repo_choice:
+    source_of_truth: "Private app state per linked account (survives a GitHub rename): the ticked repo names; absent until first save"
+    displayed_as: "ticked boxes; '${chosen_count} of ${scan_repo_cap} repos chosen'"
+    consumers: [1, 4]
+    integration_risk: "HIGH - the scan must read exactly the saved set, no more"
+    validation: "Repos read in a scan == saved choice of each verified account + imported repos (minus vanished)"
+  imported_repos:
+    source_of_truth: "Private app state per user_did: owner/name list of public repos the owner added"
+    displayed_as: "Repos you don't own: ${repo_full_name} [Remove]"
+    consumers: [3, 4, 5, 6]
+    integration_risk: "HIGH - an imported repo must never be treated as owned"
+    validation: "No repo is on both lists: when a listed account comes to own an imported repo, it moves to that account's owned list (BR-RRA-5)"
+  scan_repo_cap:
+    source_of_truth: "One constant in the review app: 10 (D-RRA-16, user 2026-10-19; matches NFR-BRA-4)"
+    displayed_as: "${scan_repo_cap}"
+    consumers: [1, 3, 4]
+    integration_risk: "MEDIUM - the repo list, the add-repo refusal and the scan must use the same number"
+    validation: "Every surface that states the limit prints the same value"
+  source_account:
+    source_of_truth: "The owner login of the repo a suggestion came from (part of its subject github:<login>/<repo>)"
+    displayed_as: "from github.com/${github_login}"
+    consumers: [5, 6]
+    integration_risk: "LOW - derived from the subject"
+    validation: "Card 'from' line == owner part of the subject"
+  publish_eligibility:
+    source_of_truth: "Derived at preview and at confirm, within the request (BR-RRA-2): read the repo's current owner and that owner account's bio. Owned = owner is on user_did's account list AND its bio holds user_did | NotYours. (Administered is deferred with US-RRA-007, D-RRA-12.) Never stored as permission."
+    displayed_as: "'Not yours to publish' badge, or the Approve button"
+    consumers: [5, 6]
+    integration_risk: "HIGH - the guardrail for unsigned suggestions; a stale value would publish claims about someone else's repo"
+    validation: "Every PDS write is preceded by an Owned result read in the same request"
+  # Display-only values (shown, never keys or proofs):
+  github_login: { source_of_truth: "linked_accounts (latest login seen)", consumers: [1, 2, 4, 5, 6] }
+  repo_full_name: { source_of_truth: "GitHub repo listing or the owner/name the owner typed, as confirmed by GitHub", consumers: [1, 3, 4, 5, 6] }
+  stars: { source_of_truth: "GitHub repo listing (owned_repo_list)", consumers: [1] }
+  chosen_count: { source_of_truth: "Total of repo_choice across accounts + imported_repos (BR-RRA-3)", consumers: [1, 3] }
+  admin_proof: { source_of_truth: "DEFERRED - no proof method chosen (D-RRA-12)", consumers: [7] }
+  scan_admission:
+    source_of_truth: "review_domain::budget (6 scans per DID per day, 2 at once app-wide, GitHub remaining floor 300)"
+    displayed_as: "existing refusal messages"
+    consumers: [4]
+    integration_risk: "MEDIUM - more repos per scan must not bypass the budget"
+    validation: "One scan = one admission, however many accounts and imports it covers"
+
+steps:
+  - id: 1
+    name: "Choose which of my owned repos a scan reads"
+    action: "On the queue, press 'Choose repos'; tick or untick; press 'Save choice'"
+    tui_mockup: |
+      (first visit, no saved choice)
+      +-- Choose the repos a scan reads ---------------------------------------+
+      | github.com/priyaraman (verified)                                        |
+      |  [x] priyaraman/tidepool       ★412   last push 2026-10-11              |
+      |  [x] priyaraman/quill-docs     ★88    last push 2026-09-30              |
+      |  [x] priyaraman/kelp           ★51    last push 2026-08-02              |
+      |  [x] priyaraman/harbor-cli     ★37    last push 2026-10-02              |
+      |  [x] priyaraman/driftwood      ★12    last push 2025-03-14              |
+      |  [ ] priyaraman/ferrous-notes  ★3     last push 2026-10-17              |
+      |  [ ] priyaraman/sandbar        ★0     last push 2026-06-01              |
+      |  Skipped: 1 fork, 1 archived repo.                                      |
+      | ${chosen_count} of ${scan_repo_cap} repos chosen.      [ Save choice ]  |
+      +-------------------------------------------------------------------------+
+    shared_artifacts: [user_did, linked_accounts, owned_repo_list, repo_choice, scan_repo_cap]
+    emotional_state: { entry: "boxed in", exit: "in control" }
+    integration_checkpoint: "An account with no saved choice (and no BR-RRA-5 move, which creates one) shows today's top 5 ticked, limited by the room left under BR-RRA-3; after Save the stored choice equals the ticked set."
+    failure_modes:
+      - "More than ${scan_repo_cap} ticked -> refused, nothing saved, message names the limit and the fix"
+      - "Account has only forks/archived repos -> empty list explains why"
+      - "GitHub rate-limited while listing -> saved choice unchanged, retry later"
+      - "Account needs re-verify -> its list is not shown; link to /github"
+    gherkin: |
+      Scenario: First visit shows today's top 5 already ticked
+        Given Priya is verified as github.com/priyaraman with 7 owned public repos, 1 fork and 1 archived repo
+        And she has never saved a repo choice
+        When she opens "Choose repos"
+        Then she sees the 7 repos ranked by stars
+        And tidepool, quill-docs, kelp, harbor-cli and driftwood are ticked
+        And she sees "Skipped: 1 fork, 1 archived repo."
+
+      Scenario: Priya saves her own choice
+        Given Priya sees her repo list with the top 5 ticked
+        When she unticks driftwood, ticks ferrous-notes and presses "Save choice"
+        Then she sees "Saved. Your next scan reads 5 repos."
+
+      Scenario: Choosing more than the limit is refused with the fix
+        Given Dmitri is verified as github.com/dvolkov with 12 owned public repos
+        And the per-scan limit is 10 repos
+        When he ticks 11 repos and presses "Save choice"
+        Then he sees "You can choose up to 10 repos per scan in total. You have 11 chosen. Untick 1 to save."
+        And his saved choice is unchanged
+
+  - id: 2
+    name: "Verify a second GitHub account on the same sign-in"
+    action: "On /github, press 'Add another GitHub account'; put the DID in that account's bio; enter the username; press Verify"
+    tui_mockup: |
+      +-- Your GitHub accounts ------------------------------------------------+
+      | github.com/priyaraman   verified 2026-10-04                  [ Remove ] |
+      | github.com/priya-tidal  verified just now                    [ Remove ] |
+      | Add another GitHub account                                              |
+      |  Your DID: ${user_did}  [ Copy ]                                         |
+      |  GitHub username [ ${github_login} ]                       [ Verify ]   |
+      +-------------------------------------------------------------------------+
+    shared_artifacts: [user_did, linked_accounts]
+    emotional_state: { entry: "hopeful", exit: "accomplished" }
+    integration_checkpoint: "The new account's bio holds ${user_did} exactly; existing verified accounts keep their status."
+    failure_modes:
+      - "Bio lacks the DID or holds a different DID -> refused with the existing message; other accounts unchanged"
+      - "Account already verified for another Bluesky sign-in -> refused"
+      - "Account already on this owner's list -> 'already on your list', nothing changes"
+      - "Fourth account -> refused: up to 3 accounts, remove one first"
+      - "Remove an account (US-RRA-008) -> confirm; its pending suggestions are deleted; declined and published records kept (BR-1, BR-2); 'Your published claims are unchanged.' (emotion: in control)"
+      - "GitHub rate-limited or unreachable -> nothing lost, verify again later"
+    gherkin: |
+      Scenario: Priya verifies her work account without losing her personal one
+        Given Priya is verified as github.com/priyaraman
+        And the bio of github.com/priya-tidal contains "did:plc:7x3kq2mzv5rj4w6hbn2tqclp"
+        When she adds and verifies GitHub username "priya-tidal"
+        Then she sees "Verified: github.com/priya-tidal belongs to @priyaraman.bsky.social"
+        And her account list shows priyaraman and priya-tidal, both verified
+
+      Scenario: An account already verified for another Bluesky sign-in cannot be added
+        Given github.com/dvolkov is verified for @dmitri.volkov.dev
+        When Sam Ortega, signed in as @samortega.bsky.social, adds GitHub username "dvolkov"
+        Then he sees "github.com/dvolkov is already verified for another Bluesky account. Each GitHub account can belong to one Bluesky account only."
+
+  - id: 3
+    name: "Add any public repo by owner/name"
+    action: "In 'Repos you don't own', type owner/name; press 'Add repo'"
+    tui_mockup: |
+      +-- Repos you don't own ---------------------------------------------------+
+      | Suggestions for these stay private and can't be published: only an      |
+      | owner of the repo can publish claims about it.                            |
+      |  rust-lang/cargo          added 2026-10-19              [ Remove ]        |
+      |  Add a public repo [ owner/name        ]                [ Add repo ]      |
+      +---------------------------------------------------------------------------+
+    shared_artifacts: [user_did, imported_repos, scan_repo_cap]
+    emotional_state: { entry: "curious", exit: "curious, safe" }
+    integration_checkpoint: "The repo is public on GitHub and not owned by any verified account of ${user_did} before it is added."
+    failure_modes:
+      - "Wrong shape ('cargo') -> 'Enter the repo as owner/name, for example rust-lang/cargo.'"
+      - "Missing or private repo -> refused, nothing added"
+      - "Repo owned by one of her verified accounts -> pointed to the repo list"
+      - "Limit reached -> refused with the limit and the fix"
+      - "GitHub unreachable -> nothing added, nothing lost, try again later"
+      - "Remove an imported repo (US-RRA-009) -> its pending suggestions are deleted; declined records kept (BR-1) (emotion: tidy, in control)"
+      - "A listed account comes to own an imported repo -> moved to that account's list and written, ticked, into its saved choice (created from its current ticks if absent); total unchanged (BR-RRA-5)"
+    gherkin: |
+      Scenario: Priya adds a repo she doesn't own
+        Given Priya is signed in
+        When she adds "rust-lang/cargo"
+        Then "rust-lang/cargo" is listed under "Repos you don't own"
+        And she sees that its suggestions stay private and can't be published
+
+      Scenario: A missing or private repo is refused
+        When Priya adds "tidal-labs/secret-roadmap", which is private
+        Then she sees "We couldn't find a public repo at github.com/tidal-labs/secret-roadmap. Check the spelling. Private repos can't be read."
+        And nothing is added
+
+  - id: 4
+    name: "Scan: one scan reads every verified account's chosen repos and every imported repo"
+    action: "Press 'Scan again' on the queue"
+    tui_mockup: |
+      +-- Your suggestions (Private: only you can see these.) ------------------+
+      | Ownership re-checked: priyaraman ✓ · priya-tidal ✓                        |
+      | 8 repos read · 7 new suggestions · 1 already published                    |
+      +---------------------------------------------------------------------------+
+      (one account failing:)
+      | Ownership re-checked: priyaraman ✓ · priya-tidal ✗ (your DID is not in    |
+      | its bio; its repos were not read and its suggestions are hidden)          |
+    shared_artifacts: [user_did, linked_accounts, repo_choice, imported_repos, scan_admission, scan_repo_cap]
+    emotional_state: { entry: "waiting", exit: "informed" }
+    integration_checkpoint: "Each account's bio is re-checked in this scan before any of its repos is read; repos read == saved choices of passing accounts + imported repos."
+    failure_modes:
+      - "One account fails its bio check -> its repos skipped, named in the summary; others read"
+      - "GitHub unreachable during an account's check -> not a failed check: status kept, nothing hidden, its repos not read this scan, 'Nothing was lost. Scan again later.'"
+      - "Every account fails and no imports -> no repo read (D-12, per account)"
+      - "A chosen repo was archived, forked, deleted or transferred -> skipped and named"
+      - "Nothing chosen and nothing imported -> scan refused before using the day's budget"
+      - "Daily limit / app busy -> existing refusal messages"
+      - "GitHub rate-limited mid-scan -> paused, partial results kept, resumes on its own"
+    gherkin: |
+      Scenario: One scan covers both accounts and names each one
+        Given Priya chose 5 repos on priyaraman and 2 on priya-tidal and imported rust-lang/cargo
+        And both bios contain her DID
+        When she presses "Scan again"
+        Then 8 repos are read
+        And the summary says "Ownership re-checked: priyaraman ✓ · priya-tidal ✓"
+
+      Scenario: An account that fails its check is skipped and named
+        Given the bio of github.com/priya-tidal no longer contains Priya's DID
+        When she presses "Scan again"
+        Then no priya-tidal repo is read
+        And priyaraman's chosen repos and rust-lang/cargo are read
+        And the summary names priya-tidal and how to fix it
+
+  - id: 5
+    name: "Review suggestions: each card names its account; imported ones say who can publish"
+    action: "Act on cards (Approve / Edit / Not me on owned; Decline on imported)"
+    tui_mockup: |
+      +-------------------------------------------------------------------------+
+      | priya-tidal/ingest-bench embodies test-driven   0.25 (speculative)       |
+      | from github.com/priya-tidal                                              |
+      | [ ] Select   [ Approve ] [ Edit ] [ Not me ]                             |
+      +-------------------------------------------------------------------------+
+      | rust-lang/cargo embodies dependency-pinning     0.25 (speculative)       |
+      | Not yours to publish. Only an owner of github.com/rust-lang can publish  |
+      | claims about this repo. This suggestion stays private.                   |
+      | [ Decline ]                                                              |
+      +-------------------------------------------------------------------------+
+    shared_artifacts: [user_did, source_account, publish_eligibility, imported_repos]
+    emotional_state: { entry: "judging", exit: "in control, safe" }
+    integration_checkpoint: "Cards from imported repos carry no Select, Approve or Edit control. Their decline is labelled 'Decline' because 'Not me' reads wrong on someone else's repo; it is the same private decline (BR-1) on the same N key."
+    failure_modes:
+      - "Suggestion from an account now unverified -> hidden until re-verified (D-12)"
+      - "Declined key (owned or imported) -> never re-offered (BR-1)"
+    gherkin: |
+      Scenario: Each suggestion says which account it came from
+        Given Priya has a pending suggestion for priya-tidal/ingest-bench
+        When she opens her queue
+        Then its card says "from github.com/priya-tidal"
+
+      Scenario: An imported suggestion offers no way to publish
+        Given Priya has a pending suggestion for rust-lang/cargo, a repo she imported
+        When she opens her queue
+        Then its card says "Not yours to publish"
+        And it has no Select, Approve or Edit control
+
+  - id: 6
+    name: "Publish: only repos a verified account owns right now"
+    action: "Approve... -> preview -> 'Publish to my repo'"
+    tui_mockup: |
+      +-- Not published --------------------------------------------------------+
+      | github.com/priyaraman/kelp is no longer owned by an account you          |
+      | verified, so nothing was published. If you own it under another          |
+      | account, verify that account; otherwise decline this suggestion.         |
+      |                       [ Back to your suggestions ]                       |
+      +-------------------------------------------------------------------------+
+    shared_artifacts: [user_did, linked_accounts, publish_eligibility]
+    emotional_state: { entry: "deliberate", exit: "confident (published) or informed, with a next step (refused)" }
+    integration_checkpoint: "Owned is re-read from GitHub at preview and again at confirm (repo owner + that account's bio); NotYours writes nothing and every refusal gives a next step."
+    failure_modes:
+      - "A publish request for an imported repo -> refused, nothing written"
+      - "Repo transferred away after the scan -> refused at preview or confirm"
+      - "GitHub unreachable at confirm -> refused, nothing written, retry later"
+    gherkin: |
+      Scenario: A publish request for a repo she doesn't own writes nothing
+        Given Sam Ortega imported BurntSushi/ripgrep and has a pending suggestion for it
+        When a publish request for that suggestion reaches the app
+        Then no record is written to Sam's PDS
+        And Sam sees "github.com/BurntSushi/ripgrep is not owned by an account you verified, so nothing was published. Decline this suggestion, or verify the GitHub account that owns the repo."
+
+  - id: 7
+    name: "(Separable, open for DESIGN) Publish for a repo I administer but don't own"
+    action: "Same as step 6, once the app can prove admin rights"
+    tui_mockup: |
+      | tidal-labs/streamline embodies semantic-versioning   0.25 (speculative)  |
+      | from github.com/tidal-labs · you administer this repo (proof: ${admin_proof}) |
+      | [ Approve ] [ Edit ] [ Not me ]                                           |
+    shared_artifacts: [user_did, publish_eligibility]
+    emotional_state: { entry: "hopeful", exit: "confident" }
+    integration_checkpoint: "Administered is a separate eligibility value from Owned, proven fresh at publish. Deferred (D-RRA-12): no proof method chosen; R1-R3 publish owned repos only."
+    failure_modes:
+      - "No admin proof -> stays 'Not yours to publish'"
+      - "Admin proof lost before confirm -> refused, nothing written"
+    gherkin: |
+      Scenario: Without admin proof an org repo stays unpublishable
+        Given Priya imported tidal-labs/streamline, which her accounts do not own
+        And the app holds no proof that she administers it
+        When she opens her queue
+        Then its suggestions say "Not yours to publish"
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: user_did
+      must_match_across: [1, 2, 3, 4, 5, 6]
+      failure_message: "A bio check, private-state key or PDS write used a DID other than the session DID"
+    - artifact: repo_choice
+      must_match_across: [1, 4]
+      failure_message: "The scan read a repo the owner did not choose, or skipped one she chose without naming it"
+    - artifact: publish_eligibility
+      must_match_across: [5, 6]
+      failure_message: "A suggestion about a repo no verified account owns reached a preview or a PDS write"
+    - artifact: scan_repo_cap
+      must_match_across: [1, 3, 4]
+      failure_message: "The repo list, add-repo refusal and scan disagree on the per-scan limit"
+
+changelog:
+  - date: "2026-10-19"
+    feature: review-app-repos-and-accounts
+    change: "Initial journey (DISCUSS): choose owned repos (top 5 pre-ticked, remembered), second GitHub account per sign-in, add any public repo unsigned (never publishable unless owned), administered-repo publishing left separable."
