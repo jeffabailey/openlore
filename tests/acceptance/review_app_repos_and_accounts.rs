@@ -391,7 +391,6 @@ fn the_scan_reads_only_the_repos_priya_chose_or_todays_top_5() {
 ///   Then the scan, before and after the pause, read the 5 repos it started with, each once
 /// ```
 #[test]
-#[ignore = "DELIVER 01-10: the frozen scan plan survives a Save and a resume (BR-RRA-4)"]
 fn a_paused_scan_finishes_the_choice_it_started_with() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -427,7 +426,6 @@ fn a_paused_scan_finishes_the_choice_it_started_with() {
 ///   Then exactly tidepool, kelp, harbor-cli and ferrous-notes are read
 /// ```
 #[test]
-#[ignore = "DELIVER 01-18: a choice saved during a scan applies from the next scan"]
 fn the_next_scan_uses_the_choice_saved_during_the_last_one() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -579,7 +577,6 @@ fn a_scan_with_nothing_to_read_does_not_start() {
 ///   And the 2 pending suggestions are still in her queue and the declined one stays declined
 /// ```
 #[test]
-#[ignore = "DELIVER 01-14: unticking stops reads only"]
 fn unticking_a_repo_keeps_its_pending_suggestions() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -614,7 +611,6 @@ fn unticking_a_repo_keeps_its_pending_suggestions() {
 ///   And "Choose repos" shows priyaraman/kelp-models ticked
 /// ```
 #[test]
-#[ignore = "DELIVER 01-15: a renamed repo stays ticked (repo ids)"]
 fn a_repo_renamed_on_github_stays_chosen() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);

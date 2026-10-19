@@ -3,8 +3,8 @@
 use duckdb::types::{TimeUnit, Value};
 use duckdb::{params, OptionalExt};
 use ports::{
-    KpiTally, PlannedScanRepo, RepoSkipReason, ReviewStoreError, ScanCounts, ScanRun, ScanRunPort,
-    ScanStatus, SkippedScanRepo,
+    KpiTally, PlanRowStatus, PlannedScanRepo, RepoSkipReason, ReviewStoreError, ScanCounts,
+    ScanPlanRead, ScanPlanRow, ScanRun, ScanRunPort, ScanStatus, SkippedScanRepo,
 };
 
 use crate::secrets::port_error;
@@ -34,6 +34,14 @@ const RECORD_SKIPPED_ROW: &str = "INSERT INTO scan_run_repos
 const LATEST_SKIPPED: &str = "SELECT repo_id, full_name, source_account_id, skip_reason
     FROM scan_run_repos
     WHERE owner_did = ? AND status = 'skipped' AND run_id = (
+        SELECT run_id FROM scan_runs WHERE owner_did = ?
+        ORDER BY started_at DESC, rowid DESC LIMIT 1)
+    ORDER BY position";
+
+// Every plan row of the owner's most recent run (the run `LATEST_SCAN` reads).
+const LATEST_PLAN: &str = "SELECT repo_id, full_name, source_account_id, status
+    FROM scan_run_repos
+    WHERE owner_did = ? AND run_id = (
         SELECT run_id FROM scan_runs WHERE owner_did = ?
         ORDER BY started_at DESC, rowid DESC LIMIT 1)
     ORDER BY position";
@@ -234,36 +242,6 @@ impl ScanRunPort for ReviewStore {
         .map_err(port_error)
     }
 
-    fn latest_skipped(&self, owner_did: &str) -> Result<Vec<SkippedScanRepo>, ReviewStoreError> {
-        self.with_connection(|conn| {
-            let mut statement = conn.prepare(LATEST_SKIPPED).map_err(db_error)?;
-            let rows = statement
-                .query_map(params![owner_did, owner_did], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<i64>>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                    ))
-                })
-                .map_err(db_error)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(db_error)?;
-            Ok(rows
-                .into_iter()
-                .filter_map(|(repo_id, full_name, account_id, reason)| {
-                    Some(SkippedScanRepo {
-                        repo_id: u64::try_from(repo_id).ok()?,
-                        full_name,
-                        source_account_id: u64::try_from(account_id?).ok()?,
-                        reason: RepoSkipReason::parse(reason.as_deref()?)?,
-                    })
-                })
-                .collect())
-        })
-        .map_err(port_error)
-    }
-
     fn latest_scan(&self, owner_did: &str) -> Result<Option<ScanRun>, ReviewStoreError> {
         self.with_connection(|conn| {
             conn.query_row(LATEST_SCAN, [owner_did], |row| {
@@ -290,6 +268,70 @@ impl ScanRunPort for ReviewStore {
                 })
             })
             .map_err(db_error)
+        })
+        .map_err(port_error)
+    }
+}
+
+impl ScanPlanRead for ReviewStore {
+    fn latest_plan(&self, owner_did: &str) -> Result<Vec<ScanPlanRow>, ReviewStoreError> {
+        self.with_connection(|conn| {
+            let mut statement = conn.prepare(LATEST_PLAN).map_err(db_error)?;
+            let rows = statement
+                .query_map(params![owner_did, owner_did], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+            Ok(rows
+                .into_iter()
+                .filter_map(|(repo_id, full_name, account_id, status)| {
+                    Some(ScanPlanRow {
+                        repo: PlannedScanRepo {
+                            repo_id: u64::try_from(repo_id).ok()?,
+                            full_name,
+                            source_account_id: u64::try_from(account_id?).ok()?,
+                        },
+                        status: PlanRowStatus::parse(&status)?,
+                    })
+                })
+                .collect())
+        })
+        .map_err(port_error)
+    }
+
+    fn latest_skipped(&self, owner_did: &str) -> Result<Vec<SkippedScanRepo>, ReviewStoreError> {
+        self.with_connection(|conn| {
+            let mut statement = conn.prepare(LATEST_SKIPPED).map_err(db_error)?;
+            let rows = statement
+                .query_map(params![owner_did, owner_did], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                })
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+            Ok(rows
+                .into_iter()
+                .filter_map(|(repo_id, full_name, account_id, reason)| {
+                    Some(SkippedScanRepo {
+                        repo_id: u64::try_from(repo_id).ok()?,
+                        full_name,
+                        source_account_id: u64::try_from(account_id?).ok()?,
+                        reason: RepoSkipReason::parse(reason.as_deref()?)?,
+                    })
+                })
+                .collect())
         })
         .map_err(port_error)
     }

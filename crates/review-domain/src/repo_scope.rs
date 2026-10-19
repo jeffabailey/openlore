@@ -8,11 +8,11 @@
 //! exactly the saved ticks are. A scan reads exactly the ticked repos, and a
 //! repo outside today's top 5 is tagged [`OutsideDefault::OwnedChoice`].
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ports::{
-    AccountRepoListing, ListedRepo, ListingExtent, OutsideDefault, OwnedRepo, RepoFacts,
-    SavedRepoChoice, SkippedScanRepo,
+    AccountRepoListing, ListedRepo, ListingExtent, OutsideDefault, OwnedRepo, PlanRowStatus,
+    RepoFacts, SavedRepoChoice, ScanStatus, SkippedScanRepo,
 };
 use scraper_domain::{select_person_repos, DEFAULT_PERSON_REPO_COUNT};
 
@@ -636,6 +636,118 @@ impl FrozenScope {
                 .collect(),
             imports: self.imports.clone(),
         }
+    }
+}
+
+/// Where a row of a frozen plan comes from: a listed account, or an
+/// imported repo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PlanSource {
+    Account(u64),
+    Imported(u64),
+}
+
+/// One row of a paused run's frozen plan, as a resume finds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrozenRow {
+    pub source: PlanSource,
+    pub status: PlanRowStatus,
+}
+
+/// A resume's own bio check of one account in the carried rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BioCheck {
+    Passed,
+    /// The bio read failed or the DID is gone.
+    Failed,
+    /// Rate limit or outage: not reached.
+    Unfinished,
+}
+
+/// Why a carried row is not read by a resume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CarriedSkip {
+    /// Its source was removed meanwhile.
+    Removed,
+}
+
+/// What a resume does with a paused run's frozen plan (positions in it).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Resume {
+    pub to_read: Vec<usize>,
+    /// Not read now, kept `planned` for a later resume.
+    pub carried: Vec<usize>,
+    pub skipped: Vec<(usize, CarriedSkip)>,
+}
+
+impl Resume {
+    /// The rows the resuming run keeps as its own plan, in plan order:
+    /// those it reads now and those it carries.
+    pub fn kept(&self) -> Vec<usize> {
+        let mut kept: Vec<usize> = self.to_read.iter().chain(&self.carried).copied().collect();
+        kept.sort_unstable();
+        kept
+    }
+}
+
+/// Does a new scan resume the latest run's frozen plan (BR-RRA-4)? Only a
+/// run paused or interrupted with plan rows; one paused before plans were
+/// recorded (at deploy) is planned afresh, once.
+pub fn resumes_frozen_plan(latest: Option<ScanStatus>, plan_rows: usize) -> bool {
+    matches!(
+        latest,
+        Some(ScanStatus::RateLimited | ScanStatus::Interrupted)
+    ) && plan_rows > 0
+}
+
+/// What a resume does with one row still `planned`.
+enum CarriedRow {
+    Read,
+    Carried,
+    Skipped(CarriedSkip),
+}
+
+/// Resume a paused run from its frozen plan (CORE-RRA-5, BR-RRA-4): only
+/// its rows still `planned` are considered, never re-planned from the
+/// choice in force now. A row of a removed source is skipped. An account's
+/// rows are read only when its bio check passed now; otherwise (failed,
+/// unfinished, or no check) they stay `planned` for a later resume, which
+/// checks the bio again first. Imports need no check.
+pub fn resume_plan(
+    rows: &[FrozenRow],
+    checks: &BTreeMap<u64, BioCheck>,
+    removed: &BTreeSet<PlanSource>,
+) -> Resume {
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| row.status == PlanRowStatus::Planned)
+        .fold(Resume::default(), |mut resume, (position, row)| {
+            match carried_row(row.source, checks, removed) {
+                CarriedRow::Read => resume.to_read.push(position),
+                CarriedRow::Skipped(reason) => resume.skipped.push((position, reason)),
+                CarriedRow::Carried => resume.carried.push(position),
+            }
+            resume
+        })
+}
+
+fn carried_row(
+    source: PlanSource,
+    checks: &BTreeMap<u64, BioCheck>,
+    removed: &BTreeSet<PlanSource>,
+) -> CarriedRow {
+    let check = match source {
+        PlanSource::Account(account_id) => checks
+            .get(&account_id)
+            .copied()
+            .unwrap_or(BioCheck::Unfinished),
+        PlanSource::Imported(_) => BioCheck::Passed,
+    };
+    match check {
+        BioCheck::Unfinished => CarriedRow::Carried,
+        _ if removed.contains(&source) => CarriedRow::Skipped(CarriedSkip::Removed),
+        BioCheck::Failed => CarriedRow::Carried,
+        BioCheck::Passed => CarriedRow::Read,
     }
 }
 

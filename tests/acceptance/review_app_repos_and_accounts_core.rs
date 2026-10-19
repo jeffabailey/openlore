@@ -328,12 +328,46 @@ fn sut_scan_intent(
 }
 
 fn sut_resume(
-    _plan: &[(Option<u64>, u64)],
-    _read: &BTreeSet<usize>,
-    _checks: &BTreeMap<u64, CheckView>,
-    _removed: &BTreeSet<u64>,
+    plan: &[(Option<u64>, u64)],
+    read: &BTreeSet<usize>,
+    checks: &BTreeMap<u64, CheckView>,
+    removed: &BTreeSet<u64>,
 ) -> (Vec<usize>, BTreeSet<(usize, SkipView)>) {
-    todo!("RED: bind to review_domain::repo_scope::resume_plan (DELIVER 01-*)")
+    use ports::PlanRowStatus;
+    use review_domain::repo_scope::{resume_plan, BioCheck, CarriedSkip, FrozenRow, PlanSource};
+    let rows: Vec<FrozenRow> = plan
+        .iter()
+        .enumerate()
+        .map(|(pos, (src, repo))| FrozenRow {
+            source: src.map_or(PlanSource::Imported(*repo), PlanSource::Account),
+            status: if read.contains(&pos) {
+                PlanRowStatus::Read
+            } else {
+                PlanRowStatus::Planned
+            },
+        })
+        .collect();
+    let bio_checks: BTreeMap<u64, BioCheck> = checks
+        .iter()
+        .map(|(id, check)| {
+            let bio = match check {
+                CheckView::Passed => BioCheck::Passed,
+                CheckView::Failed => BioCheck::Failed,
+                CheckView::Unfinished => BioCheck::Unfinished,
+            };
+            (*id, bio)
+        })
+        .collect();
+    let gone: BTreeSet<PlanSource> = removed.iter().map(|id| PlanSource::Account(*id)).collect();
+    let resume = resume_plan(&rows, &bio_checks, &gone);
+    let skipped = resume
+        .skipped
+        .into_iter()
+        .map(|(pos, why)| match why {
+            CarriedSkip::Removed => (pos, SkipView::Removed),
+        })
+        .collect();
+    (resume.to_read, skipped)
 }
 
 fn sut_may_sign(
@@ -748,7 +782,6 @@ proptest! {
 
     /// CORE-RRA-5 (@property @BR-RRA-4 @AC-004.7 @AC-008.4 @AC-009.4 @C7b @contract-shape:pure-function)
     #[test]
-    #[ignore = "CORE-RRA-5 (bind with DELIVER step 01-10): repo_scope resume of the frozen plan (RED binding)"]
     fn core_rra5_resumes_read_only_the_frozen_plan_each_repo_once(
         plan_len in 1usize..=CAP,
         rounds in proptest::collection::vec(

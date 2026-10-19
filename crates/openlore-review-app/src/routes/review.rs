@@ -56,7 +56,7 @@ pub(crate) fn queue_page(
     );
     let latest_scan = app.scans.latest_scan(&session.owner_did).ok().flatten();
     let skipped = app
-        .scans
+        .scan_plans
         .latest_skipped(&session.owner_did)
         .unwrap_or_default();
     let csrf_token = csrf_token_for(cookie_value);

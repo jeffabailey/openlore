@@ -654,6 +654,7 @@ fn app(wired: Wired) -> App {
         github: Arc::new(github),
         links: wired.store.clone(),
         scans: wired.store.clone(),
+        scan_plans: wired.store.clone(),
         review_read: wired.store.clone(),
         choices_read: wired.store.clone(),
         choices_write: wired.store.clone(),

@@ -39,12 +39,12 @@ pub use review::{
     AuthenticatedIdentity, BeginAuthorizationError, CompleteAuthorizationError, CreatedRecord,
     ForgetPort, GithubAccountsRead, GithubAccountsWrite, GithubLink, GithubLinkPort,
     KpiCounterPort, KpiCounterRow, KpiTally, LinkRecorded, NewWebSession, OAuthPort,
-    OutsideDefault, PdsCallback, PlanKind, PlannedScanRepo, PublishPlanPort, RepoChoiceRead,
-    RepoChoiceWrite, RepoSkipReason, RepoWriteError, ReviewStateRead, ReviewStateWrite,
-    ReviewStoreError, ReviewStorePort, RevokeOutcome, SavedRepoChoice, ScanCounts, ScanRun,
-    ScanRunPort, ScanStatus, SecretStorePort, SessionPort, SkippedScanRepo, StoredPublishPlan,
-    Suggestion, SuggestionKey, SuggestionSource, SuggestionState, TakenPublishPlan,
-    UserRepoReadPort, UserRepoWritePort, WebSession,
+    OutsideDefault, PdsCallback, PlanKind, PlanRowStatus, PlannedScanRepo, PublishPlanPort,
+    RepoChoiceRead, RepoChoiceWrite, RepoSkipReason, RepoWriteError, ReviewStateRead,
+    ReviewStateWrite, ReviewStoreError, ReviewStorePort, RevokeOutcome, SavedRepoChoice,
+    ScanCounts, ScanPlanRead, ScanPlanRow, ScanRun, ScanRunPort, ScanStatus, SecretStorePort,
+    SessionPort, SkippedScanRepo, StoredPublishPlan, Suggestion, SuggestionKey, SuggestionSource,
+    SuggestionState, TakenPublishPlan, UserRepoReadPort, UserRepoWritePort, WebSession,
 };
 
 // -----------------------------------------------------------------------------

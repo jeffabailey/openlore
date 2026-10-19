@@ -17,7 +17,7 @@ use hyper_util::rt::TokioIo;
 use ports::{
     ForgetPort, GithubLinkPort, GithubPort, IdentityLookupPort, KpiCounterPort, OAuthPort,
     PublishPlanPort, RepoChoiceRead, RepoChoiceWrite, RepoListingPort, ReviewStateRead,
-    ReviewStateWrite, ScanRunPort, SessionPort, UserRepoReadPort, UserRepoWritePort,
+    ReviewStateWrite, ScanPlanRead, ScanRunPort, SessionPort, UserRepoReadPort, UserRepoWritePort,
 };
 use review_domain::signin::PermissionMode;
 use scraper_domain::SignalPredicateMapping;
@@ -74,6 +74,7 @@ pub(crate) struct App {
     pub(crate) github: Arc<dyn GithubPort>,
     pub(crate) links: Arc<dyn GithubLinkPort>,
     pub(crate) scans: Arc<dyn ScanRunPort>,
+    pub(crate) scan_plans: Arc<dyn ScanPlanRead>,
     pub(crate) review_read: Arc<dyn ReviewStateRead>,
     pub(crate) review_write: Arc<dyn ReviewStateWrite>,
     pub(crate) choices_read: Arc<dyn RepoChoiceRead>,

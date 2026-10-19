@@ -432,9 +432,24 @@ pub trait ScanRunPort: Send + Sync {
         run_id: &str,
         skipped: &[SkippedScanRepo],
     ) -> Result<(), ReviewStoreError>;
+}
+
+/// READS of the owner's latest frozen scan plan (design I-13: split from
+/// the [`ScanRunPort`] writes).
+pub trait ScanPlanRead: Send + Sync {
+    /// Every row of the plan of the owner's most recent run, in position
+    /// order (empty: none recorded, e.g. a run paused before plans existed).
+    fn latest_plan(&self, owner_did: &str) -> Result<Vec<ScanPlanRow>, ReviewStoreError>;
 
     /// The chosen repos the owner's most recent run skipped, in order.
     fn latest_skipped(&self, owner_did: &str) -> Result<Vec<SkippedScanRepo>, ReviewStoreError>;
+}
+
+/// One row of a recorded plan and how far its run got with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanPlanRow {
+    pub repo: PlannedScanRepo,
+    pub status: PlanRowStatus,
 }
 
 /// One repo of a scan's frozen plan, read for the account it came from.
@@ -444,6 +459,26 @@ pub struct PlannedScanRepo {
     /// `owner/name` as listed when the plan was frozen.
     pub full_name: String,
     pub source_account_id: u64,
+}
+
+/// How far a run got with one row of its frozen plan (ADR-088 §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanRowStatus {
+    Planned,
+    Read,
+    Skipped,
+}
+
+impl PlanRowStatus {
+    /// The status a stored `status` names.
+    pub fn parse(stored: &str) -> Option<Self> {
+        match stored {
+            "planned" => Some(Self::Planned),
+            "read" => Some(Self::Read),
+            "skipped" => Some(Self::Skipped),
+            _ => None,
+        }
+    }
 }
 
 /// Why a chosen repo is not read (AC-002.4).
