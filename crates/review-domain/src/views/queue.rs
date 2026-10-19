@@ -370,7 +370,10 @@ fn declined_notice(key: &SuggestionKey, csrf_token: &str) -> Markup {
 /// The verified owner's queue: privacy statement, scan state, cards.
 fn verified_queue(login: &str, view: &QueueView<'_>) -> Markup {
     html! {
-        p { "GitHub: github.com/" (login) " (verified)" }
+        p {
+            "GitHub: github.com/" (login) " (verified) · "
+            a href="/github" { "Manage your GitHub link" }
+        }
         h1 { "Your suggestions" }
         p { strong { (PRIVATE_NOTICE) } }
         @let polling = scan_running(view.latest_scan);

@@ -776,6 +776,23 @@ fn a_paused_scan_says_when_it_resumes() {
     assert!(html.contains("resuming at 13:07 UTC"), "{html}");
 }
 
+/// A verified owner reaches the GitHub page, where her link is published or
+/// retracted, from the queue: before this, only an unverified owner was
+/// offered the way there.
+#[test]
+fn a_verified_queue_leads_to_the_github_page() {
+    let html = verified_queue(
+        Some(run(ScanStatus::Completed)),
+        &[],
+        Tally::default(),
+        None,
+    );
+    assert!(
+        html.contains(r#"<a href="/github">Manage your GitHub link</a>"#),
+        "{html}"
+    );
+}
+
 #[test]
 fn a_queue_with_cards_on_screen_never_says_all_were_reviewed() {
     let pending = [suggestion()];
