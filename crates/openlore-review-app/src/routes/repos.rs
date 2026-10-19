@@ -8,10 +8,10 @@ use std::collections::BTreeSet;
 
 use hyper::StatusCode;
 use ports::{AccountRepoListing, GithubError, GithubLink, KpiTally, SavedRepoChoice, WebSession};
-use review_domain::kpi::{utc_day, KpiEvent};
+use review_domain::kpi::{choice_saved_events, utc_day, KpiEvent};
 use review_domain::repo_scope::{
-    choice_to_save, choose_list, default_ticks, AccountChoice, ScopeAccount, Standing,
-    REPOS_PER_SCAN_LIMIT,
+    admit_save, choice_to_save, choose_list, default_ticks, differs_from_default, ticked_ids,
+    AccountChoice, ScopeAccount, Standing, SCAN_REPO_CAP,
 };
 use review_domain::views::{
     self, AccountListing, AccountRepos, ListingFailure, ReposNotice, ReposView, ACCOUNT_ID_FIELD,
@@ -55,15 +55,38 @@ pub(crate) async fn save_choice(app: &App, request: &PageRequest) -> Reply {
         return repos_page(app, &session, &csrf_token, None).await;
     };
     let choice = choice_to_save(&listing.repos, &ticked);
-    let saved = app.choices_write.save_choice(
-        &session.owner_did,
+    let today = utc_day(crate::limiter::unix_now_secs());
+    let scope = owner_scope(app, &session.owner_did).await;
+    let admitted = admit_save(
+        &scope,
+        &[],
         account.github_user_id,
-        &choice,
-        KpiTally::NONE,
+        &ticked_ids(&choice),
+        SCAN_REPO_CAP,
     );
-    let notice = saved.ok().map(|()| ReposNotice::Saved {
-        reads: choice.iter().filter(|row| row.ticked).count(),
-    });
+    let notice = match admitted {
+        Err(refusal) => {
+            let _ = app
+                .kpi
+                .count(&today, KpiEvent::ReposChoiceRefusedOverLimit.name());
+            Some(ReposNotice::OverLimit(refusal))
+        }
+        Ok(reads) => {
+            let events: Vec<&'static str> =
+                choice_saved_events(differs_from_default(&listing.repos, &choice))
+                    .into_iter()
+                    .map(KpiEvent::name)
+                    .collect();
+            let tally = KpiTally {
+                day: &today,
+                events: &events,
+            };
+            app.choices_write
+                .save_choice(&session.owner_did, account.github_user_id, &choice, tally)
+                .ok()
+                .map(|()| ReposNotice::Saved { reads })
+        }
+    };
     repos_page(app, &session, &csrf_token, notice).await
 }
 
@@ -101,6 +124,24 @@ async fn account_state(app: &App, owner_did: &str, link: GithubLink) -> AccountS
         saved,
         listing,
     }
+}
+
+/// Every listed account's state, in the order they were added.
+async fn account_states(app: &App, owner_did: &str) -> Vec<AccountState> {
+    let mut states = Vec::new();
+    for link in listed_accounts(app, owner_did) {
+        states.push(account_state(app, owner_did, link).await);
+    }
+    states
+}
+
+/// The owner's accounts as the limit counts them.
+async fn owner_scope(app: &App, owner_did: &str) -> Vec<ScopeAccount> {
+    account_states(app, owner_did)
+        .await
+        .iter()
+        .map(scope_account)
+        .collect()
 }
 
 fn standing(link: &GithubLink) -> Standing {
@@ -157,12 +198,9 @@ async fn repos_page(
     csrf_token: &str,
     notice: Option<ReposNotice>,
 ) -> Reply {
-    let mut states = Vec::new();
-    for link in listed_accounts(app, &session.owner_did) {
-        states.push(account_state(app, &session.owner_did, link).await);
-    }
+    let states = account_states(app, &session.owner_did).await;
     let scope: Vec<ScopeAccount> = states.iter().map(scope_account).collect();
-    let defaults = default_ticks(&scope, &[], REPOS_PER_SCAN_LIMIT);
+    let defaults = default_ticks(&scope, &[], SCAN_REPO_CAP);
     let sections = states
         .iter()
         .map(|state| AccountRepos {
@@ -171,8 +209,12 @@ async fn repos_page(
             listing: account_listing(state, &defaults),
         })
         .collect();
+    let status = match notice {
+        Some(ReposNotice::OverLimit(_)) => StatusCode::UNPROCESSABLE_ENTITY,
+        _ => StatusCode::OK,
+    };
     Reply::page(
-        StatusCode::OK,
+        status,
         views::repos_page(&ReposView {
             csrf_token,
             accounts: sections,

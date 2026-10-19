@@ -6,7 +6,7 @@ use maud::{html, Markup};
 use super::*;
 use ports::ListingExtent;
 
-use crate::repo_scope::ChooseList;
+use crate::repo_scope::{ChooseList, LimitRefusal};
 
 /// Where the choose page lives and its Save form posts.
 pub const REPOS_PATH: &str = "/repos";
@@ -65,6 +65,8 @@ pub struct AccountRepos<'a> {
 pub enum ReposNotice {
     /// A Save stored a choice whose next scan reads `reads` repos.
     Saved { reads: usize },
+    /// A Save was refused: the total would pass the limit (BR-RRA-3).
+    OverLimit(LimitRefusal),
 }
 
 /// The choose page.
@@ -80,6 +82,14 @@ pub fn saved_message(reads: usize) -> String {
     format!(
         "Saved. Your next scan reads {}.",
         counted(reads, "repo", "repos")
+    )
+}
+
+/// "You can choose up to 10 repos per scan in total. You have 11 chosen. Untick 1 to save."
+pub fn save_over_limit_message(refusal: LimitRefusal) -> String {
+    format!(
+        "You can choose up to {} repos per scan in total. You have {} chosen. Untick {} to save.",
+        refusal.limit, refusal.total, refusal.excess
     )
 }
 
@@ -124,8 +134,14 @@ pub fn repos_page(view: &ReposView<'_>) -> String {
         "Choose repos",
         html! {
             h1 { "Choose repos" }
-            @if let Some(ReposNotice::Saved { reads }) = view.notice {
-                p role="status" { strong { (saved_message(reads)) } }
+            @match view.notice {
+                Some(ReposNotice::Saved { reads }) => {
+                    p role="status" { strong { (saved_message(reads)) } }
+                }
+                Some(ReposNotice::OverLimit(refusal)) => {
+                    p role="alert" { strong { (save_over_limit_message(refusal)) } }
+                }
+                None => {}
             }
             p { "Tick the repos your next scan reads." }
             @for account in &view.accounts {

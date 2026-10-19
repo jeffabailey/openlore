@@ -128,7 +128,6 @@ fn first_visit_shows_todays_top_5_already_ticked() {
 ///   And the save is counted once as a change from today's default
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: Save choice stores exactly the ticked repos"]
 fn priya_saves_her_own_choice() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -166,7 +165,6 @@ fn priya_saves_her_own_choice() {
 ///     | 12 | You can choose up to 10 repos per scan in total. You have 12 chosen. Untick 2 to save. |
 /// ```
 #[test]
-#[ignore = "DELIVER 01-04: the 10-repo limit at Save (BR-RRA-3)"]
 fn choosing_more_than_the_limit_is_refused_with_the_fix() {
     let all = dmitri_repos();
     for n in [SCAN_REPO_CAP + 1, SCAN_REPO_CAP + 2] {

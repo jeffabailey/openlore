@@ -201,11 +201,41 @@ fn sut_default_ticks(scope: &ScopeView) -> Vec<(u64, Vec<u64>)> {
 }
 
 fn sut_save_admission(
-    _scope: &ScopeView,
-    _account: usize,
-    _ticked: &[u64],
+    scope: &ScopeView,
+    account: usize,
+    ticked: &[u64],
 ) -> Result<(), LimitRefusalView> {
-    todo!("RED: bind to review_domain::repo_scope::admit_save (DELIVER 01-*)")
+    use review_domain::repo_scope::{admit_save, SavedTicks, ScopeAccount, Standing};
+    let accounts: Vec<ScopeAccount> = scope
+        .accounts
+        .iter()
+        .map(|a| ScopeAccount {
+            github_user_id: a.id,
+            standing: if a.verified {
+                Standing::Verified
+            } else {
+                Standing::Unverified
+            },
+            saved: a
+                .saved
+                .clone()
+                .map_or(SavedTicks::NeverSaved, SavedTicks::Saved),
+            ranked_eligible: a.eligible.clone(),
+        })
+        .collect();
+    admit_save(
+        &accounts,
+        &scope.imports,
+        scope.accounts[account].id,
+        ticked,
+        CAP,
+    )
+    .map(drop)
+    .map_err(|refusal| LimitRefusalView {
+        limit: refusal.limit,
+        total: refusal.total,
+        excess: refusal.excess,
+    })
 }
 
 fn sut_import_admission(_scope: &ScopeView) -> Result<(), LimitRefusalView> {
@@ -530,7 +560,6 @@ proptest! {
 
     /// CORE-RRA-2 (@property @US-RRA-001 @US-RRA-004 @AC-001.3 @AC-004.6 @C1b @contract-shape:pure-function)
     #[test]
-    #[ignore = "CORE-RRA-2 (bind with DELIVER step 01-04): repo_scope Save admission (RED binding)"]
     fn core_rra2_a_save_is_admitted_iff_the_total_fits(
         (scope, account, n) in arb_scope()
             .prop_filter("at least one account", |s| !s.accounts.is_empty())

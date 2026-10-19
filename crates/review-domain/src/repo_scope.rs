@@ -47,8 +47,18 @@ impl<'a> AccountChoice<'a> {
     }
 }
 
-/// Repos one scan may read across every account and import (BR-RRA-3).
-pub const REPOS_PER_SCAN_LIMIT: usize = 10;
+/// Repos one scan may read across every account and import (BR-RRA-3,
+/// D-RRA-16): one constant, no setting.
+pub const SCAN_REPO_CAP: usize = 10;
+
+/// A change refused because the scan's total would pass the limit: it names
+/// the limit, the total it would reach and how many repos to untick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LimitRefusal {
+    pub limit: usize,
+    pub total: usize,
+    pub excess: usize,
+}
 
 /// Whether an account's DID-in-bio proof still holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +110,47 @@ pub fn default_ticks(
             ))
         })
         .collect()
+}
+
+/// Save admission (CORE-RRA-2): a Save of `ticked` on the account
+/// `github_user_id` is admitted iff its ticks, the other accounts' saved
+/// ticks (verified or not, OQ-D3), the imports and the other accounts'
+/// default ticks fit under `cap`. Admitted: the total the next scan reads.
+pub fn admit_save(
+    accounts: &[ScopeAccount],
+    imports: &[u64],
+    github_user_id: u64,
+    ticked: &[u64],
+    cap: usize,
+) -> Result<usize, LimitRefusal> {
+    let others = |id: &u64| *id != github_user_id;
+    let others_saved: usize = accounts
+        .iter()
+        .filter(|account| others(&account.github_user_id))
+        .map(|account| account.saved.count())
+        .sum();
+    let others_defaults: usize = default_ticks(accounts, imports, cap)
+        .iter()
+        .filter(|(id, _)| others(id))
+        .map(|(_, ticks)| ticks.len())
+        .sum();
+    within_cap(
+        ticked.len() + others_saved + imports.len() + others_defaults,
+        cap,
+    )
+}
+
+/// The total itself when it fits under `cap`, else the refusal naming it.
+fn within_cap(total: usize, cap: usize) -> Result<usize, LimitRefusal> {
+    if total <= cap {
+        Ok(total)
+    } else {
+        Err(LimitRefusal {
+            limit: cap,
+            total,
+            excess: total - cap,
+        })
+    }
 }
 
 impl SavedTicks {
@@ -229,6 +280,26 @@ pub fn choice_to_save(listing: &[ListedRepo], ticked: &BTreeSet<u64>) -> Vec<Sav
             ticked: ticked.contains(&listed.repo_id),
         })
         .collect()
+}
+
+/// The ticked repo ids of a choice about to be saved.
+pub fn ticked_ids(choice: &[SavedRepoChoice]) -> Vec<u64> {
+    choice
+        .iter()
+        .filter(|row| row.ticked)
+        .map(|row| row.repo_id)
+        .collect()
+}
+
+/// Does a saved choice tick anything other than today's top 5?
+pub fn differs_from_default(listing: &[ListedRepo], choice: &[SavedRepoChoice]) -> bool {
+    let top: BTreeSet<u64> = ranked(listing)
+        .0
+        .iter()
+        .take(DEFAULT_TICKS)
+        .map(|listed| listed.repo_id)
+        .collect();
+    ticked_ids(choice).into_iter().collect::<BTreeSet<u64>>() != top
 }
 
 /// The repos one account's scan reads: exactly the ticked rows of its

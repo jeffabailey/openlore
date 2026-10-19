@@ -30,13 +30,19 @@ pub enum KpiEvent {
     SuggestionActedOutsideDefault,
     /// The choose-repos page was opened.
     ReposChoiceViewed,
+    /// A Save stored a repo choice.
+    ReposChoiceSaved,
+    /// A stored repo choice ticks something other than today's top 5.
+    ReposChoiceChangedFromDefault,
+    /// A Save was refused: the scan's total would pass the limit.
+    ReposChoiceRefusedOverLimit,
     SharePosted,
     RetractPosted,
     Disconnect,
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 15] = [
+    pub const ALL: [KpiEvent; 18] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -49,6 +55,9 @@ impl KpiEvent {
         Self::SuggestionDeclined,
         Self::SuggestionActedOutsideDefault,
         Self::ReposChoiceViewed,
+        Self::ReposChoiceSaved,
+        Self::ReposChoiceChangedFromDefault,
+        Self::ReposChoiceRefusedOverLimit,
         Self::SharePosted,
         Self::RetractPosted,
         Self::Disconnect,
@@ -69,6 +78,9 @@ impl KpiEvent {
             Self::SuggestionDeclined => "suggestion.declined",
             Self::SuggestionActedOutsideDefault => "suggestion.acted.outside_default",
             Self::ReposChoiceViewed => "repos.choice.viewed",
+            Self::ReposChoiceSaved => "repos.choice.saved",
+            Self::ReposChoiceChangedFromDefault => "repos.choice.changed_from_default",
+            Self::ReposChoiceRefusedOverLimit => "repos.choice.refused.over_limit",
             Self::SharePosted => "share.posted",
             Self::RetractPosted => "retract.posted",
             Self::Disconnect => "disconnect",
@@ -112,6 +124,14 @@ pub fn outside_default_events(outside_default: Option<OutsideDefault>) -> Vec<Kp
     outside_default
         .map(|OutsideDefault::OwnedChoice| KpiEvent::SuggestionActedOutsideDefault)
         .into_iter()
+        .collect()
+}
+
+/// The counters a stored Save adds: always `repos.choice.saved`, plus
+/// `repos.choice.changed_from_default` when it differs from today's top 5.
+pub fn choice_saved_events(changed_from_default: bool) -> Vec<KpiEvent> {
+    std::iter::once(KpiEvent::ReposChoiceSaved)
+        .chain(changed_from_default.then_some(KpiEvent::ReposChoiceChangedFromDefault))
         .collect()
 }
 
