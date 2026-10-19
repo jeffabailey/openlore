@@ -6,17 +6,15 @@ use hyper::StatusCode;
 use std::collections::BTreeMap;
 
 use ports::claim_domain::authority::{
-    may_sign, owner_to_read, OwnerBioRead, RepoRead, SigningPermit, SigningRefusal,
+    may_sign, owner_to_read, OwnerBioRead, PermitBasis, RepoRead, SigningPermit, SigningRefusal,
 };
 use ports::{
     GithubLink, GithubLinkPort, ImportedReposRead, KpiTally, RepoFacts, RepoSource,
-    ReviewStateRead, Suggestion, SuggestionKey, WebSession,
+    ReviewStateRead, Suggestion, SuggestionKey, SuggestionState, WebSession,
 };
 use review_domain::edits::{edit_claim, philosophy_choices};
 use review_domain::kpi::ActedOrigin;
-use review_domain::lifecycle::{
-    owner_step, tally, visible_and_approvable, LifecycleEvent, OwnerStep, Tally,
-};
+use review_domain::lifecycle::{owner_step, tally, LifecycleEvent, OwnerStep, Tally};
 use review_domain::plans::{
     plan_expires_at, publish_edited_plan, publish_plan, rfc3339_utc, ClaimDraft, PlanError,
     PublishPlan,
@@ -499,6 +497,27 @@ impl<'a> PublishChecks<'a> {
         checked
     }
 
+    /// A publish landed under `permit`: its listed owner account's bio, read
+    /// in this request, held the DID, so an account stored as unverified is
+    /// verified again under the login GitHub serves now (ADR-089 §2: the
+    /// fresh read is the verification).
+    pub(crate) fn proven(&self, permit: &SigningPermit) {
+        let PermitBasis::Owner(github_user_id) = permit.basis();
+        let stored_unverified = self
+            .accounts
+            .iter()
+            .any(|account| account.github_user_id == github_user_id && !account.verified);
+        if let (true, Some(RepoAnswer::Found(facts))) =
+            (stored_unverified, self.repos.get(permit.subject()))
+        {
+            let _ = self.app.account_status.mark_account_verified(
+                self.owner_did,
+                github_user_id,
+                &facts.owner_login,
+            );
+        }
+    }
+
     /// A refusal's consequences, nothing written: counted, and a listed
     /// account whose bio no longer holds the DID is marked unverified (an
     /// unfinished check changes no status).
@@ -590,16 +609,16 @@ impl<'a> PublishChecks<'a> {
     }
 }
 
-/// May the owner publish the suggestion `key` right now? Only while it is
-/// pending and their GitHub link is verified (CORE-9).
-pub(crate) fn owner_can_publish(app: &App, owner_did: &str, key: &SuggestionKey) -> bool {
-    let verified = link_verified(app, owner_did);
+/// Is `key` one of the owner's own pending suggestions? Only that is read
+/// from the store on the publish path: whether she may publish it is the
+/// permit's call alone (ADR-089 §2), never a stored verified flag.
+pub(crate) fn owner_has_pending(app: &App, owner_did: &str, key: &SuggestionKey) -> bool {
     app.review_read
         .suggestion_states(owner_did)
         .is_ok_and(|states| {
             states
                 .iter()
-                .any(|(k, state)| k == key && visible_and_approvable(*state, verified))
+                .any(|(k, state)| k == key && *state == SuggestionState::Pending)
         })
 }
 

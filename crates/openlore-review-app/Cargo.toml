@@ -127,6 +127,12 @@ name = "review_app_repos_and_accounts_core"
 path = "../../tests/acceptance/review_app_repos_and_accounts_core.rs"
 harness = true
 
+# Crafter-owned regression checks from the repos-and-accounts review (F1-F3).
+[[test]]
+name = "review_app_publish_permit_alone"
+path = "../../tests/acceptance/review_app_publish_permit_alone.rs"
+harness = true
+
 # The frozen v1 store regenerator — its own target so scenario runs never
 # include it (env-gated; writes *.regenerated next to the committed fixture).
 [[test]]

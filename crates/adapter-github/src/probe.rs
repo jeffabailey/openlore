@@ -171,28 +171,6 @@ pub fn check_rate_limit_headers(headers_present: bool) -> ArmOutcome {
     })
 }
 
-// -----------------------------------------------------------------------------
-// Arm 6 — repo read shape (ADR-089 §1, `read_repo`)
-// -----------------------------------------------------------------------------
-
-/// Inspect the outcome of `read_repo` on a known PUBLIC repo: its facts must
-/// reshape strictly (repo id, owner id, owner type), else GitHub's repo
-/// shape drifted and no fresh owner read can be trusted.
-pub fn check_repo_read_shape(fixture_target: &str, read_error: Option<&str>) -> ArmOutcome {
-    match read_error {
-        None => ArmOutcome::Ok,
-        Some(detail) => ArmOutcome::Refused(ProbeRefusal {
-            reason: ProbeRefusalReason::GithubPublicApiUnreachable,
-            detail: format!("reading public repo {fixture_target} gave no usable facts: {detail}"),
-            structured: json!({
-                "arm": "repo_read_shape",
-                "fixture_target": fixture_target,
-                "read_error": detail,
-            }),
-        }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,21 +254,6 @@ mod tests {
     }
 
     // -------- Arm 4: rate-limit-header presence --------
-
-    #[test]
-    fn repo_read_shape_arm_refuses_exactly_on_a_read_error() {
-        assert!(matches!(
-            check_repo_read_shape("octocat/Hello-World", None),
-            ArmOutcome::Ok
-        ));
-        match check_repo_read_shape("octocat/Hello-World", Some("no owner type")) {
-            ArmOutcome::Refused(r) => {
-                assert_eq!(r.structured["arm"], "repo_read_shape");
-                assert!(r.detail.contains("octocat/Hello-World"));
-            }
-            ArmOutcome::Ok => panic!("a read error must refuse"),
-        }
-    }
 
     #[test]
     fn rate_limit_arm_passes_when_headers_present() {

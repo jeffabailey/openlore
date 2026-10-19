@@ -2,11 +2,13 @@
 //! is taken from the owner's store exactly once, refused if its preview has
 //! expired (ADR-074), re-admitted as the owner's own self-attested record,
 //! executed, and the suggestion moves to published. A missing or forged
-//! anti-forgery token writes nothing. A failed write puts the plan back
-//! (same deadline) so Retry publishes it exactly once (ADR-071: the record
-//! key is the content's CID, so a create that already landed is success).
+//! anti-forgery token writes nothing. A failed write or a refused permit
+//! puts the plan back (same deadline), so Retry — or confirming again once
+//! the cause is gone — publishes it exactly once (ADR-071: the record key
+//! is the content's CID, so a create that already landed is success).
 
 use hyper::StatusCode;
+use ports::claim_domain::authority::SigningPermit;
 use ports::{PlanKind, SuggestionState};
 use review_domain::kpi::approval_was_edited;
 use review_domain::plans::{restore_plan, PublishPlan};
@@ -20,7 +22,7 @@ use review_domain::views::{
 use crate::executor::{execute_publish, PublishFailure};
 use crate::http::{App, PageRequest, Reply};
 use crate::routes::confirm::{take_confirmed_plan, take_owned_plan, ConfirmedPlan};
-use crate::routes::review::{not_found, owner_can_publish, PublishChecks};
+use crate::routes::review::{not_found, owner_has_pending, PublishChecks};
 use crate::routes::signin::{csrf_token_of, fields, signed_in_post};
 use crate::wiring::{emit, Counted, LogEvent};
 
@@ -42,23 +44,35 @@ pub(crate) async fn confirm_publish(app: &App, request: &PageRequest) -> Reply {
     }
     let owner_did = confirmed.owner_did.as_str();
     let key = &confirmed.stored.key;
-    if !owner_can_publish(app, owner_did, key) {
+    if !owner_has_pending(app, owner_did, key) {
         return not_found();
     }
     let mut checks = PublishChecks::new(app, owner_did);
     let permit = match checks.permit(&key.subject).await {
         Ok(permit) => permit,
-        Err(refusal) => return checks.refused(&key.subject, refusal),
+        Err(refusal) => {
+            put_back(app, &confirmed);
+            return checks.refused(&key.subject, refusal);
+        }
     };
     match restore_plan(&permit, &confirmed.stored).ok() {
-        Some(plan) => publish(app, &plan, &confirmed).await,
+        Some(plan) => publish(app, &checks, &permit, &plan, &confirmed).await,
         None => not_found(),
     }
 }
 
-async fn publish(app: &App, plan: &PublishPlan, confirmed: &ConfirmedPlan) -> Reply {
+async fn publish(
+    app: &App,
+    checks: &PublishChecks<'_>,
+    permit: &SigningPermit,
+    plan: &PublishPlan,
+    confirmed: &ConfirmedPlan,
+) -> Reply {
     match write_plan(app, plan, confirmed).await {
-        Ok(at_uri) => Reply::page(StatusCode::OK, views::published_page(&at_uri)),
+        Ok(at_uri) => {
+            checks.proven(permit);
+            Reply::page(StatusCode::OK, views::published_page(&at_uri))
+        }
         Err(NotWritten { failure, kept }) => {
             let retry = kept.then_some(PublishRetry {
                 plan_id: plan.rkey(),
@@ -97,10 +111,7 @@ async fn write_plan(
             Ok(at_uri)
         }
         Err(failure) => {
-            let kept = app
-                .plans
-                .put_publish_plan(plan.owner_did(), &plan.stored(), confirmed.expires_at)
-                .is_ok();
+            let kept = put_back(app, confirmed);
             Err(NotWritten { failure, kept })
         }
     }
@@ -167,12 +178,20 @@ fn bound_to_named(app: &App, confirmed: ConfirmedPlan, named: &[String]) -> Opti
     if confirms_suggestion(named, &confirmed.stored.key) {
         return Some(confirmed);
     }
-    let _ = app.plans.put_publish_plan(
-        &confirmed.owner_did,
-        &confirmed.stored,
-        confirmed.expires_at,
-    );
+    put_back(app, &confirmed);
     None
+}
+
+/// Put a taken plan back under its id, untouched and with the preview's
+/// deadline; was it kept?
+fn put_back(app: &App, confirmed: &ConfirmedPlan) -> bool {
+    app.plans
+        .put_publish_plan(
+            &confirmed.owner_did,
+            &confirmed.stored,
+            confirmed.expires_at,
+        )
+        .is_ok()
 }
 
 /// Does a confirm naming `named` suggestions confirm the plan for `key`?
@@ -190,12 +209,13 @@ async fn confirm_one(
         return PlanResult::Expired;
     }
     let key = &confirmed.stored.key;
-    if !owner_can_publish(app, &confirmed.owner_did, key) {
+    if !owner_has_pending(app, &confirmed.owner_did, key) {
         return PlanResult::Skipped;
     }
     let permit = match checks.permit(&key.subject).await {
         Ok(permit) => permit,
         Err(refusal) => {
+            put_back(app, confirmed);
             checks.settle(refusal);
             return PlanResult::Skipped;
         }
@@ -204,7 +224,10 @@ async fn confirm_one(
         return PlanResult::Skipped;
     };
     match write_plan(app, &plan, confirmed).await {
-        Ok(at_uri) => PlanResult::Published(at_uri),
+        Ok(at_uri) => {
+            checks.proven(&permit);
+            PlanResult::Published(at_uri)
+        }
         Err(NotWritten { failure, kept }) => PlanResult::Failed {
             failure: BatchFailure {
                 reason: failure.message().to_string(),

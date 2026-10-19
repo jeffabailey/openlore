@@ -45,6 +45,11 @@ delivered. R3 adds imported repos, the first suggestions that must never publish
    fields, no serde derive and no public constructor: only `may_sign` mints it. The bio rule is
    the existing exact-token matcher (`claim_domain::identity_link::bio_verdict`). Freshness is the
    caller's duty and is enforced structurally (§4).
+   **Who counts as the owner:** any *listed* account (verified or not) whose bio, read in this
+   request, holds the signer DID — the fresh read is the verification; the stored status never
+   decides. The publish path reads the store only to find the owner's own pending suggestion. A
+   publish that lands through an account stored as unverified marks it verified again
+   (`AccountStatusWrite::mark_account_verified`, under the login GitHub serves now).
 3. **A `PublishPlan` needs a permit.** `publish_plan`, `publish_edited_plan` and `restore_plan`
    take `&SigningPermit` instead of `owner_did`; the plan's author is the permit's signer and the
    draft's subject must equal the permit's subject, else `PlanError::NotPermitted`.

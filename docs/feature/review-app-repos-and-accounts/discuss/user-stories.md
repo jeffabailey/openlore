@@ -34,6 +34,9 @@
   not owned by a currently verified account of the signed-in DID (BR-RRA-2) is never previewed,
   approved, written to a PDS, quoted in a share post or shown on a profile. This holds for every
   request, not only for the buttons on the page.
+  *Note (ADR-089 §2):* "currently verified" means a listed account (verified or not) whose bio,
+  read in this request, holds the signer DID — the fresh read is the verification; the stored
+  status never decides. A publish through an account stored as unverified marks it verified.
 - **BR-RRA-2 "Currently verified owner" is read fresh, in the request.** At preview and again
   at confirm, the app reads the repo's current owner from GitHub and checks that owner
   account's bio for the signed-in DID, both within that request. Publishing proceeds only when
