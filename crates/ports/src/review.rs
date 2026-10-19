@@ -423,6 +423,18 @@ pub trait ScanRunPort: Send + Sync {
         run_id: &str,
         position: usize,
     ) -> Result<(), ReviewStoreError>;
+
+    /// Record the chosen repos `run_id` skips (`skipped` rows with their
+    /// reason), after its plan rows.
+    fn record_skipped(
+        &self,
+        owner_did: &str,
+        run_id: &str,
+        skipped: &[SkippedScanRepo],
+    ) -> Result<(), ReviewStoreError>;
+
+    /// The chosen repos the owner's most recent run skipped, in order.
+    fn latest_skipped(&self, owner_did: &str) -> Result<Vec<SkippedScanRepo>, ReviewStoreError>;
 }
 
 /// One repo of a scan's frozen plan, read for the account it came from.
@@ -432,6 +444,44 @@ pub struct PlannedScanRepo {
     /// `owner/name` as listed when the plan was frozen.
     pub full_name: String,
     pub source_account_id: u64,
+}
+
+/// Why a chosen repo is not read (AC-002.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RepoSkipReason {
+    Fork,
+    Archived,
+    /// Gone from the account's complete listing, or a fresh read found it
+    /// missing or owned by someone else.
+    MissingOrTransferred,
+}
+
+impl RepoSkipReason {
+    /// The stored `skip_reason`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fork => "fork",
+            Self::Archived => "archived",
+            Self::MissingOrTransferred => "missing_or_transferred",
+        }
+    }
+
+    /// The reason a stored `skip_reason` names.
+    pub fn parse(stored: &str) -> Option<Self> {
+        [Self::Fork, Self::Archived, Self::MissingOrTransferred]
+            .into_iter()
+            .find(|reason| reason.as_str() == stored)
+    }
+}
+
+/// One chosen repo a scan did not read, named as it was chosen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedScanRepo {
+    pub repo_id: u64,
+    /// `owner/name` as saved in the choice.
+    pub full_name: String,
+    pub source_account_id: u64,
+    pub reason: RepoSkipReason,
 }
 
 /// One repo of a saved choice (ADR-088 §3): every repo shown at Save is

@@ -55,18 +55,25 @@ pub(crate) fn queue_page(
         &session.owner_did,
     );
     let latest_scan = app.scans.latest_scan(&session.owner_did).ok().flatten();
+    let skipped = app
+        .scans
+        .latest_skipped(&session.owner_did)
+        .unwrap_or_default();
     let csrf_token = csrf_token_for(cookie_value);
     Reply::page(
         status,
-        views::review_page(&QueueView {
-            handle: &session.handle,
-            csrf_token: &csrf_token,
-            github: github_step_of(link.as_ref()),
-            latest_scan,
-            pending: &pending,
-            tally,
-            notice,
-        }),
+        views::review_page_naming_skips(
+            &QueueView {
+                handle: &session.handle,
+                csrf_token: &csrf_token,
+                github: github_step_of(link.as_ref()),
+                latest_scan,
+                pending: &pending,
+                tally,
+                notice,
+            },
+            &skipped,
+        ),
     )
 }
 

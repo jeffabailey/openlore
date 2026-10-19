@@ -40,3 +40,32 @@ Read by `crates/adapter-github/tests/github_listing_contract.rs` through the
 production `GithubAdapter::list_account_repos` (3 pages read and reported
 truncated; a last page without `next` reported complete; a `next` on another
 host refused).
+
+## Repo reads (U-RRA-3, ADR-089 §1 `read_repo`)
+
+`repo_read_cases.json` holds GitHub's replies to `GET /repos/{owner}/{name}`,
+recorded live 2026-10-19T16:33:06Z–16:33:17Z the same way (unauthenticated
+`GET`, `Accept: application/vnd.github+json`), bodies verbatim. Only public
+demo and well-known open-source repos are recorded.
+
+| Case | Live URL(s) | Status |
+|---|---|---|
+| `user_200` | https://api.github.com/repos/octocat/Hello-World | 200 (owner `type: User`) |
+| `org_200` | https://api.github.com/repos/github/gitignore | 200 (owner `type: Organization`) |
+| `rename_301` | https://api.github.com/repos/rust-lang/rustup.rs → https://api.github.com/repositories/43192623 | 301, then 200 (`rust-lang/rustup`) |
+| `transfer_301` | https://api.github.com/repos/carllerche/mio → https://api.github.com/repositories/23138984 | 301, then 200 (`tokio-rs/mio`, a new owner id) |
+| `missing_404` | https://api.github.com/repos/octocat/this-repo-does-not-exist-openlore | 404 |
+| `rate_limited_403` | — | 403, **documented, not recorded** |
+
+Observed: a renamed or transferred repo answers `301` with `Location:
+https://api.github.com/repositories/{id}` on the same host (not
+`/repos/{new owner}/{new name}`); the final body names the current
+`full_name` and owner. The 403 case is built from GitHub's documented
+rate-limit reply (`x-ratelimit-remaining: 0`, "API rate limit exceeded")
+because exhausting the live budget to record it is not worth it; the
+`documented_not_recorded` flag marks it.
+
+Read by `crates/adapter-github/tests/github_repo_contract.rs` through the
+production `GithubAdapter::read_repo` (facts for a user's and an org's repo;
+one same-host redirect followed for a rename and a transfer; 404 not found;
+403 a rate limit; a redirect off the host or a second redirect refused).

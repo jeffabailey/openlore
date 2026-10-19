@@ -356,6 +356,28 @@ pub struct AccountRepoListing {
     pub extent: ListingExtent,
 }
 
+/// Who owns a repo, as GitHub's `owner.type` says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepoOwnerKind {
+    User,
+    Organization,
+}
+
+/// One repo as `GET /repos/{o}/{r}` serves it now (ADR-089 §1), read from
+/// the final body after at most one redirect. A plain port value: only
+/// adapters and test support build one (ADR-089, `authority_evidence_only_from_adapters`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoFacts {
+    pub repo_id: u64,
+    /// `owner/name` as served now (a rename or transfer shows here).
+    pub full_name: String,
+    pub owner_id: u64,
+    pub owner_login: String,
+    pub owner_kind: RepoOwnerKind,
+    pub fork: bool,
+    pub archived: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

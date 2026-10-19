@@ -10,7 +10,10 @@
 
 use std::collections::BTreeSet;
 
-use ports::{ListedRepo, OutsideDefault, OwnedRepo, SavedRepoChoice};
+use ports::{
+    AccountRepoListing, ListedRepo, ListingExtent, OutsideDefault, OwnedRepo, RepoFacts,
+    SavedRepoChoice, SkippedScanRepo,
+};
 use scraper_domain::{select_person_repos, DEFAULT_PERSON_REPO_COUNT};
 
 /// Repos ticked for an account without a saved choice: today's top 5.
@@ -379,12 +382,7 @@ pub enum AccountCheck {
 }
 
 /// Why a chosen repo is not read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SkipReason {
-    Fork,
-    Archived,
-    MissingOrTransferred,
-}
+pub use ports::RepoSkipReason as SkipReason;
 
 /// One chosen repo the scan does not read, and why.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -482,6 +480,83 @@ impl Listing {
             Some(listed) => Ok(listed),
         }
     }
+}
+
+/// The ticked repos of a saved choice a listing does not show, when only a
+/// fresh read can say what became of them (I-06): none for a complete
+/// listing (absence proves them missing), every unlisted tick for a
+/// truncated one (absence proves nothing).
+pub fn unlisted_ticks<'a>(
+    saved: &'a [SavedRepoChoice],
+    listing: &AccountRepoListing,
+) -> Vec<&'a SavedRepoChoice> {
+    match listing.extent {
+        ListingExtent::Complete => Vec::new(),
+        ListingExtent::Truncated => saved
+            .iter()
+            .filter(|row| row.ticked)
+            .filter(|row| !listing.repos.iter().any(|l| l.repo_id == row.repo_id))
+            .collect(),
+    }
+}
+
+/// The account's listing completed by the fresh reads of its unlisted
+/// ticks: a read joins it when it is the chosen repo (same id) and the
+/// account `owner_id` still owns it; any other read leaves it absent, so
+/// it is skipped as missing or transferred.
+pub fn listing_with_reads(
+    listing: AccountRepoListing,
+    owner_id: u64,
+    reads: &[(u64, RepoFacts)],
+) -> Listing {
+    let still_owned = reads
+        .iter()
+        .filter(|(chosen_id, facts)| facts.repo_id == *chosen_id && facts.owner_id == owner_id)
+        .map(|(_, facts)| listed_from_read(facts));
+    Listing::of(listing.repos.into_iter().chain(still_owned).collect())
+}
+
+/// A fresh read as a listing row (it carries no stars, so it ranks last).
+fn listed_from_read(facts: &RepoFacts) -> ListedRepo {
+    ListedRepo {
+        repo_id: facts.repo_id,
+        owner_id: facts.owner_id,
+        repo: OwnedRepo {
+            full_name: facts.full_name.clone(),
+            description: None,
+            language: None,
+            stars: 0,
+            fork: facts.fork,
+            archived: facts.archived,
+            pushed_at: None,
+        },
+    }
+}
+
+/// The skipped repos of a plan, each named as it was chosen (`saved`), for
+/// the run's summary. Only names and reasons: no bio, no DID.
+pub fn named_skips(plan: &ScanPlan, saved: &[SavedRepoChoice]) -> Vec<SkippedScanRepo> {
+    plan.accounts
+        .iter()
+        .flat_map(|(account_id, account)| {
+            let skipped: &[SkippedRepo] = match account {
+                AccountPlan::Read { skipped, .. } => skipped,
+                AccountPlan::Unverified | AccountPlan::NotReached => &[],
+            };
+            skipped.iter().map(move |skip| (*account_id, skip))
+        })
+        .filter_map(|(account_id, skip)| {
+            saved
+                .iter()
+                .find(|row| row.repo_id == skip.repo_id)
+                .map(|row| SkippedScanRepo {
+                    repo_id: skip.repo_id,
+                    full_name: row.full_name.clone(),
+                    source_account_id: account_id,
+                    reason: skip.reason,
+                })
+        })
+        .collect()
 }
 
 /// The plan of one account from the repos `chosen` for it and its check:
@@ -623,6 +698,81 @@ mod tests {
             prop_assert_eq!(default.iter().map(|p| p.repo_id).collect::<Vec<_>>(), top);
             prop_assert!(default.iter().all(|p| p.outside_default.is_none()));
         }
+    }
+
+    fn facts(id: u64, owner_id: u64) -> RepoFacts {
+        RepoFacts {
+            repo_id: id,
+            full_name: format!("me/repo-{id}"),
+            owner_id,
+            owner_login: "me".to_string(),
+            owner_kind: ports::RepoOwnerKind::User,
+            fork: false,
+            archived: false,
+        }
+    }
+
+    // bypass: I-06 as three named cases (complete, truncated + still owned,
+    // truncated + gone); the AT covers only complete listings.
+    #[test]
+    fn a_truncated_listing_never_proves_a_chosen_repo_missing() {
+        let saved = [
+            SavedRepoChoice {
+                repo_id: 1,
+                full_name: "me/repo-1".to_string(),
+                ticked: true,
+            },
+            SavedRepoChoice {
+                repo_id: 9,
+                full_name: "me/repo-9".to_string(),
+                ticked: true,
+            },
+        ];
+        let listing = |extent| AccountRepoListing {
+            repos: vec![listed(1, 5, false, false)],
+            extent,
+        };
+        assert!(unlisted_ticks(&saved, &listing(ListingExtent::Complete)).is_empty());
+        let unread: Vec<u64> = unlisted_ticks(&saved, &listing(ListingExtent::Truncated))
+            .iter()
+            .map(|row| row.repo_id)
+            .collect();
+        assert_eq!(unread, [9]);
+
+        let read_back = |reads: &[(u64, RepoFacts)]| {
+            let listing = listing_with_reads(listing(ListingExtent::Truncated), 1, reads);
+            plan_account(&[1, 9], &AccountCheck::Passed(listing))
+        };
+        let AccountPlan::Read { planned, skipped } = read_back(&[(9, facts(9, 1))]) else {
+            panic!("passed");
+        };
+        assert_eq!(
+            planned.iter().map(|p| p.repo_id).collect::<Vec<_>>(),
+            [1, 9]
+        );
+        assert!(skipped.is_empty());
+        for gone in [vec![], vec![(9, facts(9, 2))], vec![(9, facts(10, 1))]] {
+            let AccountPlan::Read { skipped, .. } = read_back(&gone) else {
+                panic!("passed");
+            };
+            let reasons: Vec<_> = skipped.iter().map(|s| (s.repo_id, s.reason)).collect();
+            assert_eq!(reasons, [(9, SkipReason::MissingOrTransferred)], "{gone:?}");
+        }
+
+        let plan = ScanPlan {
+            accounts: vec![(1, read_back(&[]))],
+            imports: Vec::new(),
+        };
+        assert_eq!(
+            named_skips(&plan, &saved),
+            [SkippedScanRepo {
+                repo_id: 9,
+                full_name: "me/repo-9".to_string(),
+                source_account_id: 1,
+                reason: SkipReason::MissingOrTransferred,
+            }],
+            "a skip is named as chosen, and carries nothing else"
+        );
     }
 
     // bypass: the DISCUSS example (7 owned, 1 fork, 1 archived) as a table.

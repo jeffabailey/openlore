@@ -404,6 +404,30 @@ pub fn parse_listed_repos(body: &serde_json::Value) -> Result<Vec<ports::ListedR
         .collect())
 }
 
+/// Reshape a `GET /repos/{o}/{r}` body (the final one, after any redirect)
+/// into [`ports::RepoFacts`] (ADR-089 §1), strictly: a body without a
+/// positive repo `id`, `full_name`, `owner.id`, `owner.login` or a known
+/// `owner.type` is refused, never guessed. PURE.
+pub fn parse_repo_read(body: &serde_json::Value) -> Result<ports::RepoFacts, String> {
+    let owner = body
+        .get("owner")
+        .ok_or_else(|| "the repo body has no `owner`".to_string())?;
+    let owner_kind = match owner.get("type").and_then(serde_json::Value::as_str) {
+        Some("User") => ports::RepoOwnerKind::User,
+        Some("Organization") => ports::RepoOwnerKind::Organization,
+        other => return Err(format!("the repo owner's `type` is {other:?}")),
+    };
+    Ok(ports::RepoFacts {
+        repo_id: positive_id(body).ok_or("the repo body has no positive `id`")?,
+        full_name: text(body, "full_name").ok_or("the repo body has no `full_name`")?,
+        owner_id: positive_id(owner).ok_or("the repo owner has no positive `id`")?,
+        owner_login: text(owner, "login").ok_or("the repo owner has no `login`")?,
+        owner_kind,
+        fork: flag(body, "fork"),
+        archived: flag(body, "archived"),
+    })
+}
+
 /// A positive numeric `id`.
 fn positive_id(body: &serde_json::Value) -> Option<u64> {
     body.get("id")

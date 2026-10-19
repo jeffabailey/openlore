@@ -44,7 +44,7 @@
 use async_trait::async_trait;
 use ports::{
     AccountRepoListing, GithubAccountProfile, GithubError, GithubPort, ListingExtent, OwnedRepo,
-    PersonProfile, ProbeOutcome, RateBudget, RawContributor, Signal, TargetKind,
+    PersonProfile, ProbeOutcome, RateBudget, RawContributor, RepoFacts, Signal, TargetKind,
 };
 
 pub mod client;
@@ -456,6 +456,17 @@ impl GithubPort for GithubAdapter {
             repos,
             extent: ListingExtent::Complete,
         })
+    }
+
+    /// `GET {base}/repos/{owner}/{name}`: one request, at most one same-host
+    /// redirect (a renamed or transferred repo, [`Self::send_get`]); the
+    /// facts are read from the final body. 404 is `NotFound`, 403 a rate limit.
+    async fn read_repo(&self, owner: &str, name: &str) -> Result<RepoFacts, GithubError> {
+        let target = format!("{owner}/{name}");
+        let body = self
+            .get_public(&format!("/repos/{target}"), &target)
+            .await?;
+        client::parse_repo_read(&body).map_err(GithubError::ApiShape)
     }
 
     fn last_rate_budget(&self) -> Option<RateBudget> {

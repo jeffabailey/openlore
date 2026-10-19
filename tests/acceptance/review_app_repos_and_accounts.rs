@@ -346,7 +346,6 @@ fn an_account_that_needs_re_verifying_shows_no_repo_list() {
 ///     | Dmitri | saved forge-01 .. forge-10 of his 12                     | dvolkov/forge-01 .. forge-10                                              | 10 |
 /// ```
 #[test]
-#[ignore = "DELIVER 01-09: a scan reads exactly the saved choice (or the default top 5)"]
 fn the_scan_reads_only_the_repos_priya_chose_or_todays_top_5() {
     let dmitri_ten: Vec<Repo> = dmitri_repos()[..SCAN_REPO_CAP].to_vec();
     let rows: [(Account, Option<Vec<Repo>>, Vec<Repo>); 3] = [
@@ -490,7 +489,6 @@ fn a_repo_created_after_the_choice_is_not_read_until_ticked() {
 ///     | transferred it to tidal-labs | Skipped priyaraman/kelp: missing or owned by someone else since you chose it. Untick it.     |
 /// ```
 #[test]
-#[ignore = "DELIVER 01-12: skipped chosen repos are named with reason and fix"]
 fn a_chosen_repo_that_can_no_longer_be_read_is_skipped_and_named() {
     #[derive(Debug, Clone, Copy)]
     enum Change {

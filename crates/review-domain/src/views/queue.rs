@@ -2,7 +2,9 @@
 //! status (US-BRA-003/005/006, ADR-076).
 
 use maud::{html, Markup};
-use ports::{ScanCounts, ScanRun, ScanStatus, Suggestion, SuggestionKey};
+use ports::{
+    RepoSkipReason, ScanCounts, ScanRun, ScanStatus, SkippedScanRepo, Suggestion, SuggestionKey,
+};
 
 use super::*;
 use crate::edits::CONFIDENCE_GUIDANCE;
@@ -210,6 +212,20 @@ pub fn scan_summary(counts: ScanCounts) -> String {
         .join(" · ")
 }
 
+/// Why a chosen repo was skipped and the fix (AC-002.4): it names the repo,
+/// never its owner's bio or DID.
+pub fn skipped_repo_message(skipped: &SkippedScanRepo) -> String {
+    let (reason, fix) = match skipped.reason {
+        RepoSkipReason::Archived => ("archived", "Untick it, or unarchive it on GitHub."),
+        RepoSkipReason::Fork => ("a fork", "Untick it."),
+        RepoSkipReason::MissingOrTransferred => ("missing or owned by someone else", "Untick it."),
+    };
+    format!(
+        "Skipped {}: {reason} since you chose it. {fix}",
+        skipped.full_name
+    )
+}
+
 /// The summary of the latest scan, once it has completed.
 fn completed_summary(latest: Option<ScanRun>) -> Option<String> {
     latest
@@ -392,8 +408,9 @@ fn declined_notice(key: &SuggestionKey, csrf_token: &str) -> Markup {
     }
 }
 
-/// The verified owner's queue: privacy statement, scan state, cards.
-fn verified_queue(login: &str, view: &QueueView<'_>) -> Markup {
+/// The verified owner's queue: privacy statement, scan state (naming the
+/// chosen repos its latest scan skipped), cards.
+fn verified_queue(login: &str, view: &QueueView<'_>, skipped: &[SkippedScanRepo]) -> Markup {
     html! {
         p {
             "GitHub: github.com/" (login) " (verified) · "
@@ -426,6 +443,9 @@ fn verified_queue(login: &str, view: &QueueView<'_>) -> Markup {
             }
             @if let Some(run) = view.latest_scan.filter(|run| run.status == ScanStatus::Completed) {
                 p role="status" { (repos_read_message(run.repos_read)) }
+                @for skip in skipped {
+                    p role="status" { (skipped_repo_message(skip)) }
+                }
             }
             @if let Some(notice) = scan_notice(view.latest_scan, view.pending, &view.tally) {
                 p role="status" { (notice) }
@@ -457,6 +477,12 @@ fn verified_queue(login: &str, view: &QueueView<'_>) -> Markup {
 /// The signed-in review queue: the GitHub step until ownership is proven,
 /// then the private queue.
 pub fn review_page(view: &QueueView<'_>) -> String {
+    review_page_naming_skips(view, &[])
+}
+
+/// The review queue, its completed latest scan's summary naming each chosen
+/// repo that scan `skipped`, with why and the fix.
+pub fn review_page_naming_skips(view: &QueueView<'_>, skipped: &[SkippedScanRepo]) -> String {
     page(
         "Your review queue",
         html! {
@@ -476,7 +502,7 @@ pub fn review_page(view: &QueueView<'_>) -> String {
                     a href="/github" { "Verify GitHub ownership" }
                 }
                 GithubStep::Verified { login } => {
-                    (verified_queue(login, view))
+                    (verified_queue(login, view, skipped))
                 }
             }
             form method="post" action="/signout" {

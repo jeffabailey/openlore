@@ -14,15 +14,18 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ports::{GithubError, GithubLink, PlannedScanRepo, ScanCounts, ScanStatus, SuggestionSource};
+use ports::{
+    AccountRepoListing, GithubError, GithubLink, PlannedScanRepo, RepoFacts, SavedRepoChoice,
+    ScanCounts, ScanStatus, SuggestionSource,
+};
 use review_domain::budget::{auto_resume_wait, github_budget_allows, ScanAdmission};
 use review_domain::kpi::{utc_day, KpiEvent};
 use review_domain::lifecycle::suggestion_from_candidate;
 use review_domain::ownership::{prove_ownership, OwnershipRefusal, VerifiedOwnership};
 use review_domain::reconcile::{add_counts, reconcile};
 use review_domain::repo_scope::{
-    scan_intent, AccountCheck, FrozenScope, LimitRefusal, Listing, PlannedRepo, SavedTicks,
-    ScanAccount, ScanIntent, SCAN_REPO_CAP,
+    listing_with_reads, named_skips, scan_intent, unlisted_ticks, AccountCheck, FrozenScope,
+    LimitRefusal, Listing, PlannedRepo, SavedTicks, ScanAccount, ScanIntent, SCAN_REPO_CAP,
 };
 use review_domain::views::ScanRefused;
 use scraper_domain::derive_candidates;
@@ -85,8 +88,8 @@ pub(crate) fn begin_scan(app: &Arc<App>, owner_did: &str) -> ScanStart {
     let Some(link) = link.filter(|link| link.verified) else {
         return ScanStart::NotVerified;
     };
-    let scope = match frozen_intent(app, owner_did, &link) {
-        Ok(scope) => scope,
+    let frozen = match frozen_intent(app, owner_did, &link) {
+        Ok(frozen) => frozen,
         Err(refused) => return refused,
     };
     let refused = match app.scan_limiter.admit(owner_did) {
@@ -110,14 +113,21 @@ pub(crate) fn begin_scan(app: &Arc<App>, owner_did: &str) -> ScanStart {
         owner_did.to_string(),
         run_id,
         link,
-        scope,
+        frozen,
     ));
     ScanStart::Started
 }
 
+/// A scan's scope frozen at its start, with the saved choice it came from
+/// (the names its skipped repos are reported by).
+pub(crate) struct FrozenChoice {
+    scope: FrozenScope,
+    saved: Vec<SavedRepoChoice>,
+}
+
 /// The scan's intent, frozen from the store before admission (§6.2 step 1):
 /// a refusal here spends none of the day's scans and asks GitHub nothing.
-fn frozen_intent(app: &App, owner_did: &str, link: &GithubLink) -> Result<FrozenScope, ScanStart> {
+fn frozen_intent(app: &App, owner_did: &str, link: &GithubLink) -> Result<FrozenChoice, ScanStart> {
     let saved = app
         .choices_read
         .saved_choice(owner_did, link.github_user_id)
@@ -128,7 +138,7 @@ fn frozen_intent(app: &App, owner_did: &str, link: &GithubLink) -> Result<Frozen
         eligible_seen: None,
     };
     match scan_intent(&[account], &[], SCAN_REPO_CAP) {
-        ScanIntent::Read(scope) => Ok(scope),
+        ScanIntent::Read(scope) => Ok(FrozenChoice { scope, saved }),
         ScanIntent::NothingToRead => Err(refused_before_admission(
             app,
             KpiEvent::ScanRefusedNothingToRead,
@@ -185,10 +195,10 @@ pub(crate) async fn run_scan(
     owner_did: String,
     run_id: String,
     link: GithubLink,
-    scope: FrozenScope,
+    frozen: FrozenChoice,
 ) {
     let ended = match reverify(&app, &owner_did, &link).await {
-        Ok(ownership) => scan_owned_repos(&app, &ownership, &run_id, &scope).await,
+        Ok(ownership) => scan_owned_repos(&app, &ownership, &run_id, &frozen).await,
         Err(refusal) if refusal.disproves_ownership() => {
             let _ =
                 app.links
@@ -236,24 +246,23 @@ async fn scan_owned_repos(
     app: &App,
     ownership: &VerifiedOwnership,
     run_id: &str,
-    scope: &FrozenScope,
+    frozen: &FrozenChoice,
 ) -> Ended {
-    let listing = match app
-        .github
-        .list_account_repos(ownership.github_login())
-        .await
-    {
-        Ok(listing) => Listing::of(listing.repos),
+    let listing = match account_listing(app, ownership, &frozen.saved).await {
+        Ok(listing) => listing,
         Err(error) => return failed(app, &error),
     };
     let owner_did = ownership.owner_did();
-    let scan_plan = scope.plan(&[AccountCheck::Passed(listing)]);
+    let scan_plan = frozen.scope.plan(&[AccountCheck::Passed(listing)]);
     let plan = scan_plan.owned_repos();
-    if app
+    let recorded = app
         .scans
         .record_plan(owner_did, run_id, &plan_rows(&plan))
-        .is_err()
-    {
+        .and_then(|()| {
+            app.scans
+                .record_skipped(owner_did, run_id, &named_skips(&scan_plan, &frozen.saved))
+        });
+    if recorded.is_err() {
         return Ended::with_status(ScanStatus::Interrupted);
     }
     let mut found = ScanCounts::default();
@@ -268,6 +277,36 @@ async fn scan_owned_repos(
         let _ = app.scans.mark_repo_read(owner_did, run_id, position);
     }
     Ended::with_status(ScanStatus::Completed).after_finding(found)
+}
+
+/// The account's owned repos now: its listing, completed (when GitHub had
+/// more pages than it reads) by one `read_repo` per ticked repo it does not
+/// show, so a truncated listing never proves a chosen repo missing (I-06).
+async fn account_listing(
+    app: &App,
+    ownership: &VerifiedOwnership,
+    saved: &[SavedRepoChoice],
+) -> Result<Listing, GithubError> {
+    let listing: AccountRepoListing = app
+        .github
+        .list_account_repos(ownership.github_login())
+        .await?;
+    let mut reads: Vec<(u64, RepoFacts)> = Vec::new();
+    for chosen in unlisted_ticks(saved, &listing) {
+        let Some((owner, name)) = chosen.full_name.split_once('/') else {
+            continue;
+        };
+        match app.github.read_repo(owner, name).await {
+            Ok(facts) => reads.push((chosen.repo_id, facts)),
+            Err(GithubError::NotFound { .. } | GithubError::NotPublic { .. }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(listing_with_reads(
+        listing,
+        ownership.github_user_id(),
+        &reads,
+    ))
 }
 
 /// The store rows of a scan's plan, in plan order.

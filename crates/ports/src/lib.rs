@@ -40,10 +40,11 @@ pub use review::{
     ForgetPort, GithubAccountsRead, GithubAccountsWrite, GithubLink, GithubLinkPort,
     KpiCounterPort, KpiCounterRow, KpiTally, LinkRecorded, NewWebSession, OAuthPort,
     OutsideDefault, PdsCallback, PlanKind, PlannedScanRepo, PublishPlanPort, RepoChoiceRead,
-    RepoChoiceWrite, RepoWriteError, ReviewStateRead, ReviewStateWrite, ReviewStoreError,
-    ReviewStorePort, RevokeOutcome, SavedRepoChoice, ScanCounts, ScanRun, ScanRunPort, ScanStatus,
-    SecretStorePort, SessionPort, StoredPublishPlan, Suggestion, SuggestionKey, SuggestionSource,
-    SuggestionState, TakenPublishPlan, UserRepoReadPort, UserRepoWritePort, WebSession,
+    RepoChoiceWrite, RepoSkipReason, RepoWriteError, ReviewStateRead, ReviewStateWrite,
+    ReviewStoreError, ReviewStorePort, RevokeOutcome, SavedRepoChoice, ScanCounts, ScanRun,
+    ScanRunPort, ScanStatus, SecretStorePort, SessionPort, SkippedScanRepo, StoredPublishPlan,
+    Suggestion, SuggestionKey, SuggestionSource, SuggestionState, TakenPublishPlan,
+    UserRepoReadPort, UserRepoWritePort, WebSession,
 };
 
 // -----------------------------------------------------------------------------
@@ -120,8 +121,8 @@ pub use peer_storage::{
 
 pub use github::{
     AccountRepoListing, CandidateClaim, CandidateClaimError, GithubAccountProfile, GithubError,
-    ListedRepo, ListingExtent, OwnedRepo, PersonProfile, RawContributor, Signal, SignalKind,
-    TargetKind,
+    ListedRepo, ListingExtent, OwnedRepo, PersonProfile, RawContributor, RepoFacts, RepoOwnerKind,
+    Signal, SignalKind, TargetKind,
 };
 
 // contributor-philosophy-inference (DDD-4 / ADR-063 §3): the NEW append-only
@@ -571,6 +572,12 @@ pub trait GithubPort: Send + Sync {
     /// ids are left out. Follows `Link: rel="next"` for up to 3 pages and
     /// says whether the listing was complete.
     async fn list_account_repos(&self, user: &str) -> Result<AccountRepoListing, GithubError>;
+
+    /// One repo as GitHub serves it now (ADR-089 §1): exactly one
+    /// `GET /repos/{owner}/{name}`, following at most one same-host redirect
+    /// (a renamed or transferred repo); the facts come from the final body.
+    /// 404 (missing or private, one meaning) is [`GithubError::NotFound`].
+    async fn read_repo(&self, owner: &str, name: &str) -> Result<RepoFacts, GithubError>;
 
     /// The rate budget GitHub reported on the most recent response, if any
     /// (ADR-076 §2: a scan reads it before each repo).
