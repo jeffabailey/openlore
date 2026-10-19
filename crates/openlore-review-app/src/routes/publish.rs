@@ -10,8 +10,12 @@ use hyper::StatusCode;
 use ports::{PlanKind, SuggestionState};
 use review_domain::kpi::approval_was_edited;
 use review_domain::plans::{restore_plan, PublishPlan};
-use review_domain::selection::{tally_batch, BatchFailure, PlanResult, MAX_SELECTED};
-use review_domain::views::{self, BatchOutcome, PublishNextStep, PublishRetry};
+use review_domain::selection::{
+    selection_value, tally_batch, BatchFailure, PlanResult, MAX_SELECTED,
+};
+use review_domain::views::{
+    self, BatchOutcome, PublishNextStep, PublishRetry, CONFIRMED_SUGGESTION_FIELD,
+};
 
 use crate::executor::{execute_publish, PublishFailure};
 use crate::http::{App, PageRequest, Reply};
@@ -25,6 +29,13 @@ pub(crate) async fn confirm_publish(app: &App, request: &PageRequest) -> Reply {
     let confirmed = match take_confirmed_plan(app, request, PlanKind::Publish) {
         Ok(confirmed) => confirmed,
         Err(refused) => return refused,
+    };
+    let Some(confirmed) = bound_to_named(
+        app,
+        confirmed,
+        &fields(&request.form, CONFIRMED_SUGGESTION_FIELD),
+    ) else {
+        return not_found();
     };
     if confirmed.expired() {
         return Reply::page(StatusCode::GONE, views::plan_expired_page());
@@ -56,7 +67,12 @@ async fn publish(app: &App, plan: &PublishPlan, confirmed: &ConfirmedPlan) -> Re
             let next_step = PublishNextStep::after_failure(failure.needs_sign_in(), retry);
             Reply::page(
                 StatusCode::BAD_GATEWAY,
-                views::publish_failed_page(failure.message(), failure.failed_write(), next_step),
+                views::publish_of_suggestion_failed_page(
+                    failure.message(),
+                    failure.failed_write(),
+                    next_step,
+                    Some(plan.key()),
+                ),
             )
         }
     }
@@ -102,6 +118,7 @@ pub(crate) async fn confirm_publish_selected(app: &App, request: &PageRequest) -
     let csrf_token = csrf_token_of(request);
     let mut plan_ids = fields(&request.form, "plan");
     plan_ids.dedup();
+    let named = fields(&request.form, CONFIRMED_SUGGESTION_FIELD);
     let taken: Vec<ConfirmedPlan> = plan_ids
         .into_iter()
         .take(MAX_SELECTED)
@@ -114,6 +131,7 @@ pub(crate) async fn confirm_publish_selected(app: &App, request: &PageRequest) -
                 csrf_token.clone(),
             )
         })
+        .filter_map(|confirmed| bound_to_named(app, confirmed, &named))
         .collect();
     if taken.is_empty() {
         return not_found();
@@ -140,6 +158,26 @@ pub(crate) async fn confirm_publish_selected(app: &App, request: &PageRequest) -
             csrf_token: &csrf_token,
         }),
     )
+}
+
+/// A taken plan, if the confirm that took it names its suggestion (or names
+/// none: its plan ids alone bind it). A plan re-aimed at another suggestion
+/// is put back untouched, and nothing is published.
+fn bound_to_named(app: &App, confirmed: ConfirmedPlan, named: &[String]) -> Option<ConfirmedPlan> {
+    if confirms_suggestion(named, &confirmed.stored.key) {
+        return Some(confirmed);
+    }
+    let _ = app.plans.put_publish_plan(
+        &confirmed.owner_did,
+        &confirmed.stored,
+        confirmed.expires_at,
+    );
+    None
+}
+
+/// Does a confirm naming `named` suggestions confirm the plan for `key`?
+fn confirms_suggestion(named: &[String], key: &ports::SuggestionKey) -> bool {
+    named.is_empty() || named.contains(&selection_value(key))
 }
 
 /// Confirm one taken plan of a batch, exactly as a single confirm would.

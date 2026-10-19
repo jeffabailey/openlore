@@ -470,35 +470,70 @@ enum CardSource<'a> {
 /// scan add and remove cards without touching one's contents, so a preview
 /// opened inside a card stays open.
 fn suggestion_card(suggestion: &Suggestion, source: CardSource<'_>, csrf_token: &str) -> Markup {
+    match source {
+        CardSource::Account(login) => owned_card(suggestion, login, csrf_token),
+        CardSource::Imported => imported_card(suggestion, csrf_token),
+    }
+}
+
+/// A card about a repo one of her accounts owns: Select, Approve, Edit and
+/// "Not me".
+fn owned_card(suggestion: &Suggestion, login: Option<&str>, csrf_token: &str) -> Markup {
     html! {
         article id=(card_id(&suggestion.key)) hx-morph-skip-children {
             (selection_box(&suggestion.key))
             h2 { (suggestion_headline(&suggestion.key)) }
-            @match source {
-                CardSource::Account(Some(login)) => {
-                    p { "from github.com/" (login) }
-                }
-                CardSource::Account(None) => {}
-                CardSource::Imported => {
-                    p { strong { (not_yours_message(&suggestion.source_repo)) } }
-                }
+            @if let Some(login) = login {
+                p { "from github.com/" (login) }
             }
-            p {
-                "Confidence " (confidence_with_bucket(suggestion.confidence_bp))
-            }
-            p { "Why: " (suggestion.why.join("; ")) }
-            p {
-                "Evidence: "
-                @for url in &suggestion.evidence {
-                    a href=(url) { (url) } " "
-                }
-            }
+            (card_reasons(suggestion, true))
             (card_action("/review/approve", "a", APPROVE_LABEL, &suggestion.key, csrf_token, CardSwap::InCard))
             (card_action("/review/edit", "e", EDIT_LABEL, &suggestion.key, csrf_token, CardSwap::Page))
             (card_action("/review/decline", "n", DECLINE_LABEL, &suggestion.key, csrf_token, CardSwap::Page))
         }
     }
 }
+
+/// A card about a repo she imported (BR-RRA-1): "Not yours to publish",
+/// who can, and Decline as its only control: nothing on it leads to a
+/// publish, nor away from the queue.
+fn imported_card(suggestion: &Suggestion, csrf_token: &str) -> Markup {
+    html! {
+        article id=(card_id(&suggestion.key)) hx-morph-skip-children {
+            h2 {
+                (repo_path(&suggestion.key.subject)) " embodies "
+                (philosophy_slug(&suggestion.key.object))
+            }
+            p { strong { (not_yours_message(&suggestion.source_repo)) } }
+            (card_reasons(suggestion, false))
+            (card_action("/review/decline", "n", IMPORTED_DECLINE_LABEL, &suggestion.key, csrf_token, CardSwap::Page))
+        }
+    }
+}
+
+/// A card's confidence, why and evidence (linked when `linked`).
+fn card_reasons(suggestion: &Suggestion, linked: bool) -> Markup {
+    html! {
+        p {
+            "Confidence " (confidence_with_bucket(suggestion.confidence_bp))
+        }
+        p { "Why: " (suggestion.why.join("; ")) }
+        p {
+            "Evidence: "
+            @for url in &suggestion.evidence {
+                @if linked {
+                    a href=(url) { (url) } " "
+                } @else {
+                    (url) " "
+                }
+            }
+        }
+    }
+}
+
+/// The label of an imported card's decline button (D-RRA-10: the same
+/// action as "Not me").
+pub const IMPORTED_DECLINE_LABEL: &str = "Decline";
 
 /// The card's edit button label (US-BRA-005).
 pub const EDIT_LABEL: &str = "Edit";

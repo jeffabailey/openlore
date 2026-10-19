@@ -1,6 +1,7 @@
 //! The exact-record preview and the publish outcome pages (US-BRA-004).
 
-use maud::html;
+use maud::{html, Markup};
+use ports::SuggestionKey;
 
 use super::*;
 use crate::failed_write::FailedWrite;
@@ -67,6 +68,7 @@ pub fn approval_preview_page(plan: &PublishPlan, csrf_token: &str) -> String {
                     hx-target="closest .outcome" hx-select=(OUTCOME_REGION) hx-swap="outerHTML" {
                     (csrf_field(csrf_token))
                     input type="hidden" name="plan" value=(plan.rkey());
+                    (confirmed_suggestion(plan.key()))
                     button type="submit" { (PUBLISH_LABEL) }
                 }
                 p { a href="/review" { "Back" } }
@@ -100,6 +102,7 @@ pub fn batch_preview_page(plans: &[PublishPlan], csrf_token: &str) -> String {
                     (csrf_field(csrf_token))
                     @for plan in plans {
                         input type="hidden" name="plan" value=(plan.rkey());
+                        (confirmed_suggestion(plan.key()))
                     }
                     button type="submit" { (publish_selected_label(count)) }
                 }
@@ -241,6 +244,18 @@ fn publish_failed_heading(written: FailedWrite) -> &'static str {
 /// What a Retry does after a publish the PDS may have stored (U-45).
 const PUBLISH_RETRY_CHECKS: &str = "Press Retry to check; it never publishes a second copy.";
 
+/// The field a publish confirm names each suggestion it confirms in (its
+/// [`selection_value`]): a confirm re-aimed at another suggestion than its
+/// plan's publishes nothing.
+pub const CONFIRMED_SUGGESTION_FIELD: &str = "suggestion";
+
+/// The hidden field naming the suggestion a confirm publishes.
+fn confirmed_suggestion(key: &SuggestionKey) -> Markup {
+    html! {
+        input type="hidden" name=(CONFIRMED_SUGGESTION_FIELD) value=(selection_value(key));
+    }
+}
+
 /// A publish that did not land (AC-004.6): the suggestion stays pending and
 /// the owner can try again. Nothing was written unless the PDS may have
 /// stored it (`written`), which the page then says (U-45).
@@ -248,6 +263,17 @@ pub fn publish_failed_page(
     reason: &str,
     written: FailedWrite,
     next_step: PublishNextStep<'_>,
+) -> String {
+    publish_of_suggestion_failed_page(reason, written, next_step, None)
+}
+
+/// [`publish_failed_page`] whose Retry names the suggestion `confirmed`
+/// it publishes.
+pub fn publish_of_suggestion_failed_page(
+    reason: &str,
+    written: FailedWrite,
+    next_step: PublishNextStep<'_>,
+    confirmed: Option<&SuggestionKey>,
 ) -> String {
     let heading = publish_failed_heading(written);
     page(
@@ -262,12 +288,39 @@ pub fn publish_failed_page(
                     @if written == FailedWrite::MayHaveStored {
                         p { (PUBLISH_RETRY_CHECKS) }
                     }
-                    (plan_form(PUBLISH_ACTION, retry.plan_id, retry.csrf_token, RETRY_LABEL))
+                    form method="post" action=(PUBLISH_ACTION) {
+                        (csrf_field(retry.csrf_token))
+                        input type="hidden" name="plan" value=(retry.plan_id);
+                        @if let Some(key) = confirmed {
+                            (confirmed_suggestion(key))
+                        }
+                        button type="submit" { (RETRY_LABEL) }
+                    }
                 }
                 PublishNextStep::SignInAgain => {
                     p { a href="/" { (SIGN_IN_LABEL) } }
                 }
                 PublishNextStep::BackToQueue => {}
+            }
+            (back_to_queue())
+            }
+        },
+    )
+}
+
+/// A publish request for a suggestion about a repo she imported, refused
+/// (BR-RRA-1, AC-006.2): nothing was published.
+pub fn not_yours_page(subject: &str) -> String {
+    let repo = subject.strip_prefix("github:").unwrap_or(subject);
+    page(
+        "Nothing was published",
+        html! {
+            section class="outcome" {
+            h1 { "Nothing was published" }
+            p role="alert" {
+                "github.com/" (repo) " is not owned by an account you verified, so nothing \
+                 was published. Decline this suggestion, or verify the GitHub account that \
+                 owns the repo."
             }
             (back_to_queue())
             }

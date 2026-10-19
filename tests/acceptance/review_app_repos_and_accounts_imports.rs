@@ -296,7 +296,6 @@ fn someone_with_no_verified_github_account_can_still_look_at_a_repo() {
 ///     | tidal-labs/streamline | tidal-labs |
 /// ```
 #[test]
-#[ignore = "DELIVER 03-04: imported cards: Not yours to publish, Decline only"]
 fn an_imported_suggestion_offers_no_way_to_publish_and_says_who_can() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -328,7 +327,6 @@ fn an_imported_suggestion_offers_no_way_to_publish_and_says_who_can() {
 ///   And Sam sees "github.com/BurntSushi/ripgrep is not owned by an account you verified, so nothing was published. Decline this suggestion, or verify the GitHub account that owns the repo."
 /// ```
 #[test]
-#[ignore = "DELIVER 03-05: a forged approve of an imported suggestion is refused"]
 fn a_forged_publish_request_for_a_repo_he_doesnt_own_writes_nothing() {
     let world = rra_world();
     let mut sam = given_signed_in(&world, Persona::Sam);
@@ -425,7 +423,6 @@ fn no_request_publishes_a_suggestion_about_a_repo_the_owner_doesnt_own() {
 ///   Then neither mentions rust-lang/cargo
 /// ```
 #[test]
-#[ignore = "DELIVER 03-07: imported suggestions never reach the profile or a share post"]
 fn profile_and_share_preview_never_show_imported_suggestions() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -465,7 +462,6 @@ fn profile_and_share_preview_never_show_imported_suggestions() {
 ///     | GitHub says it is too busy to answer |
 /// ```
 #[test]
-#[ignore = "DELIVER 03-08: an unfinished check at confirm writes nothing"]
 fn github_failing_at_confirm_publishes_nothing() {
     for rate_limited in [false, true] {
         let world = rra_world();

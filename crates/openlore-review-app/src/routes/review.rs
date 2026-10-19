@@ -10,7 +10,7 @@ use ports::claim_domain::authority::{
 };
 use ports::{
     GithubError, GithubLink, GithubLinkPort, ImportedReposRead, KpiTally, RepoFacts, RepoSource,
-    ReviewStateRead, Suggestion, SuggestionKey, SuggestionState, WebSession,
+    ReviewStateRead, Suggestion, SuggestionKey, WebSession,
 };
 use review_domain::edits::{edit_claim, philosophy_choices};
 use review_domain::lifecycle::{
@@ -275,15 +275,7 @@ pub(crate) async fn approve_selected(app: &App, request: &PageRequest) -> Reply 
         Ok(signed_in) => signed_in,
         Err(refused) => return refused,
     };
-    let visible = visible_and_approvable(
-        SuggestionState::Pending,
-        link_verified(app, &session.owner_did),
-    );
-    let pending = if visible {
-        owner_pending(app, &session.owner_did)
-    } else {
-        Vec::new()
-    };
+    let pending = owner_pending(app, &session.owner_did);
     let values = fields(&request.form, SELECTION_FIELD);
     let composed_at = composed_now();
     let mut checks = PublishChecks::new(app, &session.owner_did);
@@ -532,6 +524,11 @@ impl<'a> PublishChecks<'a> {
     pub(crate) fn refused(&self, subject: &str, refusal: SigningRefusal) -> Reply {
         self.settle(refusal);
         match refusal {
+            SigningRefusal::NotOwnedByListedAccount | SigningRefusal::OrgOwned
+                if self.imported(subject) =>
+            {
+                Reply::page(StatusCode::CONFLICT, views::not_yours_page(subject))
+            }
             SigningRefusal::NotOwnedByListedAccount | SigningRefusal::OrgOwned => {
                 Reply::page(StatusCode::CONFLICT, views::not_owned_page(subject))
             }
@@ -553,6 +550,18 @@ impl<'a> PublishChecks<'a> {
 
     fn login_of(&self, github_user_id: u64) -> Option<&str> {
         login_of(&self.accounts, github_user_id)
+    }
+
+    /// Did the owner's pending suggestions about `subject` come from a repo
+    /// she imported?
+    fn imported(&self, subject: &str) -> bool {
+        sources_of(
+            self.app.review_read.as_ref(),
+            self.owner_did,
+            &self.accounts,
+        )
+        .iter()
+        .any(|(key, source)| key.subject == subject && matches!(source, RepoSource::Imported(_)))
     }
 
     async fn repo(&mut self, subject: &str) -> RepoAnswer {
@@ -645,7 +654,7 @@ fn with_own_step(
         Ok(signed_in) => signed_in,
         Err(refused) => return refused,
     };
-    let Some(key) = key_of(request, "object").filter(|_| link_verified(app, &session.owner_did))
+    let Some(key) = key_of(request, "object").filter(|_| queue_shown(app, &session.owner_did))
     else {
         return not_found();
     };
@@ -675,21 +684,30 @@ fn with_own_step(
     }
 }
 
-/// Is the owner's GitHub link currently verified?
-/// The owner's pending suggestions she sees now (hidden ones are not hers
-/// to act on until their account is verified again).
+/// The owner's pending suggestions she sees now, exactly as her queue lists
+/// them (hidden ones are not hers to act on until their account is
+/// verified again).
 fn owner_pending(app: &App, owner_did: &str) -> Vec<Suggestion> {
-    let accounts = app.links.github_accounts(owner_did).unwrap_or_default();
-    let imports: Vec<u64> = app
-        .imports_read
-        .imports(owner_did)
-        .unwrap_or_default()
-        .iter()
-        .map(|import| import.repo_id)
-        .collect();
-    visible_pending(app.review_read.as_ref(), owner_did, &accounts, &imports)
+    owner_queue(
+        app.links.as_ref(),
+        app.review_read.as_ref(),
+        app.imports_read.as_ref(),
+        owner_did,
+    )
+    .pending
 }
 
+/// Does the owner see a queue: her GitHub link is verified, or she lists
+/// imported repos (whose cards she can still decline)?
+fn queue_shown(app: &App, owner_did: &str) -> bool {
+    link_verified(app, owner_did)
+        || app
+            .imports_read
+            .imports(owner_did)
+            .is_ok_and(|imports| !imports.is_empty())
+}
+
+/// Is the owner's GitHub link currently verified?
 fn link_verified(app: &App, owner_did: &str) -> bool {
     app.links
         .github_link(owner_did)
@@ -721,12 +739,8 @@ fn own_suggestion(
     object_field: &str,
 ) -> Result<(WebSession, Suggestion), Reply> {
     let (_, session) = signed_in_post(app, request)?;
-    let visible = visible_and_approvable(
-        SuggestionState::Pending,
-        link_verified(app, &session.owner_did),
-    );
     let named = key_of(request, object_field);
-    let found = named.filter(|_| visible).and_then(|key| {
+    let found = named.and_then(|key| {
         owner_pending(app, &session.owner_did)
             .into_iter()
             .find(|suggestion| suggestion.key == key)
