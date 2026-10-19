@@ -769,6 +769,33 @@ fn shown(source: PlanSource, accounts: &[(u64, Standing)], imports: &[u64]) -> b
     }
 }
 
+/// The sources the owner lists right now, as re-read by a scan before each
+/// repo (ADR-088 §7): their account ids and their imported repo ids.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListedSources {
+    pub accounts: Vec<u64>,
+    pub imports: Vec<u64>,
+}
+
+impl ListedSources {
+    /// Is `source` still listed? A removed one is neither read nor added to.
+    pub fn holds(&self, source: PlanSource) -> bool {
+        match source {
+            PlanSource::Account(account_id) => self.accounts.contains(&account_id),
+            PlanSource::Imported(repo_id) => self.imports.contains(&repo_id),
+        }
+    }
+
+    /// The sources of `rows` no longer listed: a resume skips their rows
+    /// "removed" ([`resume_plan`]).
+    pub fn removed_from(&self, rows: &[FrozenRow]) -> BTreeSet<PlanSource> {
+        rows.iter()
+            .map(|row| row.source)
+            .filter(|source| !self.holds(*source))
+            .collect()
+    }
+}
+
 /// One row of a paused run's frozen plan, as a resume finds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrozenRow {
@@ -1073,5 +1100,44 @@ mod tests {
         assert_eq!(list.rows.len(), 7);
         assert_eq!(ticked, [1, 3, 5, 6, 7]);
         assert_eq!((list.forks_skipped, list.archived_skipped), (1, 1));
+    }
+
+    fn plan_source() -> impl Strategy<Value = PlanSource> {
+        prop_oneof![
+            (1u64..5).prop_map(PlanSource::Account),
+            (1u64..5).prop_map(PlanSource::Imported),
+        ]
+    }
+
+    proptest! {
+        /// Universe: frozen rows from any sources, and any listed accounts
+        /// and imports. A resume skips "removed" exactly the planned rows
+        /// whose source is no longer listed, whatever their bio check.
+        #[test]
+        fn a_resume_skips_as_removed_exactly_the_rows_of_unlisted_sources(
+            sources in prop::collection::vec(plan_source(), 0..8),
+            accounts in prop::collection::vec(1u64..5, 0..4),
+            imports in prop::collection::vec(1u64..5, 0..4),
+        ) {
+            let listed = ListedSources { accounts, imports };
+            let rows: Vec<FrozenRow> = sources
+                .iter()
+                .map(|source| FrozenRow { source: *source, status: PlanRowStatus::Planned })
+                .collect();
+            let checks: BTreeMap<u64, BioCheck> =
+                (1u64..5).map(|id| (id, BioCheck::Passed)).collect();
+            let resume = resume_plan(&rows, &checks, &listed.removed_from(&rows));
+            let removed: Vec<usize> = resume
+                .skipped
+                .iter()
+                .filter(|(_, why)| *why == CarriedSkip::Removed)
+                .map(|(position, _)| *position)
+                .collect();
+            let unlisted: Vec<usize> = (0..sources.len())
+                .filter(|position| !listed.holds(sources[*position]))
+                .collect();
+            prop_assert_eq!(removed, unlisted);
+            prop_assert!(resume.to_read.iter().all(|position| listed.holds(sources[*position])));
+        }
     }
 }

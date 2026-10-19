@@ -30,8 +30,8 @@ use review_domain::reconcile::{add_counts, reconcile};
 use review_domain::repo_scope::{
     carried_repo, eligible_count, listing_with_reads, named_skips, plan_row, resume_plan,
     resumes_frozen_plan, scan_intent, standing_after_check, unlisted_ticks, AccountCheck, BioCheck,
-    CarriedSkip, FrozenRow, FrozenScope, LimitRefusal, Listing, PlanSource, PlannedRepo,
-    SavedTicks, ScanAccount, ScanIntent, Standing, StandingChange, SCAN_REPO_CAP,
+    CarriedSkip, FrozenRow, FrozenScope, LimitRefusal, ListedSources, Listing, PlanSource,
+    PlannedRepo, SavedTicks, ScanAccount, ScanIntent, Standing, StandingChange, SCAN_REPO_CAP,
 };
 use review_domain::views::ScanRefused;
 use scraper_domain::derive_candidates;
@@ -485,7 +485,10 @@ async fn resume_scan(
         .iter()
         .map(|(id, check)| (*id, check.bio_check()))
         .collect();
-    let resumed = ResumedPlan::of(plan, skipped, &bio_checks);
+    let Ok(listed) = listed_sources(app, owner_did) else {
+        return Ended::with_status(ScanStatus::Interrupted);
+    };
+    let resumed = ResumedPlan::of(plan, skipped, &bio_checks, &listed);
     if resumed.record(app, owner_did, run_id).is_err() {
         return Ended::with_status(ScanStatus::Interrupted);
     }
@@ -518,6 +521,7 @@ impl ResumedPlan {
         plan: &[ScanPlanRow],
         skipped: &[SkippedScanRepo],
         checks: &BTreeMap<u64, BioCheck>,
+        listed: &ListedSources,
     ) -> Self {
         let frozen: Vec<FrozenRow> = plan
             .iter()
@@ -526,7 +530,7 @@ impl ResumedPlan {
                 status: row.status,
             })
             .collect();
-        let resume = resume_plan(&frozen, checks, &BTreeSet::new());
+        let resume = resume_plan(&frozen, checks, &listed.removed_from(&frozen));
         let kept = resume.kept();
         let skipped_now = resume
             .skipped
@@ -565,8 +569,19 @@ fn named_carried_skip(row: &PlannedScanRepo, why: CarriedSkip) -> Option<Skipped
     }
 }
 
+/// The sources the owner lists now (imports join with their port, 03-xx).
+fn listed_sources(app: &App, owner_did: &str) -> Result<ListedSources, ReviewStoreError> {
+    let accounts = app.links.github_accounts(owner_did)?;
+    Ok(ListedSources {
+        accounts: accounts.iter().map(|a| a.github_user_id).collect(),
+        imports: Vec::new(),
+    })
+}
+
 /// Read the planned repos in order, each marked read at its plan position
-/// once stored; pause when GitHub's budget runs low.
+/// once stored; pause when GitHub's budget runs low. Before each repo its
+/// source's presence is re-read: a removed source's repo is not read
+/// (ADR-088 §7).
 async fn read_planned(
     app: &App,
     owner_did: &str,
@@ -577,6 +592,11 @@ async fn read_planned(
     for (position, account_id, repo) in to_read {
         if !github_budget_allows(app.github.last_rate_budget().map(|b| b.remaining)) {
             return paused(app).after_finding(found);
+        }
+        match listed_sources(app, owner_did) {
+            Ok(listed) if listed.holds(PlanSource::Account(*account_id)) => {}
+            Ok(_) => continue,
+            Err(_) => return Ended::with_status(ScanStatus::Interrupted).after_finding(found),
         }
         match scan_repo(app, owner_did, repo, *account_id).await {
             Ok(counts) => found = add_counts(found, counts),
@@ -666,7 +686,7 @@ async fn scan_repo(
         outside_default: repo.outside_default,
     };
     app.review_write
-        .add_pending_from(owner_did, &source, &reconciled.new)
+        .add_pending_from_listed_source(owner_did, &source, &reconciled.new)
         .map(|()| reconciled.counts())
         .map_err(interrupted)
 }

@@ -807,16 +807,13 @@ pub trait ReviewStateRead: Send + Sync {
 
 /// Owner-scoped WRITES to the suggestion queue (transitions).
 pub trait ReviewStateWrite: Send + Sync {
-    /// Add new pending suggestions (a key already held is left untouched).
-    fn add_pending(
-        &self,
-        owner_did: &str,
-        suggestions: &[Suggestion],
-    ) -> Result<(), ReviewStoreError>;
-
-    /// [`add_pending`](Self::add_pending), noting the account repo each
-    /// came from and whether it was outside today's default.
-    fn add_pending_from(
+    /// Add new pending suggestions from `source` (a key already held is left
+    /// untouched), noting the account repo each came from and whether it was
+    /// outside today's default. Race-proof against a removal (ADR-088 §7):
+    /// each insert, in the same transaction, happens only while the source
+    /// account is still listed for the owner, so nothing is ever added for a
+    /// removed source whichever commits first.
+    fn add_pending_from_listed_source(
         &self,
         owner_did: &str,
         source: &SuggestionSource,

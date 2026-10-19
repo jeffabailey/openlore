@@ -54,7 +54,7 @@ mod tests {
     use ports::{
         GithubAccountsWrite, GithubLinkPort, KpiCounterPort, NewWebSession, PlannedScanRepo,
         RepoChoiceWrite, ReviewStateRead, ReviewStateWrite, SavedRepoChoice, ScanRunPort,
-        SecretStorePort, SessionPort, Suggestion, SuggestionKey,
+        SecretStorePort, SessionPort, Suggestion, SuggestionKey, SuggestionSource,
     };
     use proptest::prelude::*;
 
@@ -152,7 +152,17 @@ mod tests {
                 source_repo: format!("{owner}/repo{i}"),
             })
             .collect();
-        store.add_pending(owner, &suggestions).unwrap();
+        store
+            .add_pending_from_listed_source(
+                owner,
+                &SuggestionSource {
+                    account_id: github_id,
+                    repo_id: 1,
+                    outside_default: None,
+                },
+                &suggestions,
+            )
+            .unwrap();
         let chosen: Vec<SavedRepoChoice> = (0..n)
             .map(|i| SavedRepoChoice {
                 repo_id: i as u64 + 1,

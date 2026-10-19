@@ -805,7 +805,6 @@ fn removing_an_account_during_a_scan_deletes_its_pending_suggestions_at_once() {
 ///   And when the scan has ended, her queue holds no priya-tidal suggestion
 /// ```
 #[test]
-#[ignore = "DELIVER 02-22: a resumed scan refuses inserts for a removed source (UC-RRA-8)"]
 fn a_resumed_scan_neither_reads_nor_adds_anything_for_a_removed_account() {
     let world = rra_world();
     let mut browser = given_tidal_scan_paused_after_one_repo(&world);

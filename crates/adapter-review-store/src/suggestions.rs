@@ -2,15 +2,15 @@
 //! queue (`suggestions`, ADR-074). Every statement is scoped by `owner_did`;
 //! a pending suggestion is never readable by another DID (I-BRA-1).
 
-use duckdb::params;
 use duckdb::OptionalExt;
+use duckdb::{params, Connection};
 use ports::{
     KpiTally, OutsideDefault, RepoSource, ReviewStateRead, ReviewStateWrite, ReviewStoreError,
     Suggestion, SuggestionKey, SuggestionSource, SuggestionState,
 };
 
 use crate::secrets::port_error;
-use crate::{db_error, db_id, ReviewStore, StoreError};
+use crate::{db_error, db_id, in_transaction, ReviewStore, StoreError};
 
 const READ_PENDING: &str = "SELECT subject, predicate, object, confidence_bp, evidence, signals,
     source_repo FROM suggestions WHERE owner_did = ? AND state = 'pending'
@@ -23,17 +23,15 @@ const READ_PENDING_SOURCES: &str = "SELECT subject, predicate, object, source_ki
 const READ_STATES: &str = "SELECT subject, predicate, object, state
     FROM suggestions WHERE owner_did = ?";
 
-const ADD_PENDING: &str = "INSERT INTO suggestions
-    (owner_did, subject, predicate, object, confidence_bp, evidence, signals, source_repo,
-     state, first_suggested_at, state_changed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', now(), now())
-    ON CONFLICT DO NOTHING";
-
-const ADD_PENDING_FROM_ACCOUNT: &str = "INSERT INTO suggestions
+/// The conditional insert (ADR-088 §7): the row is added only while its
+/// source account is still listed for the owner, in the same statement, so a
+/// removal committed first leaves nothing to insert.
+const ADD_PENDING_FROM_LISTED_ACCOUNT: &str = "INSERT INTO suggestions
     (owner_did, subject, predicate, object, confidence_bp, evidence, signals, source_repo,
      state, first_suggested_at, state_changed_at, source_kind, source_account_id,
      source_repo_id, outside_default)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', now(), now(), 'account', ?, ?, ?)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'pending', now(), now(), 'account', ?, ?, ?
+    WHERE EXISTS (SELECT 1 FROM github_accounts WHERE owner_did = ? AND github_user_id = ?)
     ON CONFLICT DO NOTHING";
 
 const READ_OUTSIDE_DEFAULT: &str = "SELECT outside_default FROM suggestions
@@ -62,6 +60,38 @@ fn source_of(kind: &str, account: Option<i64>, repo: Option<i64>) -> Option<Repo
 
 fn not_a_state(stored: &str) -> StoreError {
     StoreError::Database(format!("unknown suggestion state {stored:?}"))
+}
+
+/// Insert one pending suggestion only while `source`'s account is listed
+/// for the owner, in the caller's transaction (the port's committed one, or
+/// the probe's rolled-back one). The count of rows it added: 0 or 1.
+pub(crate) fn insert_if_listed(
+    conn: &Connection,
+    owner_did: &str,
+    source: &SuggestionSource,
+    s: &Suggestion,
+) -> Result<usize, StoreError> {
+    let account_id = db_id(source.account_id)?;
+    let repo_id = db_id(source.repo_id)?;
+    conn.execute(
+        ADD_PENDING_FROM_LISTED_ACCOUNT,
+        params![
+            owner_did,
+            s.key.subject,
+            s.key.predicate,
+            s.key.object,
+            s.confidence_bp,
+            to_json(&s.evidence),
+            to_json(&s.why),
+            s.source_repo,
+            account_id,
+            repo_id,
+            source.outside_default.map(OutsideDefault::as_str),
+            owner_did,
+            account_id,
+        ],
+    )
+    .map_err(db_error)
 }
 
 impl ReviewStateRead for ReviewStore {
@@ -162,62 +192,17 @@ impl ReviewStateRead for ReviewStore {
 }
 
 impl ReviewStateWrite for ReviewStore {
-    fn add_pending(
-        &self,
-        owner_did: &str,
-        suggestions: &[Suggestion],
-    ) -> Result<(), ReviewStoreError> {
-        self.with_connection(|conn| {
-            suggestions.iter().try_for_each(|s| {
-                conn.execute(
-                    ADD_PENDING,
-                    params![
-                        owner_did,
-                        s.key.subject,
-                        s.key.predicate,
-                        s.key.object,
-                        s.confidence_bp,
-                        to_json(&s.evidence),
-                        to_json(&s.why),
-                        s.source_repo,
-                    ],
-                )
-                .map(drop)
-                .map_err(db_error)
-            })
-        })
-        .map_err(port_error)
-    }
-
-    fn add_pending_from(
+    fn add_pending_from_listed_source(
         &self,
         owner_did: &str,
         source: &SuggestionSource,
         suggestions: &[Suggestion],
     ) -> Result<(), ReviewStoreError> {
         self.with_connection(|conn| {
-            let account_id = db_id(source.account_id)?;
-            let repo_id = db_id(source.repo_id)?;
-            let outside_default = source.outside_default.map(OutsideDefault::as_str);
-            suggestions.iter().try_for_each(|s| {
-                conn.execute(
-                    ADD_PENDING_FROM_ACCOUNT,
-                    params![
-                        owner_did,
-                        s.key.subject,
-                        s.key.predicate,
-                        s.key.object,
-                        s.confidence_bp,
-                        to_json(&s.evidence),
-                        to_json(&s.why),
-                        s.source_repo,
-                        account_id,
-                        repo_id,
-                        outside_default,
-                    ],
-                )
-                .map(drop)
-                .map_err(db_error)
+            in_transaction(conn, |conn| {
+                suggestions
+                    .iter()
+                    .try_for_each(|s| insert_if_listed(conn, owner_did, source, s).map(drop))
             })
         })
         .map_err(port_error)
@@ -258,10 +243,31 @@ impl ReviewStateWrite for ReviewStore {
 mod tests {
     use super::*;
     use crate::DataKey;
+    use ports::{GithubAccountsWrite, ScopeRemovalPort};
     use proptest::prelude::*;
     use std::collections::{BTreeMap, BTreeSet};
 
     const OWNERS: [&str; 2] = ["did:plc:priya", "did:plc:dmitri"];
+    const SOURCES: [SuggestionSource; 2] = [source(7), source(8)];
+
+    const fn source(account_id: u64) -> SuggestionSource {
+        SuggestionSource {
+            account_id,
+            repo_id: 1,
+            outside_default: None,
+        }
+    }
+
+    /// A store where each owner lists their source account.
+    fn store_listing_both() -> ReviewStore {
+        let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
+        for (owner, source) in OWNERS.iter().zip(SOURCES) {
+            store
+                .add_or_reverify(owner, "some-login", source.account_id, 3, KpiTally::NONE)
+                .unwrap();
+        }
+        store
+    }
 
     fn suggestion() -> impl Strategy<Value = Suggestion> {
         (
@@ -301,10 +307,10 @@ mod tests {
             adds in prop::collection::vec((0usize..2, suggestion()), 0..10),
             decline_pick in any::<prop::sample::Index>(),
         ) {
-            let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
+            let store = store_listing_both();
             let mut expected: [BTreeMap<SuggestionKey, Suggestion>; 2] = Default::default();
             for (owner, s) in &adds {
-                store.add_pending(OWNERS[*owner], std::slice::from_ref(s)).unwrap();
+                store.add_pending_from_listed_source(OWNERS[*owner], &SOURCES[*owner], std::slice::from_ref(s)).unwrap();
                 expected[*owner].entry(s.key.clone()).or_insert_with(|| s.clone());
             }
             for (owner, did) in OWNERS.iter().enumerate() {
@@ -330,6 +336,64 @@ mod tests {
                 prop_assert_eq!(restored, expected[0].keys().cloned().collect::<BTreeSet<_>>());
             }
             prop_assert_eq!(store.pending_suggestions(OWNERS[1]).unwrap(), other_before);
+        }
+    }
+
+    // bypass: one adapter example over a real store for the race ADR-088 §7
+    // closes, in both commit orders — a removal committed before the insert
+    // leaves nothing to insert, one committed after deletes what it added;
+    // either way no pending row of the removed account remains, and another
+    // owner's insert from a listed account still lands.
+    #[test]
+    fn a_removed_accounts_suggestions_are_never_left_pending_whichever_commits_first() {
+        let fixture = Suggestion {
+            key: SuggestionKey {
+                subject: "github:p/tidepool".into(),
+                predicate: "embodiesPhilosophy".into(),
+                object: "org.openlore.philosophy.test-driven".into(),
+            },
+            confidence_bp: 7000,
+            evidence: vec!["e".into()],
+            why: vec!["w".into()],
+            source_repo: "p/tidepool".into(),
+        };
+        let batch = std::slice::from_ref(&fixture);
+        for removal_first in [true, false] {
+            let store = store_listing_both();
+            let [priya, dmitri] = OWNERS;
+            let remove = || {
+                store
+                    .remove_account(priya, SOURCES[0].account_id, KpiTally::NONE)
+                    .unwrap()
+            };
+            if removal_first {
+                remove();
+            }
+            store
+                .add_pending_from_listed_source(priya, &SOURCES[0], batch)
+                .unwrap();
+            if !removal_first {
+                remove();
+            }
+            store
+                .add_pending_from_listed_source(dmitri, &SOURCES[1], batch)
+                .unwrap();
+
+            assert!(
+                store.pending_suggestions(priya).unwrap().is_empty(),
+                "removal first: {removal_first}"
+            );
+            assert_eq!(
+                store.pending_suggestions(dmitri).unwrap(),
+                vec![fixture.clone()]
+            );
+            assert!(store
+                .add_pending_from_listed_source(priya, &SOURCES[0], batch)
+                .is_ok());
+            assert!(
+                store.pending_suggestions(priya).unwrap().is_empty(),
+                "unlisted inserts nothing"
+            );
         }
     }
 }

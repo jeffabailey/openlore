@@ -69,7 +69,7 @@ mod tests {
     use ports::{
         AccountAdmission, AccountAdmitted, AccountRefusal, ForgetPort, GithubAccountsWrite,
         GithubLinkPort, NewWebSession, ReviewStateRead, ReviewStateWrite, ScanCounts, ScanRunPort,
-        ScanStatus, SessionPort, Suggestion, SuggestionKey, SuggestionState,
+        ScanStatus, SessionPort, Suggestion, SuggestionKey, SuggestionSource, SuggestionState,
     };
     use proptest::prelude::*;
 
@@ -102,7 +102,7 @@ mod tests {
             attempts in prop::collection::vec(any::<bool>(), 0..8)
         ) {
             let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
-            store.add_pending(PRIYA, &[suggestion()]).unwrap();
+            add_listed_pending(&store);
             let mut moves = 0;
             for decline in attempts {
                 let (from, to) = if decline {
@@ -120,6 +120,22 @@ mod tests {
     }
 
     const PRIYA: &str = "did:plc:priya";
+    const PRIYAS_ACCOUNT: u64 = 7;
+
+    /// Priya's one pending suggestion, from an account she lists.
+    fn add_listed_pending(store: &ReviewStore) {
+        store
+            .add_or_reverify(PRIYA, "priyaraman", PRIYAS_ACCOUNT, 3, KpiTally::NONE)
+            .unwrap();
+        let source = SuggestionSource {
+            account_id: PRIYAS_ACCOUNT,
+            repo_id: 1,
+            outside_default: None,
+        };
+        store
+            .add_pending_from_listed_source(PRIYA, &source, &[suggestion()])
+            .unwrap();
+    }
     const DAY: &str = "2026-10-13";
 
     fn suggestion() -> Suggestion {
@@ -151,7 +167,7 @@ mod tests {
     #[test]
     fn a_failed_tally_rolls_back_its_state_change() {
         let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
-        store.add_pending(PRIYA, &[suggestion()]).unwrap();
+        add_listed_pending(&store);
         let unstorable = KpiTally {
             day: "not-a-day",
             events: &["suggestion.declined"],

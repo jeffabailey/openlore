@@ -1,4 +1,4 @@
-//! Earned-Trust probe for the private store (ADR-074). Five hard arms:
+//! Earned-Trust probe for the private store (ADR-074). Six hard arms:
 //!
 //! 0. DuckDB caps (B11): `memory_limit` and `threads` read back as set;
 //! 1. schema version: the file is exactly this build's version;
@@ -7,16 +7,20 @@
 //! 3. cross-owner canary: inside a rolled-back transaction, a row written
 //!    for one owner is invisible to an owner-scoped read for another;
 //! 4. removal canary (ADR-088 §8): inside a rolled-back transaction,
-//!    removing an account deletes its row and its `pending` suggestions only.
+//!    removing an account deletes its row and its `pending` suggestions only;
+//! 5. conditional-insert canary (ADR-088 §7): inside a rolled-back
+//!    transaction, the scan's insert adds a suggestion from a listed account
+//!    and nothing from an unlisted one.
 //!
 //! The arm verdicts are pure; the glue below only gathers their inputs.
 
 use duckdb::Connection;
-use ports::{ProbeOutcome, ProbeRefusalReason};
+use ports::{ProbeOutcome, ProbeRefusalReason, Suggestion, SuggestionKey, SuggestionSource};
 use serde_json::json;
 
 use crate::removal::remove_account_rows;
 use crate::schema::{schema_verdict, SchemaVerdict, SCHEMA_VERSION};
+use crate::suggestions::insert_if_listed;
 use crate::{
     caps_honoured, db_error, recorded_version, reported_settings, ReviewStore, StoreError,
 };
@@ -71,8 +75,14 @@ type Arm = Result<(), (ProbeRefusalReason, String)>;
 
 /// Run every hard arm; the first refusal wins.
 pub(crate) fn run(store: &ReviewStore) -> ProbeOutcome {
-    let arms: [fn(&ReviewStore) -> Arm; 5] =
-        [caps_arm, schema_arm, aead_arm, cross_owner_arm, removal_arm];
+    let arms: [fn(&ReviewStore) -> Arm; 6] = [
+        caps_arm,
+        schema_arm,
+        aead_arm,
+        cross_owner_arm,
+        removal_arm,
+        conditional_insert_arm,
+    ];
     match arms.iter().find_map(|arm| arm(store).err()) {
         None => ProbeOutcome::Ok,
         Some((reason, detail)) => ProbeOutcome::Refused {
@@ -265,6 +275,88 @@ pub(crate) fn classify_removal(left: RemovalCanary) -> Arm {
     }
 }
 
+/// What a rolled-back conditional insert added: from the listed canary
+/// account, and from an account the owner does not list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ConditionalInsertCanary {
+    pub(crate) from_listed: i64,
+    pub(crate) from_unlisted: i64,
+}
+
+fn conditional_insert_arm(store: &ReviewStore) -> Arm {
+    store
+        .with_connection(conditional_insert_canary_rolled_back)
+        .map_err(|e| (ProbeRefusalReason::ReviewStoreRemovalUnsafe, e.to_string()))
+        .and_then(classify_conditional_insert)
+}
+
+/// List one canary account, insert one suggestion from it and one from an
+/// unlisted account through the scan's conditional insert, count what
+/// landed, then roll back.
+fn conditional_insert_canary_rolled_back(
+    conn: &Connection,
+) -> Result<ConditionalInsertCanary, StoreError> {
+    conn.execute_batch("BEGIN TRANSACTION").map_err(db_error)?;
+    let added = (|| {
+        conn.execute(
+            INSERT_CANARY_GITHUB_ACCOUNT,
+            duckdb::params![CANARY_OWNER, KEPT_ACCOUNT],
+        )
+        .map_err(db_error)?;
+        let insert_from = |account: i64| {
+            let source = SuggestionSource {
+                account_id: account as u64,
+                repo_id: 1,
+                outside_default: None,
+            };
+            insert_if_listed(conn, CANARY_OWNER, &source, &canary_suggestion(account))?;
+            conn.query_row(
+                COUNT_CANARY_SUGGESTIONS,
+                duckdb::params![CANARY_OWNER, "pending", account],
+                |row| row.get(0),
+            )
+            .map_err(db_error)
+        };
+        Ok(ConditionalInsertCanary {
+            from_listed: insert_from(KEPT_ACCOUNT)?,
+            from_unlisted: insert_from(REMOVED_ACCOUNT)?,
+        })
+    })();
+    conn.execute_batch("ROLLBACK").map_err(db_error)?;
+    added
+}
+
+fn canary_suggestion(account: i64) -> Suggestion {
+    Suggestion {
+        key: SuggestionKey {
+            subject: format!("probe:insert-{account}"),
+            predicate: "embodies".into(),
+            object: "probe-canary".into(),
+        },
+        confidence_bp: 0,
+        evidence: vec![],
+        why: vec![],
+        source_repo: "probe/canary".into(),
+    }
+}
+
+/// Pure: the insert landed for the listed account and nothing for the
+/// unlisted one.
+pub(crate) fn classify_conditional_insert(added: ConditionalInsertCanary) -> Arm {
+    let exact = ConditionalInsertCanary {
+        from_listed: 1,
+        from_unlisted: 0,
+    };
+    if added == exact {
+        Ok(())
+    } else {
+        Err((
+            ProbeRefusalReason::ReviewStoreRemovalUnsafe,
+            format!("a rolled-back conditional insert added {added:?}, expected {exact:?}"),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,6 +379,16 @@ mod tests {
             let [account_rows, pending, declined, published, other_account_pending] = counts;
             let left = RemovalCanary { account_rows, pending, declined, published, other_account_pending };
             prop_assert_eq!(classify_removal(left).is_ok(), counts == [0, 0, 1, 1, 1]);
+        }
+
+        /// Universe: every count of what a conditional insert added. Only one
+        /// from the listed account and none from the unlisted one admits.
+        #[test]
+        fn conditional_insert_arm_admits_only_an_insert_for_a_listed_source(
+            from_listed in 0i64..3, from_unlisted in 0i64..3,
+        ) {
+            let added = ConditionalInsertCanary { from_listed, from_unlisted };
+            prop_assert_eq!(classify_conditional_insert(added).is_ok(), (from_listed, from_unlisted) == (1, 0));
         }
 
         /// Universe: every opened plaintext x rebound outcome. Only the exact

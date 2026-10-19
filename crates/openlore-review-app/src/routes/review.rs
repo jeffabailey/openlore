@@ -566,7 +566,15 @@ mod tests {
             AccountAdmission::Admitted(AccountAdmitted::Added)
         );
         store
-            .add_pending(OWNER, &[pending_suggestion()])
+            .add_pending_from_listed_source(
+                OWNER,
+                &ports::SuggestionSource {
+                    account_id: LINKED_ID,
+                    repo_id: 1,
+                    outside_default: None,
+                },
+                &[pending_suggestion()],
+            )
             .expect("queued");
         let observation = GithubObservation {
             login: LINKED_LOGIN.to_string(),

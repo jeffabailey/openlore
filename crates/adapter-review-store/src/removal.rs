@@ -100,7 +100,9 @@ mod tests {
             .into_iter()
             .map(suggestion)
             .collect();
-        store.add_pending_from(owner, &source, &batch).unwrap();
+        store
+            .add_pending_from_listed_source(owner, &source, &batch)
+            .unwrap();
         for (subject, to) in [
             ("declined", SuggestionState::Declined),
             ("published", SuggestionState::Published),
