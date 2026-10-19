@@ -107,6 +107,9 @@ lives, and what every reader does with a link.
    `sameAs`** before grouping (contract shape: *unbounded preservation* — for every feed `F`,
    `score(F) == score(F \ {rows with predicate sameAs})`, and no other row is altered). One rule
    inside the pure scorer covers all current and future callers (CLI and viewer).
+   *Amended 2026-10-19 (slice 4 design, proposed): the viewer shows the `identity list` line on
+   person pages from the last local check, read-only, no GitHub request
+   (`docs/feature/github-did-identity-link/design/slice-4-viewer-linked-identity.md`).*
    Revised by ADR-086/087 (owner-only-signing): the drop is now expressed through
    `claim_domain::authority::kind` (`sameAs` is a non-weight kind, like counters and retractions)
    inside `scoring::score_attested`; the outcome for `sameAs` is unchanged (KPI-GDL-2 holds).

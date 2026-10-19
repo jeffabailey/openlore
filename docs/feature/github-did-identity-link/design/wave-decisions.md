@@ -325,3 +325,56 @@ Iteration 2: APPROVED_WITH_NOTES — all 13 iteration-1 issues resolved; 0 criti
 | N-6 ADR-064 pointer, numbering | Done 2026-10-14 on acceptance: ADR-064 points to ADR-084; numbering left stable to keep references valid |
 
 No third review iteration (max 2).
+
+## Slice 4 (viewer linked-identity line)
+
+DESIGN 2026-10-19 · Morgan · propose mode. Detail, wording table, C4 L3 and scenarios VL-1..19:
+`slice-4-viewer-linked-identity.md`. No DISCUSS story existed; US-VL-1..3 recorded as UC-11.
+Status: **PROPOSED** (awaiting the user).
+
+| ID | Decision | Options (recommended first) | Rationale |
+|---|---|---|---|
+| D-VL-1 | Which pages show the line | **A. Pages about one person: `/score?contributor`, `/project?subject=github:…`, claim detail author, search author groups** · B. Every DID everywhere (tables, edges, peers) · C. `/score` only | A covers each place a person is the topic; B repeats long lines in every table row; C misses GitHub persons and search |
+| D-VL-2 | Table rows and lists | **A. No line; their DIDs already link to `/score`** · B. A short badge per row | A keeps tables scannable and needs no second wording; a badge would be a second, shorter wording to keep honest |
+| D-VL-3 | Data source | **A. The same lineage read as `identity list` (`read_listed_links`), moved from `cli` into `ports` and called by both** · B. Copy the read into the viewer adapter · C. CLI snapshots the lines at `openlore ui` start | A: one read, so retraction, U-19 and U-39 rules cannot drift (slice-2 lesson B2). B duplicates. C is stale and adds a startup failure mode |
+| D-VL-4 | Capability | **A. Inject the three existing read-only traits (check read, candidate read, lineage read) as optional handles on `ViewerServer`** · B. Add link reads to `StoreReadPort` · C. A new `LinkedIdentityReadPort` | A matches ADR-085 §7 ("viewer: check read only"), no new port; B bloats the store trait and every fake; C is a new port for no new capability |
+| D-VL-5 | Wording | **A. The `identity list` line, character for character; DID and account become links; the command in the 30-day hint is a `<code>` element; parity pinned by a test (VL-2, layer-2 property)** · B. Hoist one sentence builder into `claim-domain` · C. New viewer wording | A: two media (text, HTML with links), four sentences; a shared segment type costs more than one parity test. C splits the vocabulary |
+| D-VL-6 | GitHub person match | **A. Last-seen login, case-insensitive (U-6 fallback); the viewer has no account ids for a page** · B. Add a contribution-link read to get ids | A needs no new read. Limit: until the reader re-checks, a renamed account's line stays on its old login's page, even if another account now uses that login (VL-17). B is a later option |
+| D-VL-7 | Failure and probe | **A. Any link read failure → the whole region says "Linked identities could not be read from your local store."; startup runs a read-only probe (one `read_listed_links` call), never the check port's insert-and-rollback `probe()`; a refusal injects no handles, emits `viewer.identity_links.probe`, shows the notice on all four pages, never refuses the viewer** · B. Omit the region silently · C. Refuse startup · D. Call `IdentityLinkCheckReadPort::probe()` | A is honest and never shows "not checked" when the check read failed. B hides a failure. C takes down the viewer for a secondary view (ADR-054 precedent). D writes (rolled back) from the read-only viewer |
+| D-VL-8 | Network | **A. None: the viewer never asks GitHub; lines come from the reader's last local check; a legend says so** · B. Re-check on page load | A keeps C-GDL-7/C-GDL-9 and the read-only viewer; B spends rate budget and needs the check write handle |
+| D-VL-9 | ADR | **A. None.** No new port, crate, route, migration or cross-crate dependency (`viewer-domain` and `adapter-http-viewer` already depend on `claim-domain`); one amendment line in ADR-085 §6 | — |
+| D-VL-10 | Search link-row label in the viewer | **A. Label link rows "authority not checked here", same constant semantics as the CLI (U-7: link rows only)** · B. Leave unlabelled | ADR-085 §8 asks every search surface to label; the viewer's `/search` had no label |
+| D-VL-11 | Enforcement | `identity_link_readers_hold_no_write_handle` extends to `crates/adapter-http-viewer/src/**`; the new fault-seam token joins the release-build guard; link rows selected only through `is_reserved_predicate` | Rules without enforcement erode |
+
+Constraints added: **C-VL-1** the viewer holds no check write or purge handle; **C-VL-2** the
+viewer makes no GitHub request to show a line; **C-VL-3** a page never changes a standing (decided
+over all active links first).
+
+D-VL-3 detail: the moved read returns a typed `ports::LinkReadError` (no `anyhow` in `ports`).
+D-VL-6 limit: login reuse after a rename shows the old account's line until the reader re-checks
+(VL-17).
+
+Review (nw-solution-architect-reviewer). Iteration 1: NEEDS_REVISION — 1 critical, 2 high,
+4 medium, 1 low. All addressed:
+
+| Issue | Fix |
+|---|---|
+| S4-1 (critical) the check port's `probe()` inserts (rolled back); the viewer is read-only | Read-only startup probe (one `read_listed_links`); the viewer never calls `probe()` (D-VL-7) |
+| S4-2 (high) `read_listed_links` returns `anyhow`; `ports` has none | Typed `LinkReadError` in `ports`; cli converts with `?` |
+| S4-3 (high) contract shapes mislabelled | Moved read = effect-read, bounded; viewer handler = effect shell, read-only, universe stated |
+| S4-4 (medium) probe-refused rendering vs VL-12 | Notice on all four pages when no handles; VL-12 only when reads succeed; VL-14 |
+| S4-5 (medium) new wording; parity test home | Legend, notice, heading = viewer-only constants; parity property in `cli` tests |
+| S4-6 (medium) login reuse on GitHub person page | Recorded as a known limit; VL-17 |
+| S4-7 (medium) scenario gaps | VL-14..VL-19; VL-9 rows per read |
+| S4-8 (low) no cost bound | Per-request query count and a ~200-candidate follow-up threshold |
+
+Iteration 2: APPROVED_WITH_NOTES. 0 critical. S4-1, S4-2 and S4-4..S4-8 resolved; S4-3 partly
+resolved (note only: the shapes are stated as effect-read and effect shell, not in the
+three-name taxonomy, because neither component changes state). One new high, N-1: the D-VL-6
+limit contradicted the known-limit paragraph. Fixed in the text: D-VL-6 now states the
+stale-line limit, and the line's guarantee is "the account last checked, under the login last
+seen". No third iteration (max 2).
+
+Open questions for the user: (1) also show the line on `/peers` (one per followed peer)? (2) a
+dedicated `/identities` page mirroring `identity list`? (3) wording of the legend and the
+unreadable notice (proposed above).

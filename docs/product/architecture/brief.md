@@ -235,6 +235,15 @@ Shipped slice extensions:
   - **`crates/openlore-review-app` (EXTEND)**: "Publish this link" / "Retract this link" through
     the create-only `UserRepoWritePort` (no new OAuth scope).
   - **`openlore-indexer`: UNCHANGED** — links index as ordinary claims; no GitHub capability.
+  - **Slice 4 (DESIGN 2026-10-19, proposed) — viewer linked-identity line.** `viewer-domain`
+    (PURE, EXTEND): new `linked_identity` module (`None | Lines | Unreadable` view-model, region
+    render) embedded in the `/score`, `/project?subject=github:…`, claim-detail and `/search`
+    results fragments; search labels link rows "authority not checked here".
+    `adapter-http-viewer` (EFFECT, EXTEND): optional read-only handles (check read, candidate
+    read, lineage read; never write or purge), one read per request, no GitHub call.
+    `read_listed_links` moves from `cli` into `ports` (one lineage read for CLI and viewer).
+    `cli` `ui` wires the handles after a read-only probe (never the check port's write probe). No new port, crate, route or migration. Detail:
+    `docs/feature/github-did-identity-link/design/slice-4-viewer-linked-identity.md`.
   - **`xtask` (EXTEND)**: `identity_link_checks_insert_only`,
     `identity_link_purge_only_in_forget_verb`, `identity_link_readers_hold_no_write_handle`,
     `identity_link_compose_only_via_proven_link`.
@@ -761,6 +770,8 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
   `openlore infer people` and `openlore scrape github <user>` (linked-identity line),
   `openlore graph query --weighted` and the viewer `/score` route (scoring exclusion); review app
   GitHub step "Publish this link" / "Retract this link" (session + CSRF, existing harness).
+  Slice 4: viewer GET `/score?contributor=`, `/project?subject=github:…`, `/claims/{cid}`,
+  `/search` (linked-identity region; scenarios VL-1..19 in `design/slice-4-viewer-linked-identity.md`).
 - **Pure seams for property tests**: `claim_domain::identity_link::{check_link, project,
   link_view}`, the `LinkDraft` codec round-trip (ADR-084 Earned Trust), and
   `scoring::score(F) == score(F \ sameAs)`.
