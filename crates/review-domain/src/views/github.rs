@@ -105,7 +105,7 @@ pub fn ownership_message(
         OwnershipRefusal::GithubUnavailable => "GitHub could not be reached. Please wait a few \
              minutes, then press Verify again. Nothing was lost."
             .to_string(),
-        OwnershipRefusal::LinkedToAnotherAccount => held_by_another_message(login),
+        OwnershipRefusal::LinkedToAnotherAccount => HELD_BY_ANOTHER_MESSAGE.to_string(),
         OwnershipRefusal::TooManyAttempts => "Too many verification attempts in the last hour. \
              Please try again later. Nothing was lost."
             .to_string(),
@@ -120,7 +120,7 @@ fn account_refusal_message(refusal: AccountRefusal, login: &str, handle: &str) -
             "Verified: github.com/{login} belongs to @{handle}. github.com/{login} is already \
              on your list."
         ),
-        AccountRefusal::HeldByAnotherOwner => held_by_another_message(login),
+        AccountRefusal::HeldByAnotherOwner => HELD_BY_ANOTHER_MESSAGE.to_string(),
         AccountRefusal::AtLimit => format!(
             "You can link up to {MAX_GITHUB_ACCOUNTS} GitHub accounts. Remove one on this page \
              to add another."
@@ -128,13 +128,10 @@ fn account_refusal_message(refusal: AccountRefusal, login: &str, handle: &str) -
     }
 }
 
-fn held_by_another_message(login: &str) -> String {
-    format!(
-        "github.com/{login} is already verified for another Bluesky account. Each GitHub \
-         account can belong to one Bluesky account only. If it is yours, remove it from that \
-         Bluesky account first."
-    )
-}
+/// R8 (user decision 2026-10-19): neutral, so it never reveals that
+/// another sign-in verified this GitHub account.
+pub const HELD_BY_ANOTHER_MESSAGE: &str =
+    "This GitHub account can't be added here. Use a GitHub account only you have verified.";
 
 /// How a verify outcome is announced: a success is a status, a refusal an
 /// alert, so a refusal never reads as if it worked.

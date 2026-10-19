@@ -94,7 +94,6 @@ fn priya_verifies_her_work_account_without_losing_her_personal_one() {
 /// not reveal that another Bluesky account verified this GitHub account; its
 /// wording is neutral.
 #[test]
-#[ignore = "REVIEW-FIX: R8"]
 fn an_account_that_cannot_be_added_changes_nothing() {
     #[derive(Debug, Clone, Copy)]
     enum Refusal {
