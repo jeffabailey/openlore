@@ -1,0 +1,1193 @@
+{
+  "roadmap": {
+    "project_id": "review-app-repos-and-accounts",
+    "created_at": "2026-10-19T00:00:00Z",
+    "total_steps": 20,
+    "scope": "R1 (phase 01): the whole store v2 migration (ADR-088) first, then choose owned repos per account, with the scan reading the saved choice through a frozen plan. R2 (phase 02): up to 3 GitHub accounts per sign-in, per-account bio checks, removal that deletes pending suggestions, and the SigningPermit minted only by claim_domain::authority::may_sign from a same-request repo-owner + bio read (ADR-089). R3 (phase 03): imported public repos with private, never-publishable suggestions, the BR-RRA-5 move, removal, purge and the per-DID scope lock. R4 (US-RRA-007, KPI-RRA-6) deferred by the user."
+  },
+  "total_steps": 20,
+  "conventions": {
+    "paradigm": "ADR-007 functional: limit arithmetic, scan intent/plan/resume, visibility, account admission, import classification and moves are pure in review_domain::repo_scope; the publish rule is pure in claim_domain::authority. Routes, the scan task and adapters do I/O only. ADTs over flags (ScanIntent, AccountPlan, ImportVerdict, SigningRefusal).",
+    "test_paradigm": "Acceptance: example-based HTTP against the real app binary and the real review-app.duckdb, fakes only for GitHub and the PDS (Strategy B, DISTILL). Pure core: proptest against the CORE-RRA oracles (256 cases) plus crafter-owned proptests in review-domain/claim-domain with state-delta over a declared universe; single-example unit tests only with a `// bypass:` reason. Adapters: real DuckDB and recorded GitHub fixtures, never mocked. HTTP scenarios stay single-example (wiring, not invariants).",
+    "scenario_fns": "`<test target>::<fn>`: review_app_repos_and_accounts (R1), review_app_repos_and_accounts_several (R2), review_app_repos_and_accounts_imports (R3), review_app_repos_and_accounts_core (CORE-RRA properties). Each step lists every fn it activates, RED driver first. Every #[ignore] fn of the four targets maps to exactly one step. review_app_repos_and_accounts_fixture is the v1 fixture regenerator, not a DELIVER step, and stays ignored.",
+    "step_ids": "Roadmap ids differ from DISTILL's by design. Every `DELIVER NN-NN` in an HTTP #[ignore] reason and every `bind with DELIVER step NN-NN` in a CORE-RRA #[ignore] reason is a DISTILL id, not a roadmap id (F8). `distill_ids` lists the DISTILL HTTP markers a step covers; CORE properties are traced by their CORE-RRA id in n_scenarios. Test files are not edited for the renumbering.",
+    "rider_classes": "Each step names one RED driver. Other activations are either a secondary driver (new behaviour, RED on activation; un-ignore it, see it RED, make it green, within the same step) or a guard (expected green on activation; record a mutation RED per mutation_red_on_pass).",
+    "core_binding_red": "A step that binds a CORE-RRA property first lands the production function as a signature stub with a todo!() body (the shape in the DISTILL binding table), then points the sut_* binding at it, so un-ignoring gives a panic/assertion RED, never a compile error (F6).",
+    "test_edit_allow_list": "Test-file edits limited to: removing the #[ignore] of a named scenario_fn; replacing a named sut_* todo!() body in review_app_repos_and_accounts_core.rs with ONE real call plus view mapping (DWD-RRA-7 allows moving a property into crates/review-domain/tests or crates/claim-domain/tests unchanged in name and assertions). Orchestrator ruling (F1): in 02-06 only, the mechanical &SigningPermit signature change at the existing call sites in crates/review-domain/src/link_plan.rs, crates/review-domain/tests/page_contracts.rs, crates/review-domain/tests/domain_contracts.rs and tests/acceptance/review_app_core.rs (a permit minted the production way, through may_sign over test-support facts); no assertion changes; recorded in the commit message. Forbidden otherwise: assertions, oracles, strategies, universe slots, helpers, test names. tests/acceptance/support/* stays DISTILL-owned: a needed change stops the step and goes to nw-acceptance-designer. Crafter-owned tests in their own crates (adapter-review-store migration test, adapter-github contract tests, xtask synthetic-violation tests, review-domain/claim-domain unit/property tests) may be added.",
+    "test_runs": "`cargo nextest run -p openlore-review-app --test <target>` for a release suite; `cargo nextest run -p openlore-review-app` runs every shipped review-app suite (186 tests at DISTILL) plus the activated scenarios. Scoped crates only, never the workspace.",
+    "done_per_step": "A step is done when its scenario_fns are un-ignored and green, its release's HTTP suite and the core suite pass, and every shipped review-app suite passes (the full `cargo nextest run -p openlore-review-app`).",
+    "mutation_red_on_pass": "A guard green on activation gets a recorded mutation RED: break the named rule in production code, run the guard and show it fails, revert. The broken rule, the failing scenario and the revert go in the commit message and the execution log RED phase.",
+    "migration_order": "ADR-088 lands whole in 01-01, alone, with its crate migration test as the RED driver and MG-1..MG-3 against the real v1 fixture; accounts move to github_accounts in the same step so github_links is never written after v2. No route reads repo_choices, scan_run_repos or the new suggestion columns before 01-02.",
+    "permit_order": "ADR-089 (claim_domain::authority::may_sign, SigningPermit, three check-arch rules) lands alone in 02-06. No earlier step changes the publish gate (plan constructors, owner check, executor); every later gate change (02-07, 03-03, 03-06) depends on 02-06 through the chain. R1 publishing keeps today's stored-status check: an accepted risk recorded in 01-02 and 02-06 (F3).",
+    "check_arch": "`cargo xtask check-arch` + `cargo test -p xtask`; each new or amended rule ships a synthetic-violation test in xtask/tests.",
+    "kpi": "D-RRA-D11 counters are added to the closed KpiEvent catalogue in the step whose scenarios first count them. KPI-RRA-1..7 are registered in docs/product/kpi-contracts.yaml in the last step, 03-06 (D-RRA-T4); KPI-RRA-6 is registered as deferred with R4.",
+    "wording": "Page and message pins are DISTILL-owned in tests/acceptance/support/review_app/repos_and_accounts.rs (DWD-RRA-2, DWD-RRA-18). DELIVER may rename a markup pin only through the acceptance designer."
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "R1 — Store v2; choose owned repos; the scan reads the saved choice through a frozen plan",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Store v2 migration keeps everything and survives interruption",
+          "description": "All of ADR-088 before any reader: CHECKPOINT, timestamped backup, the v1 → v2 step in one transaction (new tables, new columns, source backfill, github_links copied to github_accounts), version 2. Account reads and writes move to github_accounts. REVIEW_APP_TEST_FAULT=migrate_before_commit is honoured only in debug builds; a release build refuses it (DWD-RRA-16).",
+          "criteria": [
+            "The store crate's migration test over an SQL-seeded v1 file passes: counts and backfill equal, a DID without github_links keeps NULL source, second run a no-op.",
+            "MG-3: a start cut off before COMMIT leaves v1; the next start migrates cleanly, first backup bytes unchanged. MG-1 and MG-2 pass.",
+            "A release build with REVIEW_APP_TEST_FAULT set refuses to start; check-arch fails a synthetic ungated seam read.",
+            "Verify writes github_accounts only; forget-me deletes the DID's github_accounts rows; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts.rs",
+          "scenario_name": "an_update_cut_off_before_it_finished_runs_again_cleanly",
+          "scenario_fns": [
+            "review_app_repos_and_accounts::an_update_cut_off_before_it_finished_runs_again_cleanly",
+            "review_app_repos_and_accounts::priyas_suggestions_are_all_still_there_after_the_update",
+            "review_app_repos_and_accounts::restarting_after_the_update_changes_nothing_priya_sees"
+          ],
+          "distill_ids": [
+            "01-19",
+            "01-16",
+            "01-17"
+          ],
+          "n_scenarios": [
+            "migration_v1_to_v2 (crate test, RED driver)",
+            "MG-3",
+            "MG-1",
+            "MG-2",
+            "release-refusal config property",
+            "check-arch synthetic violation"
+          ],
+          "green": [
+            "cargo test -p adapter-review-store --test migration_v1_to_v2",
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo build --release -p openlore-review-app",
+            "cargo test -p xtask",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver: the store crate's migration test (U-RRA-4; each ADD COLUMN verified on DuckDB, ADR-088 Earned Trust). Secondary driver: MG-3 (the seam does not exist). Guards: MG-1 (mutation: copy before CHECKPOINT, or drop the source backfill), MG-2 (mutation: treat version 2 as Migrate). Accounts: GithubAccountsRead/Write with today's one-account behaviour, moved up from R2 because ADR-088 §1 forbids writing github_links after v2. Seam parsed in config.rs beside REVIEW_APP_CLOCK_SKEW_SECS (BuildProfile), passed to the store open as data; rule modelled on the viewer fault-seam guard. New tables join the owner-table list. Never regenerate the fixture; its comment ('before DELIVER 01-16') refers to the DISTILL id. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 9,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts.rs",
+            "crates/ports/src/review.rs",
+            "crates/ports/src/lib.rs",
+            "crates/adapter-review-store/src/schema.rs",
+            "crates/adapter-review-store/src/lib.rs",
+            "crates/adapter-review-store/src/purge.rs",
+            "crates/adapter-review-store/src/github_links.rs",
+            "crates/openlore-review-app/src/config.rs",
+            "crates/openlore-review-app/src/routes/github.rs",
+            "crates/openlore-review-app/src/scan.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "files_to_create": [
+            "crates/adapter-review-store/src/github_accounts.rs",
+            "crates/adapter-review-store/tests/migration_v1_to_v2.rs",
+            "xtask/tests/review_app_test_fault_guard.rs"
+          ],
+          "mutation_note": "Kill: migration split over two transactions; backup overwritten; NULL-source rows backfilled to an account; the seam honoured in a release build; the guard rule removed (its synthetic-violation test)."
+        },
+        {
+          "id": "01-02",
+          "name": "Walking skeleton: publish a chosen repo outside top 5",
+          "description": "Thinnest WS-RRA-1 thread (Strategy B) on the v2 store: GET /repos with one Save form per verified account, POST Save storing repo ids, a scan reading the saved choice, the KPI-RRA-1 counter.",
+          "criteria": [
+            "WS-RRA-1: a saved choice ticking ferrous-notes is scanned exactly; publishing its suggestion puts one claim in Priya's repo; nothing written before confirm.",
+            "suggestion.acted.outside_default counted once; forget-me deletes the DID's repo_choices and scan_run_repos rows.",
+            "The publish gate is unchanged; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts.rs",
+          "scenario_name": "priya_publishes_a_claim_about_a_repo_her_old_top_5_never_read",
+          "scenario_fns": [
+            "review_app_repos_and_accounts::priya_publishes_a_claim_about_a_repo_her_old_top_5_never_read"
+          ],
+          "distill_ids": [
+            "01-01"
+          ],
+          "n_scenarios": [
+            "WS-RRA-1"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p adapter-review-store",
+            "cargo test -p review-domain",
+            "cargo test -p adapter-github",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver: WS-RRA-1. Listing rows carry repo_id and owner_id (C-RRA-D3). Thinnest only: no limit, new-since marks or skips. The counter rides the approve action tally in routes/review.rs. ACCEPTED RISK (F3, orchestrator ruling): R1 publishing keeps today's stored-status owner check, the live app's current behaviour; R1 adds no newly publishable kind (chosen repos are owned repos). The transfer-after-scan window is closed by the fresh same-request owner + bio read in 02-06, where US-RRA-010 places it. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 8,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts.rs",
+            "crates/ports/src/review.rs",
+            "crates/ports/src/github.rs",
+            "crates/adapter-github/src/client.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-review-store/src/lib.rs",
+            "crates/adapter-review-store/src/suggestions.rs",
+            "crates/adapter-review-store/src/scan_runs.rs",
+            "crates/adapter-review-store/src/purge.rs",
+            "crates/review-domain/src/lib.rs",
+            "crates/review-domain/src/kpi.rs",
+            "crates/review-domain/src/views/mod.rs",
+            "crates/openlore-review-app/src/main.rs",
+            "crates/openlore-review-app/src/routes/signin.rs",
+            "crates/openlore-review-app/src/routes/review.rs",
+            "crates/openlore-review-app/src/scan.rs",
+            "crates/openlore-review-app/src/wiring.rs"
+          ],
+          "files_to_create": [
+            "crates/review-domain/src/repo_scope.rs",
+            "crates/review-domain/src/views/repos.rs",
+            "crates/openlore-review-app/src/routes/repos.rs",
+            "crates/adapter-review-store/src/repo_choices.rs"
+          ],
+          "mutation_note": "Kill: the scan reading today's top 5 instead of the saved choice; the counter on a default-top-5 action."
+        },
+        {
+          "id": "01-03",
+          "name": "Choose-repos page: default ticks, live listing, empty and failure states",
+          "description": "Pure default ticks (CORE-RRA-1) over the reused select_person_repos ranking; one fragment per verified account from a live listing of up to 3 pages; forks-only, failed-listing and unverified states; keyboard-operable boxes.",
+          "criteria": [
+            "CORE-RRA-1 passes against the real default-ticks rule; RC-1 shows exactly today's top 5 ticked on a first visit and stores nothing.",
+            "RC-4 explains a forks-only account; RC-5 shows cause and fix and leaves the saved choice unchanged; RC-7 shows the re-verify fix and requests no listing.",
+            "RC-6: boxes are named by repo and Save works from the keyboard.",
+            "The paged-listing contract test passes, truncation reported; repos.choice.viewed counted; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts.rs",
+          "scenario_name": "first_visit_shows_todays_top_5_already_ticked",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_core::core_rra1_default_ticks_fill_only_the_room_left",
+            "review_app_repos_and_accounts::first_visit_shows_todays_top_5_already_ticked",
+            "review_app_repos_and_accounts::an_owner_with_only_forks_learns_why_nothing_is_listed",
+            "review_app_repos_and_accounts::a_failed_listing_leaves_the_saved_choice_alone",
+            "review_app_repos_and_accounts::an_account_that_needs_re_verifying_shows_no_repo_list",
+            "review_app_repos_and_accounts::priya_chooses_and_saves_with_the_keyboard_only"
+          ],
+          "distill_ids": [
+            "01-02",
+            "01-05",
+            "01-06",
+            "01-08",
+            "01-07"
+          ],
+          "n_scenarios": [
+            "CORE-RRA-1",
+            "RC-1",
+            "RC-4",
+            "RC-5",
+            "RC-7",
+            "RC-6",
+            "listing contract test"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p review-domain",
+            "cargo test -p adapter-github"
+          ],
+          "implementation_notes": "RED driver: CORE-RRA-1 (stub default_ticks with todo!() first, per core_binding_red), then RC-1. Secondary drivers: RC-4 (forks-only state), RC-5 (failed-listing state), RC-7 (unverified state) — each new view state, RED on activation. Guard: RC-6 (mutation: drop the box aria-label). A failed listing is never rendered as an empty list with Save. Ranking reused unchanged. Contract test joins the required GitHub contract gate (design §12, U-RRA-3); record PROVENANCE. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 7,
+          "depends_on": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts.rs",
+            "tests/acceptance/review_app_repos_and_accounts_core.rs",
+            "crates/review-domain/src/repo_scope.rs",
+            "crates/review-domain/src/views/repos.rs",
+            "crates/review-domain/src/kpi.rs",
+            "crates/openlore-review-app/src/routes/repos.rs",
+            "crates/ports/src/github.rs",
+            "crates/adapter-github/src/client.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/test-support/fixtures/github/PROVENANCE.md"
+          ],
+          "files_to_create": [
+            "crates/adapter-github/tests/github_listing_contract.rs",
+            "crates/test-support/fixtures/github/owned_repos_paged.json"
+          ],
+          "mutation_note": "Kill: default ticks ignoring room left; accounts out of added_at order; a failed listing offered for Save; a listing fetched for an unverified account."
+        },
+        {
+          "id": "01-04",
+          "name": "Save stores the ticked repos and refuses past the limit",
+          "description": "Pure Save admission (CORE-RRA-2) with one definition of S; Save writes every shown repo with its tick (D-RRA-6); SCAN_REPO_CAP = 10 as one named constant (D-RRA-16).",
+          "criteria": [
+            "CORE-RRA-2 passes against the real Save admission rule.",
+            "RC-3: saves of 11 and 12 are refused naming limit, total and excess; the stored choice is unchanged.",
+            "RC-2: Save stores exactly the ticked repos and says `Saved. Your next scan reads N repos.`; repeating it changes nothing.",
+            "repos.choice.{saved, changed_from_default, refused.over_limit} counted; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts.rs",
+          "scenario_name": "choosing_more_than_the_limit_is_refused_with_the_fix",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_core::core_rra2_a_save_is_admitted_iff_the_total_fits",
+            "review_app_repos_and_accounts::choosing_more_than_the_limit_is_refused_with_the_fix",
+            "review_app_repos_and_accounts::priya_saves_her_own_choice"
+          ],
+          "distill_ids": [
+            "01-04",
+            "01-03"
+          ],
+          "n_scenarios": [
+            "CORE-RRA-2",
+            "RC-3",
+            "RC-2"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p review-domain",
+            "cargo test -p adapter-review-store"
+          ],
+          "implementation_notes": "RED driver: CORE-RRA-2 (stub admit_save with todo!() first), then RC-3. Secondary driver: RC-2 (confirmation message and counters are new). S counts every listed account's saved ticks, verified or not (OQ-D3), so 02-01 reuses this rule. The Save write replaces that account's rows only. No setting for the cap. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts.rs",
+            "tests/acceptance/review_app_repos_and_accounts_core.rs",
+            "crates/review-domain/src/repo_scope.rs",
+            "crates/review-domain/src/lib.rs",
+            "crates/review-domain/src/views/repos.rs",
+            "crates/review-domain/src/kpi.rs",
+            "crates/openlore-review-app/src/routes/repos.rs",
+            "crates/adapter-review-store/src/repo_choices.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: `<` for `<=` at the cap; excess miscounted; a refused Save writing rows; unticked shown repos not stored."
+        },
+        {
+          "id": "01-05",
+          "name": "A scan plans exactly the choice, before admission",
+          "description": "Pure scan intent and per-account plan (CORE-RRA-4) before admission; plan rows written before the first read; new-since repos never planned; nothing to read refused before admission.",
+          "criteria": [
+            "CORE-RRA-4 passes; RS-1 reads exactly the saved ticks, the default top 5, or all 10; plan rows exist before the first read.",
+            "RS-3 marks a new repo and leaves it unread; RS-5 refuses an empty choice before admission, GitHub not asked.",
+            "scan.refused.nothing_to_read counted; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts.rs",
+          "scenario_name": "the_scan_reads_only_the_repos_priya_chose_or_todays_top_5",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_core::core_rra4_a_scan_plans_only_what_was_chosen_from_passing_accounts",
+            "review_app_repos_and_accounts::the_scan_reads_only_the_repos_priya_chose_or_todays_top_5",
+            "review_app_repos_and_accounts::a_repo_created_after_the_choice_is_not_read_until_ticked",
+            "review_app_repos_and_accounts::a_scan_with_nothing_to_read_does_not_start"
+          ],
+          "distill_ids": [
+            "01-09",
+            "01-11",
+            "01-13"
+          ],
+          "n_scenarios": [
+            "CORE-RRA-4",
+            "RS-1",
+            "RS-3",
+            "RS-5"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p review-domain",
+            "cargo test -p adapter-review-store"
+          ],
+          "implementation_notes": "RED driver: CORE-RRA-4 (stub scan_intent and plan_account with todo!() first), then RS-1 rows 2-3. Secondary drivers: RS-3 (the new-since mark is new UI), RS-5 (the pre-admission refusal is new). Either refusal is accepted when both hold (DWD-RRA-8); scan.refused.over_limit joins the catalogue (unreachable through pages). TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 6,
+          "depends_on": [
+            "01-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts.rs",
+            "tests/acceptance/review_app_repos_and_accounts_core.rs",
+            "crates/review-domain/src/repo_scope.rs",
+            "crates/review-domain/src/views/repos.rs",
+            "crates/review-domain/src/views/mod.rs",
+            "crates/review-domain/src/kpi.rs",
+            "crates/openlore-review-app/src/scan.rs",
+            "crates/openlore-review-app/src/routes/scan.rs",
+            "crates/ports/src/review.rs",
+            "crates/adapter-review-store/src/scan_runs.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a plan row of a failed account; plans above the cap; reading before the plan is written; admission spent before the intent check; a new repo planned."
+        },
+        {
+          "id": "01-06",
+          "name": "Unreadable chosen repos are skipped and named; read_repo added",
+          "description": "NEW GithubPort::read_repo (one request, at most one same-host redirect) with recorded-fixture contract tests (U-RRA-3); a chosen repo absent from a truncated listing is decided by one read (I-06, U-RRA-7); skips are named with reason and fix in the run summary.",
+          "criteria": [
+            "RS-4 skips fork, missing and transferred chosen repos, naming reason and `Untick it.`; the rest of the plan is read.",
+            "The read_repo contract test covers 200 user/org, 301 rename/transfer, 404, 403; a truncated listing never proves a repo missing.",
+            "The run summary holds no bio or DID; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts.rs",
+          "scenario_name": "a_chosen_repo_that_can_no_longer_be_read_is_skipped_and_named",
+          "scenario_fns": [
+            "review_app_repos_and_accounts::a_chosen_repo_that_can_no_longer_be_read_is_skipped_and_named"
+          ],
+          "distill_ids": [
+            "01-12"
+          ],
+          "n_scenarios": [
+            "RS-4",
+            "read_repo contract test",
+            "truncated-listing test"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p review-domain",
+            "cargo test -p adapter-github",
+            "cargo test -p adapter-review-store"
+          ],
+          "implementation_notes": "RED driver: RS-4; the contract test drives read_repo at the adapter. read_repo moves up from R2 (design §9) because the truncated-listing fallback is R1 (§6.2 step 3); 02-06 reuses it. RepoFacts is a ports value; 02-06's lint later confines its construction to adapters and test-support. Contract tests are a required CI gate. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-05"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts.rs",
+            "crates/review-domain/src/repo_scope.rs",
+            "crates/review-domain/src/views/queue.rs",
+            "crates/openlore-review-app/src/scan.rs",
+            "crates/adapter-review-store/src/scan_runs.rs",
+            "crates/ports/src/github.rs",
+            "crates/adapter-github/src/client.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-github/src/probe.rs",
+            "crates/test-support/fixtures/github/PROVENANCE.md"
+          ],
+          "files_to_create": [
+            "crates/adapter-github/tests/github_repo_contract.rs",
+            "crates/test-support/fixtures/github/repo_read_cases.json"
+          ],
+          "mutation_note": "Kill: a repo reported missing from a truncated listing; a second or cross-host redirect followed; the summary carrying the DID."
+        },
+        {
+          "id": "01-07",
+          "name": "A paused scan finishes its frozen plan through a resume",
+          "description": "Pure resume of the frozen plan (CORE-RRA-5, BR-RRA-4) through a split ScanPlanRead port; a choice saved meanwhile applies from the next scan; ticks follow repo ids, and unticking never hides pending suggestions.",
+          "criteria": [
+            "CORE-RRA-5 passes; RS-2a resumes the original plan despite a Save in between.",
+            "RS-2b: the next fresh scan reads the choice saved meanwhile.",
+            "RS-6 keeps pending suggestions of an unticked repo; RS-7 keeps a renamed repo ticked and read.",
+            "A run paused at deploy with no plan rows re-plans once; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts.rs",
+          "scenario_name": "a_paused_scan_finishes_the_choice_it_started_with",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_core::core_rra5_resumes_read_only_the_frozen_plan_each_repo_once",
+            "review_app_repos_and_accounts::a_paused_scan_finishes_the_choice_it_started_with",
+            "review_app_repos_and_accounts::the_next_scan_uses_the_choice_saved_during_the_last_one",
+            "review_app_repos_and_accounts::unticking_a_repo_keeps_its_pending_suggestions",
+            "review_app_repos_and_accounts::a_repo_renamed_on_github_stays_chosen"
+          ],
+          "distill_ids": [
+            "01-10",
+            "01-18",
+            "01-14",
+            "01-15"
+          ],
+          "n_scenarios": [
+            "CORE-RRA-5",
+            "RS-2a",
+            "RS-2b",
+            "RS-6",
+            "RS-7"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p review-domain",
+            "cargo test -p adapter-review-store"
+          ],
+          "implementation_notes": "RED driver: CORE-RRA-5 (stub resume_plan with todo!() first), then RS-2a. Guards, mutation RED each: RS-2b (a fresh scan carries the previous plan), RS-6 (hide pending of unticked repos), RS-7 (match saved ticks by full name). ScanPlanRead (unread_plan, summary) split from the ScanRunPort writes (design I-13). R1 closure: 19 R1 scenarios and CORE-RRA-1/2/4/5 active. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-06"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts.rs",
+            "tests/acceptance/review_app_repos_and_accounts_core.rs",
+            "crates/review-domain/src/repo_scope.rs",
+            "crates/openlore-review-app/src/scan.rs",
+            "crates/ports/src/review.rs",
+            "crates/adapter-review-store/src/scan_runs.rs",
+            "crates/adapter-review-store/src/lib.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: resume re-planning from the current choice; a read row read again; visibility keyed to the tick; name-keyed matching."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "R2 — Several GitHub accounts, per-account bio checks, removal, and the SigningPermit at preview and confirm",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "Up to three accounts per sign-in, sharing one limit",
+          "description": "Pure account admission (CORE-RRA-8) and GithubAccountsWrite add_or_reverify widened to several accounts in added_at order, both limits re-checked in the add transaction; later accounts' default ticks fill only the room left; the Save limit spans every account, unverified included (OQ-D3).",
+          "criteria": [
+            "CORE-RRA-8 passes; AA-1 adds a second verified account, the first unchanged; AA-2 refuses five cases with their fix, changing nothing.",
+            "AA-3 ticks only the room left; AS-4 and AS-7 refuse a Save past 10 across accounts; CORE-RRA-2x passes.",
+            "check-arch fails when the accounts write port is named outside routes/github.rs.",
+            "account.add.{started, verified, refused.*} counted (KPI-RRA-2); done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts_several.rs",
+          "scenario_name": "priya_verifies_her_work_account_without_losing_her_personal_one",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_core::core_rra8_at_most_three_accounts_one_owner_each",
+            "review_app_repos_and_accounts_several::priya_verifies_her_work_account_without_losing_her_personal_one",
+            "review_app_repos_and_accounts_several::an_account_that_cannot_be_added_changes_nothing",
+            "review_app_repos_and_accounts_several::a_new_accounts_default_ticks_fit_the_limit",
+            "review_app_repos_and_accounts_several::two_accounts_together_cannot_exceed_the_limit",
+            "review_app_repos_and_accounts_core::core_rra2x_an_unverified_accounts_saved_ticks_still_count",
+            "review_app_repos_and_accounts_several::an_unverified_accounts_saved_repos_still_count_toward_the_limit"
+          ],
+          "distill_ids": [
+            "02-01",
+            "02-02",
+            "02-03",
+            "02-07",
+            "02-19"
+          ],
+          "n_scenarios": [
+            "CORE-RRA-8",
+            "AA-1",
+            "AA-2",
+            "AA-3",
+            "AS-4",
+            "CORE-RRA-2x",
+            "AS-7",
+            "check-arch synthetic violation"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts_several --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p review-domain",
+            "cargo test -p adapter-review-store",
+            "cargo test -p xtask",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver: CORE-RRA-8 (stub admit_account with todo!() first), then AA-1. Secondary driver: AA-2 (refusal messages and counters are new). Guards, mutation RED each: AA-3 (defaults ignore the other accounts' ticks), AS-4 (count only the saving account), AS-7 + CORE-RRA-2x (count only verified accounts' ticks; 01-04's rule already spans accounts). eligible_count_seen goes through the narrow AccountListingNote port, driven by a store crate test. MAX_GITHUB_ACCOUNTS = 3 one constant. AA-2 row 1 reuses the shipped bio-missing sentence. Identity-link routes read the chosen account, behaviour unchanged. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 8,
+          "depends_on": [
+            "01-07"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts_several.rs",
+            "tests/acceptance/review_app_repos_and_accounts_core.rs",
+            "crates/ports/src/review.rs",
+            "crates/adapter-review-store/src/github_accounts.rs",
+            "crates/review-domain/src/repo_scope.rs",
+            "crates/review-domain/src/views/github.rs",
+            "crates/review-domain/src/kpi.rs",
+            "crates/openlore-review-app/src/routes/github.rs",
+            "crates/openlore-review-app/src/routes/github_link.rs",
+            "crates/openlore-review-app/src/routes/repos.rs",
+            "crates/openlore-review-app/src/scan.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "xtask/src/check_arch.rs",
+            "xtask/tests/review_app_architecture.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a fourth account admitted; an id verified for two DIDs; a second verify replacing the first row; per-account limit; S over verified accounts only."
+        },
+        {
+          "id": "02-02",
+          "name": "Each account's bio is checked before its repos are read",
+          "description": "The scan walks listed accounts in order under one admission, running each bio check before that account's listing; a failure marks it unverified through the narrow AccountStatusWrite port; visibility derived in pure code (CORE-RRA-7); an unfinished check is not a failure; scan.repo.read audit log (KPI-RRA-5).",
+          "criteria": [
+            "CORE-RRA-7 passes; AS-2 skips, names and hides a failing account without deleting; no repo of it in the scan.repo.read log.",
+            "AS-1 names each card's account; AS-3 keeps status and hides nothing when GitHub fails; AS-5 reads nothing when every account fails.",
+            "scan.account.{failed, unfinished} and outside_default.other_account counted; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts_several.rs",
+          "scenario_name": "an_account_that_fails_its_check_is_skipped_named_and_hidden",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_core::core_rra7_visibility_follows_the_source_never_the_tick",
+            "review_app_repos_and_accounts_several::an_account_that_fails_its_check_is_skipped_named_and_hidden",
+            "review_app_repos_and_accounts_several::one_scan_covers_both_accounts_and_each_card_names_its_account",
+            "review_app_repos_and_accounts_several::github_failing_during_a_scan_hides_nothing",
+            "review_app_repos_and_accounts_several::when_every_account_fails_nothing_is_read"
+          ],
+          "distill_ids": [
+            "02-05",
+            "02-04",
+            "02-06",
+            "02-08"
+          ],
+          "n_scenarios": [
+            "CORE-RRA-7",
+            "AS-2",
+            "AS-1",
+            "AS-3",
+            "AS-5"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts_several --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p review-domain",
+            "cargo test -p adapter-review-store"
+          ],
+          "implementation_notes": "RED driver: CORE-RRA-7 (stub visible with todo!() first), then AS-2. Secondary drivers: AS-1 (the per-card account line is new), AS-3 (the `not reached` outcome is new). Guard: AS-5 (mutation: fall back to the default top 5 when every account fails). Reuse prove_ownership and disproves_ownership unchanged; read profiles by id. No hidden column. Log event on the log-field allowlist, no DID or login. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts_several.rs",
+            "tests/acceptance/review_app_repos_and_accounts_core.rs",
+            "crates/review-domain/src/repo_scope.rs",
+            "crates/review-domain/src/views/queue.rs",
+            "crates/review-domain/src/kpi.rs",
+            "crates/ports/src/review.rs",
+            "crates/adapter-review-store/src/github_accounts.rs",
+            "crates/adapter-review-store/src/suggestions.rs",
+            "crates/openlore-review-app/src/scan.rs",
+            "crates/openlore-review-app/src/routes/review.rs",
+            "crates/openlore-review-app/src/wiring.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: listing before the bio check; Unfinished marking unverified; deleting instead of hiding; two admissions for one scan; reads after every account fails."
+        },
+        {
+          "id": "02-03",
+          "name": "Unverified accounts are re-checked; resumes keep their accounts",
+          "description": "D-RRA-T1: every listed account's bio is re-checked in each scan, unverified included; one that passes is re-verified and read in that scan, and its hidden cards show again. A resume re-checks the carried accounts and reads only the frozen plan.",
+          "criteria": [
+            "AS-2c: with the DID back, the next scan marks the work account verified and reads its chosen repos.",
+            "AS-2b shows its hidden suggestions again unchanged; AS-6 resumes only the frozen plan's unread rows across both accounts.",
+            "done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts_several.rs",
+          "scenario_name": "a_scan_re_checks_an_unverified_account_and_reads_it_once_its_did_is_back",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_several::a_scan_re_checks_an_unverified_account_and_reads_it_once_its_did_is_back",
+            "review_app_repos_and_accounts_several::hidden_suggestions_come_back_after_re_verifying",
+            "review_app_repos_and_accounts_several::a_paused_scan_resumes_with_the_same_accounts_and_choices"
+          ],
+          "distill_ids": [
+            "02-21",
+            "02-20",
+            "02-09"
+          ],
+          "n_scenarios": [
+            "AS-2c",
+            "AS-2b",
+            "AS-6"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts_several --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app"
+          ],
+          "implementation_notes": "RED driver: AS-2c (re-verification on a passing scan check, through the narrow status port). Guards, mutation RED each: AS-2b (delete instead of hide on failure), AS-6 (re-plan the second account on resume). Per-account resume outcomes per design §6.2 step 8. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts_several.rs",
+            "crates/openlore-review-app/src/scan.rs",
+            "crates/review-domain/src/repo_scope.rs",
+            "crates/ports/src/review.rs",
+            "crates/adapter-review-store/src/github_accounts.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: unverified accounts skipped without a check; resume re-planning; a failed account's carried rows read."
+        },
+        {
+          "id": "02-04",
+          "name": "Removing an account deletes only its pending suggestions",
+          "description": "NEW ScopeRemovalPort and removal.rs, the only new DELETE (ADR-088 §8, D-RRA-17): the account row, its choices and its pending suggestions in one transaction, after a confirm naming the count; the live store probe adds a rolled-back removal; owner scoping of account and choice actions.",
+          "criteria": [
+            "AR-1 confirms with the pending count, then deletes account, choice and pending only; AR-2 Cancel changes nothing; AR-3 never re-offers declined or published keys.",
+            "AR-4a deletes pending at once during a paused scan; AV-1 refuses another owner's ids, both owners unchanged.",
+            "Probe's rolled-back removal deletes only pending, else health.startup.refused; check-arch confines DELETE and demands state = 'pending'.",
+            "account.removed counted; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts_several.rs",
+          "scenario_name": "priya_removes_an_account_she_no_longer_wants_scanned",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_several::priya_removes_an_account_she_no_longer_wants_scanned",
+            "review_app_repos_and_accounts_several::cancelling_the_removal_changes_nothing",
+            "review_app_repos_and_accounts_several::re_adding_offers_suggestions_again_but_never_declined_or_published_ones",
+            "review_app_repos_and_accounts_several::removing_an_account_during_a_scan_deletes_its_pending_suggestions_at_once",
+            "review_app_repos_and_accounts_several::one_owner_never_sees_or_changes_another_owners_accounts_or_choices"
+          ],
+          "distill_ids": [
+            "02-10",
+            "02-11",
+            "02-12",
+            "02-13",
+            "02-18"
+          ],
+          "n_scenarios": [
+            "AR-1",
+            "AR-2",
+            "AR-3",
+            "AR-4a",
+            "AV-1",
+            "store probe",
+            "check-arch synthetic violations"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts_several --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p adapter-review-store",
+            "cargo test -p xtask",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver: AR-1. Guards, mutation RED each: AR-2 (delete on showing the confirm), AR-3 (removal deletes declined rows), AR-4a (defer the pending delete to scan end), AV-1 (take the account id from the form without checking the session's list). Removal port held only by the remove routes (ADR-082 precedent); owner always from the session. Re-adding starts fresh (US-RRA-008). TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts_several.rs",
+            "crates/ports/src/review.rs",
+            "crates/adapter-review-store/src/lib.rs",
+            "crates/adapter-review-store/src/probe.rs",
+            "crates/review-domain/src/views/github.rs",
+            "crates/review-domain/src/kpi.rs",
+            "crates/openlore-review-app/src/routes/github.rs",
+            "crates/openlore-review-app/src/routes/repos.rs",
+            "crates/openlore-review-app/src/routes/signin.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "xtask/src/check_arch.rs",
+            "xtask/tests/review_app_architecture.rs"
+          ],
+          "files_to_create": [
+            "crates/adapter-review-store/src/removal.rs"
+          ],
+          "mutation_note": "Kill: removal deleting declined or published rows; DELETE without the pending predicate (rule test); a GET that deletes; owner from the form; probe skipped."
+        },
+        {
+          "id": "02-05",
+          "name": "A resumed scan adds nothing for a removed account",
+          "description": "UC-RRA-8 / ADR-088 §7: before each repo the scan re-reads the source's presence; suggestions are stored by a conditional insert that, in the same transaction, inserts only if the source is still listed; the store probe adds a rolled-back conditional insert.",
+          "criteria": [
+            "AR-4b: after a removal during a paused scan, the resumed scan reads none of the account's repos, adds none of its suggestions, and marks its rows skipped as removed.",
+            "The probe's rolled-back conditional insert for an unlisted source inserts nothing, else health.startup.refused.",
+            "Every add_pending caller is moved to the conditional insert; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts_several.rs",
+          "scenario_name": "a_resumed_scan_neither_reads_nor_adds_anything_for_a_removed_account",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_several::a_resumed_scan_neither_reads_nor_adds_anything_for_a_removed_account"
+          ],
+          "distill_ids": [
+            "02-22"
+          ],
+          "n_scenarios": [
+            "AR-4b",
+            "store probe"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts_several --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p adapter-review-store"
+          ],
+          "implementation_notes": "RED driver: AR-4b. add_pending becomes add_pending_from_listed_source (ports, indicative). Callers (F2): the port, suggestions.rs (impl and its proptest ~202), kpi.rs (~105, ~154) and purge.rs (~145) crate tests in adapter-review-store, scan.rs (~215), routes/review.rs test (~449); those crate-owned unit tests change only the call. Covers imported sources too, so 03-05's IR-4 is a guard. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts_several.rs",
+            "crates/ports/src/review.rs",
+            "crates/adapter-review-store/src/suggestions.rs",
+            "crates/adapter-review-store/src/kpi.rs",
+            "crates/adapter-review-store/src/purge.rs",
+            "crates/adapter-review-store/src/probe.rs",
+            "crates/openlore-review-app/src/scan.rs",
+            "crates/openlore-review-app/src/routes/review.rs",
+            "crates/review-domain/src/repo_scope.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: an unconditional insert; the presence check skipped on resume; probe skipped."
+        },
+        {
+          "id": "02-06",
+          "name": "SigningPermit gate: a transferred repo cannot be published",
+          "description": "NEW claim_domain::authority owner tier (ADR-089): may_sign is the only way to mint a SigningPermit (private fields, no serde) from a same-request read_repo + owner profile read. publish_plan, publish_edited_plan and restore_plan gain &SigningPermit; previews go through permit_for. Three check-arch rules. Precedes every other publish-gate change.",
+          "criteria": [
+            "CORE-RRA-6 passes: permit iff the repo's current owner id is listed, the owner is a user, and its bio read now holds the signer DID.",
+            "AP-1: a repo transferred away after the scan gets no preview, a message naming it and `Nothing was published`; nothing written.",
+            "check-arch fails a synthetic violation for each of review_publish_plan_needs_permit, authority_evidence_only_from_adapters, signing_permit_not_serializable.",
+            "publish.refused.not_owned counted; queue_and_publish, identity_link and review_app_core suites pass with only the signature change at the listed call sites."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts_several.rs",
+          "scenario_name": "a_repo_transferred_away_after_the_scan_can_no_longer_be_published",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_core::core_rra6_only_a_listed_user_owner_whose_bio_holds_the_did_may_publish",
+            "review_app_repos_and_accounts_several::a_repo_transferred_away_after_the_scan_can_no_longer_be_published"
+          ],
+          "distill_ids": [
+            "02-14"
+          ],
+          "n_scenarios": [
+            "CORE-RRA-6",
+            "AP-1",
+            "check-arch synthetic violations (3)"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts_several --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p claim-domain",
+            "cargo test -p review-domain",
+            "cargo test -p xtask",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver: CORE-RRA-6 (stub may_sign(signer, subject, listed ids, &RepoFacts, &profile) -> Result<SigningPermit, SigningRefusal> with todo!() first), then AP-1. Callers of the three plan constructors (F1): plans.rs (impl and its proptests), link_plan.rs (~409, 462, 501, 568, 571), routes/review.rs (~116, 144, 195), routes/publish.rs (~33, 143), crates/review-domain/tests/page_contracts.rs (~36), crates/review-domain/tests/domain_contracts.rs (~53, 165), tests/acceptance/review_app_core.rs (~193, 236). Orchestrator ruling: in the test call sites the crafter passes a permit minted through may_sign over test-support facts; no assertion changes; recorded in the commit. Plan subject must equal permit subject, else NotPermitted. Per-request memo, never cross-request. Allowlist shared with owner-only-signing. ACCEPTED RISK closed here (F3): R1 used the stored-status check; from this step every preview and confirm reads owner and bio in the same request (US-RRA-010). Identity-link writes stay under their existing rules. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 10,
+          "depends_on": [
+            "02-05"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts_several.rs",
+            "tests/acceptance/review_app_repos_and_accounts_core.rs",
+            "tests/acceptance/review_app_core.rs",
+            "crates/claim-domain/src/lib.rs",
+            "crates/ports/src/github.rs",
+            "crates/review-domain/src/plans.rs",
+            "crates/review-domain/src/link_plan.rs",
+            "crates/review-domain/tests/page_contracts.rs",
+            "crates/review-domain/tests/domain_contracts.rs",
+            "crates/review-domain/src/views/publish.rs",
+            "crates/review-domain/src/kpi.rs",
+            "crates/openlore-review-app/src/routes/review.rs",
+            "crates/openlore-review-app/src/routes/publish.rs",
+            "crates/openlore-review-app/src/executor.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "xtask/src/check_arch.rs",
+            "xtask/tests/review_app_architecture.rs"
+          ],
+          "files_to_create": [
+            "crates/claim-domain/src/authority.rs"
+          ],
+          "mutation_note": "Kill: dropping any of the three conjuncts; an org owner permitted; permit subject not checked against the plan; any rule removed (its synthetic-violation test)."
+        },
+        {
+          "id": "02-07",
+          "name": "Preview and confirm each re-check owner and bio",
+          "description": "Confirm, confirm-selected and retry run permit_for again (US-RRA-010); Unfinished gives no preview and writes nothing; BioNoLongerHolds marks the account unverified through AccountStatusWrite; ownership.publish_check.passed / .refused audit event per request (KPI-RRA-4).",
+          "criteria": [
+            "AP-4: still owned at confirm publishes once; transferred between preview and confirm writes nothing; one passed audit event per preview and per confirm.",
+            "AP-3: a bio changed before confirm writes nothing and marks the account unverified.",
+            "AP-2: GitHub busy or down at preview shows no preview, keeps status, writes nothing.",
+            "publish.refused.{unreachable, bio_failed} counted; events carry no DID or login; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts_several.rs",
+          "scenario_name": "a_claim_about_her_own_repo_is_published_only_if_she_still_owns_it_when_she_confirms",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_several::a_claim_about_her_own_repo_is_published_only_if_she_still_owns_it_when_she_confirms",
+            "review_app_repos_and_accounts_several::a_bio_edited_between_preview_and_confirm_stops_the_publish",
+            "review_app_repos_and_accounts_several::github_failing_at_preview_shows_no_preview_and_publishes_nothing"
+          ],
+          "distill_ids": [
+            "02-17",
+            "02-16",
+            "02-15"
+          ],
+          "n_scenarios": [
+            "AP-4",
+            "AP-3",
+            "AP-2"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts_several --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver: AP-4 (its first failure is the audit event). Secondary driver: AP-3 (marking unverified at confirm is new). Guard: AP-2 (mutation: treat Unfinished as a permit). Publish holds only the narrow status port. The harness log catalogue already allows the ownership. prefix (DWD-RRA-13); add the events to the log-field allowlist. Batches read once per distinct repo and account. R2 closure: 22 R2 scenarios and CORE-RRA-6/7/8/2x active. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-06"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts_several.rs",
+            "crates/openlore-review-app/src/routes/publish.rs",
+            "crates/openlore-review-app/src/routes/review.rs",
+            "crates/openlore-review-app/src/executor.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "crates/review-domain/src/views/publish.rs",
+            "crates/review-domain/src/kpi.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: the plan restored without a fresh permit; audit event after the write or missing; Unfinished treated as permit or as bio failure; account not marked unverified."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "R3 — Imported public repos: private suggestions, never publishable, moved when owned, removable, owner-scoped and serialized",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Import a public repo and get private suggestions",
+          "description": "NEW routes/imports.rs (add), ImportedReposRead/Write and imports.rs store module; the scan appends imports to the plan (no bio check), also when no account is verified; suggestions stored with source imported; purge covers imported_repos.",
+          "criteria": [
+            "IM-1: an added repo is listed under `Repos you don't own`, the next scan reads it, and its suggestions show on Priya's queue only.",
+            "IM-3: with no verified account the scan reads the import, says `No GitHub account to re-check`, counts a daily scan.",
+            "import.added counted (KPI-RRA-3); forget-me deletes imported_repos rows; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts_imports.rs",
+          "scenario_name": "priya_names_a_public_repo_she_doesnt_own_and_gets_private_suggestions",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_imports::priya_names_a_public_repo_she_doesnt_own_and_gets_private_suggestions",
+            "review_app_repos_and_accounts_imports::someone_with_no_verified_github_account_can_still_look_at_a_repo"
+          ],
+          "distill_ids": [
+            "03-01",
+            "03-03"
+          ],
+          "n_scenarios": [
+            "IM-1",
+            "IM-3"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts_imports --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p adapter-review-store",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver: IM-1. Secondary driver: IM-3 (the imports-only scan message is new). Public reads only, no contact with the repo owner. The publish gate is not touched: 02-06's permit already refuses imported repos. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 7,
+          "depends_on": [
+            "02-07"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts_imports.rs",
+            "crates/ports/src/review.rs",
+            "crates/adapter-review-store/src/lib.rs",
+            "crates/adapter-review-store/src/purge.rs",
+            "crates/adapter-review-store/src/suggestions.rs",
+            "crates/review-domain/src/repo_scope.rs",
+            "crates/review-domain/src/views/repos.rs",
+            "crates/review-domain/src/views/queue.rs",
+            "crates/review-domain/src/kpi.rs",
+            "crates/openlore-review-app/src/main.rs",
+            "crates/openlore-review-app/src/routes/signin.rs",
+            "crates/openlore-review-app/src/scan.rs",
+            "crates/openlore-review-app/src/wiring.rs"
+          ],
+          "files_to_create": [
+            "crates/adapter-review-store/src/imports.rs",
+            "crates/openlore-review-app/src/routes/imports.rs"
+          ],
+          "mutation_note": "Kill: imports bio-checked or skipped; imported suggestions stored as account-sourced; imports-only scan refused or free of the daily limit; purge missing imported_repos."
+        },
+        {
+          "id": "03-02",
+          "name": "Import refusals name the cause and never overfill a scan",
+          "description": "Pure import classification with a fixed precedence (CORE-RRA-9, DWD-RRA-4): shape → read → owned by a listed account → over limit → admitted; import admission shares the one definition of S (CORE-RRA-3).",
+          "criteria": [
+            "CORE-RRA-9 and CORE-RRA-3 pass against the real classification and admission rules.",
+            "IM-2 (12 rows): malformed names get one shape message without a GitHub request; missing, unreachable, owned, already imported and over-limit each give their message; nothing changes.",
+            "import.refused.{shape, not_found, owned, over_limit, unreachable} counted; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts_imports.rs",
+          "scenario_name": "a_repo_that_cannot_be_imported_is_refused_with_the_cause_and_the_fix",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_core::core_rra9_an_import_verdict_is_one_of_a_closed_set_in_a_fixed_order",
+            "review_app_repos_and_accounts_core::core_rra3_admitted_changes_never_overfill_a_scan",
+            "review_app_repos_and_accounts_imports::a_repo_that_cannot_be_imported_is_refused_with_the_cause_and_the_fix"
+          ],
+          "distill_ids": [
+            "03-02"
+          ],
+          "n_scenarios": [
+            "CORE-RRA-9",
+            "CORE-RRA-3",
+            "IM-2"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts_imports --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p review-domain"
+          ],
+          "implementation_notes": "RED driver: CORE-RRA-9 (stub classify_import with todo!() first). Secondary drivers: CORE-RRA-3 (binds the new admit_import, stubbed with todo!() first) and IM-2 (the route's refusal messages). D-RRA-T2 (owned by any listed account, verified or not) and D-RRA-T3 (already imported). Uses read_repo from 01-06. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts_imports.rs",
+            "tests/acceptance/review_app_repos_and_accounts_core.rs",
+            "crates/review-domain/src/repo_scope.rs",
+            "crates/review-domain/src/views/repos.rs",
+            "crates/review-domain/src/kpi.rs",
+            "crates/openlore-review-app/src/routes/imports.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: precedence swapped (limit before ownership); a GitHub read on a malformed name; a second definition of S."
+        },
+        {
+          "id": "03-03",
+          "name": "Imported suggestions can never be published, shown or shared",
+          "description": "Imported card: `Not yours to publish`, who can publish, Decline only. Every publish route meets the 02-06 permit; profile and share read published rows only; Unfinished at confirm writes nothing.",
+          "criteria": [
+            "IC-1: an imported card says `Not yours to publish`, names who can publish, offers Decline only; declining counts outside_default.imported.",
+            "IC-2 and IC-3 (18 rows): no forged or re-aimed request on any route publishes a not-owned suggestion.",
+            "IC-4 keeps imports off profile and share; IC-5 writes nothing when GitHub fails at confirm; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts_imports.rs",
+          "scenario_name": "an_imported_suggestion_offers_no_way_to_publish_and_says_who_can",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_imports::an_imported_suggestion_offers_no_way_to_publish_and_says_who_can",
+            "review_app_repos_and_accounts_imports::a_forged_publish_request_for_a_repo_he_doesnt_own_writes_nothing",
+            "review_app_repos_and_accounts_imports::no_request_publishes_a_suggestion_about_a_repo_the_owner_doesnt_own",
+            "review_app_repos_and_accounts_imports::profile_and_share_preview_never_show_imported_suggestions",
+            "review_app_repos_and_accounts_imports::github_failing_at_confirm_publishes_nothing"
+          ],
+          "distill_ids": [
+            "03-04",
+            "03-05",
+            "03-06",
+            "03-07",
+            "03-08"
+          ],
+          "n_scenarios": [
+            "IC-1",
+            "IC-2",
+            "IC-3",
+            "IC-4",
+            "IC-5"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts_imports --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app"
+          ],
+          "implementation_notes": "RED driver: IC-1 (card controls). Guards, mutation RED each: IC-2 (drop the listed-owner conjunct from the rule), IC-3 (key the per-request permit memo by account instead of repo), IC-4 (let the profile read pending rows), IC-5 (treat Unfinished at confirm as a permit). If a guard fails for real, fix the route, not the table. Controls come from the source tag; publishing is decided by the permit only (C-RRA-D2). TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts_imports.rs",
+            "crates/review-domain/src/views/queue.rs",
+            "crates/review-domain/src/views/profile.rs",
+            "crates/review-domain/src/views/share.rs",
+            "crates/review-domain/src/kpi.rs",
+            "crates/openlore-review-app/src/routes/review.rs",
+            "crates/openlore-review-app/src/routes/publish.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: Approve on an imported card; listed-owner conjunct dropped; a permit reused across repos in one batch; unpublished rows on profile or share; Unfinished at confirm writes."
+        },
+        {
+          "id": "03-04",
+          "name": "An import moves to the owned list once owned",
+          "description": "BR-RRA-5: pure moves (CORE-RRA-10) and a ScopeMovePort transaction — import −1, the owning account's choice gains the repo, the repo's suggestions become account-sourced, the total unchanged — at verify and during a scan.",
+          "criteria": [
+            "CORE-RRA-10 passes against the real move rule.",
+            "IC-6a: verifying the owning account moves the repo, ticks it, keeps the total; its card offers Approve, no longer `Not yours to publish`.",
+            "IC-7: a scan moves a repo a listed account now owns and reads it once; import.moved_to_owned counted; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts_imports.rs",
+          "scenario_name": "an_imported_repo_moves_to_the_owned_list_when_its_owner_account_is_verified",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_core::core_rra10_a_move_keeps_the_total_and_ticks_the_repo",
+            "review_app_repos_and_accounts_imports::an_imported_repo_moves_to_the_owned_list_when_its_owner_account_is_verified",
+            "review_app_repos_and_accounts_imports::a_scan_moves_an_imported_repo_that_one_of_her_accounts_now_owns"
+          ],
+          "distill_ids": [
+            "03-09",
+            "03-10"
+          ],
+          "n_scenarios": [
+            "CORE-RRA-10",
+            "IC-6a",
+            "IC-7"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts_imports --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p review-domain",
+            "cargo test -p adapter-review-store"
+          ],
+          "implementation_notes": "RED driver: CORE-RRA-10 (stub moves with todo!() first), then IC-6a. Secondary driver: IC-7 (the scan-time move in scan.rs is a new call site). OQ-D2: once moved, owned-repo rules apply; publishing is still decided by the fresh permit. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "03-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts_imports.rs",
+            "tests/acceptance/review_app_repos_and_accounts_core.rs",
+            "crates/ports/src/review.rs",
+            "crates/adapter-review-store/src/imports.rs",
+            "crates/adapter-review-store/src/lib.rs",
+            "crates/review-domain/src/repo_scope.rs",
+            "crates/review-domain/src/views/queue.rs",
+            "crates/review-domain/src/kpi.rs",
+            "crates/openlore-review-app/src/routes/github.rs",
+            "crates/openlore-review-app/src/scan.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: total changing on a move; the move split across transactions; choice replaced instead of extended; the moved repo read twice."
+        },
+        {
+          "id": "03-05",
+          "name": "Removing an import deletes its pending suggestions; purge forgets all",
+          "description": "ScopeRemovalPort gains remove_import: the import row and its pending suggestions in one transaction (D-RRA-17). Owner scoping of imports. Purge covers every new table (ADR-088 §9).",
+          "criteria": [
+            "IR-1: removal deletes the import's pending suggestions and stops its reads; import.removed and one age bucket counted.",
+            "IR-2 never re-offers declined keys; IR-3 frees room at once; IR-4 stops a removed import's read during a paused scan.",
+            "IV-1 refuses another owner's imports; IV-2 forget-me leaves none of Priya's rows in any new table; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts_imports.rs",
+          "scenario_name": "removing_an_imported_repo_stops_reading_it",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_imports::removing_an_imported_repo_stops_reading_it",
+            "review_app_repos_and_accounts_imports::re_adding_an_imported_repo_offers_suggestions_again_but_never_declined_ones",
+            "review_app_repos_and_accounts_imports::removing_frees_room_under_the_limit",
+            "review_app_repos_and_accounts_imports::removing_an_imported_repo_during_a_scan_stops_its_read",
+            "review_app_repos_and_accounts_imports::one_owner_never_sees_or_acts_on_another_owners_imports",
+            "review_app_repos_and_accounts_imports::disconnect_and_forget_me_forgets_her_accounts_choices_and_imports"
+          ],
+          "distill_ids": [
+            "03-11",
+            "03-12",
+            "03-13",
+            "03-14",
+            "03-15",
+            "03-16"
+          ],
+          "n_scenarios": [
+            "IR-1",
+            "IR-2",
+            "IR-3",
+            "IR-4",
+            "IV-1",
+            "IV-2"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts_imports --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo test -p adapter-review-store",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver: IR-1. Guards, mutation RED each: IR-2 (import removal deletes declined rows), IR-3 (count removed imports in I), IR-4 (skip the presence check for imported sources), IV-1 (take the import's owner from the form), IV-2 (drop imported_repos from the purge). Same removal module and pending-only DELETE rule as 02-04. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "03-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts_imports.rs",
+            "crates/ports/src/review.rs",
+            "crates/adapter-review-store/src/removal.rs",
+            "crates/adapter-review-store/src/purge.rs",
+            "crates/review-domain/src/views/repos.rs",
+            "crates/review-domain/src/kpi.rs",
+            "crates/openlore-review-app/src/routes/imports.rs",
+            "crates/openlore-review-app/src/routes/signin.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: removal leaving pending rows; declined keys deleted; stale I after removal; presence check limited to accounts; owner from the form; a new table missing from the purge."
+        },
+        {
+          "id": "03-06",
+          "name": "Scope changes are serialized per DID; KPIs registered",
+          "description": "ADR-088 §10: Save, import, add/remove account, remove import and the BR-RRA-5 move run under an in-process per-DID lock (one container). OQ-D2 end to end for a moved suggestion. Closing step: KPI-RRA-1..7 registered in docs/product/kpi-contracts.yaml (D-RRA-T4).",
+          "criteria": [
+            "IV-3: two tabs of one DID changing scope at once end at a total of at most 10; one of the over-limit pair is refused.",
+            "IC-6b: a moved suggestion publishes while owner and bio hold; after a bio change it is refused, nothing written.",
+            "kpi-contracts.yaml lists KPI-RRA-1..7 with their D-RRA-D11 names, KPI-RRA-6 deferred; all 70 activations green; done_per_step holds."
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts_imports.rs",
+          "scenario_name": "two_changes_at_once_never_take_the_total_past_the_limit",
+          "scenario_fns": [
+            "review_app_repos_and_accounts_imports::two_changes_at_once_never_take_the_total_past_the_limit",
+            "review_app_repos_and_accounts_imports::a_moved_suggestion_is_published_only_while_its_owner_accounts_bio_holds_her_did"
+          ],
+          "distill_ids": [
+            "03-17",
+            "03-18"
+          ],
+          "n_scenarios": [
+            "IV-3",
+            "IC-6b",
+            "KPI registration"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-review-app --test review_app_repos_and_accounts --test review_app_repos_and_accounts_several --test review_app_repos_and_accounts_imports --test review_app_repos_and_accounts_core",
+            "cargo nextest run -p openlore-review-app",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver: IV-3; if the race does not reproduce, mutation RED by releasing the lock between check and write. Per-DID async mutex map in wiring; the lock wraps read-check-write only. Guard: IC-6b (mutation: let a moved suggestion's stored source stand in for the bio read). KPI entries follow the existing kpi-contracts.yaml shape; counts only, no PII. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-05"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/review_app_repos_and_accounts_imports.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "crates/openlore-review-app/src/routes/repos.rs",
+            "crates/openlore-review-app/src/routes/imports.rs",
+            "crates/openlore-review-app/src/routes/github.rs",
+            "crates/openlore-review-app/src/scan.rs",
+            "docs/product/kpi-contracts.yaml"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: lock released between check and write; a global lock blocking other DIDs; stored source tag used as proof at publish."
+        }
+      ]
+    }
+  ],
+  "deferred_to_later_slices": {
+    "US-RRA-007 / KPI-RRA-6": "R4 administered org repos, deferred by the user 2026-10-19: no code, no table; a later tier of claim_domain::authority.",
+    "review_app_repos_and_accounts_fixture": "the v1 fixture regenerator; not a scenario, stays ignored.",
+    "github_links drop": "a later migration (ADR-088 §1, OQ-D5)."
+  },
+  "implementation_scope": {
+    "source_directories": [
+      "crates/claim-domain/src/",
+      "crates/review-domain/src/",
+      "crates/ports/src/",
+      "crates/adapter-github/src/",
+      "crates/adapter-review-store/src/",
+      "crates/openlore-review-app/src/",
+      "xtask/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "crates/review-domain/tests/",
+      "crates/adapter-review-store/tests/",
+      "crates/adapter-github/tests/",
+      "crates/test-support/fixtures/github/",
+      "xtask/tests/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.rs.bk",
+      "tests/fixtures/**/review-app.duckdb*"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "note": "20 steps (7 + 7 + 6) batching DISTILL's 59 ids; 70 activations (59 HTTP scenario fns + 11 CORE-RRA properties), each in exactly one step.",
+    "review_iteration_1_applied": {
+      "F1": "02-06 lists every caller of publish_plan, publish_edited_plan and restore_plan in files_to_modify (link_plan.rs, page_contracts.rs, domain_contracts.rs, review_app_core.rs, routes); orchestrator ruling on the mechanical test-call-site change recorded in conventions.test_edit_allow_list; criterion now reads 'pass with only the signature change at the listed call sites'.",
+      "F2": "02-05 adds the add_pending callers: adapter-review-store kpi.rs and purge.rs (plus routes/review.rs test and the suggestions.rs proptest).",
+      "F3": "Accepted risk recorded in 01-02 and 02-06 implementation_notes and conventions.permit_order: R1 keeps today's stored-status check; 02-06 closes the transfer-after-scan window.",
+      "F4": "Old 01-01 split: 01-01 store v2 migration (RED = the store crate's v1→v2 migration test, with MG-1..3 and the fault seam), 01-02 walking skeleton; both before any reader of the new tables.",
+      "F5": "Every rider in 01-03, 01-04, 01-05, 02-01, 02-02, 03-01, 03-02, 03-04 classified as secondary driver or guard (conventions.rider_classes); guards carry a break-rule-and-revert mutation.",
+      "F6": "Each step binding a CORE property stubs the production function with todo!() first (conventions.core_binding_red, named in each step's notes).",
+      "F7": "02-02 split into 02-02 (bio-check loop) and 02-03 (re-check of unverified accounts, resume); old 01-04 split into 01-05 (plan rules) and 01-06 (read_repo contract and skips).",
+      "F8": "conventions.step_ids states that the DELIVER ids in HTTP and CORE #[ignore] reasons are DISTILL ids, traced through distill_ids and CORE-RRA ids."
+    },
+    "by": "nw-software-crafter-reviewer (2 rounds) + orchestrator",
+    "date": "2026-10-19",
+    "approved_note": "Round 1 rejected on F1-F8 (F3 ruled accepted risk by the orchestrator); round 2 approved. D1 (low): #[ignore] reasons carry DISTILL ids; map via distill_ids (conventions.step_ids)."
+  }
+}
