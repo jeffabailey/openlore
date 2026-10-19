@@ -581,10 +581,22 @@ fn migration_fault(fault: TestFault) -> MigrationFault {
     match fault {}
 }
 
+/// The store opened at v2 and passed its probe: its v1 copies go (ADR-088,
+/// user decision 2026-10-19: delete after upgrade). One that cannot be
+/// deleted refuses the start, so no copy outlives a successful upgrade.
+fn discard_v1_backups(wired: &Wired) -> Result<(), Refusal> {
+    wired
+        .store
+        .discard_v1_backups(&wired.config.review_db)
+        .map(drop)
+        .map_err(|e| refusal(Probe::ReviewStore)(format!("deleting the v1 copy: {e}")))
+}
+
 /// Every hard arm; the first refusal wins.
 async fn probe(wired: &Wired) -> Result<(), Refusal> {
     arm(Probe::OAuthClient, wired.oauth.probe())?;
     arm(Probe::ReviewStore, wired.store.probe())?;
+    discard_v1_backups(wired)?;
     github_token_arm(&wired.config.github_api_base, &wired.github_token).await
 }
 

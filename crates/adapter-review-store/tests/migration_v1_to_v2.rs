@@ -326,12 +326,62 @@ fn a_start_cut_off_before_commit_leaves_v1_and_the_next_start_migrates() {
         single(&path, "SELECT max(version) FROM schema_version"),
         ["BigInt(2)"]
     );
-    let copies = backups(dir.path());
-    assert!(copies.contains(&first[0]), "{copies:?}");
-    assert_eq!(copies.len(), 2, "a new copy beside the first: {copies:?}");
+    assert_eq!(
+        backups(dir.path()),
+        first,
+        "R5: the cut-off start's copy is reused, no second copy"
+    );
     assert_eq!(
         std::fs::read(dir.path().join(&first[0])).expect("copy"),
         first_bytes,
         "the first copy is never overwritten"
     );
+}
+
+/// R5: a crash-looping start (every one cut off before COMMIT) keeps
+/// exactly one copy, the v1 data, and the store stays v1.
+#[test]
+#[cfg(debug_assertions)]
+fn crash_looping_starts_keep_exactly_one_copy() {
+    let (dir, path) = v1_store();
+    let before = dump(&path, &V1_TABLES);
+    for _ in 0..3 {
+        let cut_off = ReviewStore::open_capped_with(
+            &path,
+            key(),
+            Default::default(),
+            Some(adapter_review_store::MigrationFault::StopBeforeCommit),
+        );
+        assert!(cut_off.is_err());
+    }
+    let copies = backups(dir.path());
+    assert_eq!(copies.len(), 1, "{copies:?}");
+    let copy = dir.path().join(&copies[0]);
+    assert_eq!(
+        single(&copy, "SELECT max(version) FROM schema_version"),
+        ["BigInt(1)"]
+    );
+    assert_eq!(dump(&copy, &V1_TABLES), before, "the copy is the v1 data");
+    assert_eq!(dump(&path, &V1_TABLES), before, "the store is still v1");
+}
+
+/// R5 (user decision 2026-10-19): once the upgraded store is open, its v1
+/// copies are deleted, and another file beside it is left alone; a second
+/// start of the v2 store makes no copy and deletes nothing.
+#[test]
+fn the_v1_copy_is_deleted_after_the_upgrade() {
+    let (dir, path) = v1_store();
+    let neighbour = dir.path().join("review-app.v1.notes.bak");
+    std::fs::write(&neighbour, b"not a copy").expect("write");
+    let store = ReviewStore::open(&path, key()).expect("the start migrates");
+    assert_eq!(backups(dir.path()).len(), 1, "copied before migrating");
+
+    assert_eq!(store.discard_v1_backups(&path).expect("discard"), 1);
+    drop(store);
+
+    assert!(backups(dir.path()).is_empty());
+    assert!(neighbour.exists(), "only the store's dated copies go");
+    let again = ReviewStore::open(&path, key()).expect("second start");
+    assert_eq!(again.discard_v1_backups(&path).expect("discard"), 0);
+    assert!(backups(dir.path()).is_empty());
 }

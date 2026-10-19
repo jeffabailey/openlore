@@ -660,7 +660,6 @@ const V1_PUBLISHED: Suggestion = KELP.embodies(Philosophy::DependencyPinning);
 ///   And no copy of her data from before the update lingers beside it
 /// ```
 #[test]
-#[ignore = "REVIEW-FIX: R5"]
 fn priyas_suggestions_are_all_still_there_after_the_update() {
     let world = rra_world_on_v1_store();
     let mut browser = given_signed_in(&world, Persona::Priya);
@@ -704,7 +703,6 @@ fn priyas_suggestions_are_all_still_there_after_the_update() {
 ///   And still no copy of her data from before the update lingers
 /// ```
 #[test]
-#[ignore = "REVIEW-FIX: R5"]
 fn restarting_after_the_update_changes_nothing_priya_sees() {
     let world = rra_world_on_v1_store();
     let mut browser = given_signed_in(&world, Persona::Priya);
@@ -741,7 +739,6 @@ fn restarting_after_the_update_changes_nothing_priya_sees() {
 ///   And no copy of her data from before the update lingers
 /// ```
 #[test]
-#[ignore = "REVIEW-FIX: R5"]
 fn an_update_cut_off_before_it_finished_runs_again_cleanly() {
     let (doubles, cut_off) = rra_world_on_v1_store_cut_off_mid_update();
     assert_eq!(

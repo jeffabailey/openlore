@@ -304,7 +304,10 @@ impl ReviewStore {
     /// [`ReviewStore::open_capped`], with the v1 → v2 step asked to stop at
     /// `fault` (a development build's test seam, DWD-RRA-16). A v1 file is
     /// first checkpointed, closed and copied to `review-app.v1.<secs>.bak`
-    /// (never overwriting a copy), then migrated in one transaction.
+    /// (a copy an earlier, unfinished start left is kept and reused, never
+    /// overwritten or joined by a second), then migrated in one
+    /// transaction. Once the store has passed its probe the root calls
+    /// [`ReviewStore::discard_v1_backups`].
     pub fn open_capped_with(
         path: &Path,
         key: DataKey,
@@ -341,6 +344,18 @@ impl ReviewStore {
             key,
             caps,
         })
+    }
+
+    /// Delete every v1 copy beside `path` (ADR-088, user decision
+    /// 2026-10-19: delete after upgrade). Holding `self` proves the store
+    /// opened at v2, its migration committed; the root calls this only
+    /// after the store passed its probe. Returns how many were deleted.
+    pub fn discard_v1_backups(&self, path: &Path) -> Result<usize, StoreError> {
+        let copies = v1_backups_beside(path).map_err(|e| StoreError::Backup(e.to_string()))?;
+        for copy in &copies {
+            std::fs::remove_file(copy).map_err(|e| StoreError::Backup(e.to_string()))?;
+        }
+        Ok(copies.len())
     }
 
     /// The caps applied at open.
@@ -514,16 +529,54 @@ pub fn v1_backup_name(store_stem: &str, unix_secs: u64) -> String {
     format!("{store_stem}.v1.{unix_secs}.bak")
 }
 
+/// The store file's stem, as its backups are named.
+fn store_stem(path: &Path) -> &str {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("review-app")
+}
+
+/// Whether `file_name` names a v1 copy of the store `stem` (pure).
+pub fn is_v1_backup_name(store_stem: &str, file_name: &str) -> bool {
+    file_name
+        .strip_prefix(&format!("{store_stem}.v1."))
+        .and_then(|rest| rest.strip_suffix(".bak"))
+        .is_some_and(|secs| !secs.is_empty() && secs.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The v1 copies beside the store at `path`, oldest name first.
+fn v1_backups_beside(path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let stem = store_stem(path);
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut copies: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| is_v1_backup_name(stem, name))
+        })
+        .map(|entry| entry.path())
+        .collect();
+    copies.sort();
+    Ok(copies)
+}
+
 /// CHECKPOINT (the WAL folds into the file), close, then copy the file
-/// beside itself under a name no earlier copy holds.
+/// beside itself under a name no earlier copy holds. A copy an earlier
+/// start left is still the v1 data (that start's migration never
+/// committed): it is kept as it is, and no second copy is made.
 fn keep_v1_copy(conn: Connection, path: &Path) -> Result<PathBuf, StoreError> {
     conn.execute_batch("CHECKPOINT").map_err(db_error)?;
     conn.close().map_err(|(_, e)| db_error(e))?;
     let backup = |e: std::io::Error| StoreError::Backup(e.to_string());
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("review-app");
+    if let Some(earlier) = v1_backups_beside(path).map_err(backup)?.into_iter().next() {
+        return Ok(earlier);
+    }
+    let stem = store_stem(path);
     let dir = path.parent().unwrap_or(Path::new("."));
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
