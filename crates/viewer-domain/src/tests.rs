@@ -5859,3 +5859,50 @@ fn philosophies_page_lists_exactly_the_vocabulary_read_only_and_nav_active() {
          page:\n{page}"
     );
 }
+
+/// github-did-identity-link slice 4 (D-VL-10): only a `/search` state that renders
+/// author groups asks for linked identities — the form, the no-results and
+/// all-retracted states and the unavailable notice carry no group to hold a region,
+/// so the shell must not read the links for them. Kills the
+/// `has_author_groups -> true` mutant (slice-4 mutation run).
+#[test]
+fn only_search_states_with_author_groups_ask_for_linked_identities() {
+    let result = || {
+        search_result(&[(
+            "did:plc:priya-test#org.openlore.application",
+            "bafypriya",
+            "org.openlore.philosophy.reproducible-builds",
+            0.85,
+        )])
+    };
+    let dimension = appview_domain::SearchDimension::Object;
+    let with_groups = [
+        SearchState::Results {
+            result: result(),
+            dimension,
+        },
+        SearchState::FilteredResults {
+            result: result(),
+            dimension,
+            hidden_count: 1,
+        },
+    ];
+    let without_groups = [
+        SearchState::Form,
+        SearchState::NoResults {
+            queried_value: "org.openlore.philosophy.absent".to_string(),
+        },
+        SearchState::Unavailable,
+        SearchState::AllRetracted { hidden_count: 2 },
+    ];
+
+    for state in &with_groups {
+        assert!(state.has_author_groups(), "{state:?} renders author groups");
+    }
+    for state in &without_groups {
+        assert!(
+            !state.has_author_groups(),
+            "{state:?} renders no author group"
+        );
+    }
+}

@@ -2459,6 +2459,49 @@ mod tests {
         );
     }
 
+    /// `GET /claims/` (an EMPTY CID segment) is a route miss: the terse `404`
+    /// "Not found." body, never the claim detail handler (which would read the
+    /// store for a claim with no CID). Kills the `route` match-guard
+    /// `!cid.is_empty() -> true` mutant (slice-4 mutation run): with the guard
+    /// gone the empty segment reaches `claim_detail_page`, whose store read this
+    /// fake refuses, so no terse `404` comes back.
+    #[tokio::test]
+    async fn route_answers_an_empty_claim_cid_with_the_route_miss_404() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let store: SharedStore = Arc::new(FakeLandingStore::with_counts(12, 7, 2));
+        let addr = "127.0.0.1:0".parse().expect("loopback addr parses");
+        let server = ViewerServer::bind(addr, store).expect("bind loopback ephemeral port");
+        let bound = server.local_addr();
+        tokio::spawn(server.serve());
+
+        let mut stream = TcpStream::connect(bound)
+            .await
+            .expect("connect to the bound viewer");
+        stream
+            .write_all(b"GET /claims/ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("write the GET /claims/ request");
+
+        let mut raw = Vec::new();
+        stream
+            .read_to_end(&mut raw)
+            .await
+            .expect("read the full HTTP response");
+        let response = String::from_utf8_lossy(&raw);
+
+        assert!(
+            response.starts_with("HTTP/1.1 404"),
+            "GET /claims/ must be a 404 route miss: {response}"
+        );
+        assert!(
+            response.ends_with("<p>Not found.</p>"),
+            "GET /claims/ must carry the terse route-miss body, not the claim detail \
+             handler's: {response}"
+        );
+    }
+
     /// slice-27 (ADR-059 §5 row 27 / US-PV-006): `GET /philosophies` dispatches to the
     /// STORE-FREE pure `render_philosophies_page()` renderer with a 200 vocabulary body
     /// — a genuine `Request<Incoming>` routed through the real `route` path. Kills the
