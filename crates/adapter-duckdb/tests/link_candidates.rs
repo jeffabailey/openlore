@@ -8,7 +8,9 @@
 
 use adapter_duckdb::DuckDbStorageAdapter;
 use chrono::{TimeZone, Utc};
-use claim_domain::{Cid, Confidence, Did, SignatureBlock, SignedClaim, UnsignedClaim};
+use claim_domain::{
+    Cid, ClaimReference, Confidence, Did, ReferenceType, SignatureBlock, SignedClaim, UnsignedClaim,
+};
 use ports::{LinkCandidateReadPort, PeerStoragePort, PeerSubscription};
 use tempfile::TempDir;
 use url::Url;
@@ -133,4 +135,42 @@ fn a_re_added_peers_link_is_a_candidate_again() {
     store.follow_and_pull(RACHEL, "rachelk", "bafylinkrachel");
 
     assert_eq!(store.candidate_cids(), vec!["bafylinkrachel"]);
+}
+
+/// A candidate read returns each record's OWN references (U-51): a retraction
+/// repeating its link's triple carries its `Retracts` marker to the pure
+/// projection, while the link it retracts carries none.
+#[test]
+fn a_candidate_read_returns_the_records_own_references() {
+    let store = Store::open();
+    store.follow_and_pull(RACHEL, "rachelk", "bafylinkrachel");
+    let retracts_link = ClaimReference {
+        ref_type: ReferenceType::Retracts,
+        cid: Cid("bafylinkrachel".to_string()),
+    };
+    let mut retraction = link(RACHEL, "rachelk", "bafyretractrachel");
+    retraction.unsigned.references = vec![retracts_link.clone()];
+    let pds = Url::parse("https://peer.example/pds").expect("a url");
+    let fetched_at = Utc.with_ymd_and_hms(2026, 10, 3, 9, 0, 0).unwrap();
+    store
+        .peers()
+        .write_peer_claim(&Did(RACHEL.to_string()), &retraction, &pds, fetched_at)
+        .expect("cache the peer's retraction");
+
+    let references: Vec<(String, Vec<ClaimReference>)> = store
+        .own
+        .identity_link_check_adapter()
+        .link_candidates(SAME_AS)
+        .expect("read link candidates")
+        .into_iter()
+        .map(|candidate| (candidate.cid, candidate.references))
+        .collect();
+
+    assert_eq!(
+        references,
+        vec![
+            ("bafylinkrachel".to_string(), Vec::new()),
+            ("bafyretractrachel".to_string(), vec![retracts_link]),
+        ]
+    );
 }

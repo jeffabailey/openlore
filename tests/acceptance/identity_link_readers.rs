@@ -1340,7 +1340,6 @@ fn network_search_leaves_a_github_row_that_is_not_a_link_unlabelled() {
 ///   And Rachel's contributor page in his viewer shows no linked-identities region
 /// ```
 #[test]
-#[ignore = "DELIVER 04-09: a retraction that repeats the link's evidence never shows (U-51)"]
 fn a_retraction_that_repeats_the_links_evidence_never_shows_as_a_link() {
     let mut world = LinkWorld::with(&[RACHEL_GH]);
     let link = link_spec(RACHEL_DID, RACHEL_GH);

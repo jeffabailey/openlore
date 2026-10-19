@@ -91,6 +91,9 @@ pub struct LinkCandidate {
     pub object: String,
     /// The evidence entries, in signed order.
     pub evidence: Vec<String>,
+    /// The record's OWN references (e.g. a `Retracts` marker), so the pure
+    /// projection decides whether the record is a retraction (U-51, U-39).
+    pub references: Vec<ClaimReference>,
     /// The provenance the row was stored under: own rows are app-signed;
     /// peer rows carry `peer_claims.provenance` (ADR-071).
     pub provenance: Provenance,
@@ -252,7 +255,7 @@ fn stored_claim(candidate: &LinkCandidate) -> StoredClaim<'_> {
         lineage: ClaimLineage {
             author_did: &candidate.author_did,
             cid: &candidate.cid,
-            references: &[],
+            references: &candidate.references,
         },
     }
 }

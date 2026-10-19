@@ -14,7 +14,7 @@ use crate::conn::{ConnGuard, SharedConn};
 
 use chrono::{DateTime, TimeZone, Utc};
 use claim_domain::identity_link::CheckVerdict;
-use claim_domain::{bare_did, Did, Provenance};
+use claim_domain::{bare_did, Cid, ClaimReference, Did, Provenance};
 use duckdb::Connection;
 use ports::{
     CheckFilter, IdentityLinkCheckError, IdentityLinkCheckReadPort, IdentityLinkCheckWritePort,
@@ -67,6 +67,14 @@ const CANDIDATE_EVIDENCE_SQL: &str = "
     UNION ALL
     SELECT evidence, ordinal FROM peer_claim_evidence WHERE cid = ?
     ORDER BY ordinal";
+
+/// The candidate's OWN references (own or peer claim), so a Retracts-carrying
+/// record reaches the pure projection as the retraction it is (U-51).
+const CANDIDATE_REFERENCES_SQL: &str = "
+    SELECT ref_type, referenced_cid FROM claim_references WHERE referencing_cid = ?
+    UNION ALL
+    SELECT ref_type, referenced_cid FROM peer_claim_references WHERE referencing_cid = ?
+    ORDER BY 1, 2";
 
 /// Check history + link-candidate reads sharing the one DuckDB connection.
 pub struct DuckDbIdentityLinkCheckAdapter {
@@ -163,6 +171,7 @@ fn decode_candidate(row: &duckdb::Row<'_>) -> Result<LinkCandidate, duckdb::Erro
         predicate: row.get(3)?,
         object: row.get(4)?,
         evidence: Vec::new(),
+        references: Vec::new(),
         provenance,
     })
 }
@@ -173,12 +182,31 @@ fn candidate_evidence(conn: &Connection, cid: &str) -> Result<Vec<String>, duckd
     rows.collect()
 }
 
-fn with_evidence(
+fn candidate_references(
+    conn: &Connection,
+    cid: &str,
+) -> Result<Vec<ClaimReference>, duckdb::Error> {
+    let mut stmt = conn.prepare(CANDIDATE_REFERENCES_SQL)?;
+    let rows = stmt.query_map(duckdb::params![cid, cid], |row| {
+        let token: String = row.get(0)?;
+        let ref_type = crate::reference_type_from_sql(&token).map_err(|message| {
+            duckdb::Error::FromSqlConversionFailure(0, duckdb::types::Type::Text, message.into())
+        })?;
+        Ok(ClaimReference {
+            ref_type,
+            cid: Cid(row.get(1)?),
+        })
+    })?;
+    rows.collect()
+}
+
+fn with_evidence_and_references(
     conn: &Connection,
     candidate: LinkCandidate,
 ) -> Result<LinkCandidate, duckdb::Error> {
     Ok(LinkCandidate {
         evidence: candidate_evidence(conn, &candidate.cid)?,
+        references: candidate_references(conn, &candidate.cid)?,
         ..candidate
     })
 }
@@ -225,9 +253,9 @@ impl LinkCandidateReadPort for DuckDbIdentityLinkCheckAdapter {
             .map_err(store_error("decode link candidate"))?;
         candidates
             .into_iter()
-            .map(|candidate| with_evidence(&conn, candidate))
+            .map(|candidate| with_evidence_and_references(&conn, candidate))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(store_error("read link candidate evidence"))
+            .map_err(store_error("read link candidate evidence and references"))
     }
 }
 
