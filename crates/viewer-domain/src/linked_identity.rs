@@ -11,7 +11,8 @@
 
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::{
-    check_age_days, suggests_recheck, LinkStanding, LinkedIdentity, ListedLink,
+    check_age_days, links_of_person, suggests_recheck, LinkStanding, LinkedIdentity, ListedLink,
+    PersonKey,
 };
 
 use super::{encode_query_component, html, Markup, PROJECT_URL, SCORE_URL};
@@ -53,7 +54,33 @@ impl LinkedIdentities {
             LinkedIdentities::Lines { listed, now }
         }
     }
+
+    /// The lines that belong to `person` (U-6, D-VL-6), selected AFTER every
+    /// standing was decided (C-VL-3): a selection never changes a line. No
+    /// line left, no region; an unreadable region stays unreadable.
+    pub fn of_person(self, person: &PersonKey) -> Self {
+        match self {
+            LinkedIdentities::Lines { listed, now } => {
+                LinkedIdentities::listed(links_of_person(&listed, person), now)
+            }
+            other => other,
+        }
+    }
 }
+
+/// The GitHub person a `/project` subject names (D-VL-6): `github:<login>`,
+/// the prefix in any case, keyed by the last-seen login (the page carries no
+/// account id; `PersonKey::of_person` compares it case-insensitively). Any
+/// other subject names no person, so its page shows no region.
+pub fn github_person(subject: &str) -> Option<PersonKey> {
+    subject
+        .get(..GITHUB_SUBJECT_PREFIX.len())
+        .filter(|prefix| prefix.eq_ignore_ascii_case(GITHUB_SUBJECT_PREFIX))
+        .map(|_| PersonKey::of_person(subject, []))
+}
+
+/// The subject prefix of a GitHub person page.
+const GITHUB_SUBJECT_PREFIX: &str = "github:";
 
 /// Render the region: a `<section>` labelled by its heading, the lines as a
 /// list and the legend beneath; the notice alone when unreadable; nothing for

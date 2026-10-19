@@ -290,7 +290,6 @@ fn every_link_standing_reads_in_the_viewer_exactly_as_identity_list_prints_it() 
 ///     | JEFFBAILEY |
 /// ```
 #[test]
-#[ignore = "DELIVER 04-03: the GitHub person page matches the last-seen login in any case"]
 fn a_github_persons_page_shows_the_did_that_linked_the_account_in_any_spelling() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);
@@ -331,7 +330,6 @@ fn a_github_persons_page_shows_the_did_that_linked_the_account_in_any_spelling()
 ///     | jeff-b     | no linked-identities region |
 /// ```
 #[test]
-#[ignore = "DELIVER 04-03: a renamed account's line stays on its old login until re-check (D-VL-6)"]
 fn until_jeff_rechecks_a_renamed_accounts_line_stays_on_its_old_logins_page() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, Some(LINKED_AT));
@@ -367,7 +365,6 @@ fn until_jeff_rechecks_a_renamed_accounts_line_stays_on_its_old_logins_page() {
 ///   And the page for "jeffbailey" shows no linked-identities region
 /// ```
 #[test]
-#[ignore = "DELIVER 04-03: a renamed account's line moves on re-check (D-VL-6)"]
 fn when_jeff_rechecks_a_renamed_accounts_line_moves_to_its_new_logins_page() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, Some(LINKED_AT));
@@ -413,7 +410,6 @@ fn when_jeff_rechecks_a_renamed_accounts_line_moves_to_its_new_logins_page() {
 ///     | the GitHub person page jeffbailey      | did:plc:rachel-test |
 /// ```
 #[test]
-#[ignore = "DELIVER 04-03: a contested account reads contested on each page"]
 fn a_contested_account_reads_contested_on_every_page_about_it() {
     let mut world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);

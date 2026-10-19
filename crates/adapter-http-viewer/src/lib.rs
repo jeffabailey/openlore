@@ -42,11 +42,12 @@ use ports::{
 use scraper_domain::{derive_candidates, load_mapping, normalize_target, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
-    group_philosophy, group_project, peers_view, render_claim_detail, render_claim_detail_fragment,
-    render_claim_not_found_fragment, render_claims_page, render_claims_view_panel_fragment,
-    render_error, render_landing, render_peer_claims_page, render_peer_claims_view_panel_fragment,
-    render_peers_fragment, render_peers_page, render_philosophies_page, render_philosophy_fragment,
-    render_philosophy_page, render_project_fragment, render_project_page,
+    github_person, group_philosophy, group_project, peers_view, render_claim_detail,
+    render_claim_detail_fragment, render_claim_not_found_fragment, render_claims_page,
+    render_claims_view_panel_fragment, render_error, render_landing, render_peer_claims_page,
+    render_peer_claims_view_panel_fragment, render_peers_fragment, render_peers_page,
+    render_philosophies_page, render_philosophy_fragment, render_philosophy_page,
+    render_project_fragment_with_links, render_project_page_with_links,
     render_score_page_with_links, render_score_results_fragment_with_links, render_scrape_page,
     render_scrape_results_fragment, render_search_page, render_search_results_fragment,
     render_viewer_nav_oob, resolve_author_relationship, CandidateRowView, ClaimDetailView,
@@ -458,7 +459,7 @@ async fn route(
         // `viewer-domain::group_project` core (anti-merging, never SQL — I-GT-3), and
         // renders the `#traversal-results` region. Forks by `Shape` (ADR-033). Holds
         // NO signing key (a read + pure compute); renders NO write/sign/follow control.
-        PROJECT_URL => project_page(store.as_ref(), query.as_deref(), shape),
+        PROJECT_URL => project_page(store.as_ref(), link_reads.as_ref(), query.as_deref(), shape),
         // `GET /philosophy?object=<uri>` — the SYMMETRIC philosophy graph-traversal survey
         // (slice-10; ADR-042/043/044/045 / US-GT-003). Mirrors the `/project` route, swapping
         // subject↔object: reads the philosophy's LOCAL attributed survey over the read-only
@@ -943,13 +944,25 @@ fn resolve_score_state(store: &dyn StoreReadPort, query: Option<&str>) -> ScoreS
 /// I-GT-4) rather than a crash (NFR-VIEW-6 — never a raw stack trace).
 fn project_page(
     store: &dyn StoreReadPort,
+    link_reads: Option<&LinkReads>,
     query: Option<&str>,
     shape: Shape,
 ) -> Response<Full<Bytes>> {
     let view = resolve_project_view(store, query);
+    // The GitHub person's linked identities (slice 4; D-VL-6): standings are
+    // decided over every active link (C-VL-3), THEN `links_of_person` selects
+    // this person's lines by last-seen login; any other subject is no one.
+    let linked = query_param(query, "subject")
+        .as_deref()
+        .and_then(github_person)
+        .map_or(LinkedIdentities::None, |person| {
+            linked_identities(link_reads, &RecheckScope::Everyone).of_person(&person)
+        });
     match shape {
-        Shape::Fragment => html_ok(render_project_fragment(&view).into_string()),
-        Shape::FullPage => html_ok(render_project_page(&view)),
+        Shape::Fragment => {
+            html_ok(render_project_fragment_with_links(&view, &linked).into_string())
+        }
+        Shape::FullPage => html_ok(render_project_page_with_links(&view, &linked)),
     }
 }
 
