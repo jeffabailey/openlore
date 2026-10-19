@@ -845,9 +845,7 @@ fn score_page(
     // is a DID is a person; a bare form or a malformed value is no one.
     let linked = linked_identities(
         link_reads,
-        query_param(query, "contributor")
-            .filter(|contributor| contributor.starts_with(DID_PREFIX))
-            .map(LinkedPerson::Did),
+        score_contributor_did(query).map(LinkedPerson::Did),
     );
     // Read the per-contribution counter PRESENCE for the WHOLE breakdown in ONE
     // flattened aggregate lookup (slice-14 / US-CF-002 / ADR-051). Only the `Scored`
@@ -864,6 +862,16 @@ fn score_page(
 
 /// The prefix that makes a `/score` contributor a person (a DID).
 const DID_PREFIX: &str = "did:";
+
+/// The `/score` contributor as a person — its BARE DID, normalised through the
+/// shared [`bare_did`] SSOT exactly like the claim page, so `did:plc:x#frag`
+/// selects the same linked-identity lines as `did:plc:x`. A bare form or a
+/// malformed value is no one.
+fn score_contributor_did(query: Option<&str>) -> Option<String> {
+    query_param(query, "contributor")
+        .filter(|contributor| contributor.starts_with(DID_PREFIX))
+        .map(|contributor| bare_did(&contributor).to_owned())
+}
 
 /// Whose linked identities a page shows (slice 4; D-VL-1, D-VL-6, D-VL-10).
 enum LinkedPerson {
@@ -2036,8 +2044,8 @@ mod tests {
         append_oob_nav_items_if_boosted, bare_did, cached_peer_dids_read_with_fault_seam,
         claims_page, countered_count_with_fault_seam, countered_peer_count_with_fault_seam,
         html_ok, landing_page, own_dids_read_with_fault_seam, peer_claims_count_with_fault_seam,
-        peer_claims_page, to_indexed_claim, Shape, SharedStore, ViewerServer, HTMX_ASSET,
-        HTMX_ASSET_SHA256,
+        peer_claims_page, score_contributor_did, to_indexed_claim, Shape, SharedStore,
+        ViewerServer, HTMX_ASSET, HTMX_ASSET_SHA256,
     };
     use chrono::Utc;
     use claim_domain::{Cid, Did, KeyId};
@@ -2182,6 +2190,20 @@ mod tests {
     /// `bare_did` SSOT (R-SF-5): strips a `#fragment` signing locator; a bare DID
     /// passes through unchanged. The total-function property underlying both SF-6
     /// (the result-side strip) and the active-set bare-DID convention.
+    #[test]
+    fn score_contributor_did_selects_the_bare_did_like_the_claim_page() {
+        assert_eq!(
+            score_contributor_did(Some("contributor=did:plc:x%23org.openlore.application")),
+            Some("did:plc:x".to_owned()),
+        );
+        assert_eq!(
+            score_contributor_did(Some("contributor=did:plc:x")),
+            Some("did:plc:x".to_owned()),
+        );
+        assert_eq!(score_contributor_did(Some("contributor=alice")), None);
+        assert_eq!(score_contributor_did(None), None);
+    }
+
     #[test]
     fn bare_did_strips_the_signing_fragment_and_is_identity_on_a_bare_did() {
         assert_eq!(
