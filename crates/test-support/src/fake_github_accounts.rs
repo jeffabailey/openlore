@@ -687,28 +687,56 @@ impl FakeGithubAccounts {
             .count()
     }
 
-    /// I-BRA-4 oracle: every maximal run of scrape reads of `login` is
-    /// immediately preceded (no other scrape of `login` in between) by a
-    /// profile read of `login`. Returns the offending request sequence
-    /// numbers (empty = invariant holds).
+    /// I-BRA-4 oracle: a scan never READS an account's repos before checking
+    /// that account's bio. Returns the sequence numbers of offending repo
+    /// reads (empty = invariant holds).
+    ///
+    /// It judges reads, not listings: listing an account's repos
+    /// (`/users/{login}/repos`) reads no repo content and is what the
+    /// choose-repos page and Save do without a bio read (review-app-repos-and-
+    /// accounts design §6.4). A repo READ is a request past a repo's root
+    /// (`/repos/{login}/{name}/…`: contents, tags, readme, …); a bare
+    /// `GET /repos/{login}/{name}` is the publish-time ownership read and is
+    /// neutral. Rule: a profile read of the account (by login or by numeric
+    /// id) arms reading; the first repo read after it starts a burst; a
+    /// listing or a profile read ends the burst. A repo read that is neither
+    /// in a burst nor armed — e.g. a second scan that lists and reads without
+    /// a new bio check — offends. A resume (bio check, then reads, no
+    /// listing) is allowed.
     pub fn scrapes_without_preceding_bio_check(&self, login: &str) -> Vec<u64> {
+        let login = login.to_ascii_lowercase();
+        let id_path = self
+            .state
+            .accounts
+            .lock()
+            .unwrap()
+            .get(&login)
+            .map(|a| format!("/user/{}", a.id));
         let mut offending = Vec::new();
-        let mut checked_since_last_scan = false;
-        let mut in_scan = false;
+        let mut armed = false;
+        let mut in_burst = false;
         for r in self.requests() {
-            if r.is_profile_read_of(login) {
-                checked_since_last_scan = true;
-                in_scan = false;
-            } else if r.is_scrape_of(login) {
-                if r.path.to_ascii_lowercase().ends_with("/repos") && r.path.starts_with("/users/")
-                {
-                    // a repo listing starts a scan
-                    if !checked_since_last_scan {
-                        offending.push(r.seq);
-                    }
-                    checked_since_last_scan = false;
-                    in_scan = true;
-                } else if !in_scan {
+            let path = r.path.to_ascii_lowercase();
+            let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            let profile =
+                r.is_profile_read_of(&login) || id_path.as_deref() == Some(r.path.as_str());
+            if profile {
+                armed = true;
+                in_burst = false;
+            } else if segments.len() == 3
+                && segments[0] == "users"
+                && segments[1] == login
+                && segments[2] == "repos"
+            {
+                in_burst = false;
+            } else if segments.len() >= 4 && segments[0] == "repos" && segments[1] == login {
+                if in_burst {
+                    continue;
+                }
+                if armed {
+                    armed = false;
+                    in_burst = true;
+                } else {
                     offending.push(r.seq);
                 }
             }
@@ -1186,13 +1214,30 @@ mod tests {
     #[test]
     fn scrape_without_a_preceding_bio_check_is_detected() {
         let gh = FakeGithubAccounts::start(vec![priya()]);
+        // A scan: bio check, listing, repo reads.
         get(&gh, "/users/priyaraman");
         get(&gh, "/users/priyaraman/repos");
+        get(&gh, "/repos/priyaraman/tidepool/contents/Cargo.lock");
+        get(&gh, "/repos/priyaraman/tidepool/tags");
+        assert!(gh
+            .scrapes_without_preceding_bio_check("priyaraman")
+            .is_empty());
+        // The choose-repos page lists without a bio read: not a scan read.
+        get(&gh, "/users/priyaraman/repos");
+        // So is the publish-time ownership read of a repo's root.
         get(&gh, "/repos/priyaraman/tidepool");
         assert!(gh
             .scrapes_without_preceding_bio_check("priyaraman")
             .is_empty());
+        // A resume: bio check by numeric id, then reads with no listing.
+        get(&gh, "/user/4210001");
+        get(&gh, "/repos/priyaraman/tidepool/readme");
+        assert!(gh
+            .scrapes_without_preceding_bio_check("priyaraman")
+            .is_empty());
+        // A second scan that lists and reads without a new bio check offends.
         get(&gh, "/users/priyaraman/repos");
+        get(&gh, "/repos/priyaraman/tidepool/contents/Cargo.lock");
         assert_eq!(
             gh.scrapes_without_preceding_bio_check("priyaraman").len(),
             1
