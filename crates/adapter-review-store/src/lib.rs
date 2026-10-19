@@ -346,10 +346,11 @@ impl ReviewStore {
         })
     }
 
-    /// Delete every v1 copy beside `path` (ADR-088, user decision
-    /// 2026-10-19: delete after upgrade). Holding `self` proves the store
-    /// opened at v2, its migration committed; the root calls this only
-    /// after the store passed its probe. Returns how many were deleted.
+    /// Remove every v1 copy file beside `path` (ADR-088, the user's
+    /// 2026-10-19 decision: no copy outlives the upgrade). Holding `self`
+    /// proves the store opened at v2, its migration committed; the root
+    /// calls this only after the store passed its probe. Returns how many
+    /// files went.
     pub fn discard_v1_backups(&self, path: &Path) -> Result<usize, StoreError> {
         let copies = v1_backups_beside(path).map_err(|e| StoreError::Backup(e.to_string()))?;
         for copy in &copies {
