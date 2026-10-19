@@ -216,7 +216,7 @@ async fn confirm_one(
         Ok(permit) => permit,
         Err(refusal) => {
             put_back(app, confirmed);
-            checks.settle(refusal);
+            checks.settle(&refusal);
             return PlanResult::Skipped;
         }
     };

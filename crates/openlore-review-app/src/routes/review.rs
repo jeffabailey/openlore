@@ -6,7 +6,8 @@ use hyper::StatusCode;
 use std::collections::BTreeMap;
 
 use ports::claim_domain::authority::{
-    may_sign, owner_to_read, OwnerBioRead, PermitBasis, RepoRead, SigningPermit, SigningRefusal,
+    may_sign, owner_to_read, refusal_to_explain, OwnerBioRead, PermitBasis, RepoRead,
+    SigningPermit, SigningRefusal,
 };
 use ports::{
     GithubLink, GithubLinkPort, ImportedReposRead, KpiTally, RepoFacts, RepoSource,
@@ -276,7 +277,7 @@ pub(crate) async fn approve_selected(app: &App, request: &PageRequest) -> Reply 
         let permit = match checks.permit(&suggestion.key.subject).await {
             Ok(permit) => permit,
             Err(refusal) => {
-                checks.settle(refusal);
+                checks.settle(&refusal);
                 continue;
             }
         };
@@ -489,10 +490,11 @@ impl<'a> PublishChecks<'a> {
             &self.listed,
             repo.as_read(),
             bio.as_read(),
-        );
+        )
+        .map_err(|refusal| refusal_to_explain(refusal, &self.listed, repo.as_read()));
         emit(match &checked {
             Ok(_) => LogEvent::PublishCheckPassed,
-            Err(refusal) => LogEvent::PublishCheckRefused(*refusal),
+            Err(refusal) => LogEvent::PublishCheckRefused(refusal.clone()),
         });
         checked
     }
@@ -521,9 +523,9 @@ impl<'a> PublishChecks<'a> {
     /// A refusal's consequences, nothing written: counted, and a listed
     /// account whose bio no longer holds the DID is marked unverified (an
     /// unfinished check changes no status).
-    pub(crate) fn settle(&self, refusal: SigningRefusal) {
-        observe(self.app, LogEvent::PublishRefused(refusal));
-        if let SigningRefusal::BioNoLongerHolds(github_user_id) = refusal {
+    pub(crate) fn settle(&self, refusal: &SigningRefusal) {
+        observe(self.app, LogEvent::PublishRefused(refusal.clone()));
+        if let SigningRefusal::BioNoLongerHolds(github_user_id) = *refusal {
             let _ = self.app.account_status.mark_account_unverified(
                 self.owner_did,
                 github_user_id,
@@ -535,7 +537,7 @@ impl<'a> PublishChecks<'a> {
     /// A publish refused for want of a permit, settled, and explained with
     /// its next step; a repo gone (missing or private) is not found.
     pub(crate) fn refused(&self, subject: &str, refusal: SigningRefusal) -> Reply {
-        self.settle(refusal);
+        self.settle(&refusal);
         match refusal {
             SigningRefusal::NotOwnedByListedAccount | SigningRefusal::OrgOwned
                 if self.imported(subject) =>
@@ -558,6 +560,10 @@ impl<'a> PublishChecks<'a> {
                 }
             }
             SigningRefusal::RepoGone => not_found(),
+            SigningRefusal::RepoRenamed { now } => Reply::page(
+                StatusCode::CONFLICT,
+                views::repo_renamed_page(subject, &now),
+            ),
         }
     }
 

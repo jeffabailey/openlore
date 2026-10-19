@@ -463,8 +463,7 @@ fn sut_may_sign(
         Err(SigningRefusal::RepoGone) => PermitView::RepoGone,
         Err(SigningRefusal::BioNoLongerHolds(id)) => PermitView::BioNoLongerHolds(id),
         Err(SigningRefusal::Unfinished) => PermitView::Unfinished,
-        // REVIEW-FIX F4: add `Err(SigningRefusal::RepoRenamed { now }) =>
-        // PermitView::RepoRenamed { now }` when the variant lands.
+        Err(SigningRefusal::RepoRenamed { now }) => PermitView::RepoRenamed { now },
     }
 }
 
@@ -1106,7 +1105,6 @@ proptest! {
     /// refused (`RepoRenamed`). When the crafter adds that refusal to
     /// `SigningRefusal`, `sut_may_sign` needs its arm.
     #[test]
-    #[ignore = "REVIEW-FIX: F4"]
     fn core_rra6_only_a_listed_user_owner_whose_bio_holds_the_did_may_publish(
         listed in proptest::collection::vec(1u64..6, 0..3),
         repo in arb_repo_read(),

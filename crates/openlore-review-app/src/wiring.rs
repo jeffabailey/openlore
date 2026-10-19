@@ -174,7 +174,7 @@ fn counters_of(event: &LogEvent<'_>) -> Vec<KpiEvent> {
             account_check_event(*outcome).into_iter().collect()
         }
         LogEvent::SuggestionDeclined { origin } => decline_events(*origin),
-        LogEvent::PublishRefused(refusal) => publish_refusal_events(*refusal),
+        LogEvent::PublishRefused(refusal) => publish_refusal_events(refusal),
         LogEvent::SuggestionApproved {
             edited,
             outside_default,
@@ -283,13 +283,13 @@ fn describe(event: LogEvent<'_>) -> (Level, &'static str, Vec<(&'static str, Val
         LogEvent::PublishRefused(refusal) => (
             Info,
             "publish.refused",
-            vec![("reason", json!(publish_refusal_label(refusal)))],
+            vec![("reason", json!(publish_refusal_label(&refusal)))],
         ),
         LogEvent::PublishCheckPassed => (Info, "ownership.publish_check.passed", vec![]),
         LogEvent::PublishCheckRefused(refusal) => (
             Info,
             "ownership.publish_check.refused",
-            vec![("reason", json!(publish_refusal_label(refusal)))],
+            vec![("reason", json!(publish_refusal_label(&refusal)))],
         ),
         LogEvent::SharePosted => (Info, "share.posted", vec![]),
         LogEvent::RetractPosted => (Info, "retract.posted", vec![]),

@@ -84,7 +84,7 @@ impl SigningPermit {
 }
 
 /// Why no permit was minted (ADR-089 §2, a closed set).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SigningRefusal {
     /// The repo's current owner is none of the signer's listed accounts.
     NotOwnedByListedAccount,
@@ -92,6 +92,9 @@ pub enum SigningRefusal {
     OrgOwned,
     /// The repo is missing or private.
     RepoGone,
+    /// GitHub serves the repo under another `owner/name` now (renamed or
+    /// transferred since the scan): never publish under the old subject.
+    RepoRenamed { now: String },
     /// The listed owner account's bio no longer holds the signer's DID.
     BioNoLongerHolds(u64),
     /// GitHub could not answer: nothing is decided.
@@ -105,7 +108,8 @@ pub fn owner_to_read(listed: &[u64], repo: RepoRead<'_>) -> Option<u64> {
     owner_account(listed, repo).ok()
 }
 
-/// May `signer` publish an assertion about `subject`? Only when the repo's
+/// May `signer` publish an assertion about `subject`? Only when GitHub still
+/// serves the repo under `subject`'s `owner/name` (letter case aside), its
 /// current owner is a user, is one of the signer's `listed` GitHub ids and
 /// that owner's bio, read now, holds the signer's DID.
 pub fn may_sign(
@@ -115,6 +119,7 @@ pub fn may_sign(
     repo: RepoRead<'_>,
     owner_bio: OwnerBioRead<'_>,
 ) -> Result<SigningPermit, SigningRefusal> {
+    still_named(subject, repo)?;
     let owner_id = owner_account(listed, repo)?;
     match owner_bio {
         OwnerBioRead::Unfinished => Err(SigningRefusal::Unfinished),
@@ -126,6 +131,21 @@ pub fn may_sign(
             }),
             _ => Err(SigningRefusal::BioNoLongerHolds(owner_id)),
         },
+    }
+}
+
+/// The refusal to explain to the signer: a rename is named (and a new scan
+/// offered) only while the repo's owner is still one of her `listed` user
+/// accounts; a repo that also moved to an owner she does not list is
+/// explained, and counted, as not hers (AP-1).
+pub fn refusal_to_explain(
+    refusal: SigningRefusal,
+    listed: &[u64],
+    repo: RepoRead<'_>,
+) -> SigningRefusal {
+    match refusal {
+        SigningRefusal::RepoRenamed { .. } => owner_account(listed, repo).err().unwrap_or(refusal),
+        other => other,
     }
 }
 
@@ -141,5 +161,107 @@ fn owner_account(listed: &[u64], repo: RepoRead<'_>) -> Result<u64, SigningRefus
             Err(SigningRefusal::NotOwnedByListedAccount)
         }
         RepoRead::Found(facts) => Ok(facts.owner_id),
+    }
+}
+
+/// A found repo GitHub now serves under an `owner/name` other than
+/// `subject`'s (compared without letter case, as GitHub does) is refused
+/// with its new name; anything else is judged by [`owner_account`].
+fn still_named(subject: &str, repo: RepoRead<'_>) -> Result<(), SigningRefusal> {
+    match repo {
+        RepoRead::Found(facts)
+            if !subject
+                .strip_prefix("github:")
+                .unwrap_or(subject)
+                .eq_ignore_ascii_case(&facts.full_name) =>
+        {
+            Err(SigningRefusal::RepoRenamed {
+                now: facts.full_name.clone(),
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kelp(full_name: &str, owner_id: u64, owner_kind: RepoOwnerKind) -> RepoFacts {
+        RepoFacts {
+            repo_id: 7,
+            full_name: full_name.to_string(),
+            owner_id,
+            owner_login: "priyaraman".to_string(),
+            owner_kind,
+            fork: false,
+            archived: false,
+        }
+    }
+
+    const DID: &str = "did:plc:priya";
+
+    #[test]
+    fn a_rename_is_explained_only_while_a_listed_user_still_owns_the_repo() {
+        let renamed = |facts: &RepoFacts| {
+            may_sign(
+                DID,
+                "github:priyaraman/kelp",
+                &[1],
+                RepoRead::Found(facts),
+                OwnerBioRead::Bio(Some(DID)),
+            )
+            .unwrap_err()
+        };
+        let cases = [
+            (kelp("priyaraman/kelp-sdk", 1, RepoOwnerKind::User), None),
+            (
+                kelp("tidal-labs/kelp", 9, RepoOwnerKind::User),
+                Some(SigningRefusal::NotOwnedByListedAccount),
+            ),
+            (
+                kelp("tidal-labs/kelp", 9, RepoOwnerKind::Organization),
+                Some(SigningRefusal::OrgOwned),
+            ),
+        ];
+        for (facts, moved_away) in cases {
+            let refusal = renamed(&facts);
+            assert_eq!(
+                refusal,
+                SigningRefusal::RepoRenamed {
+                    now: facts.full_name.clone()
+                }
+            );
+            let explained = refusal_to_explain(refusal.clone(), &[1], RepoRead::Found(&facts));
+            assert_eq!(explained, moved_away.unwrap_or(refusal), "{facts:?}");
+        }
+    }
+
+    #[test]
+    fn letter_case_alone_is_not_a_rename() {
+        let facts = kelp("PriyaRaman/Kelp", 1, RepoOwnerKind::User);
+        let permit = may_sign(
+            DID,
+            "github:priyaraman/kelp",
+            &[1],
+            RepoRead::Found(&facts),
+            OwnerBioRead::Bio(Some(DID)),
+        );
+        assert_eq!(permit.map(|p| p.basis()), Ok(PermitBasis::Owner(1)));
+    }
+
+    #[test]
+    fn other_refusals_are_explained_as_they_are() {
+        for refusal in [
+            SigningRefusal::RepoGone,
+            SigningRefusal::Unfinished,
+            SigningRefusal::OrgOwned,
+            SigningRefusal::BioNoLongerHolds(1),
+        ] {
+            assert_eq!(
+                refusal_to_explain(refusal.clone(), &[], RepoRead::Unfinished),
+                refusal
+            );
+        }
     }
 }

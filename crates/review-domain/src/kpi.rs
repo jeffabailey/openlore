@@ -278,14 +278,14 @@ impl AccountAddRefused {
 }
 
 /// What a refused publish counts (KPI-RRA-4).
-pub fn publish_refusal_events(refusal: SigningRefusal) -> Vec<KpiEvent> {
+pub fn publish_refusal_events(refusal: &SigningRefusal) -> Vec<KpiEvent> {
     match refusal {
         SigningRefusal::NotOwnedByListedAccount | SigningRefusal::OrgOwned => {
             vec![KpiEvent::PublishRefusedNotOwned]
         }
         SigningRefusal::BioNoLongerHolds(_) => vec![KpiEvent::PublishRefusedBioFailed],
         SigningRefusal::Unfinished => vec![KpiEvent::PublishRefusedUnreachable],
-        SigningRefusal::RepoGone => Vec::new(),
+        SigningRefusal::RepoGone | SigningRefusal::RepoRenamed { .. } => Vec::new(),
     }
 }
 
@@ -313,11 +313,12 @@ pub fn import_refusal_event(refusal: ImportRefusal) -> Option<KpiEvent> {
 }
 
 /// The operator-facing reason of a refused publish (never whose or which).
-pub fn publish_refusal_label(refusal: SigningRefusal) -> &'static str {
+pub fn publish_refusal_label(refusal: &SigningRefusal) -> &'static str {
     match refusal {
         SigningRefusal::NotOwnedByListedAccount => "not_owned",
         SigningRefusal::OrgOwned => "org_owned",
         SigningRefusal::RepoGone => "repo_gone",
+        SigningRefusal::RepoRenamed { .. } => "repo_renamed",
         SigningRefusal::BioNoLongerHolds(_) => "bio_failed",
         SigningRefusal::Unfinished => "unreachable",
     }

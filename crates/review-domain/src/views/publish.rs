@@ -348,6 +348,27 @@ pub fn not_owned_page(subject: &str) -> String {
     )
 }
 
+/// A preview or confirm refused because GitHub serves the repo under another
+/// name now (review F4): nothing was published; a new scan suggests under
+/// the new name.
+pub fn repo_renamed_page(subject: &str, now: &str) -> String {
+    let repo = subject.strip_prefix("github:").unwrap_or(subject);
+    page(
+        "Nothing was published",
+        html! {
+            section class="outcome" {
+            h1 { "Nothing was published" }
+            p role="alert" {
+                "github.com/" (repo) " is now named github.com/" (now) " on GitHub, so \
+                 nothing was published under its old name. Press \"Scan again\" to get \
+                 suggestions under its new name."
+            }
+            (back_to_queue())
+            }
+        },
+    )
+}
+
 /// A preview or confirm refused because GitHub could not say who owns the
 /// repo now (AC-010.3): nothing was published, nothing changed.
 pub fn github_unreachable_page(subject: &str) -> String {
