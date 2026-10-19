@@ -243,11 +243,88 @@ fn sut_import_admission(_scope: &ScopeView) -> Result<(), LimitRefusalView> {
 }
 
 fn sut_scan_intent(
-    _scope: &ScopeView,
-    _checks: &[CheckView],
-    _listings: &[BTreeMap<u64, ListedView>],
+    scope: &ScopeView,
+    checks: &[CheckView],
+    listings: &[BTreeMap<u64, ListedView>],
 ) -> IntentView {
-    todo!("RED: bind to review_domain::repo_scope::{{scan_intent, plan_account}} (DELIVER 01-*)")
+    use ports::{ListedRepo, OwnedRepo};
+    use review_domain::repo_scope::{
+        scan_intent, AccountCheck, AccountPlan, Listing, SavedTicks, ScanAccount, ScanIntent,
+        SkipReason,
+    };
+    let accounts: Vec<ScanAccount> = scope
+        .accounts
+        .iter()
+        .map(|a| ScanAccount {
+            github_user_id: a.id,
+            saved: a
+                .saved
+                .clone()
+                .map_or(SavedTicks::NeverSaved, SavedTicks::Saved),
+            eligible_seen: Some(a.eligible.len()),
+        })
+        .collect();
+    let account_checks: Vec<AccountCheck> = scope
+        .accounts
+        .iter()
+        .zip(checks.iter().zip(listings))
+        .map(|(a, (check, listing))| match check {
+            CheckView::Failed => AccountCheck::Failed,
+            CheckView::Unfinished => AccountCheck::Unfinished,
+            CheckView::Passed => AccountCheck::Passed(Listing {
+                ranked_eligible: a.eligible.clone(),
+                repos: listing
+                    .iter()
+                    .filter(|(_, now)| **now != ListedView::Absent)
+                    .map(|(id, now)| ListedRepo {
+                        repo_id: *id,
+                        owner_id: a.id,
+                        repo: OwnedRepo {
+                            full_name: format!("owner{}/repo-{id}", a.id),
+                            description: None,
+                            language: None,
+                            stars: 0,
+                            fork: *now == ListedView::Fork,
+                            archived: *now == ListedView::Archived,
+                            pushed_at: None,
+                        },
+                    })
+                    .collect(),
+            }),
+        })
+        .collect();
+    match scan_intent(&accounts, &scope.imports, CAP) {
+        ScanIntent::NothingToRead => IntentView::NothingToRead,
+        ScanIntent::OverLimit(r) => IntentView::OverLimit(LimitRefusalView {
+            limit: r.limit,
+            total: r.total,
+            excess: r.excess,
+        }),
+        ScanIntent::Read(frozen) => {
+            let plan = frozen.plan(&account_checks);
+            let mut rows = Vec::new();
+            let mut skipped = BTreeSet::new();
+            for (id, account) in &plan.accounts {
+                if let AccountPlan::Read {
+                    planned,
+                    skipped: s,
+                } = account
+                {
+                    rows.extend(planned.iter().map(|p| (Some(*id), p.repo_id)));
+                    skipped.extend(s.iter().map(|s| {
+                        let reason = match s.reason {
+                            SkipReason::Fork => SkipView::Fork,
+                            SkipReason::Archived => SkipView::Archived,
+                            SkipReason::MissingOrTransferred => SkipView::MissingOrTransferred,
+                        };
+                        (s.repo_id, reason)
+                    }));
+                }
+            }
+            rows.extend(plan.imports.iter().map(|r| (None, *r)));
+            IntentView::Plan { rows, skipped }
+        }
+    }
 }
 
 fn sut_resume(
@@ -606,7 +683,6 @@ proptest! {
 
     /// CORE-RRA-4 (@property @US-RRA-002 @US-RRA-004 @KPI-RRA-5 @KPI-RRA-7 @contract-shape:pure-function)
     #[test]
-    #[ignore = "CORE-RRA-4 (bind with DELIVER step 01-09): repo_scope scan intent and plan (RED binding)"]
     fn core_rra4_a_scan_plans_only_what_was_chosen_from_passing_accounts(
         (scope, checks, listings) in arb_scope().prop_flat_map(|s| {
             let n = s.accounts.len();

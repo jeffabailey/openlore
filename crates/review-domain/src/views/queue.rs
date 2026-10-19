@@ -7,6 +7,7 @@ use ports::{ScanCounts, ScanRun, ScanStatus, Suggestion, SuggestionKey};
 use super::*;
 use crate::edits::CONFIDENCE_GUIDANCE;
 use crate::lifecycle::Tally;
+use crate::repo_scope::LimitRefusal;
 
 /// Where the signed-in person stands with their GitHub link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +87,30 @@ pub enum QueueNotice<'a> {
     ScanRefused(ScanRefused),
     /// The owner just declined this suggestion; it can still be undone.
     Declined(&'a SuggestionKey),
+    /// The scan did not start: no repo is chosen and none is named (AC-002.5).
+    NothingToScan,
+    /// The scan did not start: more repos are chosen than one scan reads.
+    ScanOverLimit(LimitRefusal),
+}
+
+/// AC-002.5: a scan with nothing to read.
+pub const NOTHING_TO_SCAN_MESSAGE: &str =
+    "Choose at least one repo, or name a public repo, before scanning.";
+
+/// "You can choose up to 10 repos per scan in total. You have 11 chosen. Untick 1 to scan."
+pub fn scan_over_limit_message(refusal: LimitRefusal) -> String {
+    format!(
+        "You can choose up to {} repos per scan in total. You have {} chosen. Untick {} to scan.",
+        refusal.limit, refusal.total, refusal.excess
+    )
+}
+
+/// "5 repos read" (`1 repo read`).
+pub fn repos_read_message(read: usize) -> String {
+    match read {
+        1 => "1 repo read".to_string(),
+        n => format!("{n} repos read"),
+    }
 }
 
 /// Everything the signed-in queue shows.
@@ -388,10 +413,19 @@ fn verified_queue(login: &str, view: &QueueView<'_>) -> Markup {
                 Some(QueueNotice::Declined(key)) => {
                     (declined_notice(key, view.csrf_token))
                 }
+                Some(QueueNotice::NothingToScan) => {
+                    p role="alert" { (NOTHING_TO_SCAN_MESSAGE) }
+                }
+                Some(QueueNotice::ScanOverLimit(refusal)) => {
+                    p role="alert" { (scan_over_limit_message(refusal)) }
+                }
                 None => {}
             }
             @if let Some(summary) = completed_summary(view.latest_scan) {
                 p role="status" { (summary) }
+            }
+            @if let Some(run) = view.latest_scan.filter(|run| run.status == ScanStatus::Completed) {
+                p role="status" { (repos_read_message(run.repos_read)) }
             }
             @if let Some(notice) = scan_notice(view.latest_scan, view.pending, &view.tally) {
                 p role="status" { (notice) }
@@ -481,6 +515,7 @@ mod tests {
                 status: ScanStatus::Completed,
                 resume_after: None,
                 counts: ScanCounts::default(),
+                repos_read: 0,
             }),
             pending: &[],
             tally,

@@ -30,11 +30,22 @@ pub(crate) async fn start_scan(app: &Arc<App>, request: &PageRequest) -> Reply {
             Some(QueueNotice::ScanRefused(refused)),
         )
     };
+    let not_started = |notice| {
+        queue_page(
+            app,
+            &cookie_value,
+            &session,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Some(notice),
+        )
+    };
     match begin_scan(app, &session.owner_did) {
         ScanStart::Started | ScanStart::AlreadyScanning => Reply::redirect("/review"),
         ScanStart::NotVerified => Reply::redirect("/github"),
         ScanStart::Refused(why) => refused(StatusCode::TOO_MANY_REQUESTS, why),
         ScanStart::Unavailable => refused(StatusCode::SERVICE_UNAVAILABLE, ScanRefused::AppBusy),
+        ScanStart::NothingToRead => not_started(QueueNotice::NothingToScan),
+        ScanStart::OverLimit(refusal) => not_started(QueueNotice::ScanOverLimit(refusal)),
     }
 }
 

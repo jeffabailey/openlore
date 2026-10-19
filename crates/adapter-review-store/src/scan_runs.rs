@@ -36,7 +36,10 @@ const INTERRUPT_OWNERS_RUNNING_SCANS: &str = "UPDATE scan_runs
 
 // `resume_after` is read raw: the TIMESTAMPTZ overloads of `epoch` & co.
 // live in the ICU extension, which the app never loads.
-const LATEST_SCAN: &str = "SELECT status, resume_after, new_count, published_count, declined_count
+const LATEST_SCAN: &str = "SELECT status, resume_after, new_count, published_count, declined_count,
+        (SELECT count(*) FROM scan_run_repos AS planned
+         WHERE planned.owner_did = scan_runs.owner_did AND planned.run_id = scan_runs.run_id
+           AND planned.status = 'read')
     FROM scan_runs WHERE owner_did = ?
     ORDER BY started_at DESC, rowid DESC LIMIT 1";
 
@@ -196,15 +199,17 @@ impl ScanRunPort for ReviewStore {
                         already_published: read_count(row.get(3)?),
                         declined_hidden: read_count(row.get(4)?),
                     },
+                    usize::try_from(row.get::<_, i64>(5)?).unwrap_or_default(),
                 ))
             })
             .optional()
             .map(|row| {
-                row.and_then(|(status, resume_after, counts)| {
+                row.and_then(|(status, resume_after, counts, repos_read)| {
                     ScanStatus::parse(&status).map(|status| ScanRun {
                         status,
                         resume_after,
                         counts,
+                        repos_read,
                     })
                 })
             })
@@ -267,11 +272,11 @@ mod tests {
             store.finish_scan("did:plc:priya", "run-2", last, resume_after, found, KpiTally::NONE).unwrap();
             prop_assert_eq!(
                 store.latest_scan("did:plc:priya").unwrap(),
-                Some(ScanRun { status: last, resume_after, counts: found })
+                Some(ScanRun { status: last, resume_after, counts: found, repos_read: 0 })
             );
             prop_assert_eq!(
                 store.latest_scan("did:plc:sam").unwrap(),
-                Some(ScanRun { status: other, resume_after: None, counts: other_found })
+                Some(ScanRun { status: other, resume_after: None, counts: other_found, repos_read: 0 })
             );
         }
 

@@ -14,6 +14,9 @@ pub const REPOS_PATH: &str = "/repos";
 /// The button that stores an account's ticks.
 pub const SAVE_CHOICE_LABEL: &str = "Save choice";
 
+/// D-RRA-6: a repo listed since the account's choice was saved.
+pub const NEW_SINCE_CHOICE_MARK: &str = "new since your last choice";
+
 /// The form field naming the account a Save is for.
 pub const ACCOUNT_ID_FIELD: &str = "github_user_id";
 
@@ -196,6 +199,9 @@ fn choose_form(
                                     aria-label=(format!("Include {}", row.full_name))
                                     checked[row.ticked];
                                 " " (row.full_name)
+                                @if row.new_since_choice {
+                                    " (" (NEW_SINCE_CHOICE_MARK) ")"
+                                }
                             }
                         }
                     }

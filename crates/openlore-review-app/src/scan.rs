@@ -16,10 +16,14 @@ use std::time::Duration;
 
 use ports::{GithubError, GithubLink, PlannedScanRepo, ScanCounts, ScanStatus, SuggestionSource};
 use review_domain::budget::{auto_resume_wait, github_budget_allows, ScanAdmission};
+use review_domain::kpi::{utc_day, KpiEvent};
 use review_domain::lifecycle::suggestion_from_candidate;
 use review_domain::ownership::{prove_ownership, OwnershipRefusal, VerifiedOwnership};
 use review_domain::reconcile::{add_counts, reconcile};
-use review_domain::repo_scope::{account_plan, AccountChoice, PlannedRepo};
+use review_domain::repo_scope::{
+    scan_intent, AccountCheck, FrozenScope, LimitRefusal, Listing, PlannedRepo, SavedTicks,
+    ScanAccount, ScanIntent, SCAN_REPO_CAP,
+};
 use review_domain::views::ScanRefused;
 use scraper_domain::derive_candidates;
 
@@ -67,6 +71,10 @@ pub(crate) enum ScanStart {
     Refused(ScanRefused),
     /// The run could not be recorded (logged as `scan.refused` busy).
     Unavailable,
+    /// Refused before admission: no repo chosen and none named.
+    NothingToRead,
+    /// Refused before admission: more repos chosen than one scan reads.
+    OverLimit(LimitRefusal),
 }
 
 /// Start a scan for `owner_did` if their link is verified and the budget
@@ -76,6 +84,10 @@ pub(crate) fn begin_scan(app: &Arc<App>, owner_did: &str) -> ScanStart {
     let link = app.links.github_link(owner_did).ok().flatten();
     let Some(link) = link.filter(|link| link.verified) else {
         return ScanStart::NotVerified;
+    };
+    let scope = match frozen_intent(app, owner_did, &link) {
+        Ok(scope) => scope,
+        Err(refused) => return refused,
     };
     let refused = match app.scan_limiter.admit(owner_did) {
         ScanAdmission::Admitted => None,
@@ -93,8 +105,47 @@ pub(crate) fn begin_scan(app: &Arc<App>, owner_did: &str) -> ScanStart {
         emit(LogEvent::ScanRefused(ScanRefused::AppBusy));
         return ScanStart::Unavailable;
     }
-    tokio::spawn(run_scan(app.clone(), owner_did.to_string(), run_id, link));
+    tokio::spawn(run_scan(
+        app.clone(),
+        owner_did.to_string(),
+        run_id,
+        link,
+        scope,
+    ));
     ScanStart::Started
+}
+
+/// The scan's intent, frozen from the store before admission (§6.2 step 1):
+/// a refusal here spends none of the day's scans and asks GitHub nothing.
+fn frozen_intent(app: &App, owner_did: &str, link: &GithubLink) -> Result<FrozenScope, ScanStart> {
+    let saved = app
+        .choices_read
+        .saved_choice(owner_did, link.github_user_id)
+        .map_err(|_| ScanStart::Unavailable)?;
+    let account = ScanAccount {
+        github_user_id: link.github_user_id,
+        saved: SavedTicks::of(&saved),
+        eligible_seen: None,
+    };
+    match scan_intent(&[account], &[], SCAN_REPO_CAP) {
+        ScanIntent::Read(scope) => Ok(scope),
+        ScanIntent::NothingToRead => Err(refused_before_admission(
+            app,
+            KpiEvent::ScanRefusedNothingToRead,
+            ScanStart::NothingToRead,
+        )),
+        ScanIntent::OverLimit(refusal) => Err(refused_before_admission(
+            app,
+            KpiEvent::ScanRefusedOverLimit,
+            ScanStart::OverLimit(refusal),
+        )),
+    }
+}
+
+/// Count a refusal made before admission and return it.
+fn refused_before_admission(app: &App, event: KpiEvent, refused: ScanStart) -> ScanStart {
+    let _ = app.kpi.count(&utc_day(unix_now_secs()), event.name());
+    refused
 }
 
 /// Resume `owner_did`'s unfinished scan on its own when
@@ -129,9 +180,15 @@ pub(crate) fn resume_on_its_own(app: Arc<App>, owner_did: String, interrupted_by
 
 /// Run one admitted scan for `owner_did` to its end, then free its slot and
 /// record how it ended; a scan paused for GitHub's budget resumes on its own.
-pub(crate) async fn run_scan(app: Arc<App>, owner_did: String, run_id: String, link: GithubLink) {
+pub(crate) async fn run_scan(
+    app: Arc<App>,
+    owner_did: String,
+    run_id: String,
+    link: GithubLink,
+    scope: FrozenScope,
+) {
     let ended = match reverify(&app, &owner_did, &link).await {
-        Ok(ownership) => scan_owned_repos(&app, &ownership, &run_id, link.github_user_id).await,
+        Ok(ownership) => scan_owned_repos(&app, &ownership, &run_id, &scope).await,
         Err(refusal) if refusal.disproves_ownership() => {
             let _ =
                 app.links
@@ -172,37 +229,35 @@ async fn reverify(
     prove_ownership(owner_did, &account_of(&profile), Some(link.github_user_id))
 }
 
-/// The repo stages; they can only run with proof in hand. The account's
-/// choice in force now is frozen as the run's plan before the first read
-/// (BR-RRA-4), and exactly the planned repos are read.
+/// The repo stages; they can only run with proof in hand. The choice frozen
+/// at the scan's start is planned against the listing, the plan is written
+/// before the first read (BR-RRA-4), and exactly the planned repos are read.
 async fn scan_owned_repos(
     app: &App,
     ownership: &VerifiedOwnership,
     run_id: &str,
-    account_id: u64,
+    scope: &FrozenScope,
 ) -> Ended {
     let listing = match app
         .github
         .list_account_repos(ownership.github_login())
         .await
     {
-        Ok(listing) => listing.repos,
+        Ok(listing) => Listing::of(listing.repos),
         Err(error) => return failed(app, &error),
     };
     let owner_did = ownership.owner_did();
-    let Ok(saved) = app.choices_read.saved_choice(owner_did, account_id) else {
-        return Ended::with_status(ScanStatus::Interrupted);
-    };
-    let plan = account_plan(&listing, AccountChoice::of(&saved));
+    let scan_plan = scope.plan(&[AccountCheck::Passed(listing)]);
+    let plan = scan_plan.owned_repos();
     if app
         .scans
-        .record_plan(owner_did, run_id, &plan_rows(&plan, account_id))
+        .record_plan(owner_did, run_id, &plan_rows(&plan))
         .is_err()
     {
         return Ended::with_status(ScanStatus::Interrupted);
     }
     let mut found = ScanCounts::default();
-    for (position, repo) in plan.iter().enumerate() {
+    for (position, (account_id, repo)) in plan.into_iter().enumerate() {
         if !github_budget_allows(app.github.last_rate_budget().map(|b| b.remaining)) {
             return paused(app).after_finding(found);
         }
@@ -215,13 +270,13 @@ async fn scan_owned_repos(
     Ended::with_status(ScanStatus::Completed).after_finding(found)
 }
 
-/// The store rows of an account's plan, in plan order.
-fn plan_rows(plan: &[PlannedRepo], account_id: u64) -> Vec<PlannedScanRepo> {
+/// The store rows of a scan's plan, in plan order.
+fn plan_rows(plan: &[(u64, &PlannedRepo)]) -> Vec<PlannedScanRepo> {
     plan.iter()
-        .map(|repo| PlannedScanRepo {
+        .map(|(account_id, repo)| PlannedScanRepo {
             repo_id: repo.repo_id,
             full_name: repo.full_name.clone(),
-            source_account_id: account_id,
+            source_account_id: *account_id,
         })
         .collect()
 }

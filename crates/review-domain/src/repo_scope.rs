@@ -37,6 +37,14 @@ impl<'a> AccountChoice<'a> {
         }
     }
 
+    /// Is the repo `repo_id` listed since the choice was saved (D-RRA-6)?
+    fn is_new(self, repo_id: u64) -> bool {
+        match self {
+            Self::Saved(rows) => !rows.iter().any(|row| row.repo_id == repo_id),
+            Self::Default | Self::DefaultTicks(_) => false,
+        }
+    }
+
     /// Is the repo `repo_id`, at `rank` in today's ranking, ticked?
     fn ticks(self, repo_id: u64, rank: usize) -> bool {
         match self {
@@ -102,7 +110,7 @@ pub fn default_ticks(
         .iter()
         .filter(|account| account.takes_default_ticks())
         .scan(room, |room, account| {
-            let ticked = DEFAULT_TICKS.min(account.ranked_eligible.len()).min(*room);
+            let ticked = default_count(account.ranked_eligible.len(), *room);
             *room -= ticked;
             Some((
                 account.github_user_id,
@@ -212,6 +220,8 @@ pub struct ChooseRow {
     /// `owner/name`.
     pub full_name: String,
     pub ticked: bool,
+    /// Not in the saved choice: listed since it was saved, never read until ticked.
+    pub new_since_choice: bool,
 }
 
 /// An account's choose list: its eligible repos ranked, and what the
@@ -261,6 +271,7 @@ pub fn choose_list(listing: &[ListedRepo], choice: AccountChoice<'_>) -> ChooseL
                 repo_id: listed.repo_id,
                 full_name: listed.repo.full_name.clone(),
                 ticked: choice.ticks(listed.repo_id, rank),
+                new_since_choice: choice.is_new(listed.repo_id),
             })
             .collect(),
         forks_skipped,
@@ -316,6 +327,241 @@ pub fn account_plan(listing: &[ListedRepo], choice: AccountChoice<'_>) -> Vec<Pl
             outside_default: (rank >= DEFAULT_TICKS).then_some(OutsideDefault::OwnedChoice),
         })
         .collect()
+}
+
+/// What one listed account brings to a scan before it is checked or listed:
+/// its saved ticks (frozen at scan start, BR-RRA-4) and, when known, how
+/// many eligible repos it had (`None`: unknown, so its default ticks count).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanAccount {
+    pub github_user_id: u64,
+    pub saved: SavedTicks,
+    pub eligible_seen: Option<usize>,
+}
+
+/// A scan's start, decided before admission (§6.2 step 1): refused, or the
+/// scope frozen for the plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScanIntent {
+    /// No account has a non-empty choice or a default, and no import (AC-002.5).
+    NothingToRead,
+    /// `S + I` passes the limit (BR-RRA-3 scan start).
+    OverLimit(LimitRefusal),
+    Read(FrozenScope),
+}
+
+/// The scope a scan admitted to read: every listed account in `added_at`
+/// order, the imports and the limit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrozenScope {
+    accounts: Vec<ScanAccount>,
+    imports: Vec<u64>,
+    cap: usize,
+}
+
+/// An account's eligible repos now: their ids in today's ranking, and the
+/// listing they were ranked from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listing {
+    pub ranked_eligible: Vec<u64>,
+    pub repos: Vec<ListedRepo>,
+}
+
+/// The scan's own bio check of one account (D-RRA-T1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountCheck {
+    /// The bio holds the DID: the account was listed.
+    Passed(Listing),
+    /// The bio read failed or the DID is gone: none of its repos is read.
+    Failed,
+    /// Rate limit or outage: not reached, none of its repos is read.
+    Unfinished,
+}
+
+/// Why a chosen repo is not read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SkipReason {
+    Fork,
+    Archived,
+    MissingOrTransferred,
+}
+
+/// One chosen repo the scan does not read, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SkippedRepo {
+    pub repo_id: u64,
+    pub reason: SkipReason,
+}
+
+/// What a scan does with one account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountPlan {
+    Read {
+        planned: Vec<PlannedRepo>,
+        skipped: Vec<SkippedRepo>,
+    },
+    /// Its bio check failed: nothing of it is read.
+    Unverified,
+    /// Its bio check did not finish: nothing of it is read.
+    NotReached,
+}
+
+/// A scan's frozen plan: each account's plan in order, then the imports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanPlan {
+    pub accounts: Vec<(u64, AccountPlan)>,
+    pub imports: Vec<u64>,
+}
+
+/// Decide, before admission, whether a scan starts (CORE-RRA-4): nothing to
+/// read and a total past the limit are refused without spending a scan.
+pub fn scan_intent(accounts: &[ScanAccount], imports: &[u64], cap: usize) -> ScanIntent {
+    if imports.is_empty() && !accounts.iter().any(ScanAccount::has_something_to_read) {
+        return ScanIntent::NothingToRead;
+    }
+    let saved: usize = accounts.iter().map(|account| account.saved.count()).sum();
+    match within_cap(saved + imports.len(), cap) {
+        Err(refusal) => ScanIntent::OverLimit(refusal),
+        Ok(_) => ScanIntent::Read(FrozenScope {
+            accounts: accounts.to_vec(),
+            imports: imports.to_vec(),
+            cap,
+        }),
+    }
+}
+
+impl ScanAccount {
+    /// A non-empty saved choice, or default ticks not known to be empty.
+    fn has_something_to_read(&self) -> bool {
+        match &self.saved {
+            SavedTicks::Saved(ticked) => !ticked.is_empty(),
+            SavedTicks::NeverSaved => self.eligible_seen != Some(0),
+        }
+    }
+
+    /// The repos chosen for this account in a scan: its saved ticks, else
+    /// (when its check passed) its default ticks within `room`, which they use up.
+    fn chosen(&self, check: &AccountCheck, room: &mut usize) -> Vec<u64> {
+        match (&self.saved, check) {
+            (SavedTicks::Saved(ticked), _) => ticked.clone(),
+            (SavedTicks::NeverSaved, AccountCheck::Passed(listing)) => {
+                let ticked = default_count(listing.ranked_eligible.len(), *room);
+                *room -= ticked;
+                listing.ranked_eligible[..ticked].to_vec()
+            }
+            (SavedTicks::NeverSaved, _) => Vec::new(),
+        }
+    }
+}
+
+/// How many default ticks an account with `eligible` repos gets in `room`.
+fn default_count(eligible: usize, room: usize) -> usize {
+    DEFAULT_TICKS.min(eligible).min(room)
+}
+
+impl Listing {
+    /// A listing as GitHub returned it, its eligible repos ranked as today.
+    pub fn of(repos: Vec<ListedRepo>) -> Self {
+        let ranked_eligible = ranked(&repos)
+            .0
+            .iter()
+            .map(|listed| listed.repo_id)
+            .collect();
+        Self {
+            ranked_eligible,
+            repos,
+        }
+    }
+
+    /// The listed repo `repo_id` when it can be read now, else why not.
+    fn readable(&self, repo_id: u64) -> Result<&ListedRepo, SkipReason> {
+        match self.repos.iter().find(|listed| listed.repo_id == repo_id) {
+            None => Err(SkipReason::MissingOrTransferred),
+            Some(listed) if listed.repo.fork => Err(SkipReason::Fork),
+            Some(listed) if listed.repo.archived => Err(SkipReason::Archived),
+            Some(listed) => Ok(listed),
+        }
+    }
+}
+
+/// The plan of one account from the repos `chosen` for it and its check:
+/// a passing account reads its chosen repos still readable, in ranking
+/// order, and names why each other chosen repo is skipped.
+pub fn plan_account(chosen: &[u64], check: &AccountCheck) -> AccountPlan {
+    match check {
+        AccountCheck::Failed => AccountPlan::Unverified,
+        AccountCheck::Unfinished => AccountPlan::NotReached,
+        AccountCheck::Passed(listing) => AccountPlan::Read {
+            planned: planned_repos(chosen, listing),
+            skipped: skipped_repos(chosen, listing),
+        },
+    }
+}
+
+fn planned_repos(chosen: &[u64], listing: &Listing) -> Vec<PlannedRepo> {
+    listing
+        .ranked_eligible
+        .iter()
+        .enumerate()
+        .filter(|(_, repo_id)| chosen.contains(repo_id))
+        .filter_map(|(rank, repo_id)| {
+            listing.readable(*repo_id).ok().map(|listed| PlannedRepo {
+                repo_id: listed.repo_id,
+                full_name: listed.repo.full_name.clone(),
+                outside_default: (rank >= DEFAULT_TICKS).then_some(OutsideDefault::OwnedChoice),
+            })
+        })
+        .collect()
+}
+
+fn skipped_repos(chosen: &[u64], listing: &Listing) -> Vec<SkippedRepo> {
+    chosen
+        .iter()
+        .filter_map(|repo_id| {
+            listing.readable(*repo_id).err().map(|reason| SkippedRepo {
+                repo_id: *repo_id,
+                reason,
+            })
+        })
+        .collect()
+}
+
+impl ScanPlan {
+    /// The owned repos the scan reads, each with its account, in plan order.
+    pub fn owned_repos(&self) -> Vec<(u64, &PlannedRepo)> {
+        self.accounts
+            .iter()
+            .flat_map(|(account_id, plan)| {
+                let planned: &[PlannedRepo] = match plan {
+                    AccountPlan::Read { planned, .. } => planned,
+                    AccountPlan::Unverified | AccountPlan::NotReached => &[],
+                };
+                planned.iter().map(move |repo| (*account_id, repo))
+            })
+            .collect()
+    }
+}
+
+impl FrozenScope {
+    /// The plan from each account's check, in account order: default ticks
+    /// follow the scan's own checks (D-RRA-T1) and fill only the room the
+    /// saved ticks and imports leave under the limit.
+    pub fn plan(&self, checks: &[AccountCheck]) -> ScanPlan {
+        let saved: usize = self.accounts.iter().map(|a| a.saved.count()).sum();
+        let room = self.cap.saturating_sub(saved + self.imports.len());
+        ScanPlan {
+            accounts: self
+                .accounts
+                .iter()
+                .zip(checks)
+                .scan(room, |room, (account, check)| {
+                    let chosen = account.chosen(check, room);
+                    Some((account.github_user_id, plan_account(&chosen, check)))
+                })
+                .collect(),
+            imports: self.imports.clone(),
+        }
+    }
 }
 
 #[cfg(test)]

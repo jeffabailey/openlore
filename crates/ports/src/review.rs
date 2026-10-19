@@ -374,6 +374,8 @@ pub struct ScanRun {
     pub status: ScanStatus,
     pub resume_after: Option<i64>,
     pub counts: ScanCounts,
+    /// How many of its planned repos were read.
+    pub repos_read: usize,
 }
 
 /// Owner-scoped scan runs (`scan_runs`).

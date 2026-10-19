@@ -579,6 +579,7 @@ fn run(status: ScanStatus) -> ScanRun {
             already_published: 0,
             declined_hidden: 0,
         },
+        repos_read: 5,
     }
 }
 

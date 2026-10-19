@@ -36,13 +36,17 @@ pub enum KpiEvent {
     ReposChoiceChangedFromDefault,
     /// A Save was refused: the scan's total would pass the limit.
     ReposChoiceRefusedOverLimit,
+    /// A scan was refused before admission: nothing to read (AC-002.5).
+    ScanRefusedNothingToRead,
+    /// A scan was refused before admission: past the limit (BR-RRA-3).
+    ScanRefusedOverLimit,
     SharePosted,
     RetractPosted,
     Disconnect,
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 18] = [
+    pub const ALL: [KpiEvent; 20] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -58,6 +62,8 @@ impl KpiEvent {
         Self::ReposChoiceSaved,
         Self::ReposChoiceChangedFromDefault,
         Self::ReposChoiceRefusedOverLimit,
+        Self::ScanRefusedNothingToRead,
+        Self::ScanRefusedOverLimit,
         Self::SharePosted,
         Self::RetractPosted,
         Self::Disconnect,
@@ -81,6 +87,8 @@ impl KpiEvent {
             Self::ReposChoiceSaved => "repos.choice.saved",
             Self::ReposChoiceChangedFromDefault => "repos.choice.changed_from_default",
             Self::ReposChoiceRefusedOverLimit => "repos.choice.refused.over_limit",
+            Self::ScanRefusedNothingToRead => "scan.refused.nothing_to_read",
+            Self::ScanRefusedOverLimit => "scan.refused.over_limit",
             Self::SharePosted => "share.posted",
             Self::RetractPosted => "retract.posted",
             Self::Disconnect => "disconnect",

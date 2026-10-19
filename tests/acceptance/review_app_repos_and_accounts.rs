@@ -457,7 +457,6 @@ fn the_next_scan_uses_the_choice_saved_during_the_last_one() {
 ///   And her next scan does not read sandpiper
 /// ```
 #[test]
-#[ignore = "DELIVER 01-11: repos new since the choice are marked and not read"]
 fn a_repo_created_after_the_choice_is_not_read_until_ticked() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -544,7 +543,6 @@ fn a_chosen_repo_that_can_no_longer_be_read_is_skipped_and_named() {
 ///   And after she ticks her repos again she can still run all 6 of today's scans, and a 7th says "You have scanned 6 times today"
 /// ```
 #[test]
-#[ignore = "DELIVER 01-13: nothing to read refuses before admission"]
 fn a_scan_with_nothing_to_read_does_not_start() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
