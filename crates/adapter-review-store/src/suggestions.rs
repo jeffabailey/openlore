@@ -34,6 +34,16 @@ const ADD_PENDING_FROM_LISTED_ACCOUNT: &str = "INSERT INTO suggestions
     WHERE EXISTS (SELECT 1 FROM github_accounts WHERE owner_did = ? AND github_user_id = ?)
     ON CONFLICT DO NOTHING";
 
+/// The conditional insert of an imported repo's suggestion (ADR-088 §7,
+/// U-RRA-D9): added only while the import is still listed for the owner.
+const ADD_PENDING_FROM_LISTED_IMPORT: &str = "INSERT INTO suggestions
+    (owner_did, subject, predicate, object, confidence_bp, evidence, signals, source_repo,
+     state, first_suggested_at, state_changed_at, source_kind, source_account_id,
+     source_repo_id, outside_default)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'pending', now(), now(), 'imported', NULL, ?, NULL
+    WHERE EXISTS (SELECT 1 FROM imported_repos WHERE owner_did = ? AND repo_id = ?)
+    ON CONFLICT DO NOTHING";
+
 const READ_OUTSIDE_DEFAULT: &str = "SELECT outside_default FROM suggestions
     WHERE owner_did = ? AND subject = ? AND predicate = ? AND object = ?";
 
@@ -208,6 +218,40 @@ impl ReviewStateWrite for ReviewStore {
         .map_err(port_error)
     }
 
+    fn add_pending_from_import(
+        &self,
+        owner_did: &str,
+        repo_id: u64,
+        suggestions: &[Suggestion],
+    ) -> Result<(), ReviewStoreError> {
+        self.with_connection(|conn| {
+            let repo_id = db_id(repo_id)?;
+            in_transaction(conn, |conn| {
+                suggestions.iter().try_for_each(|s| {
+                    conn.execute(
+                        ADD_PENDING_FROM_LISTED_IMPORT,
+                        params![
+                            owner_did,
+                            s.key.subject,
+                            s.key.predicate,
+                            s.key.object,
+                            s.confidence_bp,
+                            to_json(&s.evidence),
+                            to_json(&s.why),
+                            s.source_repo,
+                            repo_id,
+                            owner_did,
+                            repo_id,
+                        ],
+                    )
+                    .map(drop)
+                    .map_err(db_error)
+                })
+            })
+        })
+        .map_err(port_error)
+    }
+
     fn change_state(
         &self,
         owner_did: &str,
@@ -256,6 +300,43 @@ mod tests {
             repo_id: 1,
             outside_default: None,
         }
+    }
+
+    fn cargo_suggestion() -> Suggestion {
+        Suggestion {
+            key: SuggestionKey {
+                subject: "github:rust-lang/cargo".into(),
+                predicate: "embodies".into(),
+                object: "test-driven".into(),
+            },
+            confidence_bp: 7_000,
+            evidence: vec!["https://github.com/rust-lang/cargo".into()],
+            why: vec!["tests".into()],
+            source_repo: "rust-lang/cargo".into(),
+        }
+    }
+
+    /// An imported repo's suggestion is stored as imported, and only while
+    /// the import is listed (U-RRA-D9): never for another owner's import.
+    #[test]
+    fn an_imported_suggestion_is_stored_as_imported_only_while_listed() {
+        use ports::{ImportedRepo, ImportedReposWrite};
+        let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
+        let cargo = ImportedRepo {
+            repo_id: 2_001,
+            full_name: "rust-lang/cargo".into(),
+        };
+        store.add_import(OWNERS[0], &cargo, KpiTally::NONE).unwrap();
+        for owner in OWNERS {
+            store
+                .add_pending_from_import(owner, cargo.repo_id, &[cargo_suggestion()])
+                .unwrap();
+        }
+        assert_eq!(
+            store.pending_sources(OWNERS[0]).unwrap(),
+            [(cargo_suggestion().key, RepoSource::Imported(2_001))]
+        );
+        assert!(store.pending_suggestions(OWNERS[1]).unwrap().is_empty());
     }
 
     /// A store where each owner lists their source account.

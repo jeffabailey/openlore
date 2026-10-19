@@ -4,8 +4,8 @@ use duckdb::types::{TimeUnit, Value};
 use duckdb::{params, OptionalExt};
 use ports::{
     AccountCheckOutcome, AccountCheckRecord, KpiTally, OutsideDefault, PlanRowStatus,
-    PlannedScanRepo, RepoSkipReason, ReviewStoreError, ScanCounts, ScanPlanRead, ScanPlanRow,
-    ScanRun, ScanRunPort, ScanStatus, SkippedScanRepo,
+    PlannedScanRepo, RepoSkipReason, RepoSource, ReviewStoreError, ScanCounts, ScanPlanRead,
+    ScanPlanRow, ScanRun, ScanRunPort, ScanStatus, SkippedScanRepo,
 };
 
 use crate::secrets::port_error;
@@ -20,10 +20,11 @@ const FINISH_SCAN: &str = "UPDATE scan_runs
     WHERE owner_did = ? AND run_id = ?";
 
 // ADR-088 §6: the frozen plan, one row per repo, written before the first read.
+// An imported row has no account (`source_account_id` NULL).
 const RECORD_PLAN_ROW: &str = "INSERT INTO scan_run_repos
     (owner_did, run_id, position, repo_id, full_name, source_kind, source_account_id, status,
      outside_default)
-    VALUES (?, ?, ?, ?, ?, 'account', ?, 'planned', ?)";
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'planned', ?)";
 
 // A skipped chosen repo, after every row already recorded for the run.
 const RECORD_SKIPPED_ROW: &str = "INSERT INTO scan_run_repos
@@ -41,7 +42,8 @@ const LATEST_SKIPPED: &str = "SELECT repo_id, full_name, source_account_id, skip
     ORDER BY position";
 
 // Every plan row of the owner's most recent run (the run `LATEST_SCAN` reads).
-const LATEST_PLAN: &str = "SELECT repo_id, full_name, source_account_id, status, outside_default
+const LATEST_PLAN: &str = "SELECT repo_id, full_name, source_kind, source_account_id, status,
+    outside_default
     FROM scan_run_repos
     WHERE owner_did = ? AND run_id = (
         SELECT run_id FROM scan_runs WHERE owner_did = ?
@@ -225,7 +227,8 @@ impl ScanRunPort for ReviewStore {
                             stored_count(position),
                             db_id(row.repo_id)?,
                             row.full_name,
-                            db_id(row.source_account_id)?,
+                            source_kind(row.source),
+                            source_account(row.source)?,
                             row.outside_default.map(OutsideDefault::as_str),
                         ],
                     )
@@ -332,6 +335,31 @@ impl ScanRunPort for ReviewStore {
     }
 }
 
+/// A plan row's `source_kind`.
+fn source_kind(source: RepoSource) -> &'static str {
+    match source {
+        RepoSource::Account(_) => "account",
+        RepoSource::Imported(_) => "imported",
+    }
+}
+
+/// A plan row's `source_account_id`: an imported row has none.
+fn source_account(source: RepoSource) -> Result<Option<i64>, StoreError> {
+    match source {
+        RepoSource::Account(account_id) => db_id(account_id).map(Some),
+        RepoSource::Imported(_) => Ok(None),
+    }
+}
+
+/// A stored plan row's source back: an imported row is its own repo.
+fn stored_source(kind: &str, account_id: Option<i64>, repo_id: u64) -> Option<RepoSource> {
+    match kind {
+        "account" => u64::try_from(account_id?).ok().map(RepoSource::Account),
+        "imported" => Some(RepoSource::Imported(repo_id)),
+        _ => None,
+    }
+}
+
 impl ScanPlanRead for ReviewStore {
     fn latest_account_checks(
         &self,
@@ -357,9 +385,10 @@ impl ScanPlanRead for ReviewStore {
                     Ok((
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, Option<i64>>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
                     ))
                 })
                 .map_err(db_error)?
@@ -367,12 +396,13 @@ impl ScanPlanRead for ReviewStore {
                 .map_err(db_error)?;
             Ok(rows
                 .into_iter()
-                .filter_map(|(repo_id, full_name, account_id, status, tag)| {
+                .filter_map(|(repo_id, full_name, kind, account_id, status, tag)| {
+                    let repo_id = u64::try_from(repo_id).ok()?;
                     Some(ScanPlanRow {
                         repo: PlannedScanRepo {
-                            repo_id: u64::try_from(repo_id).ok()?,
+                            repo_id,
                             full_name,
-                            source_account_id: u64::try_from(account_id?).ok()?,
+                            source: stored_source(&kind, account_id, repo_id)?,
                             outside_default: tag.as_deref().and_then(OutsideDefault::parse),
                         },
                         status: PlanRowStatus::parse(&status)?,
@@ -526,7 +556,7 @@ mod tests {
                 .map(|(i, tag)| PlannedScanRepo {
                     repo_id: 500 + i as u64,
                     full_name: format!("priya/repo-{i}"),
-                    source_account_id: 1 + i as u64 % 2,
+                    source: RepoSource::Account(1 + i as u64 % 2),
                     outside_default: *tag,
                 })
                 .collect();

@@ -4,7 +4,7 @@
 use maud::{html, Markup};
 
 use super::*;
-use ports::ListingExtent;
+use ports::{ImportedRepo, ListingExtent};
 
 use crate::repo_scope::{ChooseList, LimitRefusal, TicksRoom, SCAN_REPO_CAP};
 
@@ -31,6 +31,15 @@ pub const IMPORT_REPO_FIELD: &str = "repo";
 
 /// The button that names a public repo the owner doesn't own.
 pub const ADD_REPO_LABEL: &str = "Add repo";
+
+/// The heading of the owner's imports (US-RRA-005).
+pub const REPOS_YOU_DONT_OWN_HEADING: &str = "Repos you don't own";
+
+/// Where an import's "Remove" posts (US-RRA-009).
+pub const REMOVE_IMPORT_PATH: &str = "/repos/imports/remove";
+
+/// The button that removes an import.
+pub const REMOVE_IMPORT_LABEL: &str = "Remove";
 
 /// AC-001.5: a rate-limited listing.
 pub const LISTING_RATE_LIMITED_MESSAGE: &str = "GitHub is rate-limiting the app, so your repo list couldn't be loaded. Your saved choice is unchanged. Please try again in a few minutes.";
@@ -77,6 +86,8 @@ pub enum ReposNotice {
 pub struct ReposView<'a> {
     pub csrf_token: &'a str,
     pub accounts: Vec<AccountRepos<'a>>,
+    /// The public repos she named, in the order she added them.
+    pub imports: &'a [ImportedRepo],
     pub notice: Option<ReposNotice>,
 }
 
@@ -160,6 +171,7 @@ pub fn repos_page(view: &ReposView<'_>) -> String {
             @for account in &view.accounts {
                 (account_section(account, view.csrf_token))
             }
+            (imports_section(view.imports, view.csrf_token))
             (back_to_queue())
         },
     )
@@ -242,15 +254,48 @@ fn nothing_to_choose(list: &ChooseList, name: &str, csrf_token: &str) -> Markup 
                 (skipped_message(list.forks_skipped, list.archived_skipped)
                     .unwrap_or_else(|| "No owned public repo was found.".to_string()))
             }
-            form method="post" action=(IMPORTS_PATH) {
-                (csrf_field(csrf_token))
-                label {
-                    "Add a public repo "
-                    input type="text" name=(IMPORT_REPO_FIELD) placeholder="owner/name";
-                }
-                " "
-                button type="submit" { (ADD_REPO_LABEL) }
+            (add_repo_form(csrf_token))
+        }
+    }
+}
+
+/// "Add repo": name a public repo as `owner/name`.
+fn add_repo_form(csrf_token: &str) -> Markup {
+    html! {
+        form method="post" action=(IMPORTS_PATH) {
+            (csrf_field(csrf_token))
+            label {
+                "Add a public repo "
+                input type="text" name=(IMPORT_REPO_FIELD) placeholder="owner/name";
             }
+            " "
+            button type="submit" { (ADD_REPO_LABEL) }
+        }
+    }
+}
+
+/// The repos she named that none of her accounts owns: their suggestions
+/// stay private. Each can be removed; any public repo can be added.
+fn imports_section(imports: &[ImportedRepo], csrf_token: &str) -> Markup {
+    html! {
+        section {
+            h2 { (REPOS_YOU_DONT_OWN_HEADING) }
+            @if imports.is_empty() {
+                p { "Name a public repo you don't own to get private suggestions about it." }
+            }
+            ul {
+                @for import in imports {
+                    li {
+                        form method="post" action=(REMOVE_IMPORT_PATH) {
+                            (csrf_field(csrf_token))
+                            input type="hidden" name=(IMPORT_REPO_FIELD) value=(import.repo_id);
+                            (import.full_name) " "
+                            button type="submit" { (REMOVE_IMPORT_LABEL) }
+                        }
+                    }
+                }
+            }
+            (add_repo_form(csrf_token))
         }
     }
 }

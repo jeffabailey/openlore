@@ -48,6 +48,25 @@ pub const EMPTY_SCAN_NOTICE: &str = "We didn't find suggestions in your owned, p
 /// What the queue says right after "Not me" (AC-006.2).
 pub const DECLINED_NOTICE: &str = "Declined. Private: never published, won't be suggested again.";
 
+/// The head of a scan's summary when the owner lists no GitHub account and
+/// it read only her imports (AC-005.5, D-RRA-8).
+pub const NO_ACCOUNT_TO_RECHECK: &str = "No GitHub account to re-check";
+
+/// What an imported repo's card says (US-RRA-006, BR-RRA-1).
+pub const NOT_YOURS_TO_PUBLISH: &str = "Not yours to publish.";
+
+/// "Not yours to publish. Only an owner of github.com/rust-lang can publish
+/// claims about this repo." for a suggestion about `rust-lang/cargo`.
+pub fn not_yours_message(source_repo: &str) -> String {
+    let owner = source_repo
+        .split_once('/')
+        .map_or(source_repo, |(owner, _)| owner);
+    format!(
+        "{NOT_YOURS_TO_PUBLISH} Only an owner of github.com/{owner} can publish claims about \
+         this repo."
+    )
+}
+
 /// The label of the button that restores a just-declined suggestion.
 pub const UNDO_LABEL: &str = "Undo";
 
@@ -287,11 +306,38 @@ pub fn skipped_repo_message(skipped: &SkippedScanRepo) -> String {
     )
 }
 
+/// "No GitHub account to re-check · 1 repo read · 3 new suggestions": a
+/// scan of an owner without accounts read only her imports.
+pub fn imports_only_summary(repos_read: usize, counts: ScanCounts) -> String {
+    summary_after(
+        format!(
+            "{NO_ACCOUNT_TO_RECHECK} · {}",
+            repos_read_message(repos_read)
+        ),
+        counts,
+    )
+}
+
+/// Whose queue is shown: an owner with a verified account, or one with no
+/// account who named public repos (D-RRA-8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueueHead<'a> {
+    Account { login: &'a str },
+    NoAccount,
+}
+
 /// The summary of the latest scan, once it has completed.
-fn completed_summary(latest: Option<ScanRun>, checks: &[AccountChecked<'_>]) -> Option<String> {
+fn completed_summary(
+    head: QueueHead<'_>,
+    latest: Option<ScanRun>,
+    checks: &[AccountChecked<'_>],
+) -> Option<String> {
     latest
         .filter(|run| run.status == ScanStatus::Completed)
-        .map(|run| scan_summary_by_account(run.counts, checks))
+        .map(|run| match head {
+            QueueHead::Account { .. } => scan_summary_by_account(run.counts, checks),
+            QueueHead::NoAccount => imports_only_summary(run.repos_read, run.counts),
+        })
 }
 
 /// Why each account the latest finished scan did not read was not read.
@@ -314,9 +360,22 @@ pub struct ScanDetails<'a> {
     pub skipped: &'a [SkippedScanRepo],
     pub account_checks: &'a [AccountChecked<'a>],
     pub card_accounts: &'a [(SuggestionKey, &'a str)],
+    /// The pending suggestions about repos she imported: never hers to publish.
+    pub card_imported: &'a [SuggestionKey],
+    /// Whether she lists any imported repo (then a scan needs no account).
+    pub imports_listed: bool,
 }
 
 impl<'a> ScanDetails<'a> {
+    /// Where the pending suggestion `key` came from, as its card says.
+    fn card_source(&self, key: &SuggestionKey) -> CardSource<'a> {
+        if self.card_imported.contains(key) {
+            CardSource::Imported
+        } else {
+            CardSource::Account(self.account_of(key))
+        }
+    }
+
     /// The account the pending suggestion `key` came from.
     fn account_of(&self, key: &SuggestionKey) -> Option<&'a str> {
         self.card_accounts
@@ -398,17 +457,31 @@ fn card_action(
     }
 }
 
+/// Where a card's suggestion came from: one of her accounts (by the login
+/// it is listed under, when known), or a repo she imported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CardSource<'a> {
+    Account(Option<&'a str>),
+    Imported,
+}
+
 /// One evidence-backed card (AC-003.2): confidence, why, evidence, actions.
 /// Its stable id and `hx-morph-skip-children` let the 2 s refresh during a
 /// scan add and remove cards without touching one's contents, so a preview
 /// opened inside a card stays open.
-fn suggestion_card(suggestion: &Suggestion, account: Option<&str>, csrf_token: &str) -> Markup {
+fn suggestion_card(suggestion: &Suggestion, source: CardSource<'_>, csrf_token: &str) -> Markup {
     html! {
         article id=(card_id(&suggestion.key)) hx-morph-skip-children {
             (selection_box(&suggestion.key))
             h2 { (suggestion_headline(&suggestion.key)) }
-            @if let Some(login) = account {
-                p { "from github.com/" (login) }
+            @match source {
+                CardSource::Account(Some(login)) => {
+                    p { "from github.com/" (login) }
+                }
+                CardSource::Account(None) => {}
+                CardSource::Imported => {
+                    p { strong { (not_yours_message(&suggestion.source_repo)) } }
+                }
             }
             p {
                 "Confidence " (confidence_with_bucket(suggestion.confidence_bp))
@@ -506,11 +579,13 @@ fn declined_notice(key: &SuggestionKey, csrf_token: &str) -> Markup {
 
 /// The verified owner's queue: privacy statement, scan state (naming the
 /// chosen repos its latest scan skipped), cards.
-fn verified_queue(login: &str, view: &QueueView<'_>, details: &ScanDetails<'_>) -> Markup {
+fn verified_queue(head: QueueHead<'_>, view: &QueueView<'_>, details: &ScanDetails<'_>) -> Markup {
     html! {
-        p {
-            "GitHub: github.com/" (login) " (verified) · "
-            a href="/github" { "Manage your GitHub link" }
+        @if let QueueHead::Account { login } = head {
+            p {
+                "GitHub: github.com/" (login) " (verified) · "
+                a href="/github" { "Manage your GitHub link" }
+            }
         }
         h1 { "Your suggestions" }
         p { strong { (PRIVATE_NOTICE) } }
@@ -534,7 +609,7 @@ fn verified_queue(login: &str, view: &QueueView<'_>, details: &ScanDetails<'_>) 
                 }
                 None => {}
             }
-            @if let Some(summary) = completed_summary(view.latest_scan, details.account_checks) {
+            @if let Some(summary) = completed_summary(head, view.latest_scan, details.account_checks) {
                 p role="status" { (summary) }
             }
             (account_check_notices(view.latest_scan, details.account_checks))
@@ -561,7 +636,7 @@ fn verified_queue(login: &str, view: &QueueView<'_>, details: &ScanDetails<'_>) 
                 (approve_selected_form(view.csrf_token))
             }
             @for suggestion in view.pending {
-                (suggestion_card(suggestion, details.account_of(&suggestion.key), view.csrf_token))
+                (suggestion_card(suggestion, details.card_source(&suggestion.key), view.csrf_token))
             }
         }
         p data-triage-keys="a e n j k" {
@@ -596,6 +671,13 @@ pub fn review_page_of_scan(view: &QueueView<'_>, details: &ScanDetails<'_>) -> S
         html! {
             p { "Signed in as @" (view.handle) }
             @match view.github {
+                GithubStep::NotLinked if details.imports_listed => {
+                    p {
+                        "No GitHub account linked: your scans read only the repos you named. "
+                        a href="/github" { "Verify GitHub ownership" }
+                    }
+                    (verified_queue(QueueHead::NoAccount, view, details))
+                }
                 GithubStep::NotLinked => {
                     p { "Before anything is scanned, verify that your GitHub account is yours." }
                     a href="/github" { "Verify GitHub ownership" }
@@ -611,7 +693,7 @@ pub fn review_page_of_scan(view: &QueueView<'_>, details: &ScanDetails<'_>) -> S
                     a href="/github" { "Verify GitHub ownership" }
                 }
                 GithubStep::Verified { login } => {
-                    (verified_queue(login, view, details))
+                    (verified_queue(QueueHead::Account { login }, view, details))
                 }
             }
             form method="post" action="/signout" {

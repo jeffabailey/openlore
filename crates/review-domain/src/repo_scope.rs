@@ -11,9 +11,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ports::{
-    AccountAdmission, AccountAdmitted, AccountRefusal, AccountRepoListing, ListedRepo,
-    ListingExtent, OutsideDefault, OwnedRepo, PlanRowStatus, PlannedScanRepo, RepoFacts,
-    SavedRepoChoice, ScanStatus, SkippedScanRepo,
+    AccountAdmission, AccountAdmitted, AccountRefusal, AccountRepoListing, ImportedRepo,
+    ListedRepo, ListingExtent, OutsideDefault, OwnedRepo, PlanRowStatus, PlannedScanRepo,
+    RepoFacts, SavedRepoChoice, ScanStatus, SkippedScanRepo,
 };
 use scraper_domain::{select_person_repos, DEFAULT_PERSON_REPO_COUNT};
 
@@ -725,14 +725,58 @@ fn from_other_account(plan: AccountPlan) -> AccountPlan {
     }
 }
 
-/// A planned repo of `account_id` as its frozen plan row (ADR-088 §6),
+/// A planned repo from `source` as its frozen plan row (ADR-088 §6),
 /// its outside-default tag kept (U-RRA-D2).
-pub fn plan_row(account_id: u64, repo: &PlannedRepo) -> PlannedScanRepo {
+pub fn plan_row(source: PlanSource, repo: &PlannedRepo) -> PlannedScanRepo {
     PlannedScanRepo {
         repo_id: repo.repo_id,
         full_name: repo.full_name.clone(),
-        source_account_id: account_id,
+        source,
         outside_default: repo.outside_default,
+    }
+}
+
+impl ScanPlan {
+    /// Every row the scan reads, in plan order: each passing account's
+    /// repos, then the imports (§6.2 step 4: no bio check), each named as
+    /// the owner's import list names it.
+    pub fn rows(&self, imported: &[ImportedRepo]) -> Vec<PlannedScanRepo> {
+        let owned = self
+            .owned_repos()
+            .into_iter()
+            .map(|(account_id, repo)| plan_row(PlanSource::Account(account_id), repo));
+        let imports = self.imports.iter().filter_map(|repo_id| {
+            imported
+                .iter()
+                .find(|import| import.repo_id == *repo_id)
+                .map(|import| PlannedScanRepo {
+                    repo_id: import.repo_id,
+                    full_name: import.full_name.clone(),
+                    source: PlanSource::Imported(import.repo_id),
+                    outside_default: None,
+                })
+        });
+        owned.chain(imports).collect()
+    }
+}
+
+/// The `owner/name` an owner typed into "Add repo", when it has that shape.
+pub fn import_shape(typed: &str) -> Option<(&str, &str)> {
+    let (owner, name) = typed.trim().split_once('/')?;
+    let part = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    (part(owner) && part(name)).then_some((owner, name))
+}
+
+/// The import a public repo read from GitHub becomes, named as GitHub
+/// serves it now.
+pub fn import_of(facts: &RepoFacts) -> ImportedRepo {
+    ImportedRepo {
+        repo_id: facts.repo_id,
+        full_name: facts.full_name.clone(),
     }
 }
 
@@ -966,8 +1010,8 @@ mod tests {
                 full_name: format!("me/repo-{repo_id}"),
                 outside_default: tag,
             };
-            let row = plan_row(account_id, &planned);
-            prop_assert_eq!(row.source_account_id, account_id);
+            let row = plan_row(PlanSource::Account(account_id), &planned);
+            prop_assert_eq!(row.source, PlanSource::Account(account_id));
             prop_assert_eq!(carried_repo(&row), planned);
         }
 

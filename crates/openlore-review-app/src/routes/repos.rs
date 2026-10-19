@@ -7,7 +7,10 @@
 use std::collections::BTreeSet;
 
 use hyper::StatusCode;
-use ports::{AccountRepoListing, GithubError, GithubLink, KpiTally, SavedRepoChoice, WebSession};
+use ports::{
+    AccountRepoListing, GithubError, GithubLink, ImportedRepo, KpiTally, SavedRepoChoice,
+    WebSession,
+};
 use review_domain::kpi::{choice_saved_events, utc_day, KpiEvent};
 use review_domain::repo_scope::{
     admit_save, choice_to_save, choose_list, default_ticks, differs_from_default, eligible_count,
@@ -59,7 +62,7 @@ pub(crate) async fn save_choice(app: &App, request: &PageRequest) -> Reply {
     let scope = owner_scope(app, &session.owner_did).await;
     let admitted = admit_save(
         &scope,
-        &[],
+        &import_ids(app, &session.owner_did),
         account.github_user_id,
         &ticked_ids(&choice),
         SCAN_REPO_CAP,
@@ -88,6 +91,18 @@ pub(crate) async fn save_choice(app: &App, request: &PageRequest) -> Reply {
         }
     };
     repos_page(app, &session, &csrf_token, notice).await
+}
+
+/// The owner's imports: they count toward the limit (BR-RRA-3).
+fn listed_imports(app: &App, owner_did: &str) -> Vec<ImportedRepo> {
+    app.imports_read.imports(owner_did).unwrap_or_default()
+}
+
+fn import_ids(app: &App, owner_did: &str) -> Vec<u64> {
+    listed_imports(app, owner_did)
+        .iter()
+        .map(|import| import.repo_id)
+        .collect()
 }
 
 /// The owner's accounts, in the order they were added.
@@ -199,7 +214,7 @@ fn account_listing(state: &AccountState, defaults: &[(u64, Vec<u64>)]) -> Accoun
     }
 }
 
-async fn repos_page(
+pub(crate) async fn repos_page(
     app: &App,
     session: &WebSession,
     csrf_token: &str,
@@ -207,7 +222,9 @@ async fn repos_page(
 ) -> Reply {
     let states = account_states(app, &session.owner_did).await;
     let scope: Vec<ScopeAccount> = states.iter().map(scope_account).collect();
-    let defaults = default_ticks(&scope, &[], SCAN_REPO_CAP);
+    let imports = listed_imports(app, &session.owner_did);
+    let ids: Vec<u64> = imports.iter().map(|import| import.repo_id).collect();
+    let defaults = default_ticks(&scope, &ids, SCAN_REPO_CAP);
     let sections = states
         .iter()
         .map(|state| AccountRepos {
@@ -225,6 +242,7 @@ async fn repos_page(
         views::repos_page(&ReposView {
             csrf_token,
             accounts: sections,
+            imports: &imports,
             notice,
         }),
     )

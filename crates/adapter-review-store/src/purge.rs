@@ -52,9 +52,10 @@ mod tests {
     use super::*;
     use crate::DataKey;
     use ports::{
-        GithubAccountsWrite, GithubLinkPort, KpiCounterPort, NewWebSession, PlannedScanRepo,
-        RepoChoiceWrite, ReviewStateRead, ReviewStateWrite, SavedRepoChoice, ScanRunPort,
-        SecretStorePort, SessionPort, Suggestion, SuggestionKey, SuggestionSource,
+        GithubAccountsWrite, GithubLinkPort, ImportedRepo, ImportedReposWrite, KpiCounterPort,
+        NewWebSession, PlannedScanRepo, RepoChoiceWrite, RepoSource, ReviewStateRead,
+        ReviewStateWrite, SavedRepoChoice, ScanRunPort, SecretStorePort, SessionPort, Suggestion,
+        SuggestionKey, SuggestionSource,
     };
     use proptest::prelude::*;
 
@@ -163,6 +164,14 @@ mod tests {
                 &suggestions,
             )
             .unwrap();
+        let imported = ImportedRepo {
+            repo_id: 9_000 + github_id,
+            full_name: "rust-lang/cargo".into(),
+        };
+        store.add_import(owner, &imported, KpiTally::NONE).unwrap();
+        store
+            .add_pending_from_import(owner, imported.repo_id, &suggestions)
+            .unwrap();
         let chosen: Vec<SavedRepoChoice> = (0..n)
             .map(|i| SavedRepoChoice {
                 repo_id: i as u64 + 1,
@@ -179,7 +188,7 @@ mod tests {
             .map(|c| PlannedScanRepo {
                 repo_id: c.repo_id,
                 full_name: c.full_name.clone(),
-                source_account_id: github_id,
+                source: RepoSource::Account(github_id),
                 outside_default: None,
             })
             .collect();

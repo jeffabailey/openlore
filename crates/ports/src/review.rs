@@ -554,13 +554,14 @@ pub struct ScanPlanRow {
     pub status: PlanRowStatus,
 }
 
-/// One repo of a scan's frozen plan, read for the account it came from.
+/// One repo of a scan's frozen plan, read for the source it came from: one
+/// of the owner's listed accounts, or her import.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedScanRepo {
     pub repo_id: u64,
     /// `owner/name` as listed when the plan was frozen.
     pub full_name: String,
-    pub source_account_id: u64,
+    pub source: RepoSource,
     /// Why the pre-feature scan would never have read it (KPI-RRA-1), kept
     /// on the row so a resumed run's suggestions carry it too.
     pub outside_default: Option<OutsideDefault>,
@@ -692,6 +693,33 @@ pub trait ScopeRemovalPort: Send + Sync {
     ) -> Result<AccountRemoval, ReviewStoreError>;
 }
 
+/// A public repo the owner named that none of her listed accounts owns
+/// (US-RRA-005, ADR-088 §4): read by her scans, its suggestions private.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedRepo {
+    pub repo_id: u64,
+    /// `owner/name` as GitHub served it when it was added.
+    pub full_name: String,
+}
+
+/// READS of the owner's imported repos (the choose page, the scan).
+pub trait ImportedReposRead: Send + Sync {
+    /// The owner's imports, in the order she added them.
+    fn imports(&self, owner_did: &str) -> Result<Vec<ImportedRepo>, ReviewStoreError>;
+}
+
+/// WRITES of the owner's imported repos ("Add repo" only).
+pub trait ImportedReposWrite: Send + Sync {
+    /// List `repo` as the owner's import, with `tally` in the same
+    /// transaction; re-adding a listed repo changes nothing.
+    fn add_import(
+        &self,
+        owner_did: &str,
+        repo: &ImportedRepo,
+        tally: KpiTally<'_>,
+    ) -> Result<(), ReviewStoreError>;
+}
+
 /// A suggestion's identity (BR-1): one per (subject, predicate, object).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SuggestionKey {
@@ -817,6 +845,17 @@ pub trait ReviewStateWrite: Send + Sync {
         &self,
         owner_did: &str,
         source: &SuggestionSource,
+        suggestions: &[Suggestion],
+    ) -> Result<(), ReviewStoreError>;
+
+    /// Add new pending suggestions from the owner's import `repo_id`,
+    /// stored with source `imported` (never publishable, BR-RRA-1). Like
+    /// [`Self::add_pending_from_listed_source`], each insert happens only
+    /// while the import is still listed (ADR-088 §7, U-RRA-D9).
+    fn add_pending_from_import(
+        &self,
+        owner_did: &str,
+        repo_id: u64,
         suggestions: &[Suggestion],
     ) -> Result<(), ReviewStoreError>;
 

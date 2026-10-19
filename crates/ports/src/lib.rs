@@ -39,14 +39,15 @@ pub use review::{
     AccountAdmission, AccountAdmitted, AccountCheckOutcome, AccountCheckRecord, AccountListingNote,
     AccountRefusal, AccountRemoval, AccountStatusWrite, AuthenticatedIdentity,
     BeginAuthorizationError, CompleteAuthorizationError, CreatedRecord, ForgetPort,
-    GithubAccountsRead, GithubAccountsWrite, GithubLink, GithubLinkPort, KpiCounterPort,
-    KpiCounterRow, KpiTally, NewWebSession, OAuthPort, OutsideDefault, PdsCallback, PlanKind,
-    PlanRowStatus, PlannedScanRepo, PublishPlanPort, RepoChoiceRead, RepoChoiceWrite,
-    RepoSkipReason, RepoSource, RepoWriteError, ReviewStateRead, ReviewStateWrite,
-    ReviewStoreError, ReviewStorePort, RevokeOutcome, SavedRepoChoice, ScanCounts, ScanPlanRead,
-    ScanPlanRow, ScanRun, ScanRunPort, ScanStatus, ScopeRemovalPort, SecretStorePort, SessionPort,
-    SkippedScanRepo, StoredPublishPlan, Suggestion, SuggestionKey, SuggestionSource,
-    SuggestionState, TakenPublishPlan, UserRepoReadPort, UserRepoWritePort, WebSession,
+    GithubAccountsRead, GithubAccountsWrite, GithubLink, GithubLinkPort, ImportedRepo,
+    ImportedReposRead, ImportedReposWrite, KpiCounterPort, KpiCounterRow, KpiTally, NewWebSession,
+    OAuthPort, OutsideDefault, PdsCallback, PlanKind, PlanRowStatus, PlannedScanRepo,
+    PublishPlanPort, RepoChoiceRead, RepoChoiceWrite, RepoSkipReason, RepoSource, RepoWriteError,
+    ReviewStateRead, ReviewStateWrite, ReviewStoreError, ReviewStorePort, RevokeOutcome,
+    SavedRepoChoice, ScanCounts, ScanPlanRead, ScanPlanRow, ScanRun, ScanRunPort, ScanStatus,
+    ScopeRemovalPort, SecretStorePort, SessionPort, SkippedScanRepo, StoredPublishPlan, Suggestion,
+    SuggestionKey, SuggestionSource, SuggestionState, TakenPublishPlan, UserRepoReadPort,
+    UserRepoWritePort, WebSession,
 };
 
 // -----------------------------------------------------------------------------

@@ -9,8 +9,8 @@ use ports::claim_domain::authority::{
     may_sign, owner_to_read, OwnerBioRead, RepoRead, SigningPermit, SigningRefusal,
 };
 use ports::{
-    GithubError, GithubLink, GithubLinkPort, KpiTally, RepoFacts, RepoSource, ReviewStateRead,
-    Suggestion, SuggestionKey, SuggestionState, WebSession,
+    GithubError, GithubLink, GithubLinkPort, ImportedReposRead, KpiTally, RepoFacts, RepoSource,
+    ReviewStateRead, Suggestion, SuggestionKey, SuggestionState, WebSession,
 };
 use review_domain::edits::{edit_claim, philosophy_choices};
 use review_domain::lifecycle::{
@@ -58,6 +58,7 @@ pub(crate) fn queue_page(
     } = owner_queue(
         app.links.as_ref(),
         app.review_read.as_ref(),
+        app.imports_read.as_ref(),
         &session.owner_did,
     );
     let latest_scan = app.scans.latest_scan(&session.owner_did).ok().flatten();
@@ -83,6 +84,15 @@ pub(crate) fn queue_page(
         })
         .collect();
     let sources = sources_of(app.review_read.as_ref(), &session.owner_did, &accounts);
+    let card_imported: Vec<SuggestionKey> = pending
+        .iter()
+        .filter(|suggestion| matches!(sources.get(&suggestion.key), Some(RepoSource::Imported(_))))
+        .map(|suggestion| suggestion.key.clone())
+        .collect();
+    let imports_listed = app
+        .imports_read
+        .imports(&session.owner_did)
+        .is_ok_and(|imports| !imports.is_empty());
     let card_accounts: Vec<(SuggestionKey, &str)> = pending
         .iter()
         .filter_map(|suggestion| {
@@ -111,6 +121,8 @@ pub(crate) fn queue_page(
                 skipped: &skipped,
                 account_checks: &account_checks,
                 card_accounts: &card_accounts,
+                card_imported: &card_imported,
+                imports_listed,
             },
         ),
     )
@@ -151,11 +163,13 @@ fn sources_of(
 }
 
 /// The owner's pending suggestions she sees now (CORE-RRA-7): those whose
-/// source account is listed and verified. The rest are hidden, not deleted.
+/// source account is listed and verified, or whose imported repo is listed.
+/// The rest are hidden, not deleted.
 fn visible_pending(
     review_read: &dyn ReviewStateRead,
     owner_did: &str,
     accounts: &[GithubLink],
+    imports: &[u64],
 ) -> Vec<Suggestion> {
     let pending = review_read
         .pending_suggestions(owner_did)
@@ -180,13 +194,14 @@ fn visible_pending(
         })
         .collect();
     kept.into_iter()
-        .zip(visible(&origins, &standings, &[]))
+        .zip(visible(&origins, &standings, imports))
         .filter_map(|(suggestion, shown)| shown.then_some(suggestion))
         .collect()
 }
 
 /// What the owner's queue page lists: the GitHub link, the pending
-/// suggestions (only while that link is verified) and their tally.
+/// suggestions (while that link is verified, or she lists imports) and
+/// their tally.
 pub(crate) struct OwnerQueue {
     pub(crate) link: Option<GithubLink>,
     pub(crate) pending: Vec<Suggestion>,
@@ -198,18 +213,25 @@ pub(crate) struct OwnerQueue {
 pub(crate) fn owner_queue(
     links: &dyn GithubLinkPort,
     review_read: &dyn ReviewStateRead,
+    imports_read: &dyn ImportedReposRead,
     owner_did: &str,
 ) -> OwnerQueue {
     let accounts = links.github_accounts(owner_did).unwrap_or_default();
+    let imports: Vec<u64> = imports_read
+        .imports(owner_did)
+        .unwrap_or_default()
+        .iter()
+        .map(|import| import.repo_id)
+        .collect();
     let link = accounts.first().cloned();
-    let verified = link.as_ref().is_some_and(|link| link.verified);
-    let pending = if verified {
-        visible_pending(review_read, owner_did, &accounts)
+    let shows_queue = link.as_ref().is_some_and(|link| link.verified) || !imports.is_empty();
+    let pending = if shows_queue {
+        visible_pending(review_read, owner_did, &accounts, &imports)
     } else {
         Vec::new()
     };
     let tally = tally(
-        verified
+        shows_queue
             .then(|| review_read.suggestion_states(owner_did).ok())
             .flatten()
             .unwrap_or_default()
@@ -658,7 +680,14 @@ fn with_own_step(
 /// to act on until their account is verified again).
 fn owner_pending(app: &App, owner_did: &str) -> Vec<Suggestion> {
     let accounts = app.links.github_accounts(owner_did).unwrap_or_default();
-    visible_pending(app.review_read.as_ref(), owner_did, &accounts)
+    let imports: Vec<u64> = app
+        .imports_read
+        .imports(owner_did)
+        .unwrap_or_default()
+        .iter()
+        .map(|import| import.repo_id)
+        .collect();
+    visible_pending(app.review_read.as_ref(), owner_did, &accounts, &imports)
 }
 
 fn link_verified(app: &App, owner_did: &str) -> bool {
@@ -789,7 +818,7 @@ mod tests {
             link,
             pending,
             tally: queue_tally,
-        } = owner_queue(&store, &store, OWNER);
+        } = owner_queue(&store, &store, &store, OWNER);
         assert_eq!(pending, vec![pending_suggestion()]);
         assert_eq!(queue_tally, tally([ports::SuggestionState::Pending]));
         let html = views::review_page(&QueueView {

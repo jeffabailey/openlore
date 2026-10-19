@@ -60,6 +60,8 @@ pub enum KpiEvent {
     ScanAccountUnfinished,
     /// An owner removed one of her GitHub accounts (US-RRA-008).
     AccountRemoved,
+    /// KPI-RRA-3: an owner named a public repo she doesn't own (US-RRA-005).
+    ImportAdded,
     /// KPI-RRA-4: a publish was refused because none of the owner's listed
     /// accounts owns the repo now (another account or an organization does).
     PublishRefusedNotOwned,
@@ -74,7 +76,7 @@ pub enum KpiEvent {
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 34] = [
+    pub const ALL: [KpiEvent; 35] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -103,6 +105,7 @@ impl KpiEvent {
         Self::ScanAccountFailed,
         Self::ScanAccountUnfinished,
         Self::AccountRemoved,
+        Self::ImportAdded,
         Self::PublishRefusedNotOwned,
         Self::PublishRefusedBioFailed,
         Self::PublishRefusedUnreachable,
@@ -144,6 +147,7 @@ impl KpiEvent {
             Self::ScanAccountFailed => "scan.account.failed",
             Self::ScanAccountUnfinished => "scan.account.unfinished",
             Self::AccountRemoved => "account.removed",
+            Self::ImportAdded => "import.added",
             Self::PublishRefusedNotOwned => "publish.refused.not_owned",
             Self::PublishRefusedBioFailed => "publish.refused.bio_failed",
             Self::PublishRefusedUnreachable => "publish.refused.unreachable",

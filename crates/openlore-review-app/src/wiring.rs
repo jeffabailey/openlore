@@ -724,6 +724,8 @@ fn app(wired: Wired) -> App {
         review_read: wired.store.clone(),
         choices_read: wired.store.clone(),
         choices_write: wired.store.clone(),
+        imports_read: wired.store.clone(),
+        imports_write: wired.store.clone(),
         plans: wired.store.clone(),
         forget: wired.store.clone(),
         kpi: wired.store.clone(),

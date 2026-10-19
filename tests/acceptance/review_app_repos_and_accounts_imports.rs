@@ -65,7 +65,6 @@ fn chosen_total(browser: &mut Browser) -> String {
 ///     | aishab/ripgrep  | a fork        | aishab/ripgrep embodies dependency-pinning                                  |
 /// ```
 #[test]
-#[ignore = "DELIVER 03-01: import a public repo, read it, show private suggestions"]
 fn priya_names_a_public_repo_she_doesnt_own_and_gets_private_suggestions() {
     let rows = [
         (
@@ -237,7 +236,6 @@ fn a_repo_that_cannot_be_imported_is_refused_with_the_cause_and_the_fix() {
 ///   And that scan was the last of his 6 today
 /// ```
 #[test]
-#[ignore = "DELIVER 03-03: imports need no verified account and still use the day's scans"]
 fn someone_with_no_verified_github_account_can_still_look_at_a_repo() {
     let world = rra_world();
     let mut browser = given_signed_in(&world, Persona::Dmitri);

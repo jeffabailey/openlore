@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use ports::{
     AccountCheckOutcome, AccountCheckRecord, AccountRepoListing, GithubError, GithubLink,
-    PlanRowStatus, PlannedScanRepo, RepoFacts, RepoSkipReason, ReviewStoreError, SavedRepoChoice,
-    ScanCounts, ScanPlanRow, ScanStatus, SkippedScanRepo, SuggestionSource,
+    ImportedRepo, PlanRowStatus, PlannedScanRepo, RepoFacts, RepoSkipReason, ReviewStoreError,
+    SavedRepoChoice, ScanCounts, ScanPlanRow, ScanStatus, SkippedScanRepo, SuggestionSource,
 };
 use review_domain::budget::{auto_resume_wait, github_budget_allows, ScanAdmission};
 use review_domain::kpi::{utc_day, KpiEvent};
@@ -28,7 +28,7 @@ use review_domain::lifecycle::suggestion_from_candidate;
 use review_domain::ownership::{prove_ownership, OwnershipRefusal, VerifiedOwnership};
 use review_domain::reconcile::{add_counts, reconcile};
 use review_domain::repo_scope::{
-    carried_repo, eligible_count, listing_with_reads, named_skips, plan_row, resume_plan,
+    carried_repo, eligible_count, listing_with_reads, named_skips, resume_plan,
     resumes_frozen_plan, scan_intent, standing_after_check, unlisted_ticks, AccountCheck, BioCheck,
     CarriedSkip, FrozenRow, FrozenScope, LimitRefusal, ListedSources, Listing, PlanSource,
     PlannedRepo, SavedTicks, ScanAccount, ScanIntent, Standing, StandingChange, SCAN_REPO_CAP,
@@ -73,7 +73,7 @@ impl Ended {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScanStart {
     Started,
-    /// No verified GitHub link: verify first.
+    /// No verified GitHub link and no imported repo: verify first.
     NotVerified,
     AlreadyScanning,
     /// The budget said no (logged as `scan.refused`).
@@ -86,15 +86,19 @@ pub(crate) enum ScanStart {
     OverLimit(LimitRefusal),
 }
 
-/// Start a scan for `owner_did` if their link is verified and the budget
+/// Start a scan for `owner_did` if one of their accounts is verified or
+/// they imported a repo (D-RRA-8: imports need no account), and the budget
 /// admits it; it then runs in the background. The one way any scan starts,
 /// whether the owner pressed Scan or a paused scan resumes on its own.
 pub(crate) fn begin_scan(app: &Arc<App>, owner_did: &str) -> ScanStart {
     let accounts = app.links.github_accounts(owner_did).unwrap_or_default();
-    if !accounts.iter().any(|account| account.verified) {
+    let Ok(imports) = app.imports_read.imports(owner_did) else {
+        return ScanStart::Unavailable;
+    };
+    if imports.is_empty() && !accounts.iter().any(|account| account.verified) {
         return ScanStart::NotVerified;
     }
-    let basis = match scan_basis(app, owner_did, &accounts) {
+    let basis = match scan_basis(app, owner_did, &accounts, imports) {
         Ok(basis) => basis,
         Err(refused) => return refused,
     };
@@ -137,7 +141,12 @@ pub(crate) enum ScanBasis {
 
 /// Resume the latest run's frozen plan when it paused with one; otherwise
 /// freeze the choice in force now. A resume ignores choices saved since.
-fn scan_basis(app: &App, owner_did: &str, accounts: &[GithubLink]) -> Result<ScanBasis, ScanStart> {
+fn scan_basis(
+    app: &App,
+    owner_did: &str,
+    accounts: &[GithubLink],
+    imports: Vec<ImportedRepo>,
+) -> Result<ScanBasis, ScanStart> {
     let unavailable = |_| ScanStart::Unavailable;
     let latest = app.scans.latest_scan(owner_did).map_err(unavailable)?;
     let plan = app.scan_plans.latest_plan(owner_did).map_err(unavailable)?;
@@ -148,14 +157,16 @@ fn scan_basis(app: &App, owner_did: &str, accounts: &[GithubLink]) -> Result<Sca
             .map_err(unavailable)?;
         return Ok(ScanBasis::Resume { plan, skipped });
     }
-    frozen_intent(app, owner_did, accounts).map(ScanBasis::Fresh)
+    frozen_intent(app, owner_did, accounts, imports).map(ScanBasis::Fresh)
 }
 
 /// A scan's scope frozen at its start, with each account's saved choice in
-/// account order (the names its skipped repos are reported by).
+/// account order (the names its skipped repos are reported by) and the
+/// imports (the names their plan rows are read by).
 pub(crate) struct FrozenChoice {
     scope: FrozenScope,
     saved: Vec<Vec<SavedRepoChoice>>,
+    imports: Vec<ImportedRepo>,
 }
 
 /// The scan's intent over every listed account, frozen from the store
@@ -165,6 +176,7 @@ fn frozen_intent(
     app: &App,
     owner_did: &str,
     accounts: &[GithubLink],
+    imports: Vec<ImportedRepo>,
 ) -> Result<FrozenChoice, ScanStart> {
     let saved: Vec<Vec<SavedRepoChoice>> = accounts
         .iter()
@@ -183,8 +195,13 @@ fn frozen_intent(
             eligible_seen: None,
         })
         .collect();
-    match scan_intent(&scan_accounts, &[], SCAN_REPO_CAP) {
-        ScanIntent::Read(scope) => Ok(FrozenChoice { scope, saved }),
+    let import_ids: Vec<u64> = imports.iter().map(|import| import.repo_id).collect();
+    match scan_intent(&scan_accounts, &import_ids, SCAN_REPO_CAP) {
+        ScanIntent::Read(scope) => Ok(FrozenChoice {
+            scope,
+            saved,
+            imports,
+        }),
         ScanIntent::NothingToRead => Err(refused_before_admission(
             app,
             KpiEvent::ScanRefusedNothingToRead,
@@ -415,8 +432,9 @@ async fn check_and_list(
 
 /// A fresh scan: each account in order is checked, then (when it passed)
 /// listed, before the next; the choice frozen at the scan's start is
-/// planned against the listings, the plan is written before the first read
-/// (BR-RRA-4), and exactly the planned repos are read.
+/// planned against the listings, the imports are appended unchecked, the
+/// plan is written before the first read (BR-RRA-4), and exactly the
+/// planned repos are read.
 async fn scan_accounts(
     app: &App,
     owner_did: &str,
@@ -433,11 +451,11 @@ async fn scan_accounts(
     }
     record_checks(app, owner_did, run_id, &checked);
     let scan_plan = frozen.scope.plan(&account_checks);
-    let plan = scan_plan.owned_repos();
+    let plan = scan_plan.rows(&frozen.imports);
     let every_saved = frozen.saved.concat();
     let recorded = app
         .scans
-        .record_plan(owner_did, run_id, &plan_rows(&plan))
+        .record_plan(owner_did, run_id, &plan)
         .and_then(|()| {
             app.scans
                 .record_skipped(owner_did, run_id, &named_skips(&scan_plan, &every_saved))
@@ -448,10 +466,10 @@ async fn scan_accounts(
     if plan.is_empty() {
         return ended_reading_nothing(app, &checked);
     }
-    let to_read: Vec<(usize, u64, PlannedRepo)> = plan
-        .into_iter()
+    let to_read: Vec<(usize, PlanSource, PlannedRepo)> = plan
+        .iter()
         .enumerate()
-        .map(|(position, (account_id, repo))| (position, account_id, repo.clone()))
+        .map(|(position, row)| (position, row.source, carried_repo(row)))
         .collect();
     read_planned(app, owner_did, run_id, &to_read).await
 }
@@ -470,7 +488,10 @@ async fn resume_scan(
     let carried: BTreeSet<u64> = plan
         .iter()
         .filter(|row| row.status == PlanRowStatus::Planned)
-        .map(|row| row.repo.source_account_id)
+        .filter_map(|row| match row.repo.source {
+            PlanSource::Account(account_id) => Some(account_id),
+            PlanSource::Imported(_) => None,
+        })
         .collect();
     let mut checked = Vec::new();
     for account in accounts
@@ -495,12 +516,12 @@ async fn resume_scan(
     if resumed.to_read.is_empty() {
         return ended_reading_nothing(app, &checked);
     }
-    let to_read: Vec<(usize, u64, PlannedRepo)> = resumed
+    let to_read: Vec<(usize, PlanSource, PlannedRepo)> = resumed
         .to_read
         .iter()
         .map(|position| {
             let row = &resumed.rows[*position];
-            (*position, row.source_account_id, carried_repo(row))
+            (*position, row.source, carried_repo(row))
         })
         .collect();
     read_planned(app, owner_did, run_id, &to_read).await
@@ -526,7 +547,7 @@ impl ResumedPlan {
         let frozen: Vec<FrozenRow> = plan
             .iter()
             .map(|row| FrozenRow {
-                source: PlanSource::Account(row.repo.source_account_id),
+                source: row.repo.source,
                 status: row.status,
             })
             .collect();
@@ -558,23 +579,26 @@ impl ResumedPlan {
 /// A carried row a resume skips, named for the summary: an account that
 /// failed its check names its repos; a removed source's are not named.
 fn named_carried_skip(row: &PlannedScanRepo, why: CarriedSkip) -> Option<SkippedScanRepo> {
-    match why {
-        CarriedSkip::AccountUnverified => Some(SkippedScanRepo {
-            repo_id: row.repo_id,
-            full_name: row.full_name.clone(),
-            source_account_id: row.source_account_id,
-            reason: RepoSkipReason::AccountUnverified,
-        }),
-        CarriedSkip::Removed => None,
+    match (why, row.source) {
+        (CarriedSkip::AccountUnverified, PlanSource::Account(account_id)) => {
+            Some(SkippedScanRepo {
+                repo_id: row.repo_id,
+                full_name: row.full_name.clone(),
+                source_account_id: account_id,
+                reason: RepoSkipReason::AccountUnverified,
+            })
+        }
+        _ => None,
     }
 }
 
-/// The sources the owner lists now (imports join with their port, 03-xx).
+/// The sources the owner lists now: her accounts and her imports.
 fn listed_sources(app: &App, owner_did: &str) -> Result<ListedSources, ReviewStoreError> {
     let accounts = app.links.github_accounts(owner_did)?;
+    let imports = app.imports_read.imports(owner_did)?;
     Ok(ListedSources {
         accounts: accounts.iter().map(|a| a.github_user_id).collect(),
-        imports: Vec::new(),
+        imports: imports.iter().map(|import| import.repo_id).collect(),
     })
 }
 
@@ -586,19 +610,19 @@ async fn read_planned(
     app: &App,
     owner_did: &str,
     run_id: &str,
-    to_read: &[(usize, u64, PlannedRepo)],
+    to_read: &[(usize, PlanSource, PlannedRepo)],
 ) -> Ended {
     let mut found = ScanCounts::default();
-    for (position, account_id, repo) in to_read {
+    for (position, source, repo) in to_read {
         if !github_budget_allows(app.github.last_rate_budget().map(|b| b.remaining)) {
             return paused(app).after_finding(found);
         }
         match listed_sources(app, owner_did) {
-            Ok(listed) if listed.holds(PlanSource::Account(*account_id)) => {}
+            Ok(listed) if listed.holds(*source) => {}
             Ok(_) => continue,
             Err(_) => return Ended::with_status(ScanStatus::Interrupted).after_finding(found),
         }
-        match scan_repo(app, owner_did, repo, *account_id).await {
+        match scan_repo(app, owner_did, repo, *source).await {
             Ok(counts) => found = add_counts(found, counts),
             Err(ended) => return ended.after_finding(found),
         }
@@ -643,21 +667,15 @@ async fn account_listing(
     ))
 }
 
-/// The store rows of a scan's plan, in plan order.
-fn plan_rows(plan: &[(u64, &PlannedRepo)]) -> Vec<PlannedScanRepo> {
-    plan.iter()
-        .map(|(account_id, repo)| plan_row(*account_id, repo))
-        .collect()
-}
-
 /// Harvest one planned repo, derive and reconcile its suggestions, persist
-/// the new with where they came from; what it found counts toward the
-/// scan's summary.
+/// the new with where they came from (an imported repo's are stored as
+/// imported, never publishable); what it found counts toward the scan's
+/// summary.
 async fn scan_repo(
     app: &App,
     owner_did: &str,
     repo: &PlannedRepo,
-    account_id: u64,
+    source: PlanSource,
 ) -> Result<ScanCounts, Ended> {
     let Some((owner, name)) = repo.full_name.split_once('/') else {
         return Ok(ScanCounts::default());
@@ -680,15 +698,22 @@ async fn scan_repo(
         .into_iter()
         .collect();
     let reconciled = reconcile(&existing, derived);
-    let source = SuggestionSource {
-        account_id,
-        repo_id: repo.repo_id,
-        outside_default: repo.outside_default,
+    let stored = match source {
+        PlanSource::Account(account_id) => app.review_write.add_pending_from_listed_source(
+            owner_did,
+            &SuggestionSource {
+                account_id,
+                repo_id: repo.repo_id,
+                outside_default: repo.outside_default,
+            },
+            &reconciled.new,
+        ),
+        PlanSource::Imported(repo_id) => {
+            app.review_write
+                .add_pending_from_import(owner_did, repo_id, &reconciled.new)
+        }
     };
-    app.review_write
-        .add_pending_from_listed_source(owner_did, &source, &reconciled.new)
-        .map(|()| reconciled.counts())
-        .map_err(interrupted)
+    stored.map(|()| reconciled.counts()).map_err(interrupted)
 }
 
 /// A GitHub failure mid-scan: rate limits pause, anything else interrupts.
