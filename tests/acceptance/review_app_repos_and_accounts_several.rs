@@ -744,22 +744,29 @@ fn re_adding_offers_suggestions_again_but_never_declined_or_published_ones() {
 }
 
 /// AR-4a (OQ-D4: deleted at once)
+///
+/// The queue already hides an unlisted account's rows, so "gone from the
+/// queue" cannot tell deleted from hidden. The Then re-adds the account while
+/// the scan is still paused: hidden rows would come back, deleted ones cannot.
 /// ```gherkin
 /// @US-RRA-008 @AC-008.4 @BR-RRA-4 @OQ-D4 @UC-RRA-8 @C7b @interruption @contract-shape:bounded-change
 /// Scenario: Removing an account during a scan deletes its pending suggestions at once
 ///   Given a scan of Priya's priya-tidal repos is running, paused after reading 1 of 2
 ///   And that scan already found pending suggestions for priya-tidal
 ///   When she removes priya-tidal and confirms
-///   Then her queue holds no priya-tidal pending suggestion, while the scan is still paused
+///   Then her queue holds no priya-tidal pending suggestion
+///   And even after she adds and verifies priya-tidal again while the scan is still paused, those suggestions do not come back: they were deleted, not hidden
 /// ```
 #[test]
 fn removing_an_account_during_a_scan_deletes_its_pending_suggestions_at_once() {
     let world = rra_world();
     let mut browser = given_tidal_scan_paused_after_one_repo(&world);
+    let found: Vec<String> = pending_on_queue(&mut browser)
+        .into_iter()
+        .filter(|p| p.starts_with("priya-tidal/"))
+        .collect();
     assert!(
-        pending_on_queue(&mut browser)
-            .iter()
-            .any(|p| p.starts_with("priya-tidal/")),
+        !found.is_empty(),
         "precondition: the paused scan found priya-tidal suggestions"
     );
 
@@ -769,12 +776,22 @@ fn removing_an_account_during_a_scan_deletes_its_pending_suggestions_at_once() {
         pending_on_queue(&mut browser)
             .iter()
             .all(|p| !p.starts_with("priya-tidal/")),
-        "deleted at once, not after the scan"
+        "none left on the queue"
     );
+    when_adds_account(&mut browser, Account::PriyaTidal);
+    then_sees_account_verified(&browser.page, Account::PriyaTidal, Persona::Priya);
     assert_eq!(
         scan_status(&mut browser),
         "rate_limited",
-        "the scan is still paused"
+        "precondition: the scan is still paused"
+    );
+    let back: Vec<String> = pending_on_queue(&mut browser)
+        .into_iter()
+        .filter(|p| found.contains(p))
+        .collect();
+    assert!(
+        back.is_empty(),
+        "deleted at once, not hidden until the scan ends: {back:?} came back"
     );
 }
 
@@ -1076,15 +1093,16 @@ fn an_unverified_accounts_saved_repos_still_count_toward_the_limit() {
 /// ```gherkin
 /// @I-BRA-1 @C-RRA-4 @privacy @adversarial @C6a @contract-shape:unbounded-preservation
 /// Scenario Outline: One owner never sees or changes another owner's accounts or choices
-///   Given Priya has priyaraman and priya-tidal with a saved choice
+///   Given Priya has priyaraman and priya-tidal with a saved choice and pending suggestions
 ///   When Sam, signed in as himself, sends the app Priya's own <request> request
-///   Then Sam's GitHub step and repo list name none of Priya's accounts or repos
-///   And Sam's own list and choice did not take her account or repos
+///   Then Sam <answer>
+///   And Sam's GitHub step and repo list name none of Priya's accounts or repos
 ///   And Priya's accounts, choices, queue and published claims are exactly as before
 ///   Examples:
-///     | request                                   |
-///     | "Remove" for priya-tidal                  |
-///     | "Save choice" naming her ingest-bench     |
+///     | request                                           | answer                                                 |
+///     | "Remove" for priya-tidal                          | is refused, and is shown no confirm naming her account |
+///     | "Remove" confirmed for priya-tidal                | is refused, and nothing is removed                     |
+///     | "Save choice" naming her account and ingest-bench | is not told anything was saved                         |
 /// ```
 #[test]
 fn one_owner_never_sees_or_changes_another_owners_accounts_or_choices() {
@@ -1093,11 +1111,24 @@ fn one_owner_never_sees_or_changes_another_owners_accounts_or_choices() {
     given_saved_choice(&mut priya, Account::PriyaTidal, &[INGEST_BENCH]);
     given_scanned(&world, &mut priya);
     priya.open("/github");
+    let tidal_id = Account::PriyaTidal.id().to_string();
     let remove_form = priya
         .forms()
         .into_iter()
-        .find(|f| f.buttons.iter().any(|(l, _, _)| l.contains(REMOVE)))
-        .expect("Priya's remove form");
+        .filter(|f| f.buttons.iter().any(|(l, _, _)| l.contains(REMOVE)))
+        .find(|f| f.fields.iter().any(|(_, v)| *v == tidal_id))
+        .expect("Priya's remove form for priya-tidal");
+    when_presses_remove_account(&mut priya, Account::PriyaTidal);
+    let confirm_form = priya
+        .forms()
+        .into_iter()
+        .find(|f| {
+            f.buttons
+                .iter()
+                .any(|(l, _, _)| html::label_matches(l, REMOVE))
+        })
+        .expect("Priya's removal confirm form");
+    when_cancels_removal(&mut priya);
     when_opens_choose_repos(&mut priya);
     let save_form = priya
         .forms()
@@ -1107,17 +1138,35 @@ fn one_owner_never_sees_or_changes_another_owners_accounts_or_choices() {
     let before = capture_rra(&world, &mut priya, Persona::Priya);
 
     let mut sam = given_signed_in(&world, Persona::Sam);
-    for (request, form) in [("Remove", &remove_form), ("Save choice", &save_form)] {
+    let rows = [
+        ("Remove", &remove_form, true),
+        ("Remove confirmed", &confirm_form, true),
+        ("Save choice", &save_form, false),
+    ];
+    for (request, form, removal) in rows {
         sam.open("/github");
         let sams_csrf = csrf_token(&sam);
 
         sam.submit(&Browser::with_field(form, "csrf", &sams_csrf), None);
 
+        let answer = sam.page.clone();
+        if removal {
+            assert!(
+                answer.status >= 400,
+                "{request}: refused, got {} {}",
+                answer.status,
+                answer.text()
+            );
+        }
+        assert!(!answer.shows("Saved."), "{request}: {}", answer.text());
+        assert!(!answer.shows(" removed."), "{request}: {}", answer.text());
         let github_page = sam.open("/github").text();
         let repos_page = sam.open("/repos").text();
         for leak in ["priya-tidal", "priyaraman", INGEST_BENCH.name] {
             assert!(
-                !github_page.contains(leak) && !repos_page.contains(leak),
+                !answer.text().contains(leak)
+                    && !github_page.contains(leak)
+                    && !repos_page.contains(leak),
                 "{request}: {leak}"
             );
         }

@@ -76,10 +76,10 @@ All 50 active AC are covered (the 4 AC of deferred US-RRA-007 are not tested bey
 | Invariant | Where |
 |---|---|
 | BR-RRA-1 over every publish route (fresh owner + bio at preview and confirm) | IC-3 (3 kinds × Approve, Approve selected, Edit preview, Confirm, Confirm selected, Retry), IC-2, AP-1..4, CORE-RRA-6 |
-| Private: no owner sees another's suggestions, choices, accounts, imports | AV-1, IV-1 (cross-owner replay with the attacker's own session), IC-4 |
+| Private: no owner sees another's suggestions, choices, accounts, imports | AV-1 (another owner's Remove, Remove confirm and Save requests: refused, nothing changed), IV-1, IC-4 |
 | 10-repo cap incl. default and unverified accounts' ticks; 3-account cap | RC-3, AA-3, AS-4, IM-2, IR-3, IV-3; AA-2 (fourth account); CORE-RRA-1/2/3/8 (OQ-D3: `S` counts unverified accounts' saved ticks) |
 | Scan admission with several accounts; resumed scan reads only the frozen plan's rest | AS-1 (one of 6), IM-3, RS-5; RS-2, AS-6, AR-4, IR-4; CORE-RRA-5 |
-| Removal deletes pending, keeps declined/published keys, never re-offered | AR-1..4, IR-1..2, IV-2 (purge) |
+| Removal deletes pending, keeps declined/published keys, never re-offered | AR-1..4 (AR-4a: re-adding during the paused scan brings nothing back — deleted, not hidden), IR-1..2, IV-2 (purge) |
 | Store v1 → v2 tags existing suggestions to their account; idempotent; interrupted update re-runs; backup kept and never overwritten | MG-1, MG-2, MG-3 |
 | Rename-safe ids (repo rename keeps the tick) | RS-7 |
 | Purge covers the new tables (C-RRA-4) | IV-2 |
