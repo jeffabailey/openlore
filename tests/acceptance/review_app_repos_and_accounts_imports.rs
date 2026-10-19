@@ -668,7 +668,6 @@ fn a_scan_moves_an_imported_repo_that_one_of_her_accounts_now_owns() {
 ///   And her next scan does not read rust-lang/cargo
 /// ```
 #[test]
-#[ignore = "DELIVER 03-11: removing an import deletes its pending suggestions"]
 fn removing_an_imported_repo_stops_reading_it() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -710,7 +709,6 @@ fn removing_an_imported_repo_stops_reading_it() {
 ///   And the declined suggestion is not offered
 /// ```
 #[test]
-#[ignore = "DELIVER 03-12: removal keeps the import's declined keys (BR-1)"]
 fn re_adding_an_imported_repo_offers_suggestions_again_but_never_declined_ones() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -738,7 +736,6 @@ fn re_adding_an_imported_repo_offers_suggestions_again_but_never_declined_ones()
 ///   Then tidal-labs/streamline is listed under "Repos you don't own"
 /// ```
 #[test]
-#[ignore = "DELIVER 03-13: removing an import frees room at once"]
 fn removing_frees_room_under_the_limit() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Dvolkov);
@@ -765,7 +762,6 @@ fn removing_frees_room_under_the_limit() {
 ///   And no rust-lang/cargo suggestion is left in her queue
 /// ```
 #[test]
-#[ignore = "DELIVER 03-14: removal during a scan stops the import's read"]
 fn removing_an_imported_repo_during_a_scan_stops_its_read() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -799,7 +795,6 @@ fn removing_an_imported_repo_during_a_scan_stops_its_read() {
 ///   And Priya's imports, queue and published claims are exactly as before
 /// ```
 #[test]
-#[ignore = "DELIVER 03-15: imports and their suggestions are owner-scoped"]
 fn one_owner_never_sees_or_acts_on_another_owners_imports() {
     let world = rra_world();
     let mut priya = given_owner_verified(&world, Account::Priyaraman);
@@ -848,7 +843,6 @@ fn one_owner_never_sees_or_acts_on_another_owners_imports() {
 ///   And her choose-repos page lists no account
 /// ```
 #[test]
-#[ignore = "DELIVER 03-16: purge covers accounts, choices and imports"]
 fn disconnect_and_forget_me_forgets_her_accounts_choices_and_imports() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);

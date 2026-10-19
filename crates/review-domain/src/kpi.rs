@@ -63,6 +63,14 @@ pub enum KpiEvent {
     AccountRemoved,
     /// KPI-RRA-3: an owner named a public repo she doesn't own (US-RRA-005).
     ImportAdded,
+    /// An owner removed one of her imports (US-RRA-009).
+    ImportRemoved,
+    /// KPI-RRA-3 retention: a removed import was held under a day,
+    ImportRemovedAgeLt1d,
+    /// under 14 days,
+    ImportRemovedAgeLt14d,
+    /// or 14 days or longer.
+    ImportRemovedAgeGe14d,
     /// An import moved to the owned list of the account that owns it now
     /// (BR-RRA-5).
     ImportMovedToOwned,
@@ -90,7 +98,7 @@ pub enum KpiEvent {
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 41] = [
+    pub const ALL: [KpiEvent; 45] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -120,6 +128,10 @@ impl KpiEvent {
         Self::ScanAccountUnfinished,
         Self::AccountRemoved,
         Self::ImportAdded,
+        Self::ImportRemoved,
+        Self::ImportRemovedAgeLt1d,
+        Self::ImportRemovedAgeLt14d,
+        Self::ImportRemovedAgeGe14d,
         Self::ImportMovedToOwned,
         Self::ImportRefusedShape,
         Self::ImportRefusedNotFound,
@@ -168,6 +180,10 @@ impl KpiEvent {
             Self::ScanAccountUnfinished => "scan.account.unfinished",
             Self::AccountRemoved => "account.removed",
             Self::ImportAdded => "import.added",
+            Self::ImportRemoved => "import.removed",
+            Self::ImportRemovedAgeLt1d => "import.removed.age.lt_1d",
+            Self::ImportRemovedAgeLt14d => "import.removed.age.lt_14d",
+            Self::ImportRemovedAgeGe14d => "import.removed.age.ge_14d",
             Self::ImportMovedToOwned => "import.moved_to_owned",
             Self::ImportRefusedShape => "import.refused.shape",
             Self::ImportRefusedNotFound => "import.refused.not_found",
@@ -263,6 +279,17 @@ pub fn publish_refusal_events(refusal: SigningRefusal) -> Vec<KpiEvent> {
         SigningRefusal::BioNoLongerHolds(_) => vec![KpiEvent::PublishRefusedBioFailed],
         SigningRefusal::Unfinished => vec![KpiEvent::PublishRefusedUnreachable],
         SigningRefusal::RepoGone => Vec::new(),
+    }
+}
+
+/// The age bucket a removed import held for `held_secs` counts (KPI-RRA-3:
+/// imports kept 14 days or longer); never which repo or whose.
+pub fn import_removed_age_event(held_secs: u64) -> KpiEvent {
+    const DAY_SECS: u64 = 24 * 60 * 60;
+    match held_secs / DAY_SECS {
+        0 => KpiEvent::ImportRemovedAgeLt1d,
+        1..=13 => KpiEvent::ImportRemovedAgeLt14d,
+        _ => KpiEvent::ImportRemovedAgeGe14d,
     }
 }
 

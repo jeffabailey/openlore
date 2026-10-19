@@ -38,6 +38,9 @@ pub const REPOS_YOU_DONT_OWN_HEADING: &str = "Repos you don't own";
 /// Where an import's "Remove" posts (US-RRA-009).
 pub const REMOVE_IMPORT_PATH: &str = "/repos/imports/remove";
 
+/// Where the removal confirm's "Remove" posts (US-RRA-009).
+pub const CONFIRM_REMOVE_IMPORT_PATH: &str = "/repos/imports/remove/confirm";
+
 /// The button that removes an import.
 pub const REMOVE_IMPORT_LABEL: &str = "Remove";
 
@@ -84,6 +87,12 @@ pub enum ReposNotice {
         refusal: ImportRefusal,
         repo: String,
     },
+    /// The import `repo` and its `deleted_pending` pending suggestions were
+    /// deleted (US-RRA-009).
+    ImportRemoved {
+        repo: String,
+        deleted_pending: usize,
+    },
 }
 
 /// The choose page.
@@ -116,6 +125,43 @@ pub fn save_over_limit_message(refusal: LimitRefusal) -> String {
     format!(
         "You can choose up to {} repos per scan in total. You have {} chosen. Untick {} to save.",
         refusal.limit, refusal.total, refusal.excess
+    )
+}
+
+/// AC-009.1: "rust-lang/cargo removed. Its 3 pending suggestions were deleted."
+pub fn import_removed_message(repo: &str, deleted_pending: usize) -> String {
+    format!(
+        "{repo} removed. Its {} {} deleted.",
+        counted(deleted_pending, "pending suggestion", "pending suggestions"),
+        if deleted_pending == 1 { "was" } else { "were" }
+    )
+}
+
+/// The import removal confirm (AC-009.1): what removing `repo` deletes and
+/// what it keeps. Nothing is deleted here; Cancel goes back unchanged.
+pub fn remove_import_confirm_page(
+    import: &ImportedRepo,
+    pending: usize,
+    csrf_token: &str,
+) -> String {
+    page(
+        "Remove this repo?",
+        html! {
+            h1 { "Remove " (import.full_name) "?" }
+            p {
+                strong {
+                    "This deletes its "
+                    (counted(pending, "pending suggestion", "pending suggestions")) "."
+                }
+            }
+            p { "It is no longer scanned. Suggestions you declined stay declined." }
+            form method="post" action=(CONFIRM_REMOVE_IMPORT_PATH) {
+                (csrf_field(csrf_token))
+                input type="hidden" name=(IMPORT_REPO_FIELD) value=(import.repo_id);
+                button type="submit" { (REMOVE_IMPORT_LABEL) }
+            }
+            p { a href=(REPOS_PATH) { (CANCEL_LABEL) } }
+        },
     )
 }
 
@@ -205,6 +251,9 @@ pub fn repos_page(view: &ReposView<'_>) -> String {
                 }
                 Some(ReposNotice::ImportRefused { refusal, repo }) => {
                     p role="alert" { strong { (import_refusal_message(*refusal, repo)) } }
+                }
+                Some(ReposNotice::ImportRemoved { repo, deleted_pending }) => {
+                    p role="status" { strong { (import_removed_message(repo, *deleted_pending)) } }
                 }
                 None => {}
             }

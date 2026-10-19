@@ -2,19 +2,22 @@
 //! its suggestions stay private (BR-RRA-1). The shape, the verdict and the
 //! import are `review_domain::repo_scope`'s decisions; this module only reads
 //! GitHub (public reads, the repo's owner is never contacted) and writes the
-//! store. A refusal names its cause and changes nothing.
+//! store. A refusal names its cause and changes nothing. "Remove" deletes
+//! an import and its pending suggestions at once (US-RRA-009, D-RRA-17).
 
+use hyper::StatusCode;
 use ports::claim_domain::authority::RepoRead;
-use ports::{GithubError, KpiTally, RepoFacts};
-use review_domain::kpi::{import_refusal_event, utc_day, KpiEvent};
+use ports::{GithubError, ImportRemoval, ImportedRepo, KpiTally, RepoFacts, RepoSource};
+use review_domain::kpi::{import_refusal_event, import_removed_age_event, utc_day, KpiEvent};
 use review_domain::repo_scope::{
     classify_import, import_shape, ImportRefusal, ImportVerdict, SCAN_REPO_CAP,
 };
-use review_domain::views::{ReposNotice, IMPORT_REPO_FIELD};
+use review_domain::views::{self, ReposNotice, IMPORT_REPO_FIELD};
 
 use crate::http::{App, PageRequest, Reply};
 use crate::routes::repos::{import_ids, listed_accounts, owner_scope, repos_page};
-use crate::routes::signin::{csrf_token_of, field, signed_in_post};
+use crate::routes::review::not_found;
+use crate::routes::signin::{csrf_token_for, csrf_token_of, field, signed_in_post};
 
 /// `POST /repos/imports`: read the named repo publicly and list it under
 /// "Repos you don't own", counted as `import.added`; or refuse it, counted
@@ -79,4 +82,82 @@ fn repo_read(answer: &Result<RepoFacts, GithubError>) -> RepoRead<'_> {
         Err(GithubError::NotFound { .. } | GithubError::NotPublic { .. }) => RepoRead::Gone,
         Err(_) => RepoRead::Unfinished,
     }
+}
+
+/// The session owner's import the form names; another owner's, or none,
+/// is not found (I-BRA-1).
+fn named_import(app: &App, owner_did: &str, request: &PageRequest) -> Option<ImportedRepo> {
+    let named = field(&request.form, IMPORT_REPO_FIELD)?
+        .parse::<u64>()
+        .ok()?;
+    app.imports_read
+        .imports(owner_did)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|import| import.repo_id == named)
+}
+
+/// How many of the owner's pending suggestions came from her import `repo_id`.
+fn pending_from_import(app: &App, owner_did: &str, repo_id: u64) -> usize {
+    app.review_read
+        .pending_sources(owner_did)
+        .unwrap_or_default()
+        .iter()
+        .filter(|(_, source)| *source == RepoSource::Imported(repo_id))
+        .count()
+}
+
+/// `POST /repos/imports/remove`: the confirm naming how many pending
+/// suggestions removing the import deletes. Nothing is deleted here.
+pub(crate) fn remove_import_confirm(app: &App, request: &PageRequest) -> Reply {
+    let (cookie_value, session) = match signed_in_post(app, request) {
+        Ok(signed_in) => signed_in,
+        Err(refused) => return refused,
+    };
+    let Some(import) = named_import(app, &session.owner_did, request) else {
+        return not_found();
+    };
+    let pending = pending_from_import(app, &session.owner_did, import.repo_id);
+    Reply::page(
+        StatusCode::OK,
+        views::remove_import_confirm_page(&import, pending, &csrf_token_for(&cookie_value)),
+    )
+}
+
+/// `POST /repos/imports/remove/confirm`: delete the import and its pending
+/// suggestions at once (ADR-088 §8); its declined keys stay. Counted as
+/// `import.removed` with the removal, and by how long it was held.
+pub(crate) async fn remove_import(app: &App, request: &PageRequest) -> Reply {
+    let (cookie_value, session) = match signed_in_post(app, request) {
+        Ok(signed_in) => signed_in,
+        Err(refused) => return refused,
+    };
+    let Some(import) = named_import(app, &session.owner_did, request) else {
+        return not_found();
+    };
+    let today = utc_day(crate::limiter::unix_now_secs());
+    let tally = KpiTally {
+        day: &today,
+        events: &[KpiEvent::ImportRemoved.name()],
+    };
+    let removal = app
+        .scope_removal
+        .remove_import(&session.owner_did, import.repo_id, tally);
+    let notice = match removal {
+        Ok(ImportRemoval::Removed {
+            full_name,
+            deleted_pending,
+            held_secs,
+        }) => {
+            let _ = app
+                .kpi
+                .count(&today, import_removed_age_event(held_secs).name());
+            Some(ReposNotice::ImportRemoved {
+                repo: full_name,
+                deleted_pending,
+            })
+        }
+        _ => None,
+    };
+    repos_page(app, &session, &csrf_token_for(&cookie_value), notice).await
 }

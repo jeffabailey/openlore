@@ -691,6 +691,30 @@ pub trait ScopeRemovalPort: Send + Sync {
         github_user_id: u64,
         tally: KpiTally<'_>,
     ) -> Result<AccountRemoval, ReviewStoreError>;
+
+    /// Delete the owner's import `repo_id` and its pending suggestions in
+    /// ONE transaction, with `tally` when it was hers (D-RRA-17). Its
+    /// declined keys stay; an imported repo has no published keys.
+    fn remove_import(
+        &self,
+        owner_did: &str,
+        repo_id: u64,
+        tally: KpiTally<'_>,
+    ) -> Result<ImportRemoval, ReviewStoreError>;
+}
+
+/// What removing one of the owner's imports did (ADR-088 §8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportRemoval {
+    /// The import `full_name`, held for `held_secs`, and its
+    /// `deleted_pending` pending suggestions are gone.
+    Removed {
+        full_name: String,
+        deleted_pending: usize,
+        held_secs: u64,
+    },
+    /// The owner imports no such repo: nothing changed.
+    NotImported,
 }
 
 /// A public repo the owner named that none of her listed accounts owns

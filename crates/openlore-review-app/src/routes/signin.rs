@@ -59,6 +59,8 @@ pub(crate) enum PageRoute {
     ChooseRepos,
     SaveRepoChoice,
     AddImport,
+    RemoveImportConfirm,
+    RemoveImport,
     Settings,
     ForgetMePreview,
     ConfirmForgetMe,
@@ -94,6 +96,8 @@ pub(crate) fn page_route(method: &Method, path: &str) -> Option<PageRoute> {
         ("GET", views::REPOS_PATH) => Some(PageRoute::ChooseRepos),
         ("POST", views::REPOS_PATH) => Some(PageRoute::SaveRepoChoice),
         ("POST", views::IMPORTS_PATH) => Some(PageRoute::AddImport),
+        ("POST", views::REMOVE_IMPORT_PATH) => Some(PageRoute::RemoveImportConfirm),
+        ("POST", views::CONFIRM_REMOVE_IMPORT_PATH) => Some(PageRoute::RemoveImport),
         ("GET", "/settings") => Some(PageRoute::Settings),
         ("GET", "/settings/forget") => Some(PageRoute::ForgetMePreview),
         ("POST", "/settings/forget") => Some(PageRoute::ConfirmForgetMe),
@@ -129,6 +133,10 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         PageRoute::ConfirmRetract if same_origin => retract::confirm_retract(app, request).await,
         PageRoute::SaveRepoChoice if same_origin => repos::save_choice(app, request).await,
         PageRoute::AddImport if same_origin => imports::add_import(app, request).await,
+        PageRoute::RemoveImportConfirm if same_origin => {
+            imports::remove_import_confirm(app, request)
+        }
+        PageRoute::RemoveImport if same_origin => imports::remove_import(app, request).await,
         PageRoute::ConfirmForgetMe if same_origin => {
             settings::confirm_forget_me(app, request).await
         }
@@ -152,6 +160,8 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         | PageRoute::ConfirmRetract
         | PageRoute::SaveRepoChoice
         | PageRoute::AddImport
+        | PageRoute::RemoveImportConfirm
+        | PageRoute::RemoveImport
         | PageRoute::ConfirmForgetMe => forbidden(),
         PageRoute::ChooseRepos => repos::choose_repos(app, request).await,
         PageRoute::Settings => settings::settings(app, request),
