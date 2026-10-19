@@ -59,15 +59,14 @@ claim-domain = { path = "../claim-domain" }
 # `viewer-domain` pure: the vocabulary + object-id derivation are REUSED, never
 # reimplemented here.
 lexicon = { path = "../lexicon" }
+# PURE (github-did-identity-link slice 4; D-VL-5): the linked-identities region
+# renders a link's check age from the `now` VALUE the effect shell passes in
+# (`DateTime<Utc>`); the viewer domain reads no clock. Promoted from a
+# dev-dependency. `chrono` is already a `claim-domain` / `ports` dependency.
+chrono = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
-# TEST-ONLY: the `/score` + `/project` render unit/property tests build an
-# `AttributedClaim` / `SurveyRow` feed and run the REUSED pure cores to obtain real
-# view-models (not hand-rolled ones) before rendering them — so they need `chrono`
-# for the claim `composed_at`. (`claim-domain`'s `Cid`/`Did` value types are now a
-# regular dep above.) Dev-dependency only.
-chrono = { workspace = true }
 
 [lints]
 workspace = true

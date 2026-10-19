@@ -257,7 +257,6 @@ fn when_the_link_store_cannot_be_read_every_page_still_loads_and_says_so() {
 ///     | Jeff linked github "jeffbailey" on 2026-10-01 09:00 | the GitHub person page BurntSushi | no linked-identities region |
 /// ```
 #[test]
-#[ignore = "DELIVER 04-01: an upgraded store shows every page and no false standing"]
 fn a_store_made_before_identity_links_shows_every_page_and_no_linked_identity_it_does_not_hold() {
     let world = LinkWorld::with_frozen_pre_v7_store(&[JEFF_GH]);
     let pages = [

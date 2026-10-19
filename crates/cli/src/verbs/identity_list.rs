@@ -6,7 +6,7 @@
 //! check write or purge, no signing, no GitHub. The link lineage is read as
 //! `identity verify` reads it (`identity_reads`), so a link its author
 //! retracted or superseded is never listed (ADR-085 §5, ADR-060). The read
-//! itself is `identity_reads::read_listed_links`, shared with the person views.
+//! itself is `ports::read_listed_links`, shared with the person views.
 //!
 //! `--did` narrows the list to one person (F7): every standing is decided
 //! over all active links and all of this reader's checks, and only then are
@@ -20,10 +20,11 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use claim_domain::identity_link::RecheckScope;
-use ports::{IdentityLinkCheckReadPort, LinkCandidateReadPort, LinkLineageReadPort};
+use ports::{
+    read_listed_links, IdentityLinkCheckReadPort, LinkCandidateReadPort, LinkLineageReadPort,
+};
 
 use crate::render::{render_linked_identities, render_no_linked_identities};
-use crate::verbs::identity_reads::read_listed_links;
 
 /// The narrow read handles `identity list` holds.
 pub struct IdentityListHandles<'a> {

@@ -113,8 +113,22 @@ pub fn render_score_results_fragment(
     state: &ScoreState,
     presence: &std::collections::HashSet<String>,
 ) -> Markup {
+    render_score_results_fragment_with_links(state, presence, &LinkedIdentities::None)
+}
+
+/// [`render_score_results_fragment`] carrying the contributor's linked
+/// identities (github-did-identity-link slice 4; D-VL-1): the region sits
+/// inside the results fragment, above the score, so the htmx swap and the full
+/// page carry the same lines (ADR-033). [`LinkedIdentities::None`] renders no
+/// region at all.
+pub fn render_score_results_fragment_with_links(
+    state: &ScoreState,
+    presence: &std::collections::HashSet<String>,
+    linked: &LinkedIdentities,
+) -> Markup {
     html! {
         div id=(SCORE_RESULTS_ID) {
+            (render_linked_identities_region(linked))
             (render_score_result(state, presence))
         }
     }
@@ -137,6 +151,16 @@ pub fn render_score_page(
     state: &ScoreState,
     presence: &std::collections::HashSet<String>,
 ) -> String {
+    render_score_page_with_links(state, presence, &LinkedIdentities::None)
+}
+
+/// [`render_score_page`] carrying the contributor's linked identities inside
+/// the embedded results fragment (slice 4; D-VL-1, ADR-033 parity).
+pub fn render_score_page_with_links(
+    state: &ScoreState,
+    presence: &std::collections::HashSet<String>,
+    linked: &LinkedIdentities,
+) -> String {
     // slice-21 (ADR-058 D6): composed through `page_shell` (persistent left nav +
     // `<main id="viewer-main">`); `active = SCORE_URL` marks the Contributor Score nav
     // item current. The `render_*_fragment` fn is UNCHANGED (it rides `Shape::Fragment`
@@ -147,7 +171,7 @@ pub fn render_score_page(
             a href=(MY_CLAIMS_URL) { "My Claims" }
         }
         (render_score_form())
-        (render_score_results_fragment(state, presence))
+        (render_score_results_fragment_with_links(state, presence, linked))
     };
     page_shell("OpenLore — Contributor Score", SCORE_URL, body)
 }

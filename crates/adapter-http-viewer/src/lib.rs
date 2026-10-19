@@ -26,6 +26,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use appview_domain::{compose_results, partition_retracted, NetworkSearchResult};
+use claim_domain::identity_link::RecheckScope;
 use claim_domain::{Cid, Did, KeyId};
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
@@ -33,8 +34,10 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ports::{
-    GithubError, GithubPort, IndexQueryError, IndexQueryPort, IndexedClaim, NetworkResultRowRaw,
-    PageRequest, SearchDimension, StoreReadError, StoreReadPort, TargetKind,
+    read_listed_links, ClockPort, GithubError, GithubPort, IdentityLinkCheckReadPort,
+    IndexQueryError, IndexQueryPort, IndexedClaim, LinkCandidateReadPort, LinkLineageReadPort,
+    LinkReadError, NetworkResultRowRaw, PageRequest, SearchDimension, StoreReadError,
+    StoreReadPort, TargetKind,
 };
 use scraper_domain::{derive_candidates, load_mapping, normalize_target, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
@@ -43,13 +46,14 @@ use viewer_domain::{
     render_claim_not_found_fragment, render_claims_page, render_claims_view_panel_fragment,
     render_error, render_landing, render_peer_claims_page, render_peer_claims_view_panel_fragment,
     render_peers_fragment, render_peers_page, render_philosophies_page, render_philosophy_fragment,
-    render_philosophy_page, render_project_fragment, render_project_page, render_score_page,
-    render_score_results_fragment, render_scrape_page, render_scrape_results_fragment,
-    render_search_page, render_search_results_fragment, render_viewer_nav_oob,
-    resolve_author_relationship, CandidateRowView, ClaimDetailView, ClaimRowView, CounterThread,
-    LandingSummary, PageView, PeerClaimRowView, PeersView, ScoreState, ScrapeState, SearchState,
-    TraversalView, HTMX_ASSET_URL, PEERS_URL, PHILOSOPHIES_URL, PHILOSOPHY_URL, PROJECT_URL,
-    SCORE_URL, SCRAPE_NO_CANDIDATES_NOTICE, SEARCH_URL,
+    render_philosophy_page, render_project_fragment, render_project_page,
+    render_score_page_with_links, render_score_results_fragment_with_links, render_scrape_page,
+    render_scrape_results_fragment, render_search_page, render_search_results_fragment,
+    render_viewer_nav_oob, resolve_author_relationship, CandidateRowView, ClaimDetailView,
+    ClaimRowView, CounterThread, LandingSummary, LinkedIdentities, PageView, PeerClaimRowView,
+    PeersView, ScoreState, ScrapeState, SearchState, TraversalView, HTMX_ASSET_URL, PEERS_URL,
+    PHILOSOPHIES_URL, PHILOSOPHY_URL, PROJECT_URL, SCORE_URL, SCRAPE_NO_CANDIDATES_NOTICE,
+    SEARCH_URL,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -99,6 +103,40 @@ pub type SharedGithub = Arc<dyn GithubPort>;
 /// sign/write method on it — so adding it to the viewer preserves the read-only,
 /// no-signing-key invariant. The viewer persists NOTHING from `/search` (WD-NS-7).
 pub type SharedIndexQuery = Arc<dyn IndexQueryPort>;
+
+/// The read-only handles behind the linked-identities region (github-did-
+/// identity-link slice 4; D-VL-4): this reader's check history, the stored
+/// link candidates and their lineage — the three reads of
+/// [`ports::read_listed_links`] — plus the clock that dates a page's lines.
+///
+/// CAPABILITY NOTE (C-VL-1, ADR-085 §7): read handles only. The viewer holds
+/// no check-write or purge handle and asks GitHub nothing to show a line
+/// (C-VL-2); `xtask check-arch` (`identity_link_readers_hold_no_write_handle`)
+/// keeps those names out of this crate.
+#[derive(Clone)]
+pub struct LinkReads {
+    pub checks: Arc<dyn IdentityLinkCheckReadPort + Send + Sync>,
+    pub candidates: Arc<dyn LinkCandidateReadPort + Send + Sync>,
+    pub lineage: Arc<dyn LinkLineageReadPort + Send + Sync>,
+    pub clock: Arc<dyn ClockPort + Send + Sync>,
+}
+
+impl LinkReads {
+    /// The links within `scope` as `identity list` shows them, as of the
+    /// clock's `now` (one read: standings decided over every active link
+    /// before the scope selects lines, C-VL-3).
+    pub fn listed_links(&self, scope: &RecheckScope) -> Result<LinkedIdentities, LinkReadError> {
+        let now = self.clock.now_utc();
+        read_listed_links(
+            self.checks.as_ref(),
+            self.candidates.as_ref(),
+            self.lineage.as_ref(),
+            scope,
+            now,
+        )
+        .map(|listed| LinkedIdentities::listed(listed, now))
+    }
+}
 
 /// The fixed rows-per-page for the My Claims list view (ADR-030). Drives the
 /// `?page=N` offset math (`OFFSET (page-1)*size LIMIT size`) in [`claims_page`]
@@ -193,9 +231,20 @@ pub struct ViewerServer {
     /// ADR-037). `None` for an UNCONFIGURED viewer — `/search` then renders the
     /// fixed [`SearchState::Unavailable`] notice WITHOUT any network call (I-NS-2).
     index_query: Option<SharedIndexQuery>,
+    /// The linked-identity reads (slice 4; D-VL-4/7). `None` when the startup
+    /// link probe refused (or none was wired): every person page then says its
+    /// linked identities could not be read.
+    link_reads: Option<LinkReads>,
 }
 
 impl ViewerServer {
+    /// Give the viewer the linked-identity reads its person pages show
+    /// (slice 4; D-VL-4). The composition root passes `None` when its
+    /// read-only startup probe refused (D-VL-7).
+    pub fn with_link_reads(self, link_reads: Option<LinkReads>) -> Self {
+        Self { link_reads, ..self }
+    }
+
     /// Earned-Trust probe — see `probe.rs`. Real (non-stub): the store is
     /// readable (sentinel `count_claims`), the port is read-only by
     /// construction, and the bound address is loopback (127.0.0.1). `store_path`
@@ -286,6 +335,7 @@ impl ViewerServer {
             store,
             github,
             index_query,
+            link_reads: None,
         })
     }
 
@@ -313,9 +363,16 @@ impl ViewerServer {
             let store = Arc::clone(&self.store);
             let github = self.github.clone();
             let index_query = self.index_query.clone();
+            let link_reads = self.link_reads.clone();
             tokio::task::spawn(async move {
                 let service = service_fn(move |req| {
-                    route(req, Arc::clone(&store), github.clone(), index_query.clone())
+                    route(
+                        req,
+                        Arc::clone(&store),
+                        github.clone(),
+                        index_query.clone(),
+                        link_reads.clone(),
+                    )
                 });
                 let _ = hyper::server::conn::http1::Builder::new()
                     .serve_connection(io, service)
@@ -335,6 +392,7 @@ async fn route(
     store: SharedStore,
     github: Option<SharedGithub>,
     index_query: Option<SharedIndexQuery>,
+    link_reads: Option<LinkReads>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
@@ -392,7 +450,7 @@ async fn route(
         // viewer ALREADY holds (NO new field, NO network — I-CS-5), runs the REUSED
         // pure `scoring::score` in the shell, and renders the ranked `WeightedView`.
         // Forks by `Shape` (ADR-033). Holds NO signing key (a read + pure compute).
-        SCORE_URL => score_page(store.as_ref(), query.as_deref(), shape),
+        SCORE_URL => score_page(store.as_ref(), link_reads.as_ref(), query.as_deref(), shape),
         // `GET /project?subject=<uri>` — the project graph-traversal survey (slice-10;
         // ADR-042/043/044/045). Reads the project's LOCAL attributed survey over the
         // read-only store the viewer ALREADY holds (`query_project_survey` — claims ∪
@@ -775,18 +833,39 @@ fn claims_page(
 /// (NFR-VIEW-6 — never a raw stack trace).
 fn score_page(
     store: &dyn StoreReadPort,
+    link_reads: Option<&LinkReads>,
     query: Option<&str>,
     shape: Shape,
 ) -> Response<Full<Bytes>> {
     let state = resolve_score_state(store, query);
+    // The contributor's linked identities (slice 4; D-VL-1): a contributor that
+    // is a DID is a person; a bare form or a malformed value is no one.
+    let linked = query_param(query, "contributor")
+        .filter(|contributor| contributor.starts_with("did:"))
+        .map_or(LinkedIdentities::None, |did| {
+            linked_identities(link_reads, &RecheckScope::Person(did))
+        });
     // Read the per-contribution counter PRESENCE for the WHOLE breakdown in ONE
     // flattened aggregate lookup (slice-14 / US-CF-002 / ADR-051). Only the `Scored`
     // arm has contributions to flag; `Form`/`NoClaims` build no view → no query → the
     // empty set (so the render signature stays uniform across shapes/states).
     let presence = score_counter_presence(store, &state);
     match shape {
-        Shape::Fragment => html_ok(render_score_results_fragment(&state, &presence).into_string()),
-        Shape::FullPage => html_ok(render_score_page(&state, &presence)),
+        Shape::Fragment => html_ok(
+            render_score_results_fragment_with_links(&state, &presence, &linked).into_string(),
+        ),
+        Shape::FullPage => html_ok(render_score_page_with_links(&state, &presence, &linked)),
+    }
+}
+
+/// What a person page shows of the linked identities within `scope` (slice 4;
+/// D-VL-7) — the one mapping every person page reuses: no reads wired (the
+/// startup probe refused) or any read failing → [`LinkedIdentities::Unreadable`],
+/// never partial lines; no link → no region. Writes nothing, asks GitHub nothing.
+fn linked_identities(link_reads: Option<&LinkReads>, scope: &RecheckScope) -> LinkedIdentities {
+    match link_reads.map(|reads| reads.listed_links(scope)) {
+        Some(Ok(linked)) => linked,
+        None | Some(Err(_)) => LinkedIdentities::Unreadable,
     }
 }
 

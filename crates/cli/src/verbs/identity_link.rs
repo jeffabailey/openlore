@@ -17,7 +17,7 @@ use claim_domain::identity_link::{
     ProofCheck, ProvenLink,
 };
 use claim_domain::{canonicalize, compute_cid, SignedClaim};
-use ports::{GithubError, LinkCheck};
+use ports::{GithubError, LinkCheck, StoredLinkLineage};
 
 use crate::io::prompt_line;
 use crate::render::{
@@ -28,7 +28,7 @@ use crate::verbs::claim_publish::{
     build_tokio_runtime, publish_signed_claim, render_publish_error, render_publish_success,
     PublishError,
 };
-use crate::verbs::identity_reads::{observation_of, StoredLinkLineage};
+use crate::verbs::identity_reads::observation_of;
 use crate::wiring::Wiring;
 
 /// Arguments of `identity link github <login>`.

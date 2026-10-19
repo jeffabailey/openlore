@@ -15,11 +15,13 @@
 use adapter_duckdb::DuckDbStorageAdapter;
 use adapter_github::GithubAdapter;
 use adapter_http_viewer::{
-    read_only_launch_banner, viewer_store_unreadable_refusal, SharedGithub, SharedIndexQuery,
-    SharedStore, ViewerServer,
+    read_only_launch_banner, viewer_store_unreadable_refusal, LinkReads, SharedGithub,
+    SharedIndexQuery, SharedStore, ViewerServer,
 };
 use adapter_index_query::HttpIndexQueryAdapter;
+use adapter_system_clock::SystemClockAdapter;
 use anyhow::{anyhow, Result};
+use claim_domain::identity_link::RecheckScope;
 use ports::{IndexQueryPort, ProbeOutcome, StoreReadPort};
 use std::sync::Arc;
 
@@ -76,6 +78,18 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
     };
     let store: SharedStore = Arc::new(storage.read_adapter());
 
+    // Wire the linked-identity reads (github-did-identity-link slice 4; D-VL-4)
+    // over the SAME connection: check read, candidate read, lineage read — no
+    // check write, no purge (C-VL-1) — and the clock that dates the lines
+    // (`OPENLORE_TEST_NOW` in development builds, as the CLI identity verbs).
+    // A refused read-only probe injects none; the viewer still serves (D-VL-7).
+    let link_reads = probed_link_reads(LinkReads {
+        checks: Arc::new(storage.identity_link_check_adapter()),
+        candidates: Arc::new(storage.identity_link_check_adapter()),
+        lineage: Arc::new(storage.link_lineage_adapter()),
+        clock: Arc::new(SystemClockAdapter::new()),
+    });
+
     // Wire the slice-02 `GithubPort` (adapter-github) for the `/scrape` LIVE
     // propose route (US-VIEW-005). `from_env` resolves the GitHub API base (the
     // real public API, or the `OPENLORE_GITHUB_API_BASE` test seam) and the
@@ -126,7 +140,7 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
             Some(Arc::clone(&github)),
             index_query.clone(),
         ) {
-            Ok(server) => server,
+            Ok(server) => server.with_link_reads(link_reads),
             Err(err) => {
                 eprintln!("openlore ui: {err}");
                 return 2;
@@ -197,6 +211,23 @@ fn emit_startup_refused(outcome: &ProbeOutcome) {
     });
     eprintln!("{event}");
     eprintln!("openlore ui: refusing to serve — {detail}");
+}
+
+/// The viewer's READ-ONLY startup probe of its link reads (D-VL-7): one
+/// `read_listed_links(…, Everyone, now)` call through `reads`, which exercises
+/// all three reads and writes nothing. It never calls the check port's own
+/// `probe()`, which inserts checks inside a rolled-back transaction — the viewer
+/// writes nothing (NFR-VIEW-1). Passed → the reads; refused → none, and a
+/// `viewer.identity_links.probe {refused: true}` event. Never refuses the viewer
+/// (links are a secondary view, ADR-054 precedent).
+fn probed_link_reads(reads: LinkReads) -> Option<LinkReads> {
+    let refused = reads.listed_links(&RecheckScope::Everyone).is_err();
+    let probe_event = serde_json::json!({
+        "event": "viewer.identity_links.probe",
+        "refused": refused,
+    });
+    announce(&probe_event.to_string());
+    (!refused).then_some(reads)
 }
 
 /// The env-var seam the viewer composition root reads for the self-hosted indexer

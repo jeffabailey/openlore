@@ -86,7 +86,6 @@ fn rachels_checked_link() -> LinkWorld {
 ///   And GitHub was not asked anything while the page was shown
 /// ```
 #[test]
-#[ignore = "DELIVER 04-01: walking skeleton — the linked-identity region on /score"]
 fn rachels_contributor_page_shows_her_github_account_as_verified() {
     let world = rachels_checked_link();
     let asked_before = world.github_paths().len();
@@ -823,7 +822,6 @@ fn network_search_shows_each_authors_linked_identity_and_labels_link_rows() {
 /// load and show no linked-identities region.
 /// ```
 #[test]
-#[ignore = "DELIVER 04-01: a person with no link shows no region"]
 fn a_person_with_no_link_shows_no_linked_identities_region() {
     let mut world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);

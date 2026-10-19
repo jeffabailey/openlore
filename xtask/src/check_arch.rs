@@ -1576,7 +1576,10 @@ pub fn scan_adapter_github_port_references(workspace_root: &Path) -> anyhow::Res
 //   store, no `IdentityPort`, no `GithubPort` and not the whole `Wiring`; the
 //   `infer people` module names no check-write or purge port, method or slot
 //   (its `--sign` path holds signing by design). Neither — nor `identity
-//   verify` — glob-imports, which would hide a forbidden name.
+//   verify` — glob-imports, which would hide a forbidden name. The viewer
+//   (`crates/adapter-http-viewer/src/**`, github-did-identity-link slice 4,
+//   C-VL-1) names no check-write, purge or signing handle; its `GithubPort`
+//   stays allowed (`POST /scrape` uses it).
 // * `identity_link_purge_only_in_forget_verb`: the purge port, its method and
 //   its wiring slot are named only by the `identity forget` verb, besides the
 //   port's definition, its adapter and the composition root.
@@ -1702,6 +1705,23 @@ const INFER_PEOPLE_FORBIDDEN_TOKENS: &[&str] = &[
     "identity_link_check_purge",
 ];
 
+/// The viewer adapter's sources, which show linked identities (slice 4,
+/// C-VL-1), and what they may not name: the check-write and purge ports,
+/// their methods and wiring slots, and the signing surface. Not `GithubPort`:
+/// the viewer keeps it for `POST /scrape`.
+const VIEWER_ADAPTER_SOURCES: &str = "crates/adapter-http-viewer/src";
+const VIEWER_ADAPTER_FORBIDDEN_TOKENS: &[&str] = &[
+    "IdentityLinkCheckWritePort",
+    "IdentityLinkCheckPurgePort",
+    "record_check",
+    "purge_subject",
+    "identity_link_check_writes",
+    "identity_link_check_purge",
+    "IdentityPort",
+    "sign_and_keep",
+    "publish_signed_claim",
+];
+
 /// Pure rule: every glob import (`use …::*;`, `use a::{B, *};`, a glob
 /// nested in braces or spread over lines) as a `line N: …` finding, read
 /// from the parsed `use` items — a glob hides which names a module holds, so
@@ -1783,6 +1803,25 @@ pub fn scan_identity_link_readers_hold_no_write_handle(
                          or GitHub handle (identity_link_readers_hold_no_write_handle, ADR-085 §7)"
             )
         }));
+    }
+    for path in rust_sources_under(&workspace_root.join(VIEWER_ADAPTER_SOURCES)) {
+        let source = std::fs::read_to_string(&path)?;
+        let rel_path = path
+            .strip_prefix(workspace_root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        findings.extend(
+            classify_forbidden_words(&source, VIEWER_ADAPTER_FORBIDDEN_TOKENS)
+                .into_iter()
+                .map(|finding| {
+                    format!(
+                        "{rel_path}: {finding} — the viewer shows linked identities holding no \
+                         check-write, purge or signing handle \
+                         (identity_link_readers_hold_no_write_handle, C-VL-1)"
+                    )
+                }),
+        );
     }
     Ok(findings)
 }
@@ -4095,6 +4134,49 @@ mod tests {
                 .expect("scan real tree"),
             Vec::<String>::new(),
             "the real readers hold read handles only"
+        );
+    }
+
+    #[test]
+    fn reader_scan_covers_the_viewer_adapter() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let viewer = violating
+            .path()
+            .join("crates/adapter-http-viewer/src/routes");
+        std::fs::create_dir_all(&viewer).expect("mkdir");
+        std::fs::write(
+            viewer.join("links.rs"),
+            "// an IdentityLinkCheckWritePort in a comment is no handle\n\
+             use ports::{GithubPort, IdentityLinkCheckReadPort, IdentityLinkCheckWritePort};\n\
+             fn erase(p: &dyn IdentityLinkCheckPurgePort) { p.purge_subject(\"d\"); }\n\
+             fn sign(id: &dyn IdentityPort) {}\n",
+        )
+        .expect("write");
+        let findings =
+            scan_identity_link_readers_hold_no_write_handle(violating.path()).expect("scan");
+        let named = |token: &str| {
+            findings.iter().any(|f| {
+                f.starts_with("crates/adapter-http-viewer/src/routes/links.rs")
+                    && f.contains(&format!("`{token}`"))
+            })
+        };
+        for token in [
+            "IdentityLinkCheckWritePort",
+            "IdentityLinkCheckPurgePort",
+            "purge_subject",
+            "IdentityPort",
+        ] {
+            assert!(named(token), "{token}: {findings:?}");
+        }
+        assert!(!named("GithubPort"), "/scrape keeps GitHub: {findings:?}");
+        assert!(!named("IdentityLinkCheckReadPort"), "{findings:?}");
+        assert_eq!(findings.len(), 4, "{findings:?}");
+
+        assert_eq!(
+            scan_identity_link_readers_hold_no_write_handle(real_workspace_root())
+                .expect("scan real tree"),
+            Vec::<String>::new(),
+            "the real viewer holds read handles only"
         );
     }
 
