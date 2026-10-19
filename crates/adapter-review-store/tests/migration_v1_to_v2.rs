@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use adapter_review_store::{DataKey, MigrationFault, ReviewStore, StoreError};
+use adapter_review_store::{DataKey, ReviewStore};
 use duckdb::Connection;
 use ports::{GithubLink, GithubLinkPort};
 
@@ -283,6 +283,7 @@ fn a_second_start_changes_nothing() {
 }
 
 #[test]
+#[cfg(debug_assertions)]
 fn a_start_cut_off_before_commit_leaves_v1_and_the_next_start_migrates() {
     let (dir, path) = v1_store();
     let before = dump(&path, &V1_TABLES);
@@ -291,11 +292,14 @@ fn a_start_cut_off_before_commit_leaves_v1_and_the_next_start_migrates() {
         &path,
         key(),
         Default::default(),
-        Some(MigrationFault::StopBeforeCommit),
+        Some(adapter_review_store::MigrationFault::StopBeforeCommit),
     )
     .err();
 
-    assert_eq!(cut_off, Some(StoreError::MigrationStopped));
+    assert_eq!(
+        cut_off,
+        Some(adapter_review_store::StoreError::MigrationStopped)
+    );
     assert_eq!(dump(&path, &V1_TABLES), before, "still v1, every row");
     assert!(
         single(

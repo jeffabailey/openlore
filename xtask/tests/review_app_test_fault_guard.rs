@@ -33,6 +33,25 @@ fn test_fault(value: &str) -> Option<TestFault> {
 }
 "#;
 
+/// Review R7: the store's fault variant compiled into every build.
+const UNGATED_VARIANT: &str = r#"
+pub enum MigrationFault {
+    StopBeforeCommit,
+}
+"#;
+
+/// The production shape (adapter-review-store lib.rs): the variant exists
+/// only in a development build; the release twin has no values.
+const GATED_VARIANT: &str = r#"
+#[cfg(debug_assertions)]
+pub enum MigrationFault {
+    StopBeforeCommit,
+}
+
+#[cfg(not(debug_assertions))]
+pub enum MigrationFault {}
+"#;
+
 fn workspace_with(rel: &str, source: &str) -> tempfile::TempDir {
     let root = tempfile::tempdir().expect("temp workspace");
     let path = root.path().join(rel);
@@ -62,6 +81,20 @@ fn an_ungated_fault_name_fails_in_the_app_or_the_store() {
         assert_eq!(found.len(), 1, "{rel}: {found:?}");
         assert!(found[0].contains("migrate_before_commit"), "{}", found[0]);
     }
+}
+
+#[test]
+fn an_ungated_store_fault_variant_fails() {
+    let root = workspace_with("crates/adapter-review-store/src/lib.rs", UNGATED_VARIANT);
+    let found = findings(root.path());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("StopBeforeCommit"), "{}", found[0]);
+}
+
+#[test]
+fn a_gated_store_fault_variant_passes() {
+    let root = workspace_with("crates/adapter-review-store/src/lib.rs", GATED_VARIANT);
+    assert_eq!(findings(root.path()), Vec::<String>::new());
 }
 
 #[test]

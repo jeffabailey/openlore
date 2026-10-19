@@ -433,11 +433,35 @@ pub(crate) fn recorded_version(conn: &Connection) -> Result<Option<i64>, StoreEr
 }
 
 /// A point the v1 → v2 step can be asked to stop at (DWD-RRA-16). Only a
-/// development build's configuration can name one.
+/// development build knows any (review R7).
+#[cfg(debug_assertions)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MigrationFault {
     /// Run every statement of the step, then roll back instead of COMMIT.
     StopBeforeCommit,
+}
+
+/// A release build knows no migration fault: the type has no values.
+#[cfg(not(debug_assertions))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationFault {}
+
+/// Whether `fault` stops the step just before COMMIT.
+#[cfg(debug_assertions)]
+fn stop_at(fault: Option<MigrationFault>) -> Result<(), StoreError> {
+    match fault {
+        Some(MigrationFault::StopBeforeCommit) => Err(StoreError::MigrationStopped),
+        None => Ok(()),
+    }
+}
+
+/// A release build never stops the step.
+#[cfg(not(debug_assertions))]
+fn stop_at(fault: Option<MigrationFault>) -> Result<(), StoreError> {
+    match fault {
+        Some(never) => match never {},
+        None => Ok(()),
+    }
 }
 
 /// Open the store file with DuckDB's `caps` applied (B11).
@@ -478,10 +502,7 @@ fn migrate_v1_to_v2(conn: &Connection, fault: Option<MigrationFault>) -> Result<
         }
         conn.execute(schema::RECORD_SCHEMA_VERSION, [SCHEMA_VERSION])
             .map_err(db_error)?;
-        match fault {
-            Some(MigrationFault::StopBeforeCommit) => Err(StoreError::MigrationStopped),
-            None => Ok(()),
-        }
+        stop_at(fault)
     })
 }
 

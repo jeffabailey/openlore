@@ -1137,7 +1137,9 @@ pub fn scan_viewer_fail_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<
 // `#[cfg(...)]` gate, like the viewer fault seams above.
 
 /// The fault names the review app's development build honours.
-const REVIEW_APP_TEST_FAULT_TOKENS: &[&str] = &["migrate_before_commit"];
+/// `StopBeforeCommit` is the store's variant the name maps to (review R7):
+/// a release build must not even hold it.
+const REVIEW_APP_TEST_FAULT_TOKENS: &[&str] = &["migrate_before_commit", "StopBeforeCommit"];
 
 /// The source trees the review-app test-fault guard scans.
 const REVIEW_APP_TEST_FAULT_GUARDED_DIRS: &[&str] = &[
