@@ -1247,7 +1247,6 @@ fn a_save_that_races_a_removal_never_brings_the_removed_accounts_choice_back() {
 ///   And priyaraman's suggestions are hidden
 /// ```
 #[test]
-#[ignore = "REVIEW-FIX: D12"]
 fn when_her_first_account_fails_its_check_only_that_accounts_suggestions_are_hidden() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);

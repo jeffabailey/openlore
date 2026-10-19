@@ -42,8 +42,8 @@ pub(crate) fn review(app: &App, request: &PageRequest) -> Reply {
     }
 }
 
-/// The owner's queue page; pending suggestions show only while the GitHub
-/// link is verified (D-12: hidden, never deleted).
+/// The owner's queue page; each pending suggestion shows only while its
+/// source is listed and verified (D-12, CORE-RRA-7: hidden, never deleted).
 pub(crate) fn queue_page(
     app: &App,
     cookie_value: &str,
@@ -216,7 +216,7 @@ pub(crate) fn owner_queue(
         .iter()
         .map(|import| import.repo_id)
         .collect();
-    let link = accounts.first().cloned();
+    let link = queue_link(&accounts).cloned();
     let shows_queue = link.as_ref().is_some_and(|link| link.verified) || !imports.is_empty();
     let pending = if shows_queue {
         visible_pending(review_read, owner_did, &accounts, &imports)
@@ -738,23 +738,32 @@ fn owner_pending(app: &App, owner_did: &str) -> Vec<Suggestion> {
     .pending
 }
 
-/// Does the owner see a queue: her GitHub link is verified, or she lists
-/// imported repos (whose cards she can still decline)?
+/// Does the owner see a queue: one of her GitHub accounts is verified, or
+/// she lists imported repos (whose cards she can still decline)? Which
+/// cards show is each card's own source's business (CORE-RRA-7, D12).
 fn queue_shown(app: &App, owner_did: &str) -> bool {
-    link_verified(app, owner_did)
+    any_account_verified(app, owner_did)
         || app
             .imports_read
             .imports(owner_did)
             .is_ok_and(|imports| !imports.is_empty())
 }
 
-/// Is the owner's GitHub link currently verified?
-fn link_verified(app: &App, owner_did: &str) -> bool {
+/// Is any of the owner's GitHub accounts currently verified?
+fn any_account_verified(app: &App, owner_did: &str) -> bool {
     app.links
-        .github_link(owner_did)
-        .ok()
-        .flatten()
-        .is_some_and(|link| link.verified)
+        .github_accounts(owner_did)
+        .is_ok_and(|accounts| accounts.iter().any(|account| account.verified))
+}
+
+/// The account the queue's GitHub step names: her first verified one, so
+/// one failed account never hides the others' suggestions (D12); with none
+/// verified, her first (to re-verify).
+fn queue_link(accounts: &[GithubLink]) -> Option<&GithubLink> {
+    accounts
+        .iter()
+        .find(|account| account.verified)
+        .or_else(|| accounts.first())
 }
 
 /// Run `act` on the visible pending suggestion the form names (its object
