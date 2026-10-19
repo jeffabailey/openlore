@@ -7,10 +7,15 @@
 use std::collections::BTreeSet;
 
 use hyper::StatusCode;
-use ports::{GithubLink, KpiTally, WebSession};
-use review_domain::repo_scope::{choice_to_save, choose_list, AccountChoice};
+use ports::{AccountRepoListing, GithubError, GithubLink, KpiTally, SavedRepoChoice, WebSession};
+use review_domain::kpi::{utc_day, KpiEvent};
+use review_domain::repo_scope::{
+    choice_to_save, choose_list, default_ticks, AccountChoice, ScopeAccount, Standing,
+    REPOS_PER_SCAN_LIMIT,
+};
 use review_domain::views::{
-    self, AccountListing, AccountRepos, ReposNotice, ReposView, ACCOUNT_ID_FIELD, REPO_FIELD,
+    self, AccountListing, AccountRepos, ListingFailure, ReposNotice, ReposView, ACCOUNT_ID_FIELD,
+    REPO_FIELD,
 };
 
 use crate::http::{App, PageRequest, Reply};
@@ -19,11 +24,13 @@ use crate::routes::signin::{
     csrf_token_for, csrf_token_of, current_session, field, fields, signed_in_post, to_landing,
 };
 
-/// `GET /repos`: the choose page.
+/// `GET /repos`: the choose page. Opening it stores nothing; it is counted.
 pub(crate) async fn choose_repos(app: &App, request: &PageRequest) -> Reply {
     let Some((cookie_value, session)) = current_session(app, request) else {
         return to_landing();
     };
+    let today = utc_day(crate::limiter::unix_now_secs());
+    let _ = app.kpi.count(&today, KpiEvent::ReposChoiceViewed.name());
     repos_page(app, &session, &csrf_token_for(&cookie_value), None).await
 }
 
@@ -47,7 +54,7 @@ pub(crate) async fn save_choice(app: &App, request: &PageRequest) -> Reply {
     let Ok(listing) = app.github.list_account_repos(&account.github_login).await else {
         return repos_page(app, &session, &csrf_token, None).await;
     };
-    let choice = choice_to_save(&listing, &ticked);
+    let choice = choice_to_save(&listing.repos, &ticked);
     let saved = app.choices_write.save_choice(
         &session.owner_did,
         account.github_user_id,
@@ -60,33 +67,87 @@ pub(crate) async fn save_choice(app: &App, request: &PageRequest) -> Reply {
     repos_page(app, &session, &csrf_token, notice).await
 }
 
-/// The owner's verified accounts, in the order they were added.
-fn verified_accounts(app: &App, owner_did: &str) -> Vec<GithubLink> {
-    app.links
-        .github_accounts(owner_did)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|account| account.verified)
-        .collect()
+/// The owner's accounts, in the order they were added.
+fn listed_accounts(app: &App, owner_did: &str) -> Vec<GithubLink> {
+    app.links.github_accounts(owner_did).unwrap_or_default()
 }
 
 fn verified_account(app: &App, owner_did: &str, github_user_id: u64) -> Option<GithubLink> {
-    verified_accounts(app, owner_did)
+    listed_accounts(app, owner_did)
         .into_iter()
-        .find(|account| account.github_user_id == github_user_id)
+        .find(|account| account.verified && account.github_user_id == github_user_id)
 }
 
-/// One account's section: its live listing, ticked as its choice says.
-async fn account_listing(app: &App, owner_did: &str, account: &GithubLink) -> AccountListing {
-    match app.github.list_account_repos(&account.github_login).await {
-        Ok(listing) => {
-            let saved = app
-                .choices_read
-                .saved_choice(owner_did, account.github_user_id)
-                .unwrap_or_default();
-            AccountListing::Listed(choose_list(&listing, AccountChoice::of(&saved)))
+/// What the page knows of one account: its saved rows and, when verified,
+/// its live listing (an unverified account's repos are never asked for).
+struct AccountState {
+    link: GithubLink,
+    saved: Vec<SavedRepoChoice>,
+    listing: Option<Result<AccountRepoListing, GithubError>>,
+}
+
+async fn account_state(app: &App, owner_did: &str, link: GithubLink) -> AccountState {
+    let listing = if link.verified {
+        Some(app.github.list_account_repos(&link.github_login).await)
+    } else {
+        None
+    };
+    let saved = app
+        .choices_read
+        .saved_choice(owner_did, link.github_user_id)
+        .unwrap_or_default();
+    AccountState {
+        link,
+        saved,
+        listing,
+    }
+}
+
+fn standing(link: &GithubLink) -> Standing {
+    if link.verified {
+        Standing::Verified
+    } else {
+        Standing::Unverified
+    }
+}
+
+fn scope_account(state: &AccountState) -> ScopeAccount {
+    let listed = match &state.listing {
+        Some(Ok(listing)) => Some(listing.repos.as_slice()),
+        _ => None,
+    };
+    ScopeAccount::of(
+        state.link.github_user_id,
+        standing(&state.link),
+        &state.saved,
+        listed,
+    )
+}
+
+fn listing_failure(error: &GithubError) -> ListingFailure {
+    match error {
+        GithubError::RateLimited { .. } => ListingFailure::RateLimited,
+        _ => ListingFailure::Unreachable,
+    }
+}
+
+/// One account's section: its listing ticked as its saved choice says, or
+/// (never saved) as its default ticks within the room left say.
+fn account_listing(state: &AccountState, defaults: &[(u64, Vec<u64>)]) -> AccountListing {
+    match &state.listing {
+        None => AccountListing::NeedsReverifying,
+        Some(Err(error)) => AccountListing::Unavailable(listing_failure(error)),
+        Some(Ok(listing)) => {
+            let default_ticked = defaults
+                .iter()
+                .find(|(id, _)| *id == state.link.github_user_id)
+                .map_or(&[][..], |(_, ticked)| ticked.as_slice());
+            let choice = match AccountChoice::of(&state.saved) {
+                AccountChoice::Saved(rows) => AccountChoice::Saved(rows),
+                _ => AccountChoice::DefaultTicks(default_ticked),
+            };
+            AccountListing::Listed(choose_list(&listing.repos, choice), listing.extent)
         }
-        Err(_) => AccountListing::Unavailable,
     }
 }
 
@@ -96,15 +157,20 @@ async fn repos_page(
     csrf_token: &str,
     notice: Option<ReposNotice>,
 ) -> Reply {
-    let accounts = verified_accounts(app, &session.owner_did);
-    let mut sections = Vec::with_capacity(accounts.len());
-    for account in &accounts {
-        sections.push(AccountRepos {
-            github_user_id: account.github_user_id,
-            login: &account.github_login,
-            listing: account_listing(app, &session.owner_did, account).await,
-        });
+    let mut states = Vec::new();
+    for link in listed_accounts(app, &session.owner_did) {
+        states.push(account_state(app, &session.owner_did, link).await);
     }
+    let scope: Vec<ScopeAccount> = states.iter().map(scope_account).collect();
+    let defaults = default_ticks(&scope, &[], REPOS_PER_SCAN_LIMIT);
+    let sections = states
+        .iter()
+        .map(|state| AccountRepos {
+            github_user_id: state.link.github_user_id,
+            login: &state.link.github_login,
+            listing: account_listing(state, &defaults),
+        })
+        .collect();
     Reply::page(
         StatusCode::OK,
         views::repos_page(&ReposView {

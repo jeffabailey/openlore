@@ -178,8 +178,26 @@ enum ImportVerdictView {
 // Binding seam — each binds to ONE production call (RED until DELIVER)
 // =============================================================================
 
-fn sut_default_ticks(_scope: &ScopeView) -> Vec<(u64, Vec<u64>)> {
-    todo!("RED: bind to review_domain::repo_scope::default_ticks (DELIVER 01-*)")
+fn sut_default_ticks(scope: &ScopeView) -> Vec<(u64, Vec<u64>)> {
+    use review_domain::repo_scope::{default_ticks, SavedTicks, ScopeAccount, Standing};
+    let accounts: Vec<ScopeAccount> = scope
+        .accounts
+        .iter()
+        .map(|a| ScopeAccount {
+            github_user_id: a.id,
+            standing: if a.verified {
+                Standing::Verified
+            } else {
+                Standing::Unverified
+            },
+            saved: a
+                .saved
+                .clone()
+                .map_or(SavedTicks::NeverSaved, SavedTicks::Saved),
+            ranked_eligible: a.eligible.clone(),
+        })
+        .collect();
+    default_ticks(&accounts, &scope.imports, CAP)
 }
 
 fn sut_save_admission(
@@ -501,7 +519,6 @@ proptest! {
 
     /// CORE-RRA-1 (@property @US-RRA-001 @US-RRA-003 @BR-RRA-3 @contract-shape:pure-function)
     #[test]
-    #[ignore = "CORE-RRA-1 (bind with DELIVER step 01-02): repo_scope default ticks (RED binding)"]
     fn core_rra1_default_ticks_fill_only_the_room_left(scope in arb_scope()) {
         let ticks = sut_default_ticks(&scope);
         prop_assert_eq!(&ticks, &oracle_default_ticks(&scope));

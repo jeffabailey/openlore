@@ -340,6 +340,22 @@ pub struct ListedRepo {
     pub repo: OwnedRepo,
 }
 
+/// Whether a listing holds every owned repo or stopped at the page cap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListingExtent {
+    Complete,
+    /// GitHub had more pages than the listing reads (3 pages of 100): a
+    /// repo absent from it is not proven missing.
+    Truncated,
+}
+
+/// An account's owned repos, as many pages as the listing reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountRepoListing {
+    pub repos: Vec<ListedRepo>,
+    pub extent: ListingExtent,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

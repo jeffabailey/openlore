@@ -119,8 +119,9 @@ pub use peer_storage::{
 // pure `scraper-domain` derivation crate (step 01-02) consumes these shapes.
 
 pub use github::{
-    CandidateClaim, CandidateClaimError, GithubAccountProfile, GithubError, ListedRepo, OwnedRepo,
-    PersonProfile, RawContributor, Signal, SignalKind, TargetKind,
+    AccountRepoListing, CandidateClaim, CandidateClaimError, GithubAccountProfile, GithubError,
+    ListedRepo, ListingExtent, OwnedRepo, PersonProfile, RawContributor, Signal, SignalKind,
+    TargetKind,
 };
 
 // contributor-philosophy-inference (DDD-4 / ADR-063 §3): the NEW append-only
@@ -565,10 +566,11 @@ pub trait GithubPort: Send + Sync {
     /// rows (forks and archived repos included).
     async fn list_owned_repos(&self, user: &str) -> Result<Vec<OwnedRepo>, GithubError>;
 
-    /// [`list_owned_repos`](Self::list_owned_repos) with GitHub's numeric
-    /// repo and owner ids on each row (the choose page and the scan key
-    /// choices by them); rows without both ids are left out.
-    async fn list_account_repos(&self, user: &str) -> Result<Vec<ListedRepo>, GithubError>;
+    /// The owned repos with GitHub's numeric repo and owner ids on each row
+    /// (the choose page and the scan key choices by them); rows without both
+    /// ids are left out. Follows `Link: rel="next"` for up to 3 pages and
+    /// says whether the listing was complete.
+    async fn list_account_repos(&self, user: &str) -> Result<AccountRepoListing, GithubError>;
 
     /// The rate budget GitHub reported on the most recent response, if any
     /// (ADR-076 §2: a scan reads it before each repo).

@@ -95,7 +95,6 @@ fn priya_publishes_a_claim_about_a_repo_her_old_top_5_never_read() {
 ///   And she sees "Skipped: 1 fork, 1 archived repo."
 /// ```
 #[test]
-#[ignore = "DELIVER 01-02: choose-repos page with today's top 5 ticked"]
 fn first_visit_shows_todays_top_5_already_ticked() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -206,7 +205,6 @@ fn choosing_more_than_the_limit_is_refused_with_the_fix() {
 ///   And she is offered "Add repo" to name a public repo she doesn't own
 /// ```
 #[test]
-#[ignore = "DELIVER 01-05: forks-only owner sees why nothing is listed"]
 fn an_owner_with_only_forks_learns_why_nothing_is_listed() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Aishab);
@@ -236,7 +234,6 @@ fn an_owner_with_only_forks_learns_why_nothing_is_listed() {
 ///   And her next scan still reads her 5 saved repos
 /// ```
 #[test]
-#[ignore = "DELIVER 01-06: a failed listing never touches the saved choice"]
 fn a_failed_listing_leaves_the_saved_choice_alone() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -267,7 +264,6 @@ fn a_failed_listing_leaves_the_saved_choice_alone() {
 ///   And she sees "Saved. Your next scan reads 5 repos."
 /// ```
 #[test]
-#[ignore = "DELIVER 01-07: labelled, keyboard-operable repo boxes"]
 fn priya_chooses_and_saves_with_the_keyboard_only() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
@@ -311,7 +307,6 @@ fn priya_chooses_and_saves_with_the_keyboard_only() {
 ///   And she sees "Your DID is no longer in the bio of github.com/priyaraman. Put it back, then verify on the GitHub step." with a link to the GitHub step
 /// ```
 #[test]
-#[ignore = "DELIVER 01-08: an unverified account shows the fix, not a list"]
 fn an_account_that_needs_re_verifying_shows_no_repo_list() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);

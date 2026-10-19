@@ -28,13 +28,15 @@ pub enum KpiEvent {
     /// KPI-RRA-1: an action on a suggestion today's top 5 would never have
     /// produced.
     SuggestionActedOutsideDefault,
+    /// The choose-repos page was opened.
+    ReposChoiceViewed,
     SharePosted,
     RetractPosted,
     Disconnect,
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 14] = [
+    pub const ALL: [KpiEvent; 15] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -46,6 +48,7 @@ impl KpiEvent {
         Self::SuggestionApprovedEdited,
         Self::SuggestionDeclined,
         Self::SuggestionActedOutsideDefault,
+        Self::ReposChoiceViewed,
         Self::SharePosted,
         Self::RetractPosted,
         Self::Disconnect,
@@ -65,6 +68,7 @@ impl KpiEvent {
             Self::SuggestionApprovedEdited => "suggestion.approved.edited",
             Self::SuggestionDeclined => "suggestion.declined",
             Self::SuggestionActedOutsideDefault => "suggestion.acted.outside_default",
+            Self::ReposChoiceViewed => "repos.choice.viewed",
             Self::SharePosted => "share.posted",
             Self::RetractPosted => "retract.posted",
             Self::Disconnect => "disconnect",

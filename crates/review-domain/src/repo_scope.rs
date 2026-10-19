@@ -21,6 +21,9 @@ pub const DEFAULT_TICKS: usize = DEFAULT_PERSON_REPO_COUNT;
 pub enum AccountChoice<'a> {
     /// Never saved: today's top 5 are ticked.
     Default,
+    /// Never saved: exactly these default ticks, today's top 5 cut to the
+    /// room left under the limit ([`default_ticks`]).
+    DefaultTicks(&'a [u64]),
     Saved(&'a [SavedRepoChoice]),
 }
 
@@ -38,8 +41,116 @@ impl<'a> AccountChoice<'a> {
     fn ticks(self, repo_id: u64, rank: usize) -> bool {
         match self {
             Self::Default => rank < DEFAULT_TICKS,
+            Self::DefaultTicks(ticked) => ticked.contains(&repo_id),
             Self::Saved(rows) => rows.iter().any(|row| row.repo_id == repo_id && row.ticked),
         }
+    }
+}
+
+/// Repos one scan may read across every account and import (BR-RRA-3).
+pub const REPOS_PER_SCAN_LIMIT: usize = 10;
+
+/// Whether an account's DID-in-bio proof still holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Standing {
+    Verified,
+    /// A re-check failed: no listing, no default ticks until re-verified.
+    Unverified,
+}
+
+/// An account's ticks as the limit counts them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SavedTicks {
+    NeverSaved,
+    /// The ticked repo ids of the saved choice (they count even while the
+    /// account is unverified, OQ-D3).
+    Saved(Vec<u64>),
+}
+
+/// One listed account, as the 10-repo limit sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeAccount {
+    pub github_user_id: u64,
+    pub standing: Standing,
+    pub saved: SavedTicks,
+    /// Its eligible repo ids in today's ranking (empty when not listed).
+    pub ranked_eligible: Vec<u64>,
+}
+
+/// The default ticks of each verified account without a saved choice, in
+/// `added_at` order: the first `min(5, eligible, room left)` of its ranking,
+/// the room being what the saved ticks, the imports and earlier defaults
+/// leave under `cap`.
+pub fn default_ticks(
+    accounts: &[ScopeAccount],
+    imports: &[u64],
+    cap: usize,
+) -> Vec<(u64, Vec<u64>)> {
+    let saved: usize = accounts.iter().map(|account| account.saved.count()).sum();
+    let room = cap.saturating_sub(saved + imports.len());
+    accounts
+        .iter()
+        .filter(|account| account.takes_default_ticks())
+        .scan(room, |room, account| {
+            let ticked = DEFAULT_TICKS.min(account.ranked_eligible.len()).min(*room);
+            *room -= ticked;
+            Some((
+                account.github_user_id,
+                account.ranked_eligible[..ticked].to_vec(),
+            ))
+        })
+        .collect()
+}
+
+impl SavedTicks {
+    /// The ticks a saved choice holds (the stored rows' ticked ids).
+    pub fn of(rows: &[SavedRepoChoice]) -> Self {
+        if rows.is_empty() {
+            Self::NeverSaved
+        } else {
+            Self::Saved(
+                rows.iter()
+                    .filter(|row| row.ticked)
+                    .map(|row| row.repo_id)
+                    .collect(),
+            )
+        }
+    }
+
+    /// How many repos these ticks count toward the limit.
+    fn count(&self) -> usize {
+        match self {
+            Self::NeverSaved => 0,
+            Self::Saved(ticked) => ticked.len(),
+        }
+    }
+}
+
+impl ScopeAccount {
+    /// An account as the limit sees it: its saved rows, and its eligible
+    /// repos ranked from `listing` (`None`: not listed, so none).
+    pub fn of(
+        github_user_id: u64,
+        standing: Standing,
+        saved_rows: &[SavedRepoChoice],
+        listing: Option<&[ListedRepo]>,
+    ) -> Self {
+        Self {
+            github_user_id,
+            standing,
+            saved: SavedTicks::of(saved_rows),
+            ranked_eligible: listing.map_or_else(Vec::new, |listing| {
+                ranked(listing)
+                    .0
+                    .iter()
+                    .map(|listed| listed.repo_id)
+                    .collect()
+            }),
+        }
+    }
+
+    fn takes_default_ticks(&self) -> bool {
+        self.standing == Standing::Verified && self.saved == SavedTicks::NeverSaved
     }
 }
 

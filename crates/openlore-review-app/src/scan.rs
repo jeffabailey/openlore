@@ -186,7 +186,7 @@ async fn scan_owned_repos(
         .list_account_repos(ownership.github_login())
         .await
     {
-        Ok(listing) => listing,
+        Ok(listing) => listing.repos,
         Err(error) => return failed(app, &error),
     };
     let owner_did = ownership.owner_did();

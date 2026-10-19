@@ -4,6 +4,8 @@
 use maud::{html, Markup};
 
 use super::*;
+use ports::ListingExtent;
+
 use crate::repo_scope::ChooseList;
 
 /// Where the choose page lives and its Save form posts.
@@ -18,12 +20,36 @@ pub const ACCOUNT_ID_FIELD: &str = "github_user_id";
 /// The form field of each ticked repo (its numeric GitHub id).
 pub const REPO_FIELD: &str = "repo";
 
-/// What GitHub said when an account's repos were listed.
+/// Where "Add repo" names a public repo the owner doesn't own (US-RRA-005).
+pub const IMPORTS_PATH: &str = "/repos/imports";
+
+/// The "Add repo" field: the repo as `owner/name`.
+pub const IMPORT_REPO_FIELD: &str = "repo";
+
+/// The button that names a public repo the owner doesn't own.
+pub const ADD_REPO_LABEL: &str = "Add repo";
+
+/// AC-001.5: a rate-limited listing.
+pub const LISTING_RATE_LIMITED_MESSAGE: &str = "GitHub is rate-limiting the app, so your repo list couldn't be loaded. Your saved choice is unchanged. Please try again in a few minutes.";
+
+/// AC-001.5: any other failed listing.
+pub const LISTING_UNREACHABLE_MESSAGE: &str = "GitHub couldn't be reached, so your repo list couldn't be loaded. Your saved choice is unchanged. Please try again in a few minutes.";
+
+/// Why an account's repos could not be listed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListingFailure {
+    RateLimited,
+    Unreachable,
+}
+
+/// What the choose page can show for one account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountListing {
-    Listed(ChooseList),
+    Listed(ChooseList, ListingExtent),
     /// The listing could not be read; nothing can be chosen right now.
-    Unavailable,
+    Unavailable(ListingFailure),
+    /// The account's proof no longer holds: no listing was asked for.
+    NeedsReverifying,
 }
 
 /// One verified account's section of the choose page.
@@ -73,6 +99,21 @@ pub fn skipped_message(forks: usize, archived: usize) -> Option<String> {
     (!parts.is_empty()).then(|| format!("Skipped: {}.", parts.join(", ")))
 }
 
+/// AC-001.5: the cause of a failed listing and what to do next.
+pub fn listing_failure_message(failure: ListingFailure) -> &'static str {
+    match failure {
+        ListingFailure::RateLimited => LISTING_RATE_LIMITED_MESSAGE,
+        ListingFailure::Unreachable => LISTING_UNREACHABLE_MESSAGE,
+    }
+}
+
+/// AC-001.7: the fix for an account whose proof no longer holds.
+pub fn needs_reverifying_message(login: &str) -> String {
+    format!(
+        "Your DID is no longer in the bio of github.com/{login}. Put it back, then verify on the GitHub step."
+    )
+}
+
 fn counted(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
@@ -98,37 +139,84 @@ pub fn repos_page(view: &ReposView<'_>) -> String {
 fn account_section(account: &AccountRepos<'_>, csrf_token: &str) -> Markup {
     let name = format!("github.com/{}", account.login);
     match &account.listing {
-        AccountListing::Listed(list) => html! {
-            form method="post" action=(REPOS_PATH) {
-                (csrf_field(csrf_token))
-                input type="hidden" name=(ACCOUNT_ID_FIELD) value=(account.github_user_id);
-                fieldset {
-                    legend { (name) }
-                    ul {
-                        @for row in &list.rows {
-                            li {
-                                label {
-                                    input type="checkbox" name=(REPO_FIELD) value=(row.repo_id)
-                                        aria-label=(format!("Include {}", row.full_name))
-                                        checked[row.ticked];
-                                    " " (row.full_name)
-                                }
+        AccountListing::Listed(list, extent) if !list.rows.is_empty() => {
+            choose_form(account, list, *extent, &name, csrf_token)
+        }
+        AccountListing::Listed(list, _) => nothing_to_choose(list, &name, csrf_token),
+        AccountListing::Unavailable(failure) => html! {
+            section {
+                h2 { (name) }
+                p role="alert" { (listing_failure_message(*failure)) }
+            }
+        },
+        AccountListing::NeedsReverifying => html! {
+            section {
+                h2 { (name) }
+                p { (needs_reverifying_message(account.login)) }
+                p { a href="/github" { "Go to the GitHub step" } }
+            }
+        },
+    }
+}
+
+fn choose_form(
+    account: &AccountRepos<'_>,
+    list: &ChooseList,
+    extent: ListingExtent,
+    name: &str,
+    csrf_token: &str,
+) -> Markup {
+    html! {
+        form method="post" action=(REPOS_PATH) {
+            (csrf_field(csrf_token))
+            input type="hidden" name=(ACCOUNT_ID_FIELD) value=(account.github_user_id);
+            fieldset {
+                legend { (name) }
+                ul {
+                    @for row in &list.rows {
+                        li {
+                            label {
+                                input type="checkbox" name=(REPO_FIELD) value=(row.repo_id)
+                                    aria-label=(format!("Include {}", row.full_name))
+                                    checked[row.ticked];
+                                " " (row.full_name)
                             }
                         }
                     }
-                    @if let Some(skipped) = skipped_message(list.forks_skipped, list.archived_skipped) {
-                        p { (skipped) }
-                    }
                 }
-                button type="submit" { (SAVE_CHOICE_LABEL) }
+                @if let Some(skipped) = skipped_message(list.forks_skipped, list.archived_skipped) {
+                    p { (skipped) }
+                }
+                @if extent == ListingExtent::Truncated {
+                    p { "GitHub lists more repos than shown here: these are the first 300." }
+                }
             }
-        },
-        AccountListing::Unavailable => html! {
-            section {
-                h2 { (name) }
-                p { "Your repo list couldn't be loaded. Your saved choice is unchanged. Please try again in a few minutes." }
+            button type="submit" { (SAVE_CHOICE_LABEL) }
+        }
+    }
+}
+
+/// An account with no eligible repo (RC-4) says why, and offers naming a
+/// public repo instead.
+fn nothing_to_choose(list: &ChooseList, name: &str, csrf_token: &str) -> Markup {
+    html! {
+        section {
+            h2 { (name) }
+            p {
+                "Forks and archived repos are skipped. "
+                (skipped_message(list.forks_skipped, list.archived_skipped)
+                    .unwrap_or_else(|| "No owned public repo was found.".to_string()))
             }
-        },
+            form method="post" action=(IMPORTS_PATH) {
+                (csrf_field(csrf_token))
+                label {
+                    "Add a public repo "
+                    input type="text" name=(IMPORT_REPO_FIELD) placeholder="owner/name";
+                }
+                " "
+                button type="submit" { (ADD_REPO_LABEL) }
+            }
+        }
     }
 }
 

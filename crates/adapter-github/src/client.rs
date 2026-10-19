@@ -482,6 +482,38 @@ pub fn redirect_target(requested: &str, location: &str) -> Option<String> {
     (to.origin() == from.origin()).then(|| to.to_string())
 }
 
+/// Pages an owned-repo listing reads at most (100 rows each, I-06).
+pub const LISTING_PAGE_LIMIT: usize = 3;
+
+/// The next page of a listing read from `requested`: the `rel="next"` target
+/// of its `Link` header (`Ok(None)`: this was the last page). A next page on
+/// another scheme, host or port, or off the public user paths (`/user/…`,
+/// `/users/…`), is refused (N-2), never followed. PURE.
+pub fn next_page_url(requested: &str, link_header: Option<&str>) -> Result<Option<String>, String> {
+    let Some(next) = link_header.and_then(rel_next) else {
+        return Ok(None);
+    };
+    redirect_target(requested, next)
+        .filter(|followed| {
+            reqwest::Url::parse(followed).is_ok_and(|url| {
+                url.path().starts_with("/user/") || url.path().starts_with("/users/")
+            })
+        })
+        .map(Some)
+        .ok_or_else(|| format!("GitHub's next page of {requested} is elsewhere; not followed"))
+}
+
+/// The `rel="next"` target of a `Link` header.
+fn rel_next(link_header: &str) -> Option<&str> {
+    link_header.split(',').find_map(|link| {
+        let (target, params) = link.split_once(';')?;
+        params
+            .split(';')
+            .any(|param| param.trim() == "rel=\"next\"")
+            .then(|| target.trim().trim_start_matches('<').trim_end_matches('>'))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

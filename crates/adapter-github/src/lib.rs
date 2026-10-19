@@ -43,8 +43,8 @@
 
 use async_trait::async_trait;
 use ports::{
-    GithubAccountProfile, GithubError, GithubPort, ListedRepo, OwnedRepo, PersonProfile,
-    ProbeOutcome, RateBudget, RawContributor, Signal, TargetKind,
+    AccountRepoListing, GithubAccountProfile, GithubError, GithubPort, ListingExtent, OwnedRepo,
+    PersonProfile, ProbeOutcome, RateBudget, RawContributor, Signal, TargetKind,
 };
 
 pub mod client;
@@ -428,12 +428,34 @@ impl GithubPort for GithubAdapter {
         client::parse_owned_repos(&body).map_err(GithubError::ApiShape)
     }
 
-    /// The same one request as [`list_owned_repos`](Self::list_owned_repos),
-    /// each row with its numeric repo and owner ids.
-    async fn list_account_repos(&self, user: &str) -> Result<Vec<ListedRepo>, GithubError> {
-        let path = format!("/users/{user}/repos?type=owner&sort=pushed&per_page=100");
-        let body = self.get_public(&path, user).await?;
-        client::parse_listed_repos(&body).map_err(GithubError::ApiShape)
+    /// [`list_owned_repos`](Self::list_owned_repos)'s request, each row with
+    /// its numeric repo and owner ids, following `Link: rel="next"` for up to
+    /// [`client::LISTING_PAGE_LIMIT`] pages; a further page marks the listing
+    /// truncated.
+    async fn list_account_repos(&self, user: &str) -> Result<AccountRepoListing, GithubError> {
+        let mut url = format!(
+            "{}/users/{user}/repos?type=owner&sort=pushed&per_page=100",
+            self.api_base
+        );
+        let mut repos = Vec::new();
+        for page in 1..=client::LISTING_PAGE_LIMIT {
+            let (body, link) = self.get_public_page(&url, user).await?;
+            repos.extend(client::parse_listed_repos(&body).map_err(GithubError::ApiShape)?);
+            match client::next_page_url(&url, link.as_deref()).map_err(GithubError::ApiShape)? {
+                None => break,
+                Some(_) if page == client::LISTING_PAGE_LIMIT => {
+                    return Ok(AccountRepoListing {
+                        repos,
+                        extent: ListingExtent::Truncated,
+                    })
+                }
+                Some(next) => url = next,
+            }
+        }
+        Ok(AccountRepoListing {
+            repos,
+            extent: ListingExtent::Complete,
+        })
     }
 
     fn last_rate_budget(&self) -> Option<RateBudget> {
@@ -509,6 +531,29 @@ impl GithubAdapter {
         // is still a PUBLIC endpoint (`/repos/...` or `/users/...`); no private
         // surface is ever reached.
         Err(classify_refusal(response, target).await)
+    }
+
+    /// [`get_public`](Self::get_public) on a full `url` (one listing page),
+    /// with the response's `Link` header.
+    async fn get_public_page(
+        &self,
+        url: &str,
+        target: &str,
+    ) -> Result<(serde_json::Value, Option<String>), GithubError> {
+        let response = self.send_get(url).await?;
+        if !response.status().is_success() {
+            return Err(classify_refusal(response, target).await);
+        }
+        let link = response
+            .headers()
+            .get(reqwest::header::LINK)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let body = response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| GithubError::ApiShape(format!("response body was not JSON: {e}")))?;
+        Ok((body, link))
     }
 
     /// Issue one PUBLIC GET against `{api_base}{url_path}`, attaching the
