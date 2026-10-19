@@ -117,6 +117,7 @@ fn priya_names_a_public_repo_she_doesnt_own_and_gets_private_suggestions() {
 ///   When <who> adds "<typed>"
 ///   Then <who> sees "<message>"
 ///   And nothing is added and nothing else changes
+///   And for a name not shaped owner/name, GitHub is not asked about any repo
 ///   Examples:
 ///     | setup                                              | who    | typed                     | message |
 ///     | Priya is verified as priyaraman                    | Priya  | cargo                     | Enter the repo as owner/name, for example rust-lang/cargo. |
@@ -210,8 +211,21 @@ fn a_repo_that_cannot_be_imported_is_refused_with_the_cause_and_the_fix() {
             _ => {}
         }
 
-        when_imports(&mut browser, typed);
+        when_opens_choose_repos(&mut browser);
+        let asked_before = github_mark(&world);
 
+        browser.fill(IMPORT_FIELD, typed);
+        browser.press(ADD_REPO);
+
+        // Repo reads the import made (the refusal page may list her own
+        // repos again; that listing is not a check of the typed name).
+        let repo_reads: Vec<String> = world
+            .github
+            .requests()
+            .into_iter()
+            .filter(|r| r.seq > asked_before && r.path.starts_with("/repos/"))
+            .map(|r| r.path)
+            .collect();
         world.github.set_offline(false);
         world.github.clear_rate_limit();
         assert!(
@@ -219,6 +233,12 @@ fn a_repo_that_cannot_be_imported_is_refused_with_the_cause_and_the_fix() {
             "{setup:?} {typed:?}: expected {message:?}:\n{}",
             browser.page.text()
         );
+        if message == SHAPE {
+            assert!(
+                repo_reads.is_empty(),
+                "{typed:?}: a malformed name asks GitHub nothing, but it read {repo_reads:?}"
+            );
+        }
         let after = capture_rra(&world, &mut browser, persona);
         assert_state_delta(&before, &after, &rra_universe(), &Delta::new());
     }
