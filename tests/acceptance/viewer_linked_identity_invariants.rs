@@ -366,12 +366,14 @@ fn the_results_swap_and_the_full_page_carry_the_same_linked_identities() {
 
 /// Binding seam (Mandate 7, DD-GDL-16 practice): ONE call into the production
 /// `viewer-domain` render of a region holding `listed` as of `now`
-/// (`LinkedIdentities::Lines`), returned as HTML. `todo!()` until DELIVER binds
-/// it (the `viewer-domain` module does not exist yet; `cli` reaches it through
-/// `adapter-http-viewer` or a `viewer-domain` dev-dependency).
-#[allow(unused_variables)]
+/// (`LinkedIdentities::Lines`), returned as HTML. `cli` reaches it through a
+/// `viewer-domain` dev-dependency (D-VL-T11: no production edge).
 fn sut_render_region(listed: &[ListedLink], now: DateTime<Utc>) -> String {
-    todo!("RED: bind to viewer_domain::linked_identity — the LinkedIdentities::Lines render (slice 4, D-VL-5)")
+    viewer_domain::render_linked_identities_region(&viewer_domain::LinkedIdentities::Lines {
+        listed: listed.to_vec(),
+        now,
+    })
+    .into_string()
 }
 
 const PARITY_DIDS: [&str; 3] = [
@@ -437,7 +439,6 @@ proptest! {
     ///   Then the region's lines, read as text, equal "identity list" for the same links at the same moment, with the backticks removed
     /// ```
     #[test]
-    #[ignore = "DELIVER 04-02: viewer line text == `identity list` line (parity property)"]
     fn for_every_listing_the_viewers_lines_are_the_identity_list_lines_without_backticks(
         listed in prop::collection::vec(
             arb_listed_link(Utc.with_ymd_and_hms(2026, 10, 19, 12, 0, 0).unwrap()),

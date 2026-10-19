@@ -140,7 +140,6 @@ fn rachels_contributor_page_shows_her_github_account_as_verified() {
 /// stated change on GitHub. R1..R3 are the record IDs `peer pull` stored (in ascending order on a line);
 /// row 4 is VL-18 (a contested line past 30 days carries no re-check hint).
 #[test]
-#[ignore = "DELIVER 04-02: every standing reads as `identity list` prints it"]
 fn every_link_standing_reads_in_the_viewer_exactly_as_identity_list_prints_it() {
     let mut world = LinkWorld::with(&[JEFF_GH, JEFF_WORK_GH, RACHEL_GH, RACHEL_OLD_GH]);
     given_i_linked(&world, JEFF_GH, Some(LINKED_AT));
@@ -881,7 +880,6 @@ fn a_person_with_no_link_shows_no_linked_identities_region() {
 ///   Then he sees "did:plc:test-jeff is github:jeffbailey — verified today", as identity list prints it then
 /// ```
 #[test]
-#[ignore = "DELIVER 04-02: a future-dated check is ignored"]
 fn a_check_dated_in_the_future_is_ignored() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, Some(LINKED_AT));

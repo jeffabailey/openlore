@@ -126,6 +126,11 @@ openlore-indexer = { path = "../openlore-indexer" }
 # BLOCKING client (rustls; same version/TLS the workspace already uses in
 # `adapter-index-query`). Dev-only — production viewer code serves via hyper.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-webpki-roots"] }
+# Step 04-02 (github-did-identity-link slice 4; D-VL-T11): the VL-2p parity
+# property binds `sut_render_region` to ONE call into the pure `viewer-domain`
+# linked-identities render. Dev-only — the CLI's production graph never links
+# the viewer core.
+viewer-domain = { path = "../viewer-domain" }
 
 [[test]]
 name = "walking_skeleton"
