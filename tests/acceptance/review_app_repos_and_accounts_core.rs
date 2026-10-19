@@ -100,6 +100,15 @@ enum ListedView {
     Absent,
 }
 
+/// A frozen plan row's status as the scan stored it (ADR-088 `scan_run_repos`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowStatusView {
+    Planned,
+    Read,
+    /// Final within that scan: never read later (design §6.2 step 8).
+    Skipped(SkipView),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum IntentView {
     NothingToRead,
@@ -329,7 +338,7 @@ fn sut_scan_intent(
 
 fn sut_resume(
     plan: &[(Option<u64>, u64)],
-    read: &BTreeSet<usize>,
+    statuses: &[RowStatusView],
     checks: &BTreeMap<u64, CheckView>,
     removed: &BTreeSet<u64>,
 ) -> (Vec<usize>, BTreeSet<(usize, SkipView)>) {
@@ -340,10 +349,10 @@ fn sut_resume(
         .enumerate()
         .map(|(pos, (src, repo))| FrozenRow {
             source: src.map_or(PlanSource::Imported(*repo), PlanSource::Account),
-            status: if read.contains(&pos) {
-                PlanRowStatus::Read
-            } else {
-                PlanRowStatus::Planned
+            status: match statuses[pos] {
+                RowStatusView::Planned => PlanRowStatus::Planned,
+                RowStatusView::Read => PlanRowStatus::Read,
+                RowStatusView::Skipped(_) => PlanRowStatus::Skipped,
             },
         })
         .collect();
@@ -781,47 +790,73 @@ proptest! {
     }
 
     /// CORE-RRA-5 (@property @BR-RRA-4 @AC-004.7 @AC-008.4 @AC-009.4 @C7b @contract-shape:pure-function)
+    ///
+    /// Each round is one resume of the same scan. Every row's status is
+    /// carried between rounds (U-RRA-D1): read rows stay read, skipped rows
+    /// stay skipped (final within the scan), planned rows stay planned. Per
+    /// design §6.2 step 8, for each still-planned row of a resume: a removed
+    /// source → skipped "removed"; an account whose bio check failed →
+    /// skipped "account unverified"; an unfinished check → carried
+    /// (planned); a passed check, or an import → read.
     #[test]
+    #[ignore = "DELIVER 02-03: U-RRA-D1, skipped rows are final"]
     fn core_rra5_resumes_read_only_the_frozen_plan_each_repo_once(
         plan_len in 1usize..=CAP,
         rounds in proptest::collection::vec(
             (proptest::collection::btree_set(0usize..CAP, 0..4),
-             proptest::collection::btree_map(1u64..4, arb_check(), 0..3),
+             // A resume re-checks the bio of every account in its carried
+             // rows (design §6.2 step 8): each of accounts 1..=3 has a check.
+             proptest::collection::vec(arb_check(), 3)
+                 .prop_map(|c| (1u64..=3).zip(c).collect::<BTreeMap<u64, CheckView>>()),
              proptest::collection::btree_set(1u64..5, 0..2)),
             1..4)
     ) {
         let plan: Vec<(Option<u64>, u64)> = (0..plan_len)
             .map(|i| (if i % 4 == 3 { None } else { Some(1 + (i as u64 % 3)) }, 500 + i as u64))
             .collect();
-        let mut read: BTreeSet<usize> = BTreeSet::new();
+        let mut statuses = vec![RowStatusView::Planned; plan.len()];
         let mut removed: BTreeSet<u64> = BTreeSet::new();
-        let mut skipped_ever: BTreeSet<usize> = BTreeSet::new();
-        for (partial, checks, removed_now) in rounds {
+        for (paused_before, checks, removed_now) in rounds {
             removed.extend(removed_now);
-            let (to_read, skipped) = sut_resume(&plan, &read, &checks, &removed);
+            let mut expected_read: Vec<usize> = Vec::new();
+            let mut expected_skipped: BTreeSet<(usize, SkipView)> = BTreeSet::new();
+            for (pos, (src, _)) in plan.iter().enumerate() {
+                if statuses[pos] != RowStatusView::Planned {
+                    continue;
+                }
+                match src {
+                    None => expected_read.push(pos),
+                    Some(acc) if removed.contains(acc) => {
+                        expected_skipped.insert((pos, SkipView::Removed));
+                    }
+                    Some(acc) => match checks[acc] {
+                        CheckView::Passed => expected_read.push(pos),
+                        CheckView::Failed => {
+                            expected_skipped.insert((pos, SkipView::AccountUnverified));
+                        }
+                        CheckView::Unfinished => {}
+                    },
+                }
+            }
+
+            let (to_read, skipped) = sut_resume(&plan, &statuses, &checks, &removed);
+
             for pos in &to_read {
                 prop_assert!(*pos < plan.len(), "only the frozen plan");
-                prop_assert!(!read.contains(pos) && !skipped_ever.contains(pos), "each at most once");
-                let (src, _) = plan[*pos];
-                if let Some(acc) = src {
-                    prop_assert_eq!(checks.get(&acc).copied().unwrap_or(CheckView::Passed), CheckView::Passed);
-                    prop_assert!(!removed.contains(&acc), "removed sources are never read");
-                }
+                prop_assert_eq!(statuses[*pos], RowStatusView::Planned, "each row at most once; a skipped row is final");
             }
+            let mut got_read = to_read.clone();
+            got_read.sort_unstable();
+            prop_assert_eq!(&got_read, &expected_read, "rows read by this resume");
+            prop_assert_eq!(&skipped, &expected_skipped, "rows skipped by this resume");
             for (pos, reason) in &skipped {
-                if let (Some(acc), SkipView::AccountUnverified) = (plan[*pos].0, reason) {
-                    prop_assert_eq!(checks.get(&acc).copied(), Some(CheckView::Failed));
-                }
-                skipped_ever.insert(*pos);
+                statuses[*pos] = RowStatusView::Skipped(*reason);
             }
-            for (pos, (src, _)) in plan.iter().enumerate() {
-                if let Some(acc) = src {
-                    if checks.get(acc) == Some(&CheckView::Unfinished) && !read.contains(&pos) {
-                        prop_assert!(!skipped.iter().any(|(p, _)| *p == pos), "unfinished rows are carried");
-                    }
+            for pos in to_read {
+                if !paused_before.contains(&pos) {
+                    statuses[pos] = RowStatusView::Read;
                 }
             }
-            read.extend(to_read.iter().copied().filter(|p| partial.is_empty() || !partial.contains(p)));
         }
     }
 
