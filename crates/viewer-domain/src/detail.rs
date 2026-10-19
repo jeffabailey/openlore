@@ -164,10 +164,23 @@ fn counter_is_own(origin: &PeerOrigin) -> bool {
 /// duplicated). This is the load-bearing slice-07 structural contract: page =
 /// chrome + fragment.
 pub fn render_claim_detail_fragment(claim: &ClaimDetailView, thread: &CounterThread) -> Markup {
+    render_claim_detail_fragment_with_links(claim, thread, &LinkedIdentities::None)
+}
+
+/// [`render_claim_detail_fragment`] with the AUTHOR's linked-identities region
+/// (slice 4; D-VL-1) beneath the claim's fields — under its Author row — and
+/// inside `#claim-detail`, so the htmx swap and the full page carry the same
+/// region (ADR-033).
+pub fn render_claim_detail_fragment_with_links(
+    claim: &ClaimDetailView,
+    thread: &CounterThread,
+    linked: &LinkedIdentities,
+) -> Markup {
     html! {
         div id=(CLAIM_DETAIL_ID) {
             (render_presence_flag(thread))
             (render_claim_fields(claim))
+            (render_linked_identities_region(linked))
             (render_evidence_section(&claim.evidence))
             (render_counter_thread(thread))
         }
@@ -253,6 +266,15 @@ fn render_counter_entry(entry: &CounterEntry) -> Markup {
 /// Because the detail region is the SAME fn in both shapes, fragment/full-page
 /// parity is structural, not asserted by duplicating render logic (I-HX-5).
 pub fn render_claim_detail(claim: &ClaimDetailView, thread: &CounterThread) -> String {
+    render_claim_detail_with_links(claim, thread, &LinkedIdentities::None)
+}
+
+/// [`render_claim_detail`] embedding [`render_claim_detail_fragment_with_links`].
+pub fn render_claim_detail_with_links(
+    claim: &ClaimDetailView,
+    thread: &CounterThread,
+    linked: &LinkedIdentities,
+) -> String {
     // slice-21 (ADR-058 D6): the detail body is composed through `page_shell`
     // (persistent left nav + `<main id="viewer-main">`). The detail route is the deep
     // `/claims/{cid}` drill from the My Claims list, so `active = MY_CLAIMS_URL` (the
@@ -261,7 +283,7 @@ pub fn render_claim_detail(claim: &ClaimDetailView, thread: &CounterThread) -> S
     let body = html! {
         h1 { "Claim Detail" }
         p { (READ_ONLY_NOTICE) }
-        (render_claim_detail_fragment(claim, thread))
+        (render_claim_detail_fragment_with_links(claim, thread, linked))
         p {
             a href="/claims" { "Back to My Claims" }
         }

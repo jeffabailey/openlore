@@ -42,12 +42,12 @@ use ports::{
 use scraper_domain::{derive_candidates, load_mapping, normalize_target, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
-    github_person, group_philosophy, group_project, peers_view, render_claim_detail,
-    render_claim_detail_fragment, render_claim_not_found_fragment, render_claims_page,
-    render_claims_view_panel_fragment, render_error, render_landing, render_peer_claims_page,
-    render_peer_claims_view_panel_fragment, render_peers_fragment, render_peers_page,
-    render_philosophies_page, render_philosophy_fragment, render_philosophy_page,
-    render_project_fragment_with_links, render_project_page_with_links,
+    github_person, group_philosophy, group_project, peers_view,
+    render_claim_detail_fragment_with_links, render_claim_detail_with_links,
+    render_claim_not_found_fragment, render_claims_page, render_claims_view_panel_fragment,
+    render_error, render_landing, render_peer_claims_page, render_peer_claims_view_panel_fragment,
+    render_peers_fragment, render_peers_page, render_philosophies_page, render_philosophy_fragment,
+    render_philosophy_page, render_project_fragment_with_links, render_project_page_with_links,
     render_score_page_with_links, render_score_results_fragment_with_links, render_scrape_page,
     render_scrape_results_fragment, render_search_page, render_search_results_fragment,
     render_viewer_nav_oob, resolve_author_relationship, CandidateRowView, ClaimDetailView,
@@ -500,7 +500,9 @@ async fn route(
             // `GET /claims/{cid}` — the claim detail view (US-VIEW-002). A
             // non-empty CID segment routes to the detail handler; everything
             // else is 404.
-            Some(cid) if !cid.is_empty() => claim_detail_page(store.as_ref(), cid, shape),
+            Some(cid) if !cid.is_empty() => {
+                claim_detail_page(store.as_ref(), link_reads.as_ref(), cid, shape)
+            }
             _ => not_found(),
         },
     };
@@ -1186,10 +1188,21 @@ fn peer_claims_page(
 /// no-JS request the full `404` page ([`render_error`]) — the `404` status + the
 /// guided message + back link carry through BOTH shapes (the fork is AFTER the
 /// not-found decision).
-fn claim_detail_page(store: &dyn StoreReadPort, cid: &str, shape: Shape) -> Response<Full<Bytes>> {
+fn claim_detail_page(
+    store: &dyn StoreReadPort,
+    link_reads: Option<&LinkReads>,
+    cid: &str,
+    shape: Shape,
+) -> Response<Full<Bytes>> {
     match store.get_claim(cid) {
         Ok(Some(detail)) => {
             let view = ClaimDetailView::from_detail(&detail);
+            // The AUTHOR's linked identities (slice 4; D-VL-1) — never the
+            // claim's subject — selected as on `/score`, by the bare author DID.
+            let linked = linked_identities(
+                link_reads,
+                &RecheckScope::Person(bare_did(&view.author_did).to_owned()),
+            );
             // slice-11 (US-CT-002 / ADR-046/047): additionally read the LOCAL
             // counter-claim thread over the SAME read-only store the viewer ALREADY
             // holds (`query_counter_claims` — claims ∪ local peer_claims via the
@@ -1205,10 +1218,10 @@ fn claim_detail_page(store: &dyn StoreReadPort, cid: &str, shape: Shape) -> Resp
                 Err(_) => CounterThread::None,
             };
             match shape {
-                Shape::Fragment => {
-                    html_ok(render_claim_detail_fragment(&view, &thread).into_string())
-                }
-                Shape::FullPage => html_ok(render_claim_detail(&view, &thread)),
+                Shape::Fragment => html_ok(
+                    render_claim_detail_fragment_with_links(&view, &thread, &linked).into_string(),
+                ),
+                Shape::FullPage => html_ok(render_claim_detail_with_links(&view, &thread, &linked)),
             }
         }
         // Unknown CID / read failure: the GUIDED 404 — message + back link, never a

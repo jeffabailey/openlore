@@ -655,7 +655,6 @@ fn a_link_from_a_peer_jeff_removed_does_not_show_until_he_follows_her_again() {
 ///   And the line reads exactly as on his contributor page
 /// ```
 #[test]
-#[ignore = "DELIVER 04-05: the claim detail page shows its author's linked identity"]
 fn a_claims_detail_page_shows_its_authors_linked_identity() {
     let world = LinkWorld::with(&[JEFF_GH]);
     given_i_linked(&world, JEFF_GH, None);
