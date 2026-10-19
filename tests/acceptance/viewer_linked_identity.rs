@@ -708,7 +708,6 @@ fn a_claims_detail_page_shows_its_authors_linked_identity() {
 ///     | is not configured                                                           | the "network index is unavailable" notice, and no linked identity |
 /// ```
 #[test]
-#[ignore = "DELIVER 04-06: search author groups show the line; link rows are labelled"]
 fn network_search_shows_each_authors_linked_identity_and_labels_link_rows() {
     let world = rachels_checked_link();
     let search = PersonPage::Search(RACHEL_GH.subject());

@@ -49,12 +49,12 @@ use viewer_domain::{
     render_peers_fragment, render_peers_page, render_philosophies_page, render_philosophy_fragment,
     render_philosophy_page, render_project_fragment_with_links, render_project_page_with_links,
     render_score_page_with_links, render_score_results_fragment_with_links, render_scrape_page,
-    render_scrape_results_fragment, render_search_page, render_search_results_fragment,
-    render_viewer_nav_oob, resolve_author_relationship, CandidateRowView, ClaimDetailView,
-    ClaimRowView, CounterThread, LandingSummary, LinkedIdentities, PageView, PeerClaimRowView,
-    PeersView, ScoreState, ScrapeState, SearchState, TraversalView, HTMX_ASSET_URL, PEERS_URL,
-    PHILOSOPHIES_URL, PHILOSOPHY_URL, PROJECT_URL, SCORE_URL, SCRAPE_NO_CANDIDATES_NOTICE,
-    SEARCH_URL,
+    render_scrape_results_fragment, render_search_page_with_links,
+    render_search_results_fragment_with_links, render_viewer_nav_oob, resolve_author_relationship,
+    CandidateRowView, ClaimDetailView, ClaimRowView, CounterThread, LandingSummary,
+    LinkedIdentities, PageView, PeerClaimRowView, PeersView, ScoreState, ScrapeState, SearchState,
+    TraversalView, HTMX_ASSET_URL, PEERS_URL, PHILOSOPHIES_URL, PHILOSOPHY_URL, PROJECT_URL,
+    SCORE_URL, SCRAPE_NO_CANDIDATES_NOTICE, SEARCH_URL,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -432,6 +432,7 @@ async fn route(
         let response = search_page(
             index_query.as_deref(),
             store.as_ref(),
+            link_reads.as_ref(),
             query.as_deref(),
             shape,
         )
@@ -1258,14 +1259,33 @@ fn claim_detail_page(
 async fn search_page(
     index_query: Option<&dyn IndexQueryPort>,
     store: &dyn StoreReadPort,
+    link_reads: Option<&LinkReads>,
     query: Option<&str>,
     shape: Shape,
 ) -> Response<Full<Bytes>> {
     let state = resolve_search_state(index_query, store, query).await;
+    // The authors' linked identities (slice 4; D-VL-10): ONE link read per
+    // request, shared by every author group, and only when there are groups —
+    // the lines come from this reader's local checks, never from the index.
+    let linked = if has_author_groups(&state) {
+        linked_identities(link_reads, &RecheckScope::Everyone)
+    } else {
+        LinkedIdentities::None
+    };
     match shape {
-        Shape::Fragment => html_ok(render_search_results_fragment(&state).into_string()),
-        Shape::FullPage => html_ok(render_search_page(&state)),
+        Shape::Fragment => {
+            html_ok(render_search_results_fragment_with_links(&state, &linked).into_string())
+        }
+        Shape::FullPage => html_ok(render_search_page_with_links(&state, &linked)),
     }
+}
+
+/// Does the search state render author groups (the only place a region sits)?
+fn has_author_groups(state: &SearchState) -> bool {
+    matches!(
+        state,
+        SearchState::Results { .. } | SearchState::FilteredResults { .. }
+    )
 }
 
 /// Resolve the [`SearchState`] for a `/search` request (the pure-ish decision over
