@@ -157,6 +157,9 @@ pub enum ProbeRefusalReason {
     /// DuckDB does not report the `memory_limit` / `threads` the review app
     /// configured (B11).
     ReviewStoreCapsNotHonoured,
+    /// A rolled-back removal deleted a declined or published suggestion, or
+    /// left a pending one of the removed account (ADR-088 §8).
+    ReviewStoreRemovalUnsafe,
     /// The OAuth client key cannot sign, or its published half does not verify.
     OAuthClientKeyUnusable,
     /// The published JWKS is not ES256-only or carries a private part.

@@ -18,7 +18,7 @@ use ports::{
     AccountListingNote, AccountStatusWrite, ForgetPort, GithubAccountsWrite, GithubLinkPort,
     GithubPort, IdentityLookupPort, KpiCounterPort, OAuthPort, PublishPlanPort, RepoChoiceRead,
     RepoChoiceWrite, RepoListingPort, ReviewStateRead, ReviewStateWrite, ScanPlanRead, ScanRunPort,
-    SessionPort, UserRepoReadPort, UserRepoWritePort,
+    ScopeRemovalPort, SessionPort, UserRepoReadPort, UserRepoWritePort,
 };
 use review_domain::signin::PermissionMode;
 use scraper_domain::SignalPredicateMapping;
@@ -77,6 +77,8 @@ pub(crate) struct App {
     /// Held by the GitHub step's route only (add and verify again).
     pub(crate) accounts_write: Arc<dyn GithubAccountsWrite>,
     pub(crate) account_status: Arc<dyn AccountStatusWrite>,
+    /// Held by the remove routes only (ADR-088 §8, ADR-082 precedent).
+    pub(crate) scope_removal: Arc<dyn ScopeRemovalPort>,
     pub(crate) listing_note: Arc<dyn AccountListingNote>,
     pub(crate) scans: Arc<dyn ScanRunPort>,
     pub(crate) scan_plans: Arc<dyn ScanPlanRead>,

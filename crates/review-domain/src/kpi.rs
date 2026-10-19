@@ -57,13 +57,15 @@ pub enum KpiEvent {
     ScanAccountFailed,
     /// A scan's bio check of one listed account did not finish (AC-004.8).
     ScanAccountUnfinished,
+    /// An owner removed one of her GitHub accounts (US-RRA-008).
+    AccountRemoved,
     SharePosted,
     RetractPosted,
     Disconnect,
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 30] = [
+    pub const ALL: [KpiEvent; 31] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -91,6 +93,7 @@ impl KpiEvent {
         Self::AccountAddRefusedUnreachable,
         Self::ScanAccountFailed,
         Self::ScanAccountUnfinished,
+        Self::AccountRemoved,
         Self::SharePosted,
         Self::RetractPosted,
         Self::Disconnect,
@@ -128,6 +131,7 @@ impl KpiEvent {
             Self::AccountAddRefusedUnreachable => "account.add.refused.unreachable",
             Self::ScanAccountFailed => "scan.account.failed",
             Self::ScanAccountUnfinished => "scan.account.unfinished",
+            Self::AccountRemoved => "account.removed",
             Self::SharePosted => "share.posted",
             Self::RetractPosted => "retract.posted",
             Self::Disconnect => "disconnect",

@@ -16,6 +16,7 @@ mod kpi;
 mod plans;
 mod probe;
 mod purge;
+mod removal;
 mod repo_choices;
 mod scan_runs;
 pub mod schema;

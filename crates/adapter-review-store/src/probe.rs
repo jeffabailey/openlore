@@ -1,11 +1,13 @@
-//! Earned-Trust probe for the private store (ADR-074). Four hard arms:
+//! Earned-Trust probe for the private store (ADR-074). Five hard arms:
 //!
 //! 0. DuckDB caps (B11): `memory_limit` and `threads` read back as set;
 //! 1. schema version: the file is exactly this build's version;
 //! 2. AEAD canary: a sealed canary opens under its own binding and a blob
 //!    re-bound to another owner does not;
 //! 3. cross-owner canary: inside a rolled-back transaction, a row written
-//!    for one owner is invisible to an owner-scoped read for another.
+//!    for one owner is invisible to an owner-scoped read for another;
+//! 4. removal canary (ADR-088 §8): inside a rolled-back transaction,
+//!    removing an account deletes its row and its `pending` suggestions only.
 //!
 //! The arm verdicts are pure; the glue below only gathers their inputs.
 
@@ -13,6 +15,7 @@ use duckdb::Connection;
 use ports::{ProbeOutcome, ProbeRefusalReason};
 use serde_json::json;
 
+use crate::removal::remove_account_rows;
 use crate::schema::{schema_verdict, SchemaVerdict, SCHEMA_VERSION};
 use crate::{
     caps_honoured, db_error, recorded_version, reported_settings, ReviewStore, StoreError,
@@ -27,12 +30,49 @@ const INSERT_CANARY_ACCOUNT: &str = "INSERT INTO accounts \
     VALUES (?, 'probe.invalid', 'https://probe.invalid', now(), now())";
 const COUNT_ACCOUNTS_FOR_OWNER: &str = "SELECT count(*) FROM accounts WHERE owner_did = ?";
 
+/// The removal canary's account and another of the same owner's accounts.
+const REMOVED_ACCOUNT: i64 = 1;
+const KEPT_ACCOUNT: i64 = 2;
+
+const INSERT_CANARY_GITHUB_ACCOUNT: &str = "INSERT INTO github_accounts \
+    (owner_did, github_user_id, github_login_seen, status, verified_at, last_checked_at, \
+     last_verdict, added_at) \
+    VALUES (?, ?, 'probe-canary', 'verified', now(), now(), 'verified', now())";
+const INSERT_CANARY_SUGGESTION: &str = "INSERT INTO suggestions \
+    (owner_did, subject, predicate, object, confidence_bp, evidence, signals, source_repo, \
+     state, first_suggested_at, state_changed_at, source_kind, source_account_id) \
+    VALUES (?, ?, 'embodies', 'probe-canary', 0, '[]', '[]', 'probe/canary', ?, now(), now(), \
+     'account', ?)";
+const COUNT_CANARY_SUGGESTIONS: &str = "SELECT count(*) FROM suggestions \
+    WHERE owner_did = ? AND state = ? AND source_account_id = ?";
+const COUNT_CANARY_GITHUB_ACCOUNTS: &str =
+    "SELECT count(*) FROM github_accounts WHERE owner_did = ? AND github_user_id = ?";
+
+/// The canary suggestions: `(subject, state, account)`.
+const CANARY_SUGGESTIONS: [(&str, &str, i64); 4] = [
+    ("probe:pending", "pending", REMOVED_ACCOUNT),
+    ("probe:declined", "declined", REMOVED_ACCOUNT),
+    ("probe:published", "published", REMOVED_ACCOUNT),
+    ("probe:other", "pending", KEPT_ACCOUNT),
+];
+
+/// What a rolled-back removal of the canary account left behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RemovalCanary {
+    pub(crate) account_rows: i64,
+    pub(crate) pending: i64,
+    pub(crate) declined: i64,
+    pub(crate) published: i64,
+    pub(crate) other_account_pending: i64,
+}
+
 /// One arm's verdict.
 type Arm = Result<(), (ProbeRefusalReason, String)>;
 
 /// Run every hard arm; the first refusal wins.
 pub(crate) fn run(store: &ReviewStore) -> ProbeOutcome {
-    let arms: [fn(&ReviewStore) -> Arm; 4] = [caps_arm, schema_arm, aead_arm, cross_owner_arm];
+    let arms: [fn(&ReviewStore) -> Arm; 5] =
+        [caps_arm, schema_arm, aead_arm, cross_owner_arm, removal_arm];
     match arms.iter().find_map(|arm| arm(store).err()) {
         None => ProbeOutcome::Ok,
         Some((reason, detail)) => ProbeOutcome::Refused {
@@ -155,6 +195,76 @@ pub(crate) fn classify_cross_owner(own_rows: i64, other_rows: i64) -> Arm {
     }
 }
 
+fn removal_arm(store: &ReviewStore) -> Arm {
+    store
+        .with_connection(removal_canary_rolled_back)
+        .map_err(|e| (ProbeRefusalReason::ReviewStoreRemovalUnsafe, e.to_string()))
+        .and_then(classify_removal)
+}
+
+/// Seed an account with one suggestion in each state (and a pending one of
+/// another account), remove it, read what is left, then roll back.
+fn removal_canary_rolled_back(conn: &Connection) -> Result<RemovalCanary, StoreError> {
+    conn.execute_batch("BEGIN TRANSACTION").map_err(db_error)?;
+    let left = (|| {
+        conn.execute(
+            INSERT_CANARY_GITHUB_ACCOUNT,
+            duckdb::params![CANARY_OWNER, REMOVED_ACCOUNT],
+        )
+        .map_err(db_error)?;
+        CANARY_SUGGESTIONS
+            .iter()
+            .try_for_each(|(subject, state, account)| {
+                conn.execute(
+                    INSERT_CANARY_SUGGESTION,
+                    duckdb::params![CANARY_OWNER, subject, state, account],
+                )
+                .map(drop)
+                .map_err(db_error)
+            })?;
+        remove_account_rows(conn, CANARY_OWNER, REMOVED_ACCOUNT as u64)?;
+        let count = |sql: &str, params: &[&dyn duckdb::ToSql]| -> Result<i64, StoreError> {
+            conn.query_row(sql, params, |row| row.get(0))
+                .map_err(db_error)
+        };
+        let in_state = |state: &str, account: i64| {
+            count(COUNT_CANARY_SUGGESTIONS, &[&CANARY_OWNER, &state, &account])
+        };
+        Ok(RemovalCanary {
+            account_rows: count(
+                COUNT_CANARY_GITHUB_ACCOUNTS,
+                &[&CANARY_OWNER, &REMOVED_ACCOUNT],
+            )?,
+            pending: in_state("pending", REMOVED_ACCOUNT)?,
+            declined: in_state("declined", REMOVED_ACCOUNT)?,
+            published: in_state("published", REMOVED_ACCOUNT)?,
+            other_account_pending: in_state("pending", KEPT_ACCOUNT)?,
+        })
+    })();
+    conn.execute_batch("ROLLBACK").map_err(db_error)?;
+    left
+}
+
+/// Pure: the removal took the account and its one pending suggestion, and
+/// kept its declined and published keys and the other account's pending one.
+pub(crate) fn classify_removal(left: RemovalCanary) -> Arm {
+    let exact = RemovalCanary {
+        account_rows: 0,
+        pending: 0,
+        declined: 1,
+        published: 1,
+        other_account_pending: 1,
+    };
+    if left == exact {
+        Ok(())
+    } else {
+        Err((
+            ProbeRefusalReason::ReviewStoreRemovalUnsafe,
+            format!("a rolled-back account removal left {left:?}, expected {exact:?}"),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +276,17 @@ mod tests {
         #[test]
         fn cross_owner_arm_admits_only_exact_isolation(own in -2i64..4, other in -2i64..4) {
             prop_assert_eq!(classify_cross_owner(own, other).is_ok(), own == 1 && other == 0);
+        }
+
+        /// Universe: every count of what a removal left. Only the account and
+        /// its pending suggestion gone, everything else kept, admits.
+        #[test]
+        fn removal_arm_admits_only_a_pending_only_delete(
+            counts in proptest::array::uniform5(0i64..3),
+        ) {
+            let [account_rows, pending, declined, published, other_account_pending] = counts;
+            let left = RemovalCanary { account_rows, pending, declined, published, other_account_pending };
+            prop_assert_eq!(classify_removal(left).is_ok(), counts == [0, 0, 1, 1, 1]);
         }
 
         /// Universe: every opened plaintext x rebound outcome. Only the exact

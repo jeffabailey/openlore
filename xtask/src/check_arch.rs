@@ -2975,7 +2975,8 @@ const REVIEW_OWNER_TABLES: &[&str] = &[
 
 /// Pure SQL rule for one review-store literal in `file_name`. Owner-table
 /// SQL must name `owner_did`; `kpi_counters` must never name it; `DELETE`
-/// lives only in the purge / expiry modules.
+/// lives only in the purge / expiry / removal modules, and a removal
+/// `DELETE` on `suggestions` must name `state = 'pending'` (ADR-088 §8).
 pub fn classify_review_store_sql_literal(file_name: &str, literal: &str) -> Option<String> {
     let sql = literal.to_ascii_lowercase();
     let is_sql = ["select ", "insert ", "update ", "delete ", "create table"]
@@ -2996,13 +2997,23 @@ pub fn classify_review_store_sql_literal(file_name: &str, literal: &str) -> Opti
             excerpt_of(literal)
         ));
     }
-    if sql.contains("delete ") && !(file_name.contains("purge") || file_name.contains("expiry")) {
+    if !sql.contains("delete ") {
+        return None;
+    }
+    let is_removal = file_name.contains("removal");
+    if !(file_name.contains("purge") || file_name.contains("expiry") || is_removal) {
         return Some(format!(
-            "DELETE outside the purge / expiry modules: {}",
+            "DELETE outside the purge / expiry / removal modules: {}",
             excerpt_of(literal)
         ));
     }
-    None
+    let deletes_suggestions = sql.contains("suggestions");
+    (is_removal && deletes_suggestions && !sql.contains("state = 'pending'")).then(|| {
+        format!(
+            "a removal DELETE on suggestions does not name state = 'pending': {}",
+            excerpt_of(literal)
+        )
+    })
 }
 
 /// Field names a tracing event in the review app must never use (DV-BRA-9).
@@ -4985,6 +4996,17 @@ mod review_app_rule_tests {
         assert!(classify_review_store_sql_literal("lib.rs", delete).is_some());
         assert!(classify_review_store_sql_literal("purge.rs", delete).is_none());
         assert!(classify_review_store_sql_literal("expiry.rs", delete).is_none());
+        assert!(classify_review_store_sql_literal("removal.rs", delete).is_none());
+    }
+
+    #[test]
+    fn a_removal_delete_of_suggestions_must_name_pending() {
+        let pending_only =
+            "DELETE FROM suggestions WHERE owner_did = ? AND state = 'pending' AND source_account_id = ?";
+        let every_state = "DELETE FROM suggestions WHERE owner_did = ? AND source_account_id = ?";
+        assert!(classify_review_store_sql_literal("removal.rs", pending_only).is_none());
+        assert!(classify_review_store_sql_literal("removal.rs", every_state).is_some());
+        assert!(classify_review_store_sql_literal("purge.rs", every_state).is_none());
     }
 
     #[test]

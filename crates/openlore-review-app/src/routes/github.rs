@@ -1,6 +1,7 @@
 //! The GitHub step (US-BRA-002, ADR-076; US-RRA-003): show the exact DID
 //! to put in the bio, then check the bio of each account the owner adds, up
-//! to three. The one holder of the accounts write port. HTTP concerns and port calls only; the verdict,
+//! to three, and remove one after a confirm naming its pending suggestions
+//! (US-RRA-008). The one holder of the accounts write and removal ports. HTTP concerns and port calls only; the verdict,
 //! the capability and every message are `review_domain` functions. The bio
 //! itself is never logged.
 
@@ -12,8 +13,8 @@ use hyper::StatusCode;
 use ports::claim_domain::identity_link::LinkRecord;
 use ports::claim_domain::RecordOrigin;
 use ports::{
-    AccountAdmission, AccountAdmitted, AccountRefusal, GithubAccountProfile, GithubError,
-    GithubLink, WebSession,
+    AccountAdmission, AccountAdmitted, AccountRefusal, AccountRemoval, GithubAccountProfile,
+    GithubError, GithubLink, RepoSource, WebSession,
 };
 use review_domain::budget::{budget_allows, HOUR_SECS, VERIFY_ATTEMPTS_PER_HOUR};
 use review_domain::kpi::AccountAddRefused;
@@ -25,6 +26,7 @@ use review_domain::repo_scope::{admit_account, OtherOwner, Standing, MAX_GITHUB_
 use review_domain::views::{self, GithubStep, OwnershipOutcome};
 
 use crate::http::{App, PageRequest, Reply};
+use crate::routes::review::not_found;
 use crate::routes::signin::{csrf_token_for, current_session, field, signed_in_post, to_landing};
 use crate::wiring::{emit, observe, Counted, LogEvent};
 
@@ -294,6 +296,82 @@ fn unverify_if_listed(
             refusal.label(),
         );
     }
+}
+
+/// The signed-in owner's listed account named by the form's id. The owner
+/// is always the session's: an id she does not list names nothing.
+fn named_account(app: &App, session: &WebSession, request: &PageRequest) -> Option<GithubLink> {
+    let named = field(&request.form, views::ACCOUNT_ID_FIELD)?
+        .parse::<u64>()
+        .ok()?;
+    app.links
+        .github_accounts(&session.owner_did)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|account| account.github_user_id == named)
+}
+
+/// How many of the owner's pending suggestions came from `github_user_id`.
+fn pending_from_account(app: &App, owner_did: &str, github_user_id: u64) -> usize {
+    app.review_read
+        .pending_sources(owner_did)
+        .unwrap_or_default()
+        .iter()
+        .filter(|(_, source)| *source == RepoSource::Account(github_user_id))
+        .count()
+}
+
+/// `POST /github/remove`: the confirm naming how many pending suggestions
+/// removing the account deletes. Nothing is deleted here.
+pub(crate) fn remove_account_confirm(app: &App, request: &PageRequest) -> Reply {
+    let (cookie_value, session) = match signed_in_post(app, request) {
+        Ok(signed_in) => signed_in,
+        Err(refused) => return refused,
+    };
+    let Some(account) = named_account(app, &session, request) else {
+        return not_found();
+    };
+    let pending = pending_from_account(app, &session.owner_did, account.github_user_id);
+    Reply::page(
+        StatusCode::OK,
+        views::remove_account_confirm_page(
+            &account.github_login,
+            account.github_user_id,
+            pending,
+            &csrf_token_for(&cookie_value),
+        ),
+    )
+}
+
+/// `POST /github/remove/confirm`: delete the account, its saved choice and
+/// its pending suggestions at once (ADR-088 §8); declined and published
+/// keys, and her repo, are untouched. Counted with the removal.
+pub(crate) async fn remove_account(app: &App, request: &PageRequest) -> Reply {
+    let (cookie_value, session) = match signed_in_post(app, request) {
+        Ok(signed_in) => signed_in,
+        Err(refused) => return refused,
+    };
+    let Some(account) = named_account(app, &session, request) else {
+        return not_found();
+    };
+    let counted = Counted::of(&LogEvent::AccountRemoved);
+    let removal = app.scope_removal.remove_account(
+        &session.owner_did,
+        account.github_user_id,
+        counted.tally(),
+    );
+    let Ok(AccountRemoval::Removed { deleted_pending }) = removal else {
+        return github_page(app, &session, &cookie_value, None).await;
+    };
+    emit(LogEvent::AccountRemoved);
+    let shown = OwnershipOutcome::Removed { deleted_pending };
+    let message = views::ownership_message(
+        shown,
+        &account.github_login,
+        &session.owner_did,
+        &session.handle,
+    );
+    github_page(app, &session, &cookie_value, Some((shown, &message))).await
 }
 
 /// The facts of a profile the ownership proof reads.

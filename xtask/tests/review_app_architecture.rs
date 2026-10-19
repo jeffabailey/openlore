@@ -247,10 +247,17 @@ fn every_owner_table_query_is_owner_scoped_and_kpi_counters_name_no_owner() {
             if sql.contains("delete ") {
                 let file = path.file_name().unwrap().to_string_lossy().to_string();
                 assert!(
-                    file.contains("purge") || file.contains("expiry"),
-                    "DELETE only in purge/expiry modules: {}",
+                    file.contains("purge") || file.contains("expiry") || file.contains("removal"),
+                    "DELETE only in purge/expiry/removal modules: {}",
                     path.display()
                 );
+                if file.contains("removal") && sql.contains("suggestions") {
+                    assert!(
+                        sql.contains("state = 'pending'"),
+                        "a removal DELETE on suggestions names state = 'pending' (ADR-088 §8): {}",
+                        path.display()
+                    );
+                }
             }
         }
     }

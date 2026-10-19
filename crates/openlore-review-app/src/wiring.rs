@@ -97,6 +97,9 @@ pub(crate) enum LogEvent<'a> {
     AccountAdded,
     /// That account was not added (the reason only; never whose or which).
     AccountAddRefused(AccountAddRefused),
+    /// An owner removed one of her accounts (counted with the removal;
+    /// never whose or which, nor how many suggestions went with it).
+    AccountRemoved,
     /// A GitHub ownership check did not pass (the refusal's label only).
     GithubVerifyRefused(&'static str),
     /// An owner's confirmed identity link landed (never whose or which).
@@ -152,6 +155,7 @@ fn counters_of(event: &LogEvent<'_>) -> Vec<KpiEvent> {
         LogEvent::GithubVerifyRefused(_) => vec![KpiEvent::GithubVerifyFail],
         LogEvent::AccountAddStarted => vec![KpiEvent::AccountAddStarted],
         LogEvent::AccountAdded => vec![KpiEvent::AccountAddVerified],
+        LogEvent::AccountRemoved => vec![KpiEvent::AccountRemoved],
         LogEvent::AccountAddRefused(refused) => vec![refused.event()],
         LogEvent::ScanFinished(ScanStatus::Completed) => vec![KpiEvent::ScanCompleted],
         LogEvent::ScanAccountChecked(outcome) => {
@@ -282,6 +286,7 @@ fn describe(event: LogEvent<'_>) -> (Level, &'static str, Vec<(&'static str, Val
         LogEvent::GithubVerified => (Info, "github.verified", vec![]),
         LogEvent::AccountAddStarted => (Info, "account.add.started", vec![]),
         LogEvent::AccountAdded => (Info, "account.add.verified", vec![]),
+        LogEvent::AccountRemoved => (Info, "account.removed", vec![]),
         LogEvent::AccountAddRefused(refused) => (
             Info,
             "account.add.refused",
@@ -691,6 +696,7 @@ fn app(wired: Wired) -> App {
         links: wired.store.clone(),
         accounts_write: wired.store.clone(),
         account_status: wired.store.clone(),
+        scope_removal: wired.store.clone(),
         listing_note: wired.store.clone(),
         scans: wired.store.clone(),
         scan_plans: wired.store.clone(),

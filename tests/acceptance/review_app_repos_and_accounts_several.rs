@@ -611,7 +611,6 @@ fn a_paused_scan_resumes_with_the_same_accounts_and_choices() {
 ///   And the removal is counted
 /// ```
 #[test]
-#[ignore = "DELIVER 02-10: removing an account deletes its pending suggestions only"]
 fn priya_removes_an_account_she_no_longer_wants_scanned() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);
@@ -678,7 +677,6 @@ fn priya_removes_an_account_she_no_longer_wants_scanned() {
 ///   Then priya-tidal is still on her list, verified, and its suggestions are shown
 /// ```
 #[test]
-#[ignore = "DELIVER 02-11: cancelling a removal changes nothing"]
 fn cancelling_the_removal_changes_nothing() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);
@@ -709,7 +707,6 @@ fn cancelling_the_removal_changes_nothing() {
 ///   And the published one is counted as "already published"
 /// ```
 #[test]
-#[ignore = "DELIVER 02-12: removal keeps declined and published keys (BR-1, BR-2)"]
 fn re_adding_offers_suggestions_again_but_never_declined_or_published_ones() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);
@@ -756,7 +753,6 @@ fn re_adding_offers_suggestions_again_but_never_declined_or_published_ones() {
 ///   Then her queue holds no priya-tidal pending suggestion, while the scan is still paused
 /// ```
 #[test]
-#[ignore = "DELIVER 02-13: removal during a scan deletes the source's pending rows at once (OQ-D4)"]
 fn removing_an_account_during_a_scan_deletes_its_pending_suggestions_at_once() {
     let world = rra_world();
     let mut browser = given_tidal_scan_paused_after_one_repo(&world);
@@ -1091,7 +1087,6 @@ fn an_unverified_accounts_saved_repos_still_count_toward_the_limit() {
 ///     | "Save choice" naming her ingest-bench     |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-18: accounts and choices are owner-scoped"]
 fn one_owner_never_sees_or_changes_another_owners_accounts_or_choices() {
     let world = rra_world();
     let mut priya = given_accounts_verified(&world, &BOTH);

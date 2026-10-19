@@ -667,6 +667,31 @@ pub trait RepoChoiceWrite: Send + Sync {
     ) -> Result<(), ReviewStoreError>;
 }
 
+/// What removing one of the owner's accounts did (ADR-088 §8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountRemoval {
+    /// The account, its saved choice and its `deleted_pending` pending
+    /// suggestions are gone; declined and published keys stay.
+    Removed { deleted_pending: usize },
+    /// The owner lists no such account: nothing changed.
+    NotListed,
+}
+
+/// Removes a source from the owner's scope (US-RRA-008, D-RRA-17). Held
+/// only by the remove routes (ADR-082 precedent). Only `pending`
+/// suggestions are ever deleted; nothing is written to any PDS.
+pub trait ScopeRemovalPort: Send + Sync {
+    /// Delete the owner's account `github_user_id`, its `repo_choices` rows
+    /// and its pending suggestions in ONE transaction, with `tally` when it
+    /// was listed.
+    fn remove_account(
+        &self,
+        owner_did: &str,
+        github_user_id: u64,
+        tally: KpiTally<'_>,
+    ) -> Result<AccountRemoval, ReviewStoreError>;
+}
+
 /// A suggestion's identity (BR-1): one per (subject, predicate, object).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SuggestionKey {

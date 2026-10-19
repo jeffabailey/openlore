@@ -33,17 +33,25 @@ pub const REMOVE_ACCOUNT_LABEL: &str = "Remove";
 /// Where an account's "Remove" asks for the removal confirm.
 pub const REMOVE_ACCOUNT_ACTION: &str = "/github/remove";
 
+/// Where the removal confirm removes the account (ADR-088 §8).
+pub const CONFIRM_REMOVE_ACCOUNT_ACTION: &str = "/github/remove/confirm";
+
 /// What publishing a link means (RA-1a, ADR-084 §5).
 pub const LINK_PUBLIC_NOTICE: &str = "This link is public: anyone can read it in your repo. \
      Retracting this link later withdraws it but does not erase it.";
 
-/// What happened when the person pressed Verify.
+/// What happened when the person pressed Verify, or confirmed a removal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OwnershipOutcome<'a> {
     Verified,
     Refused(&'a OwnershipRefusal),
     /// The account cannot join the owner's list; nothing changed.
     NotAdded(AccountRefusal),
+    /// The account left the list with its `deleted_pending` pending
+    /// suggestions (US-RRA-008).
+    Removed {
+        deleted_pending: usize,
+    },
 }
 
 /// The sentence explaining a verify outcome (AC-002.3: each names the fix).
@@ -59,6 +67,14 @@ pub fn ownership_message(
         }
         OwnershipOutcome::NotAdded(refusal) => {
             return account_refusal_message(refusal, login, handle)
+        }
+        OwnershipOutcome::Removed { deleted_pending } => {
+            return format!(
+                "github.com/{login} removed. Its {} {} deleted. Your published claims are \
+                 unchanged.",
+                pending_suggestions(deleted_pending),
+                if deleted_pending == 1 { "was" } else { "were" }
+            )
         }
         OwnershipOutcome::Refused(refusal) => refusal,
     };
@@ -124,9 +140,9 @@ fn held_by_another_message(login: &str) -> String {
 /// alert, so a refusal never reads as if it worked.
 fn outcome_role(outcome: OwnershipOutcome<'_>) -> &'static str {
     match outcome {
-        OwnershipOutcome::Verified | OwnershipOutcome::NotAdded(AccountRefusal::AlreadyListed) => {
-            "status"
-        }
+        OwnershipOutcome::Verified
+        | OwnershipOutcome::NotAdded(AccountRefusal::AlreadyListed)
+        | OwnershipOutcome::Removed { .. } => "status",
         OwnershipOutcome::Refused(_) | OwnershipOutcome::NotAdded(_) => "alert",
     }
 }
@@ -246,6 +262,41 @@ fn account_list(accounts: &[GithubLink], csrf_token: &str) -> Markup {
             }
         }
     }
+}
+
+/// "1 pending suggestion" / "2 pending suggestions".
+fn pending_suggestions(count: usize) -> String {
+    let plural = if count == 1 { "" } else { "s" };
+    format!("{count} pending suggestion{plural}")
+}
+
+/// The removal confirm (AC-008.1): what removing `login` deletes and what it
+/// keeps. Nothing is deleted here; Cancel goes back unchanged.
+pub fn remove_account_confirm_page(
+    login: &str,
+    github_user_id: u64,
+    pending: usize,
+    csrf_token: &str,
+) -> String {
+    page(
+        "Remove this GitHub account?",
+        html! {
+            h1 { "Remove github.com/" (login) "?" }
+            p {
+                strong {
+                    "This deletes its " (pending_suggestions(pending))
+                    ". Your published claims stay in your repo."
+                }
+            }
+            p { "Its repos are no longer scanned. Nothing is written to your Bluesky repo." }
+            form method="post" action=(CONFIRM_REMOVE_ACCOUNT_ACTION) {
+                (csrf_field(csrf_token))
+                input type="hidden" name=(super::ACCOUNT_ID_FIELD) value=(github_user_id);
+                button type="submit" { (REMOVE_ACCOUNT_LABEL) }
+            }
+            p { a href="/github" { (CANCEL_LABEL) } }
+        },
+    )
 }
 
 /// The offer to preview the link to the verified account `login`.
