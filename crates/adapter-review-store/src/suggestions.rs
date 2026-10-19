@@ -104,6 +104,34 @@ pub(crate) fn insert_if_listed(
     .map_err(db_error)
 }
 
+/// The conditional insert of one suggestion from the owner's import
+/// `repo_id`: inserted only while the import is still listed (U-RRA-D9).
+fn insert_if_imported(
+    conn: &Connection,
+    owner_did: &str,
+    repo_id: u64,
+    s: &Suggestion,
+) -> Result<usize, StoreError> {
+    let repo_id = db_id(repo_id)?;
+    conn.execute(
+        ADD_PENDING_FROM_LISTED_IMPORT,
+        params![
+            owner_did,
+            s.key.subject,
+            s.key.predicate,
+            s.key.object,
+            s.confidence_bp,
+            to_json(&s.evidence),
+            to_json(&s.why),
+            s.source_repo,
+            repo_id,
+            owner_did,
+            repo_id,
+        ],
+    )
+    .map_err(db_error)
+}
+
 impl ReviewStateRead for ReviewStore {
     fn pending_suggestions(&self, owner_did: &str) -> Result<Vec<Suggestion>, ReviewStoreError> {
         self.with_connection(|conn| {
@@ -225,28 +253,10 @@ impl ReviewStateWrite for ReviewStore {
         suggestions: &[Suggestion],
     ) -> Result<(), ReviewStoreError> {
         self.with_connection(|conn| {
-            let repo_id = db_id(repo_id)?;
             in_transaction(conn, |conn| {
-                suggestions.iter().try_for_each(|s| {
-                    conn.execute(
-                        ADD_PENDING_FROM_LISTED_IMPORT,
-                        params![
-                            owner_did,
-                            s.key.subject,
-                            s.key.predicate,
-                            s.key.object,
-                            s.confidence_bp,
-                            to_json(&s.evidence),
-                            to_json(&s.why),
-                            s.source_repo,
-                            repo_id,
-                            owner_did,
-                            repo_id,
-                        ],
-                    )
-                    .map(drop)
-                    .map_err(db_error)
-                })
+                suggestions
+                    .iter()
+                    .try_for_each(|s| insert_if_imported(conn, owner_did, repo_id, s).map(drop))
             })
         })
         .map_err(port_error)

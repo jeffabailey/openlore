@@ -4,7 +4,7 @@
 use maud::{html, Markup};
 
 use super::*;
-use ports::{ImportedRepo, ListingExtent};
+use ports::{ImportedRepo, ListingExtent, LISTING_PAGE_LIMIT, LISTING_PAGE_SIZE};
 
 use crate::repo_scope::{ChooseList, ImportRefusal, LimitRefusal, TicksRoom, SCAN_REPO_CAP};
 
@@ -123,8 +123,17 @@ pub fn saved_message(reads: usize) -> String {
 /// "You can choose up to 10 repos per scan in total. You have 11 chosen. Untick 1 to save."
 pub fn save_over_limit_message(refusal: LimitRefusal) -> String {
     format!(
-        "You can choose up to {} repos per scan in total. You have {} chosen. Untick {} to save.",
-        refusal.limit, refusal.total, refusal.excess
+        "{} Untick {} to save.",
+        over_limit_lead(refusal),
+        refusal.excess
+    )
+}
+
+/// What every over-limit refusal opens with: the limit and the total.
+fn over_limit_lead(refusal: LimitRefusal) -> String {
+    format!(
+        "You can choose up to {} repos per scan in total. You have {} chosen.",
+        refusal.limit, refusal.total
     )
 }
 
@@ -180,9 +189,8 @@ pub fn import_refusal_message(refusal: ImportRefusal, repo: &str) -> String {
         }
         ImportRefusal::AlreadyImported => format!("github:{repo} is already in your list."),
         ImportRefusal::OverLimit(refusal) => format!(
-            "You can choose up to {} repos per scan in total. You have {} chosen. Untick or remove {} before adding another.",
-            refusal.limit,
-            refusal.total,
+            "{} Untick or remove {} before adding another.",
+            over_limit_lead(refusal),
             counted(refusal.excess, "repo", "repos")
         ),
     }
@@ -326,7 +334,10 @@ fn choose_form(
                     p { (skipped) }
                 }
                 @if extent == ListingExtent::Truncated {
-                    p { "GitHub lists more repos than shown here: these are the first 300." }
+                    p {
+                        "GitHub lists more repos than shown here: these are the first "
+                        (LISTING_PAGE_LIMIT * LISTING_PAGE_SIZE) "."
+                    }
                 }
             }
             button type="submit" { (SAVE_CHOICE_LABEL) }

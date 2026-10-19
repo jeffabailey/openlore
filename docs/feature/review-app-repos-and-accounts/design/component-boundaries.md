@@ -42,6 +42,9 @@ and the new store tables are justified.
 - **Shape**: pure-function throughout. Inputs are values (account rows, choices, listings,
   imports, cap); outputs are values (`ScanIntent`, `AccountPlan`, `Move`, `Visible`,
   `LimitRefusal { limit, total, excess }`).
+- **Layout** (DELIVER refactor): one facade, private submodules by concern — `limits` (account
+  and repo limits; the one `S` and the one room-left rule every admission shares), `choose`,
+  `plan`, `imports`, `moves`, `resume`, `visibility`.
 - **Never**: touches a port.
 
 ### `review-domain::plans` (EXTEND)

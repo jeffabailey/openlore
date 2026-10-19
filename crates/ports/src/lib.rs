@@ -125,7 +125,7 @@ pub use peer_storage::{
 pub use github::{
     AccountRepoListing, CandidateClaim, CandidateClaimError, GithubAccountProfile, GithubError,
     ListedRepo, ListingExtent, OwnedRepo, PersonProfile, RawContributor, RepoFacts, RepoOwnerKind,
-    Signal, SignalKind, TargetKind,
+    Signal, SignalKind, TargetKind, LISTING_PAGE_LIMIT, LISTING_PAGE_SIZE,
 };
 
 // contributor-philosophy-inference (DDD-4 / ADR-063 §3): the NEW append-only

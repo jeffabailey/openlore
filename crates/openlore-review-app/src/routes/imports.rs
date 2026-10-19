@@ -15,9 +15,11 @@ use review_domain::repo_scope::{
 use review_domain::views::{self, ReposNotice, IMPORT_REPO_FIELD};
 
 use crate::http::{App, PageRequest, Reply};
-use crate::routes::repos::{import_ids, listed_accounts, owner_scope, repos_page};
+use crate::routes::repos::{
+    import_ids, listed_accounts, listed_imports, owner_scope, pending_from, repos_page,
+};
 use crate::routes::review::not_found;
-use crate::routes::signin::{csrf_token_for, csrf_token_of, field, signed_in_post};
+use crate::routes::signin::{csrf_token_for, csrf_token_of, field, id_field, signed_in_post};
 
 /// `POST /repos/imports`: read the named repo publicly and list it under
 /// "Repos you don't own", counted as `import.added`; or refuse it, counted
@@ -82,7 +84,7 @@ async fn import_verdict(app: &App, owner_did: &str, typed: &str) -> ImportVerdic
 fn repo_read(answer: &Result<RepoFacts, GithubError>) -> RepoRead<'_> {
     match answer {
         Ok(facts) => RepoRead::Found(facts),
-        Err(GithubError::NotFound { .. } | GithubError::NotPublic { .. }) => RepoRead::Gone,
+        Err(error) if error.is_gone() => RepoRead::Gone,
         Err(_) => RepoRead::Unfinished,
     }
 }
@@ -90,24 +92,10 @@ fn repo_read(answer: &Result<RepoFacts, GithubError>) -> RepoRead<'_> {
 /// The session owner's import the form names; another owner's, or none,
 /// is not found (I-BRA-1).
 fn named_import(app: &App, owner_did: &str, request: &PageRequest) -> Option<ImportedRepo> {
-    let named = field(&request.form, IMPORT_REPO_FIELD)?
-        .parse::<u64>()
-        .ok()?;
-    app.imports_read
-        .imports(owner_did)
-        .unwrap_or_default()
+    let named = id_field(&request.form, IMPORT_REPO_FIELD)?;
+    listed_imports(app, owner_did)
         .into_iter()
         .find(|import| import.repo_id == named)
-}
-
-/// How many of the owner's pending suggestions came from her import `repo_id`.
-fn pending_from_import(app: &App, owner_did: &str, repo_id: u64) -> usize {
-    app.review_read
-        .pending_sources(owner_did)
-        .unwrap_or_default()
-        .iter()
-        .filter(|(_, source)| *source == RepoSource::Imported(repo_id))
-        .count()
 }
 
 /// `POST /repos/imports/remove`: the confirm naming how many pending
@@ -120,7 +108,11 @@ pub(crate) fn remove_import_confirm(app: &App, request: &PageRequest) -> Reply {
     let Some(import) = named_import(app, &session.owner_did, request) else {
         return not_found();
     };
-    let pending = pending_from_import(app, &session.owner_did, import.repo_id);
+    let pending = pending_from(
+        app,
+        &session.owner_did,
+        RepoSource::Imported(import.repo_id),
+    );
     Reply::page(
         StatusCode::OK,
         views::remove_import_confirm_page(&import, pending, &csrf_token_for(&cookie_value)),

@@ -9,7 +9,7 @@ use ports::claim_domain::authority::{
     may_sign, owner_to_read, OwnerBioRead, RepoRead, SigningPermit, SigningRefusal,
 };
 use ports::{
-    GithubError, GithubLink, GithubLinkPort, ImportedReposRead, KpiTally, RepoFacts, RepoSource,
+    GithubLink, GithubLinkPort, ImportedReposRead, KpiTally, RepoFacts, RepoSource,
     ReviewStateRead, Suggestion, SuggestionKey, WebSession,
 };
 use review_domain::edits::{edit_claim, philosophy_choices};
@@ -185,14 +185,7 @@ fn visible_pending(
         .unzip();
     let standings: Vec<(u64, Standing)> = accounts
         .iter()
-        .map(|account| {
-            let standing = if account.verified {
-                Standing::Verified
-            } else {
-                Standing::Unverified
-            };
-            (account.github_user_id, standing)
-        })
+        .map(|account| (account.github_user_id, Standing::of(account.verified)))
         .collect();
     kept.into_iter()
         .zip(visible(&origins, &standings, imports))
@@ -576,9 +569,7 @@ impl<'a> PublishChecks<'a> {
             None => RepoAnswer::Gone,
             Some((owner, name)) => match self.app.github.read_repo(owner, name).await {
                 Ok(facts) => RepoAnswer::Found(facts),
-                Err(GithubError::NotFound { .. } | GithubError::NotPublic { .. }) => {
-                    RepoAnswer::Gone
-                }
+                Err(error) if error.is_gone() => RepoAnswer::Gone,
                 Err(_) => RepoAnswer::Unfinished,
             },
         };

@@ -506,8 +506,8 @@ pub fn redirect_target(requested: &str, location: &str) -> Option<String> {
     (to.origin() == from.origin()).then(|| to.to_string())
 }
 
-/// Pages an owned-repo listing reads at most (100 rows each, I-06).
-pub const LISTING_PAGE_LIMIT: usize = 3;
+/// The listing's page cap and page size, as the port states them (I-06).
+pub use ports::{LISTING_PAGE_LIMIT, LISTING_PAGE_SIZE};
 
 /// The next page of a listing read from `requested`: the `rel="next"` target
 /// of its `Link` header (`Ok(None)`: this was the last page). A next page on

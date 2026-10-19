@@ -30,9 +30,11 @@ use review_domain::repo_scope::{
 use review_domain::views::{self, GithubStep, OwnershipOutcome};
 
 use crate::http::{App, PageRequest, Reply};
-use crate::routes::repos::owner_scope;
+use crate::routes::repos::{import_ids, listed_accounts, owner_scope, pending_from};
 use crate::routes::review::not_found;
-use crate::routes::signin::{csrf_token_for, current_session, field, signed_in_post, to_landing};
+use crate::routes::signin::{
+    csrf_token_for, current_session, field, id_field, signed_in_post, to_landing,
+};
 use crate::wiring::{emit, observe, Counted, LogEvent};
 
 /// Recent verify attempts per DID (in memory; resets on restart, ADR-076 §2).
@@ -162,10 +164,7 @@ pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
     let typed = field(&request.form, "github_login").unwrap_or_default();
     let typed = typed.trim();
     let scope_guard = app.scope_locks.hold(&session.owner_did).await;
-    let listed = app
-        .links
-        .github_accounts(&session.owner_did)
-        .unwrap_or_default();
+    let listed = listed_accounts(app, &session.owner_did);
     let attempt = Attempt::of(&listed);
     if attempt == Attempt::AnotherAccount {
         observe(app, LogEvent::AccountAddStarted);
@@ -258,7 +257,7 @@ fn admission(
 ) -> AccountAdmission {
     let standings: Vec<(u64, Standing)> = listed
         .iter()
-        .map(|account| (account.github_user_id, standing_of(account)))
+        .map(|account| (account.github_user_id, Standing::of(account.verified)))
         .collect();
     let other_owner = match app
         .links
@@ -268,14 +267,6 @@ fn admission(
         _ => OtherOwner::None,
     };
     admit_account(&standings, github_user_id, other_owner, MAX_GITHUB_ACCOUNTS)
-}
-
-fn standing_of(account: &GithubLink) -> Standing {
-    if account.verified {
-        Standing::Verified
-    } else {
-        Standing::Unverified
-    }
 }
 
 /// Add the proven account (both limits checked again as it is written); its
@@ -303,13 +294,7 @@ fn add_account(
 /// owns moves to its choice. One listing; the scope is read again only
 /// when a repo moves.
 async fn move_owned_imports(app: &App, owner_did: &str, login: &str, github_user_id: u64) {
-    let imports: Vec<u64> = app
-        .imports_read
-        .imports(owner_did)
-        .unwrap_or_default()
-        .iter()
-        .map(|import| import.repo_id)
-        .collect();
+    let imports = import_ids(app, owner_did);
     if imports.is_empty() {
         return;
     }
@@ -389,24 +374,10 @@ fn unverify_if_listed(
 /// The signed-in owner's listed account named by the form's id. The owner
 /// is always the session's: an id she does not list names nothing.
 fn named_account(app: &App, session: &WebSession, request: &PageRequest) -> Option<GithubLink> {
-    let named = field(&request.form, views::ACCOUNT_ID_FIELD)?
-        .parse::<u64>()
-        .ok()?;
-    app.links
-        .github_accounts(&session.owner_did)
-        .unwrap_or_default()
+    let named = id_field(&request.form, views::ACCOUNT_ID_FIELD)?;
+    listed_accounts(app, &session.owner_did)
         .into_iter()
         .find(|account| account.github_user_id == named)
-}
-
-/// How many of the owner's pending suggestions came from `github_user_id`.
-fn pending_from_account(app: &App, owner_did: &str, github_user_id: u64) -> usize {
-    app.review_read
-        .pending_sources(owner_did)
-        .unwrap_or_default()
-        .iter()
-        .filter(|(_, source)| *source == RepoSource::Account(github_user_id))
-        .count()
 }
 
 /// `POST /github/remove`: the confirm naming how many pending suggestions
@@ -419,7 +390,11 @@ pub(crate) fn remove_account_confirm(app: &App, request: &PageRequest) -> Reply 
     let Some(account) = named_account(app, &session, request) else {
         return not_found();
     };
-    let pending = pending_from_account(app, &session.owner_did, account.github_user_id);
+    let pending = pending_from(
+        app,
+        &session.owner_did,
+        RepoSource::Account(account.github_user_id),
+    );
     Reply::page(
         StatusCode::OK,
         views::remove_account_confirm_page(
@@ -476,9 +451,7 @@ pub(crate) fn account_of(profile: &GithubAccountProfile) -> GithubAccount<'_> {
 /// A GitHub read that failed, as the person is told.
 pub(crate) fn refusal_of(error: &GithubError) -> OwnershipRefusal {
     match error {
-        GithubError::NotFound { .. } | GithubError::NotPublic { .. } => {
-            OwnershipRefusal::AccountNotFound
-        }
+        gone if gone.is_gone() => OwnershipRefusal::AccountNotFound,
         GithubError::RateLimited { .. } => OwnershipRefusal::RateLimited,
         _ => OwnershipRefusal::GithubUnavailable,
     }
@@ -496,10 +469,7 @@ pub(crate) async fn github_page(
     notice: Option<(OwnershipOutcome<'_>, &str)>,
 ) -> Reply {
     let active_links = published_links(app, &session.owner_did).await;
-    let accounts = app
-        .links
-        .github_accounts(&session.owner_did)
-        .unwrap_or_default();
+    let accounts = listed_accounts(app, &session.owner_did);
     Reply::page(
         StatusCode::OK,
         views::github_accounts_page(

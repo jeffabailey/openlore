@@ -237,6 +237,15 @@ pub enum GithubError {
     ContributorsUnavailable { target: String, reason: String },
 }
 
+impl GithubError {
+    /// GitHub answered that no public target is there (missing, or
+    /// private: the public API cannot tell them apart). Any other error is
+    /// no answer at all.
+    pub fn is_gone(&self) -> bool {
+        matches!(self, Self::NotFound { .. } | Self::NotPublic { .. })
+    }
+}
+
 // -----------------------------------------------------------------------------
 // RawContributor — one RAW row of GitHub's public contributors list
 // -----------------------------------------------------------------------------
@@ -340,12 +349,19 @@ pub struct ListedRepo {
     pub repo: OwnedRepo,
 }
 
+/// Pages an owned-repo listing reads at most (I-06).
+pub const LISTING_PAGE_LIMIT: usize = 3;
+
+/// Rows one owned-repo listing page asks for (GitHub's maximum).
+pub const LISTING_PAGE_SIZE: usize = 100;
+
 /// Whether a listing holds every owned repo or stopped at the page cap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListingExtent {
     Complete,
-    /// GitHub had more pages than the listing reads (3 pages of 100): a
-    /// repo absent from it is not proven missing.
+    /// GitHub had more pages than the listing reads
+    /// ([`LISTING_PAGE_LIMIT`] pages of [`LISTING_PAGE_SIZE`]): a repo
+    /// absent from it is not proven missing.
     Truncated,
 }
 

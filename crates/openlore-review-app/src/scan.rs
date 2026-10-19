@@ -346,11 +346,7 @@ async fn check_account(app: &App, owner_did: &str, account: &GithubLink) -> Chec
 
 /// Store what the check changed in the account's standing.
 fn record_standing(app: &App, owner_did: &str, account: &GithubLink, checked: &Checked) {
-    let stored = if account.verified {
-        Standing::Verified
-    } else {
-        Standing::Unverified
-    };
+    let stored = Standing::of(account.verified);
     let id = account.github_user_id;
     let _ = match (standing_after_check(stored, checked.bio_check()), checked) {
         (StandingChange::Reverify, Checked::Passed(ownership)) => app
@@ -698,7 +694,7 @@ async fn account_listing(
         };
         match app.github.read_repo(owner, name).await {
             Ok(facts) => reads.push((chosen.repo_id, facts)),
-            Err(GithubError::NotFound { .. } | GithubError::NotPublic { .. }) => {}
+            Err(gone) if gone.is_gone() => {}
             Err(error) => return Err(error),
         }
     }

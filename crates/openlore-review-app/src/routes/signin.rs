@@ -352,6 +352,11 @@ pub(crate) fn field(pairs: &[(String, String)], name: &str) -> Option<String> {
         .map(|(_, value)| value.clone())
 }
 
+/// The numeric id a form names in `name` (a GitHub account or repo id).
+pub(crate) fn id_field(pairs: &[(String, String)], name: &str) -> Option<u64> {
+    field(pairs, name)?.parse().ok()
+}
+
 /// Every value of a repeated field, in submitted order.
 pub(crate) fn fields(pairs: &[(String, String)], name: &str) -> Vec<String> {
     pairs

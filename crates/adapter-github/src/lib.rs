@@ -434,8 +434,9 @@ impl GithubPort for GithubAdapter {
     /// truncated.
     async fn list_account_repos(&self, user: &str) -> Result<AccountRepoListing, GithubError> {
         let mut url = format!(
-            "{}/users/{user}/repos?type=owner&sort=pushed&per_page=100",
-            self.api_base
+            "{}/users/{user}/repos?type=owner&sort=pushed&per_page={}",
+            self.api_base,
+            client::LISTING_PAGE_SIZE
         );
         let mut repos = Vec::new();
         for page in 1..=client::LISTING_PAGE_LIMIT {
@@ -532,10 +533,7 @@ impl GithubAdapter {
 
         let status = response.status();
         if status.is_success() {
-            return response
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|e| GithubError::ApiShape(format!("response body was not JSON: {e}")));
+            return json_body(response).await;
         }
 
         // A non-2xx status is a refusal: read its body and classify it. This
@@ -560,11 +558,7 @@ impl GithubAdapter {
             .get(reqwest::header::LINK)
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
-        let body = response
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|e| GithubError::ApiShape(format!("response body was not JSON: {e}")))?;
-        Ok((body, link))
+        Ok((json_body(response).await?, link))
     }
 
     /// Issue one PUBLIC GET against `{api_base}{url_path}`, attaching the
@@ -879,6 +873,14 @@ fn is_too_large_refusal(body: &serde_json::Value) -> bool {
     body.get("message")
         .and_then(serde_json::Value::as_str)
         .is_some_and(|message| message.contains("too large"))
+}
+
+/// A 2xx body as JSON; anything else is a response-shape change.
+async fn json_body(response: reqwest::Response) -> Result<serde_json::Value, GithubError> {
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| GithubError::ApiShape(format!("response body was not JSON: {e}")))
 }
 
 /// Read a non-2xx refusal body, then classify it into the railway-oriented

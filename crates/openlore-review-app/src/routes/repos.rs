@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 
 use hyper::StatusCode;
 use ports::{
-    AccountRepoListing, GithubError, GithubLink, ImportedRepo, KpiTally, SavedRepoChoice,
-    WebSession,
+    AccountRepoListing, GithubError, GithubLink, ImportedRepo, KpiTally, RepoSource,
+    SavedRepoChoice, WebSession,
 };
 use review_domain::kpi::{choice_saved_events, utc_day, KpiEvent};
 use review_domain::repo_scope::{
@@ -24,7 +24,7 @@ use review_domain::views::{
 use crate::http::{App, PageRequest, Reply};
 use crate::routes::review::not_found;
 use crate::routes::signin::{
-    csrf_token_for, csrf_token_of, current_session, field, fields, signed_in_post, to_landing,
+    csrf_token_for, csrf_token_of, current_session, fields, id_field, signed_in_post, to_landing,
 };
 
 /// `GET /repos`: the choose page. Opening it stores nothing; it is counted.
@@ -45,7 +45,7 @@ pub(crate) async fn save_choice(app: &App, request: &PageRequest) -> Reply {
         Ok(signed_in) => signed_in,
         Err(refused) => return refused,
     };
-    let named = field(&request.form, ACCOUNT_ID_FIELD).and_then(|id| id.parse::<u64>().ok());
+    let named = id_field(&request.form, ACCOUNT_ID_FIELD);
     let Some(account) = named.and_then(|id| verified_account(app, &session.owner_did, id)) else {
         return not_found();
     };
@@ -97,10 +97,11 @@ pub(crate) async fn save_choice(app: &App, request: &PageRequest) -> Reply {
 }
 
 /// The owner's imports: they count toward the limit (BR-RRA-3).
-fn listed_imports(app: &App, owner_did: &str) -> Vec<ImportedRepo> {
+pub(crate) fn listed_imports(app: &App, owner_did: &str) -> Vec<ImportedRepo> {
     app.imports_read.imports(owner_did).unwrap_or_default()
 }
 
+/// The repo ids of the owner's imports.
 pub(crate) fn import_ids(app: &App, owner_did: &str) -> Vec<u64> {
     listed_imports(app, owner_did)
         .iter()
@@ -111,6 +112,17 @@ pub(crate) fn import_ids(app: &App, owner_did: &str) -> Vec<u64> {
 /// The owner's accounts, in the order they were added.
 pub(crate) fn listed_accounts(app: &App, owner_did: &str) -> Vec<GithubLink> {
     app.links.github_accounts(owner_did).unwrap_or_default()
+}
+
+/// How many of the owner's pending suggestions came from `source`: what
+/// removing it deletes, named on its confirm page.
+pub(crate) fn pending_from(app: &App, owner_did: &str, source: RepoSource) -> usize {
+    app.review_read
+        .pending_sources(owner_did)
+        .unwrap_or_default()
+        .iter()
+        .filter(|(_, from)| *from == source)
+        .count()
 }
 
 fn verified_account(app: &App, owner_did: &str, github_user_id: u64) -> Option<GithubLink> {
@@ -169,14 +181,6 @@ pub(crate) async fn owner_scope(app: &App, owner_did: &str) -> Vec<ScopeAccount>
         .collect()
 }
 
-fn standing(link: &GithubLink) -> Standing {
-    if link.verified {
-        Standing::Verified
-    } else {
-        Standing::Unverified
-    }
-}
-
 fn scope_account(state: &AccountState) -> ScopeAccount {
     let listed = match &state.listing {
         Some(Ok(listing)) => Some(listing.repos.as_slice()),
@@ -184,7 +188,7 @@ fn scope_account(state: &AccountState) -> ScopeAccount {
     };
     ScopeAccount::of(
         state.link.github_user_id,
-        standing(&state.link),
+        Standing::of(state.link.verified),
         &state.saved,
         listed,
     )
