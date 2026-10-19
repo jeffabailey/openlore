@@ -473,7 +473,6 @@ fn a_contested_account_reads_contested_on_every_page_about_it() {
 ///     | the GitHub person page rachelk     | exactly the line "did:plc:rachel-test claims github:rachelk — not checked (record R1)" |
 /// ```
 #[test]
-#[ignore = "DELIVER 04-04: third-party and flawed link records never show"]
 fn a_strangers_link_about_tobias_and_flawed_link_records_never_show_as_anyones_linked_identity() {
     let mut world = LinkWorld::with(&[RACHEL_GH, TOBIAS_GH]);
     let mut specs = vec![
@@ -524,7 +523,6 @@ fn a_strangers_link_about_tobias_and_flawed_link_records_never_show_as_anyones_l
 ///     | the GitHub person page rachel-old | absent (no region) |
 /// ```
 #[test]
-#[ignore = "DELIVER 04-04: retracted and superseded links never show"]
 fn a_retracted_or_superseded_link_and_the_retraction_itself_never_show() {
     let mut world = LinkWorld::with(&[RACHEL_GH, RACHEL_OLD_GH]);
     let kept = link_spec(RACHEL_DID, RACHEL_GH);
@@ -592,7 +590,6 @@ fn a_retracted_or_superseded_link_and_the_retraction_itself_never_show() {
 ///     | removed her, then added her | the GitHub person page rachelk | "did:plc:rachel-test is github:rachelk — verified today" |
 /// ```
 #[test]
-#[ignore = "DELIVER 04-04: a removed peer's link is hidden until she is followed again"]
 fn a_link_from_a_peer_jeff_removed_does_not_show_until_he_follows_her_again() {
     let world = rachels_checked_link();
     let pages = [
