@@ -123,6 +123,11 @@ pub(crate) enum LogEvent<'a> {
     /// A preview or confirm minted no signing permit (the reason only;
     /// never which repo or whose, KPI-RRA-4).
     PublishRefused(SigningRefusal),
+    /// KPI-RRA-4 audit: a fresh owner and bio read in this request minted a
+    /// signing permit (never which repo, account or whose).
+    PublishCheckPassed,
+    /// KPI-RRA-4 audit: that check minted no permit (the reason only).
+    PublishCheckRefused(SigningRefusal),
     /// An owner confirmed a share post and it landed (KPI count; never the
     /// text, whose or where).
     SharePosted,
@@ -275,6 +280,12 @@ fn describe(event: LogEvent<'_>) -> (Level, &'static str, Vec<(&'static str, Val
         LogEvent::PublishRefused(refusal) => (
             Info,
             "publish.refused",
+            vec![("reason", json!(publish_refusal_label(refusal)))],
+        ),
+        LogEvent::PublishCheckPassed => (Info, "ownership.publish_check.passed", vec![]),
+        LogEvent::PublishCheckRefused(refusal) => (
+            Info,
+            "ownership.publish_check.refused",
             vec![("reason", json!(publish_refusal_label(refusal)))],
         ),
         LogEvent::SharePosted => (Info, "share.posted", vec![]),

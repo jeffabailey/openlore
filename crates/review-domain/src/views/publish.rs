@@ -295,6 +295,44 @@ pub fn not_owned_page(subject: &str) -> String {
     )
 }
 
+/// A preview or confirm refused because GitHub could not say who owns the
+/// repo now (AC-010.3): nothing was published, nothing changed.
+pub fn github_unreachable_page(subject: &str) -> String {
+    let repo = subject.strip_prefix("github:").unwrap_or(subject);
+    page(
+        "Nothing was published",
+        html! {
+            section class="outcome" {
+            h1 { "Nothing was published" }
+            p role="alert" {
+                "GitHub could not be reached, so we couldn't check who owns github.com/"
+                (repo) ". Nothing was published. Please try again in a few minutes."
+            }
+            (back_to_queue())
+            }
+        },
+    )
+}
+
+/// A preview or confirm refused because the owning account's bio, read now,
+/// no longer holds the owner's DID (AC-010.2): nothing was published.
+pub fn bio_no_longer_holds_page(github_login: &str) -> String {
+    page(
+        "Nothing was published",
+        html! {
+            section class="outcome" {
+            h1 { "Nothing was published" }
+            p role="alert" {
+                "Your DID is no longer in the bio of github.com/" (github_login)
+                ", so nothing was published. Put your DID back, verify the account, then \
+                 publish again."
+            }
+            (back_to_queue())
+            }
+        },
+    )
+}
+
 /// A confirm that arrived after its preview expired (ADR-074): refused,
 /// nothing written.
 pub fn plan_expired_page() -> String {

@@ -904,7 +904,6 @@ fn a_repo_transferred_away_after_the_scan_can_no_longer_be_published() {
 ///     | GitHub says it is too busy to answer |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-15: an unfinished check at preview changes nothing"]
 fn github_failing_at_preview_shows_no_preview_and_publishes_nothing() {
     for rate_limited in [false, true] {
         let world = rra_world();
@@ -944,7 +943,6 @@ fn github_failing_at_preview_shows_no_preview_and_publishes_nothing() {
 ///   And priya-tidal is marked as needing re-verify
 /// ```
 #[test]
-#[ignore = "DELIVER 02-16: confirm re-reads the bio and marks the account unverified"]
 fn a_bio_edited_between_preview_and_confirm_stops_the_publish() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);
@@ -984,7 +982,6 @@ fn a_bio_edited_between_preview_and_confirm_stops_the_publish() {
 ///     | she transferred tidepool to tidal-labs meanwhile | she sees "github.com/priyaraman/tidepool is no longer owned by an account you verified, so nothing was published. If you own it under another account, verify that account; otherwise decline this suggestion." and nothing is written |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-17: confirm mints its own permit from a fresh owner and bio read"]
 fn a_claim_about_her_own_repo_is_published_only_if_she_still_owns_it_when_she_confirms() {
     for transferred in [false, true] {
         let world = rra_world();

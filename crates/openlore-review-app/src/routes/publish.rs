@@ -16,9 +16,9 @@ use review_domain::views::{self, BatchOutcome, PublishNextStep, PublishRetry};
 use crate::executor::{execute_publish, PublishFailure};
 use crate::http::{App, PageRequest, Reply};
 use crate::routes::confirm::{take_confirmed_plan, take_owned_plan, ConfirmedPlan};
-use crate::routes::review::{not_found, owner_can_publish, refused_publish, PublishChecks};
+use crate::routes::review::{not_found, owner_can_publish, PublishChecks};
 use crate::routes::signin::{csrf_token_of, fields, signed_in_post};
-use crate::wiring::{emit, observe, Counted, LogEvent};
+use crate::wiring::{emit, Counted, LogEvent};
 
 /// Confirm "Publish to my repo" (or "Retry").
 pub(crate) async fn confirm_publish(app: &App, request: &PageRequest) -> Reply {
@@ -34,12 +34,10 @@ pub(crate) async fn confirm_publish(app: &App, request: &PageRequest) -> Reply {
     if !owner_can_publish(app, owner_did, key) {
         return not_found();
     }
-    let permit = match PublishChecks::new(app, owner_did)
-        .permit(&key.subject)
-        .await
-    {
+    let mut checks = PublishChecks::new(app, owner_did);
+    let permit = match checks.permit(&key.subject).await {
         Ok(permit) => permit,
-        Err(refusal) => return refused_publish(app, &key.subject, refusal),
+        Err(refusal) => return checks.refused(&key.subject, refusal),
     };
     match restore_plan(&permit, &confirmed.stored).ok() {
         Some(plan) => publish(app, &plan, &confirmed).await,
@@ -160,7 +158,7 @@ async fn confirm_one(
     let permit = match checks.permit(&key.subject).await {
         Ok(permit) => permit,
         Err(refusal) => {
-            observe(app, LogEvent::PublishRefused(refusal));
+            checks.settle(refusal);
             return PlanResult::Skipped;
         }
     };

@@ -233,15 +233,13 @@ pub(crate) async fn approve(app: &App, request: &PageRequest) -> Reply {
         Err(refused) => return refused,
     };
     let subject = suggestion.key.subject.clone();
-    match PublishChecks::new(app, &session.owner_did)
-        .permit(&subject)
-        .await
-    {
+    let mut checks = PublishChecks::new(app, &session.owner_did);
+    match checks.permit(&subject).await {
         Ok(permit) => {
             let plan = publish_plan(&permit, &draft_of(suggestion), &composed_now());
             keep_and_preview(app, request, &session, plan)
         }
-        Err(refusal) => refused_publish(app, &subject, refusal),
+        Err(refusal) => checks.refused(&subject, refusal),
     }
 }
 
@@ -272,7 +270,7 @@ pub(crate) async fn approve_selected(app: &App, request: &PageRequest) -> Reply 
         let permit = match checks.permit(&suggestion.key.subject).await {
             Ok(permit) => permit,
             Err(refusal) => {
-                observe(app, LogEvent::PublishRefused(refusal));
+                checks.settle(refusal);
                 continue;
             }
         };
@@ -329,16 +327,14 @@ pub(crate) async fn preview_edit(app: &App, request: &PageRequest) -> Reply {
     match edit_claim(&suggestion.key.object, chosen.as_deref(), &typed) {
         Ok(edit) => {
             let subject = suggestion.key.subject.clone();
-            match PublishChecks::new(app, &session.owner_did)
-                .permit(&subject)
-                .await
-            {
+            let mut checks = PublishChecks::new(app, &session.owner_did);
+            match checks.permit(&subject).await {
                 Ok(permit) => {
                     let draft = draft_of(suggestion);
                     let plan = publish_edited_plan(&permit, &draft, &edit, &composed_now());
                     keep_and_preview(app, request, &session, plan)
                 }
-                Err(refusal) => refused_publish(app, &subject, refusal),
+                Err(refusal) => checks.refused(&subject, refusal),
             }
         }
         Err(invalid) => {
@@ -408,6 +404,9 @@ fn keep_and_preview(
     }
 }
 
+/// The last verdict stored when a publish found the DID gone from the bio.
+const BIO_NO_LONGER_HOLDS_VERDICT: &str = "did_missing";
+
 /// The fresh reads one request makes to mint signing permits (ADR-089 §4):
 /// the repo as GitHub serves it now and its owner's bio now. Shared between
 /// suggestions of the same repo or owner account within the request; never
@@ -415,6 +414,7 @@ fn keep_and_preview(
 pub(crate) struct PublishChecks<'a> {
     app: &'a App,
     owner_did: &'a str,
+    accounts: Vec<GithubLink>,
     listed: Vec<u64>,
     repos: BTreeMap<String, RepoAnswer>,
     bios: BTreeMap<u64, BioAnswer>,
@@ -454,36 +454,83 @@ impl BioAnswer {
 
 impl<'a> PublishChecks<'a> {
     pub(crate) fn new(app: &'a App, owner_did: &'a str) -> Self {
-        let listed = app
-            .links
-            .github_accounts(owner_did)
-            .unwrap_or_default()
+        let accounts = app.links.github_accounts(owner_did).unwrap_or_default();
+        let listed = accounts
             .iter()
             .map(|account| account.github_user_id)
             .collect();
         Self {
             app,
             owner_did,
+            accounts,
             listed,
             repos: BTreeMap::new(),
             bios: BTreeMap::new(),
         }
     }
 
-    /// A permit for `subject` from this request's reads, or why not.
+    /// A permit for `subject` from this request's reads, or why not; each
+    /// check is audited before anything can be written (KPI-RRA-4).
     pub(crate) async fn permit(&mut self, subject: &str) -> Result<SigningPermit, SigningRefusal> {
         let repo = self.repo(subject).await;
         let bio = match owner_to_read(&self.listed, repo.as_read()) {
             Some(owner_id) => self.bio(owner_id).await,
             None => BioAnswer::Unfinished,
         };
-        may_sign(
+        let checked = may_sign(
             self.owner_did,
             subject,
             &self.listed,
             repo.as_read(),
             bio.as_read(),
-        )
+        );
+        emit(match &checked {
+            Ok(_) => LogEvent::PublishCheckPassed,
+            Err(refusal) => LogEvent::PublishCheckRefused(*refusal),
+        });
+        checked
+    }
+
+    /// A refusal's consequences, nothing written: counted, and a listed
+    /// account whose bio no longer holds the DID is marked unverified (an
+    /// unfinished check changes no status).
+    pub(crate) fn settle(&self, refusal: SigningRefusal) {
+        observe(self.app, LogEvent::PublishRefused(refusal));
+        if let SigningRefusal::BioNoLongerHolds(github_user_id) = refusal {
+            let _ = self.app.account_status.mark_account_unverified(
+                self.owner_did,
+                github_user_id,
+                BIO_NO_LONGER_HOLDS_VERDICT,
+            );
+        }
+    }
+
+    /// A publish refused for want of a permit, settled, and explained with
+    /// its next step; a repo gone (missing or private) is not found.
+    pub(crate) fn refused(&self, subject: &str, refusal: SigningRefusal) -> Reply {
+        self.settle(refusal);
+        match refusal {
+            SigningRefusal::NotOwnedByListedAccount | SigningRefusal::OrgOwned => {
+                Reply::page(StatusCode::CONFLICT, views::not_owned_page(subject))
+            }
+            SigningRefusal::Unfinished => Reply::page(
+                StatusCode::SERVICE_UNAVAILABLE,
+                views::github_unreachable_page(subject),
+            ),
+            SigningRefusal::BioNoLongerHolds(github_user_id) => {
+                match self.login_of(github_user_id) {
+                    Some(login) => {
+                        Reply::page(StatusCode::CONFLICT, views::bio_no_longer_holds_page(login))
+                    }
+                    None => not_found(),
+                }
+            }
+            SigningRefusal::RepoGone => not_found(),
+        }
+    }
+
+    fn login_of(&self, github_user_id: u64) -> Option<&str> {
+        login_of(&self.accounts, github_user_id)
     }
 
     async fn repo(&mut self, subject: &str) -> RepoAnswer {
@@ -517,19 +564,6 @@ impl<'a> PublishChecks<'a> {
         };
         self.bios.insert(owner_id, answer.clone());
         answer
-    }
-}
-
-/// A publish refused for want of a permit: counted, nothing written. A repo
-/// none of the owner's accounts owns now is explained; anything else is not
-/// found.
-pub(crate) fn refused_publish(app: &App, subject: &str, refusal: SigningRefusal) -> Reply {
-    observe(app, LogEvent::PublishRefused(refusal));
-    match refusal {
-        SigningRefusal::NotOwnedByListedAccount | SigningRefusal::OrgOwned => {
-            Reply::page(StatusCode::CONFLICT, views::not_owned_page(subject))
-        }
-        _ => not_found(),
     }
 }
 

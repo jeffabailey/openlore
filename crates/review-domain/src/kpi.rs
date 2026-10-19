@@ -63,13 +63,18 @@ pub enum KpiEvent {
     /// KPI-RRA-4: a publish was refused because none of the owner's listed
     /// accounts owns the repo now (another account or an organization does).
     PublishRefusedNotOwned,
+    /// KPI-RRA-4: a publish was refused because the owner account's bio,
+    /// read in that request, no longer holds the signer's DID.
+    PublishRefusedBioFailed,
+    /// KPI-RRA-4: a publish was refused because GitHub could not answer.
+    PublishRefusedUnreachable,
     SharePosted,
     RetractPosted,
     Disconnect,
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 32] = [
+    pub const ALL: [KpiEvent; 34] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -99,6 +104,8 @@ impl KpiEvent {
         Self::ScanAccountUnfinished,
         Self::AccountRemoved,
         Self::PublishRefusedNotOwned,
+        Self::PublishRefusedBioFailed,
+        Self::PublishRefusedUnreachable,
         Self::SharePosted,
         Self::RetractPosted,
         Self::Disconnect,
@@ -138,6 +145,8 @@ impl KpiEvent {
             Self::ScanAccountUnfinished => "scan.account.unfinished",
             Self::AccountRemoved => "account.removed",
             Self::PublishRefusedNotOwned => "publish.refused.not_owned",
+            Self::PublishRefusedBioFailed => "publish.refused.bio_failed",
+            Self::PublishRefusedUnreachable => "publish.refused.unreachable",
             Self::SharePosted => "share.posted",
             Self::RetractPosted => "retract.posted",
             Self::Disconnect => "disconnect",
@@ -221,7 +230,9 @@ pub fn publish_refusal_events(refusal: SigningRefusal) -> Vec<KpiEvent> {
         SigningRefusal::NotOwnedByListedAccount | SigningRefusal::OrgOwned => {
             vec![KpiEvent::PublishRefusedNotOwned]
         }
-        _ => Vec::new(),
+        SigningRefusal::BioNoLongerHolds(_) => vec![KpiEvent::PublishRefusedBioFailed],
+        SigningRefusal::Unfinished => vec![KpiEvent::PublishRefusedUnreachable],
+        SigningRefusal::RepoGone => Vec::new(),
     }
 }
 
