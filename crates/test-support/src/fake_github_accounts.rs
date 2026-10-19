@@ -294,6 +294,10 @@ struct GhState {
     /// far) — once the n-th distinct repo is read, responses report the low
     /// remaining budget (a scan pauses part way, after real reads).
     low_after_repos: Mutex<Option<(usize, u64, std::collections::BTreeSet<String>)>>,
+    /// Owned-repo listings answered only after a delay (lowercase login →
+    /// milliseconds): GitHub slow on one account's listing, so a request
+    /// that lists it stays in flight while another request lands.
+    slow_listings: Mutex<BTreeMap<String, u64>>,
 }
 
 impl GhState {
@@ -368,7 +372,13 @@ impl FakeGithubAccounts {
                 tokio::spawn(async move {
                     let svc = hyper::service::service_fn(move |req| {
                         let st3 = st2.clone();
-                        async move { Ok::<_, Infallible>(route(&st3, req)) }
+                        async move {
+                            let delay = listing_delay(&st3, req.uri().path());
+                            if let Some(ms) = delay {
+                                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                            }
+                            Ok::<_, Infallible>(route(&st3, req))
+                        }
                     });
                     let _ = http1::Builder::new()
                         .serve_connection(TokioIo::new(stream), svc)
@@ -491,6 +501,18 @@ impl FakeGithubAccounts {
             outage.insert(login.to_ascii_lowercase());
         } else {
             outage.remove(&login.to_ascii_lowercase());
+        }
+    }
+
+    /// GitHub answers `login`'s owned-repo listing only after `ms`
+    /// milliseconds (0 = no delay): a request that lists it stays in flight
+    /// while another request lands (race scenarios, review R1).
+    pub fn slow_listing_of(&self, login: &str, ms: u64) {
+        let mut slow = self.state.slow_listings.lock().unwrap();
+        if ms == 0 {
+            slow.remove(&login.to_ascii_lowercase());
+        } else {
+            slow.insert(login.to_ascii_lowercase(), ms);
         }
     }
 
@@ -982,6 +1004,20 @@ fn route(state: &GhState, req: HttpRequest) -> HttpResponse {
             json_with_headers(status, &body, &headers)
         }
         _ => not_found(),
+    }
+}
+
+/// How long the owned-repo listing at `path` is held back, if at all.
+fn listing_delay(state: &GhState, path: &str) -> Option<u64> {
+    let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    match segments.as_slice() {
+        ["users", login, "repos"] => state
+            .slow_listings
+            .lock()
+            .unwrap()
+            .get(&login.to_ascii_lowercase())
+            .copied(),
+        _ => None,
     }
 }
 

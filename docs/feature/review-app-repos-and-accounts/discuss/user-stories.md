@@ -449,7 +449,8 @@ And github.com/priyaraman is still verified
 
 Given github.com/dvolkov is verified for @dmitri.volkov.dev
 When Sam Ortega, signed in as @samortega.bsky.social, adds GitHub username "dvolkov"
-Then he sees "github.com/dvolkov is already verified for another Bluesky account. Each GitHub account can belong to one Bluesky account only. If it is yours, remove it from that Bluesky account first."
+Then he sees "This GitHub account can't be added here. Use a GitHub account only you have verified."
+And the message does not reveal that another Bluesky account verified github.com/dvolkov (user decision 2026-10-19, review R8)
 And nothing is added to Sam's list
 
 #### Scenario: Adding an account already on the list changes nothing
@@ -487,7 +488,7 @@ And her next scan reads 10 repos
 
 - [ ] AC-003.1 A second account is verified by the same DID-in-bio check against the signed-in DID; success lists both as verified. Tested by: "Priya verifies her work account…".
 - [ ] AC-003.2 A failed check of a new account never changes accounts already listed. Tested by: "A second account without the DID…", "GitHub being unreachable…".
-- [ ] AC-003.3 An account verified for another DID is refused with the reason and the fix. Tested by: "An account verified for another Bluesky sign-in…".
+- [ ] AC-003.3 An account verified for another DID is refused with a neutral message and the fix ("This GitHub account can't be added here. Use a GitHub account only you have verified."); the refusal never reveals that another Bluesky account holds it (user decision 2026-10-19, review R8). Tested by: "An account verified for another Bluesky sign-in…".
 - [ ] AC-003.4 Adding an account already on the list says so and changes nothing. Tested by: "Adding an account already on the list…".
 - [ ] AC-003.5 Adding past the account limit is refused with the limit and the fix. Tested by: "A fourth account is refused…".
 - [ ] AC-003.6 Adding an account writes nothing to any PDS and publishes no link (C-GDL-1). Tested by: "Priya verifies her work account…".

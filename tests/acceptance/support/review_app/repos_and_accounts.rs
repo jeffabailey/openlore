@@ -835,6 +835,16 @@ pub fn when_saves_choice<'b>(
     ticked: &[Repo],
 ) -> &'b Page {
     when_opens_choose_repos(browser);
+    when_submits_choice_on_open_page(browser, account, ticked)
+}
+
+/// WHEN the owner, with "Choose repos" ALREADY open, ticks exactly `ticked`
+/// on `account` and presses "Save choice" (no reload: the page she has).
+pub fn when_submits_choice_on_open_page<'b>(
+    browser: &'b mut Browser,
+    account: Account,
+    ticked: &[Repo],
+) -> &'b Page {
     let raw = account_form_html(&browser.page, account).unwrap_or_else(|| {
         panic!(
             "no \"{SAVE_CHOICE}\" list for {} on the choose-repos page:\n{}",

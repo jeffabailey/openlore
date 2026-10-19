@@ -139,6 +139,12 @@ enum PermitView {
     RepoGone,
     BioNoLongerHolds(u64),
     Unfinished,
+    /// Review F4 (U-RRA-D11): GitHub now serves the repo under another
+    /// owner/name (renamed or transferred since the scan): never publish
+    /// under the old subject.
+    RepoRenamed {
+        now: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -457,6 +463,8 @@ fn sut_may_sign(
         Err(SigningRefusal::RepoGone) => PermitView::RepoGone,
         Err(SigningRefusal::BioNoLongerHolds(id)) => PermitView::BioNoLongerHolds(id),
         Err(SigningRefusal::Unfinished) => PermitView::Unfinished,
+        // REVIEW-FIX F4: add `Err(SigningRefusal::RepoRenamed { now }) =>
+        // PermitView::RepoRenamed { now }` when the variant lands.
     }
 }
 
@@ -715,6 +723,15 @@ fn oracle_may_sign(
     match repo {
         RepoReadView::Unreachable => PermitView::Unfinished,
         RepoReadView::NotFound => PermitView::RepoGone,
+        RepoReadView::Found { full_name, .. }
+            if !subject
+                .strip_prefix("github:")
+                .is_some_and(|named| named.eq_ignore_ascii_case(full_name)) =>
+        {
+            PermitView::RepoRenamed {
+                now: full_name.clone(),
+            }
+        }
         RepoReadView::Found {
             owner_is_user: false,
             ..
@@ -847,12 +864,25 @@ fn arb_bio() -> impl Strategy<Value = Option<String>> {
     ]
 }
 
+/// The repo as GitHub serves it now, for the subject `github:owner1/repo`
+/// (CORE-RRA-6): mostly under that same name (letter case may differ —
+/// GitHub names are case-insensitive), sometimes renamed or transferred since
+/// the scan (review F4). The owner id is independent of the login, as on
+/// GitHub (an account keeps its id when renamed).
 fn arb_repo_read() -> impl Strategy<Value = RepoReadView> {
+    let name = prop_oneof![
+        6 => Just("owner1/repo".to_string()),
+        1 => Just("Owner1/REPO".to_string()),
+        1 => Just("owner1/repo-renamed".to_string()),
+        1 => (2u64..6).prop_map(|n| format!("owner{n}/repo")),
+    ];
     prop_oneof![
-        (1u64..6, any::<bool>()).prop_map(|(owner_id, owner_is_user)| RepoReadView::Found {
-            full_name: format!("owner{owner_id}/repo"),
-            owner_id,
-            owner_is_user,
+        (name, 1u64..6, any::<bool>()).prop_map(|(full_name, owner_id, owner_is_user)| {
+            RepoReadView::Found {
+                full_name,
+                owner_id,
+                owner_is_user,
+            }
         }),
         Just(RepoReadView::NotFound),
         Just(RepoReadView::Unreachable),
@@ -1071,7 +1101,12 @@ proptest! {
     }
 
     /// CORE-RRA-6 (@property @US-RRA-010 @US-RRA-006 @BR-RRA-1 @BR-RRA-2 @KPI-RRA-4 @contract-shape:pure-function)
+    ///
+    /// Review F4: a repo GitHub now serves under another owner/name is
+    /// refused (`RepoRenamed`). When the crafter adds that refusal to
+    /// `SigningRefusal`, `sut_may_sign` needs its arm.
     #[test]
+    #[ignore = "REVIEW-FIX: F4"]
     fn core_rra6_only_a_listed_user_owner_whose_bio_holds_the_did_may_publish(
         listed in proptest::collection::vec(1u64..6, 0..3),
         repo in arb_repo_read(),

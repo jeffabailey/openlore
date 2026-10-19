@@ -83,13 +83,18 @@ fn priya_verifies_her_work_account_without_losing_her_personal_one() {
 ///   Examples:
 ///     | setup                                                            | who    | login       | message |
 ///     | Priya is verified as priyaraman; priya-tidal's bio lacks her DID | Priya  | priya-tidal | We couldn't find your DID in the bio of github.com/priya-tidal. Add your DID to the bio of your own GitHub account, then press Verify again. |
-///     | dvolkov is verified for @dmitri.volkov.dev                       | Sam    | dvolkov     | github.com/dvolkov is already verified for another Bluesky account. Each GitHub account can belong to one Bluesky account only. If it is yours, remove it from that Bluesky account first. |
+///     | dvolkov is verified for @dmitri.volkov.dev                       | Sam    | dvolkov     | This GitHub account can't be added here. Use a GitHub account only you have verified. |
 ///     | Priya's list holds priyaraman and priya-tidal                    | Priya  | priya-tidal | github.com/priya-tidal is already on your list. |
 ///     | Dmitri has 3 verified accounts                                   | Dmitri | dvolkov-old | You can link up to 3 GitHub accounts. Remove one on this page to add another. |
 ///     | Priya is verified as priyaraman; GitHub drops the connection     | Priya  | priya-tidal | GitHub could not be reached. Please wait a few minutes, then press Verify again. Nothing was lost. |
 ///     | Priya is verified as priyaraman; GitHub says it is too busy to answer | Priya  | priya-tidal | GitHub could not be reached. Please wait a few minutes, then press Verify again. Nothing was lost. |
 /// ```
+///
+/// R8 (user decision 2026-10-19): the "held by another sign-in" refusal must
+/// not reveal that another Bluesky account verified this GitHub account; its
+/// wording is neutral.
 #[test]
+#[ignore = "REVIEW-FIX: R8"]
 fn an_account_that_cannot_be_added_changes_nothing() {
     #[derive(Debug, Clone, Copy)]
     enum Refusal {
@@ -121,7 +126,7 @@ fn an_account_that_cannot_be_added_changes_nothing() {
                     given_owner_verified(&world, Account::Dvolkov);
                     puts_did_in_account_bio(&world, Account::Dvolkov);
                     let b = given_signed_in(&world, Persona::Sam);
-                    let expected = vec!["github.com/dvolkov is already verified for another Bluesky account. Each GitHub account can belong to one Bluesky account only. If it is yours, remove it from that Bluesky account first.".to_string()];
+                    let expected = vec!["This GitHub account can't be added here. Use a GitHub account only you have verified.".to_string()];
                     (b, Persona::Sam, Account::Dvolkov, expected)
                 }
                 Refusal::AlreadyListed => {
@@ -1168,4 +1173,112 @@ fn one_owner_never_sees_or_changes_another_owners_accounts_or_choices() {
         let after = capture_rra(&world, &mut priya, Persona::Priya);
         assert_state_delta(&before, &after, &rra_universe(), &Delta::new());
     }
+}
+
+/// AR-5 (review R1: a Save racing a removal)
+///
+/// Driving ports only: three tabs of Priya. Scope changes queue on the
+/// per-DID lock (D-RRA-D8). A first Save, of priyaraman, holds the lock while
+/// GitHub answers priyaraman's listing slowly
+/// (`FakeGithubAccounts::slow_listing_of`). Meanwhile the removal of
+/// priya-tidal queues, and THEN a Save of priya-tidal looks its account up
+/// (still listed) and queues behind it. When the lock frees, the removal runs
+/// first; the priya-tidal Save must not write a choice for an account that
+/// is gone.
+/// ```gherkin
+/// @US-RRA-008 @AC-008.3 @R1 @D-RRA-D8 @C7c @concurrency @contract-shape:bounded-change
+/// Scenario: A Save that races a removal never brings the removed account's choice back
+///   Given Priya has priyaraman and priya-tidal, priya-tidal with a saved choice of ingest-bench
+///   And she has "Choose repos" open in two tabs and the GitHub step in a third
+///   And GitHub is slow to list priyaraman's repos
+///   When, in that order and a moment apart, she saves priyaraman's choice, removes priya-tidal, and saves ingest-bench and tidal-sdk for priya-tidal
+///   Then after she adds and verifies priya-tidal again, its list starts fresh: today's default ticks, no old choice
+/// ```
+#[test]
+#[ignore = "REVIEW-FIX: R1"]
+fn a_save_that_races_a_removal_never_brings_the_removed_accounts_choice_back() {
+    let world = rra_world();
+    let mut holding = given_accounts_verified(&world, &BOTH);
+    given_saved_choice(&mut holding, Account::PriyaTidal, &[INGEST_BENCH]);
+    let mut removing = given_signed_in(&world, Persona::Priya);
+    let mut racing = given_signed_in(&world, Persona::Priya);
+    when_opens_choose_repos(&mut holding);
+    when_opens_choose_repos(&mut racing);
+    world
+        .github
+        .slow_listing_of(Account::Priyaraman.login(), 2_000);
+    let pause = |ms| std::thread::sleep(std::time::Duration::from_millis(ms));
+
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            when_submits_choice_on_open_page(&mut holding, Account::Priyaraman, &PRIYA_TOP_5);
+        });
+        s.spawn(|| {
+            pause(400);
+            when_removes_account(&mut removing, Account::PriyaTidal);
+        });
+        s.spawn(|| {
+            pause(900);
+            when_submits_choice_on_open_page(
+                &mut racing,
+                Account::PriyaTidal,
+                &[INGEST_BENCH, TIDAL_SDK],
+            );
+        });
+    });
+    world.github.slow_listing_of(Account::Priyaraman.login(), 0);
+    when_adds_account(&mut removing, Account::PriyaTidal);
+
+    let page = when_opens_choose_repos(&mut removing).clone();
+    assert_eq!(
+        ticked_repos(&page, Account::PriyaTidal),
+        fulls(&TIDAL_RANKED),
+        "starts fresh with today's default ticks (US-RRA-008), not the raced Save"
+    );
+}
+
+/// AS-8 (U-RRA-D12)
+/// ```gherkin
+/// @US-RRA-004 @AC-004.3 @D-12 @U-RRA-D12 @error @contract-shape:bounded-change
+/// Scenario: When her first account fails its check, only that account's suggestions are hidden
+///   Given Priya has pending suggestions from priyaraman and priya-tidal
+///   And the bio of github.com/priyaraman, her first account, no longer contains her DID
+///   When she presses "Scan again"
+///   Then priya-tidal's suggestions are still shown, ready to approve
+///   And priyaraman's suggestions are hidden
+/// ```
+#[test]
+#[ignore = "REVIEW-FIX: D12"]
+fn when_her_first_account_fails_its_check_only_that_accounts_suggestions_are_hidden() {
+    let world = rra_world();
+    let mut browser = given_accounts_verified(&world, &BOTH);
+    given_saved_choice(
+        &mut browser,
+        Account::PriyaTidal,
+        &[INGEST_BENCH, TIDAL_SDK],
+    );
+    given_scanned(&world, &mut browser);
+    let tidal: Vec<String> = pending_on_queue(&mut browser)
+        .into_iter()
+        .filter(|p| p.starts_with("priya-tidal/"))
+        .collect();
+    assert!(!tidal.is_empty(), "precondition: priya-tidal suggestions");
+    removes_did_from_account_bio(&world, Account::Priyaraman);
+
+    when_scans(&world, &mut browser);
+
+    let shown = pending_on_queue(&mut browser);
+    let tidal_now: Vec<String> = shown
+        .iter()
+        .filter(|p| p.starts_with("priya-tidal/"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        tidal_now, tidal,
+        "the second account's suggestions stay shown"
+    );
+    assert!(
+        shown.iter().all(|p| !p.starts_with("priyaraman/")),
+        "the first account's are hidden: {shown:?}"
+    );
 }
