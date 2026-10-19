@@ -1251,6 +1251,20 @@ fn retarget(form: &Form, own: &[(String, String)], target: &[(String, String)]) 
     out
 }
 
+/// `form` naming BOTH the `own` suggestion and, alongside it, the `target`:
+/// every field that names `own` is kept and a re-aimed copy is added (a batch
+/// that mixes an owned suggestion with a not-owned one in one request).
+fn alongside(form: &Form, own: &[(String, String)], target: &[(String, String)]) -> Form {
+    let aimed = retarget(form, own, target);
+    let mut out = form.clone();
+    for (field, original) in aimed.fields.iter().zip(&form.fields) {
+        if field != original && !own.iter().any(|(k, _)| *k == field.0) {
+            out.fields.push(field.clone());
+        }
+    }
+    out
+}
+
 fn card_html(browser: &mut Browser, s: Suggestion) -> String {
     let page = browser.open("/review");
     let parts = s.card_parts();
@@ -1279,7 +1293,9 @@ fn button_form(html_fragment: &str, label: &str) -> Form {
 /// WHEN a request on `route` names `target`, sent without the page — the
 /// forms are captured from the owner's own `carrier` suggestion and re-aimed
 /// (an imported card offers none of them). `Retry` is reached through a
-/// failed publish of `carrier`.
+/// failed publish of `carrier`. The two batch routes send the `carrier` AND
+/// the `target` in one request, so a permit shared wrongly between them
+/// (e.g. reads memoised per account instead of per repo) would show.
 pub fn when_requests_publish_via(
     world: &ReviewWorld,
     browser: &mut Browser,
@@ -1300,7 +1316,9 @@ pub fn when_requests_publish_via(
             browser.open("/review");
             let parts = carrier.card_parts();
             browser.tick_in_card(&[parts[0].as_str(), parts[1].as_str()]);
-            let form = retarget(
+            // The owned carrier stays selected; the target rides along in
+            // the same request (one permit check per suggestion, ADR-089 §4).
+            let form = alongside(
                 &button_form(&browser.page.html.clone(), "Approve selected"),
                 &own,
                 &target_key,
@@ -1328,22 +1346,26 @@ pub fn when_requests_publish_via(
             browser.submit(&form, Some("Publish to my repo"));
         }
         PublishRoute::ConfirmSelected => {
+            // Select the carrier AND the target in one batch preview, then
+            // confirm whatever that preview offers to publish.
             browser.open("/review");
             let parts = carrier.card_parts();
             browser.tick_in_card(&[parts[0].as_str(), parts[1].as_str()]);
-            browser.press("Approve selected");
+            let batch = alongside(
+                &button_form(&browser.page.html.clone(), "Approve selected"),
+                &own,
+                &target_key,
+            );
+            browser.submit(&batch, Some("Approve selected"));
             let label = browser
                 .forms()
                 .iter()
                 .flat_map(|f| f.buttons.iter().map(|(l, _, _)| l.clone()))
-                .find(|l| l.starts_with("Publish"))
-                .unwrap_or_else(|| "Publish 1 to my repo".to_string());
-            let form = retarget(
-                &button_form(&browser.page.html.clone(), &label),
-                &own,
-                &target_key,
-            );
-            browser.submit(&form, Some(&label));
+                .find(|l| l.starts_with("Publish"));
+            if let Some(label) = label {
+                let form = button_form(&browser.page.html.clone(), &label);
+                browser.submit(&form, Some(&label));
+            }
         }
         PublishRoute::Retry => {
             when_previews_approval(browser, carrier);

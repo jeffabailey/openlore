@@ -373,31 +373,36 @@ fn a_forged_publish_request_for_a_repo_he_doesnt_own_writes_nothing() {
 ///     | owned at scan, transferred   | priyaraman/kelp embodies dependency-pinning            |
 ///     | listed account, DID removed  | priya-tidal/ingest-bench embodies test-driven          |
 ///   When any preview, approve, approve-selected, edit-preview, retry or confirm request names that suggestion
+///   (each from a fresh start; approve-selected and confirm-selected send it in one batch with one of her own suggestions)
 ///   Then no record about that repo is written to any Bluesky repo
 ///   And the suggestion stays pending or hidden as it was, never published
 /// ```
 #[test]
 #[ignore = "DELIVER 03-06: BR-RRA-1 over every publish route (the permit)"]
 fn no_request_publishes_a_suggestion_about_a_repo_the_owner_doesnt_own() {
-    let world = rra_world();
-    let mut browser = given_accounts_verified(&world, &BOTH);
-    given_saved_choice(&mut browser, Account::PriyaTidal, &[INGEST_BENCH]);
-    given_imported(&mut browser, CARGO);
-    given_scanned(&world, &mut browser);
-    let carrier = TIDEPOOL.embodies(Philosophy::TestDriven);
+    // The owned carrier sorts before priyaraman/kelp, so a permit wrongly
+    // shared per account in a batch would be minted for it first.
+    let carrier = HARBOR_CLI.embodies(Philosophy::TestDriven);
     let targets = [
         CARGO.embodies(Philosophy::DependencyPinning),
         KELP.embodies(Philosophy::DependencyPinning),
         INGEST_BENCH.embodies(Philosophy::TestDriven),
     ];
-    world
-        .github
-        .transfer_repo(KELP.owner, KELP.name, KELP_AT_TIDAL_LABS.owner);
-    removes_did_from_account_bio(&world, Account::PriyaTidal);
     let forbidden: Vec<String> = targets.iter().map(|t| t.subject()).collect();
-
     for target in targets {
         for route in PublishRoute::ALL {
+            // Each row starts fresh: a refused bio check marks priya-tidal
+            // unverified and hides its card (ADR-089 §2), as it should.
+            let world = rra_world();
+            let mut browser = given_accounts_verified(&world, &BOTH);
+            given_saved_choice(&mut browser, Account::PriyaTidal, &[INGEST_BENCH]);
+            given_imported(&mut browser, CARGO);
+            given_scanned(&world, &mut browser);
+            world
+                .github
+                .transfer_repo(KELP.owner, KELP.name, KELP_AT_TIDAL_LABS.owner);
+            removes_did_from_account_bio(&world, Account::PriyaTidal);
+
             when_requests_publish_via(&world, &mut browser, route, carrier, target);
 
             let written = claim_subjects(&world, Persona::Priya);
@@ -406,12 +411,13 @@ fn no_request_publishes_a_suggestion_about_a_repo_the_owner_doesnt_own() {
                 "{route:?} on {}: wrote {written:?}",
                 target.phrase()
             );
+            assert!(
+                world.atproto.forbidden_write_attempts().is_empty(),
+                "{route:?} on {}: create-only, nothing else",
+                target.phrase()
+            );
         }
     }
-    assert!(
-        world.atproto.forbidden_write_attempts().is_empty(),
-        "create-only, nothing else"
-    );
 }
 
 /// IC-4
@@ -422,6 +428,10 @@ fn no_request_publishes_a_suggestion_about_a_repo_the_owner_doesnt_own() {
 ///   When she opens her profile and the share preview
 ///   Then neither mentions rust-lang/cargo
 /// ```
+///
+/// Note: the share half is a regression guard that cannot fail today — a
+/// share draft names only the philosophies of her published claims, never a
+/// repo subject; the profile half is the one that observes imported rows.
 #[test]
 fn profile_and_share_preview_never_show_imported_suggestions() {
     let world = rra_world();
