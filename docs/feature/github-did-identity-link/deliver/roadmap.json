@@ -2,10 +2,10 @@
   "roadmap": {
     "project_id": "github-did-identity-link",
     "created_at": "2026-10-15T00:00:00Z",
-    "total_steps": 26,
+    "total_steps": 34,
     "scope": "SLICE 1: claim_domain::identity_link core, identity link/verify/list/forget, v7 checks + read/write/purge ports, GithubPort::read_person_by_id + DD-GDL-11 contract test, reserved-predicate guard (claim counter exempt, D-b), GDL-D13 check-arch rules. SLICE 2 (phase 02): readers — identity list lineage, age hint, record IDs and --did; scorer drops sameAs; infer people and person-scrape link lines (scrape refreshes checks); search label; ADR-084 peer-pull fixture. SLICE 3 (phase 03): review app — \"Publish this link\" (preview + confirm, each from its own fresh GitHub read) and \"Retract this link\" as self-attested records; prove_ownership delegates to the shared identity_link core; review-app reserved-predicate guard; link plans stored under kind publish (U-21 B); link records hidden from the public profile and share draft (U-27)."
   },
-  "total_steps": 26,
+  "total_steps": 34,
   "conventions": {
     "paradigm": "ADR-007: decisions pure in claim-domain; adapters and cli verbs do I/O only.",
     "test_paradigm": "Acceptance: example-based subprocess. Pure core: proptest against the CORE oracles. Adapters: real DuckDB / real HTTP adapter against FakeGithubAccounts, never mocked.",
@@ -1318,6 +1318,368 @@
           "mutation_note": "Kill: a retracted link offered for retraction; selecting before folding; another DID's record offered."
         }
       ]
+    },
+    {
+      "id": "04",
+      "name": "Slice-04 — viewer: the four pages about a person show its linked identities as `identity list` prints them, from the local store only; failed reads say so; no GitHub request, no write",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "Walking skeleton: Rachel's `/score` page shows her linked identity; no link, no region; a pre-v7 store loads every page",
+          "description": "D-VL-3/4/7. read_listed_links (with StoredLinkLineage) moves from cli identity_reads.rs into ports::identity_link_check, returning a typed ports::LinkReadError (Checks / Lineage, thiserror); cli delegates with `?`. NEW viewer-domain linked_identity: LinkedIdentities (None / Lines / Unreadable) and pure region renders. ViewerServer gains optional LinkReads (three Arc'd read handles) and a ClockPort; ui.rs wires them after a read-only probe. /score only.",
+          "criteria": [
+            "VL-1: Rachel's contributor page carries a `Linked identities` region reading `did:plc:rachel-test is github:rachelk — verified today`, with the legend; the GitHub double's request log gains nothing.",
+            "VL-12: Jeff's page shows his line (anchor); a person with no link, an empty store and malformed `contributor`/`subject` params show no region and no empty heading.",
+            "VL-20: the frozen pre-v7 store loads every page with status 200, no region and no refused-probe event; after Jeff links, only his page shows his line.",
+            "At startup the viewer checks, by reading only, that it can read links; when it cannot, it logs `viewer.identity_links.probe {refused: true}`, still serves, and writes nothing to the store.",
+            "When links cannot be read, the region shows the notice and no line (viewer-domain property).",
+            "check-arch fails when crates/adapter-http-viewer/src/** names a check-write, purge or signing handle; a synthetic-violation test proves it.",
+            "`identity list`, `identity link`, `identity verify` and `infer people` output is unchanged (identity_link, identity_link_readers incl. IR-15, infer_people suites green)."
+          ],
+          "test_file": "tests/acceptance/viewer_linked_identity.rs",
+          "scenario_name": "rachels_contributor_page_shows_her_github_account_as_verified",
+          "scenario_fns": [
+            "viewer_linked_identity::rachels_contributor_page_shows_her_github_account_as_verified",
+            "viewer_linked_identity::a_person_with_no_link_shows_no_linked_identities_region",
+            "viewer_linked_identity_invariants::a_store_made_before_identity_links_shows_every_page_and_no_linked_identity_it_does_not_hold"
+          ],
+          "n_scenarios": [
+            "VL-1 (RED driver, WS)",
+            "VL-12",
+            "VL-20",
+            "Unreadable-renders-notice property",
+            "check-arch synthetic violation"
+          ],
+          "green": [
+            "cargo build -p cli --bins",
+            "cargo test -p cli --test viewer_linked_identity --test viewer_linked_identity_invariants",
+            "cargo test -p cli --test identity_link --test identity_link_readers --test infer_people",
+            "cargo test -p cli --test viewer_contributor_scoring --test viewer_contributor_scoring_invariants --test viewer_counter_flags_score_surface",
+            "cargo test -p ports",
+            "cargo test -p viewer-domain",
+            "cargo test -p adapter-http-viewer",
+            "cargo test -p xtask",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver: VL-1; VL-12 and VL-20 ride along (their negative rows hold today, their positive anchors need the region). MOVE SET (F2), cli identity_reads.rs → ports::identity_link_check, never copied: read_listed_links; StoredLinkLineage with read, active_links, links_to_recheck, active_link_records and decide; the private helpers latest_of, stored_claim and referrer_lineage; plus NEW ports::LinkReadError (thiserror; candidate and lineage StorageError → Lineage, IdentityLinkCheckError → Checks). ports gains no anyhow; cli converts with `?`. CALLERS (F1, chosen: callers import from ports, no wrapper or re-export left in identity_reads.rs): identity_link.rs (StoredLinkLineage, :31/:89), identity_list.rs (read_listed_links, :26), infer_people.rs (read_listed_links, :36), and identity_reads.rs's own links_in_scope (:171). Startup probe (F7) = one ports read_listed_links(…, Everyone, now) call; the viewer never calls IdentityLinkCheckReadPort::probe() (it inserts, rolled back). CHECK-ARCH (F5): extend scan_identity_link_readers_hold_no_write_handle to crates/adapter-http-viewer/src/**, banning check-write, purge and signing handles there but NOT GithubPort (the viewer keeps it for POST /scrape, design 'What stays unchanged'); NEW synthetic-violation test reader_scan_covers_the_viewer_adapter in the tests module of xtask/src/check_arch.rs (crafter-owned, U-12), with the real tree still clean. Standings are decided over every active link before RecheckScope::Person selects (C-VL-3). now comes from the injected ClockPort (adapter-system-clock; OPENLORE_TEST_NOW in development builds, D-VL-T6); viewer-domain reads no clock. chrono moves to [dependencies] in viewer-domain and adapter-http-viewer. One handler helper maps (Option<LinkReads>, read result) to LinkedIdentities; later pages reuse it. The region sits inside the score results fragment (ADR-033); markup per D-VL-T4 (section aria-labelledby the heading, ul/li, %-encoded hrefs, ADR-044). depends_on 03-09 is serialization-only (slice order). DISPATCH CONDITIONS: RED must fail on an assertion: land todo!() stubs first (C-3); never edit tests/acceptance/support/*, un-ignore only the named fns (C-5).",
+          "estimate_hours": 7,
+          "depends_on": [
+            "03-09"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_linked_identity.rs",
+            "tests/acceptance/viewer_linked_identity_invariants.rs",
+            "crates/ports/src/identity_link_check.rs",
+            "crates/ports/src/lib.rs",
+            "crates/cli/src/verbs/identity_reads.rs",
+            "crates/cli/src/verbs/identity_link.rs",
+            "crates/cli/src/verbs/identity_list.rs",
+            "crates/cli/src/verbs/infer_people.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/viewer-domain/src/score.rs",
+            "crates/viewer-domain/Cargo.toml",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/adapter-http-viewer/Cargo.toml",
+            "crates/cli/src/verbs/ui.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "files_to_create": [
+            "crates/viewer-domain/src/linked_identity.rs"
+          ],
+          "mutation_note": "Kill: a region for a person with no link; an empty heading; a read error rendered as lines or `not checked`; the probe refusing the viewer or calling probe(); the scope applied before link_view; the rule's adapter-http-viewer path removed (its synthetic-violation test)."
+        },
+        {
+          "id": "04-02",
+          "name": "Every standing reads in the viewer as `identity list` prints it; a future-dated check is ignored; parity holds for every listing",
+          "description": "D-VL-5: the Lines render covers verified (with the >30-day hint, its command in `<code>`), not checked, proof gone × 4 verdicts, contested and several record IDs, character for character with the CLI line minus backticks. DID and account render as links. VL-2p is bound.",
+          "criteria": [
+            "VL-2 (+VL-18): each of the 10 rows reads exactly as a real `openlore identity list --did` run at the same pinned instant, backticks removed; a contested account past 30 days carries no hint.",
+            "VL-15: a check dated after now is ignored; the line reads from the latest real check.",
+            "VL-2p: for every generated listing (0–3 records, 1–5 links, ages 0–90 days, every verdict) the region's lines equal the lines `identity list` prints for it, without backticks (256 cases).",
+            "The age is text; a `<time datetime>` carries the check instant."
+          ],
+          "test_file": "tests/acceptance/viewer_linked_identity.rs",
+          "scenario_name": "every_link_standing_reads_in_the_viewer_exactly_as_identity_list_prints_it",
+          "scenario_fns": [
+            "viewer_linked_identity::every_link_standing_reads_in_the_viewer_exactly_as_identity_list_prints_it",
+            "viewer_linked_identity::a_check_dated_in_the_future_is_ignored",
+            "viewer_linked_identity_invariants::for_every_listing_the_viewers_lines_are_the_identity_list_lines_without_backticks"
+          ],
+          "n_scenarios": [
+            "VL-2 (RED driver, 10 rows)",
+            "VL-18",
+            "VL-15",
+            "VL-2p (layer-2 property)"
+          ],
+          "green": [
+            "cargo build -p cli --bins",
+            "cargo test -p cli --test viewer_linked_identity --test viewer_linked_identity_invariants",
+            "cargo test -p cli --test identity_link_readers",
+            "cargo test -p viewer-domain"
+          ],
+          "implementation_notes": "RED driver: VL-2. D-VL-T11 resolved: cli takes viewer-domain as a dev-dependency (no production edge; adapter-http-viewer's pub surface unchanged). sut_render_region's body becomes ONE call to the viewer-domain Lines render plus the HTML-to-text view mapping (test_edit_allow_list, DD-GDL-16); its oracle stays cli::render::render_linked_identities, the text `identity list` prints (waiver D-VL-T11). Reuse claim-domain check_age_days and suggests_recheck; no second age or hint rule in viewer-domain. The proof-gone and contested rows come from `identity verify --github` against the double (D-VL-T14); confirm each later row reaches its Then. Do not commit a proptest-regressions file (Sentinel F10). If page and CLI differ, fix the render, never the test. depends_on 04-01 is a code dependency (the region).",
+          "estimate_hours": 4,
+          "depends_on": [
+            "04-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_linked_identity.rs",
+            "tests/acceptance/viewer_linked_identity_invariants.rs",
+            "crates/viewer-domain/src/linked_identity.rs",
+            "crates/cli/Cargo.toml"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: the hint at >= 30 days or on a contested or proof-gone line; a verdict token swapped; record IDs unordered or dropped; a future check deciding; `is` written for a contested account."
+        },
+        {
+          "id": "04-03",
+          "name": "The GitHub person page shows the DIDs that linked the account by last-seen login in any case; contested reads contested on every page; a rename moves the line only on re-check",
+          "description": "D-VL-6: /project?subject=github:<login> selects lines with claim_domain::identity_link::links_of_person (PersonKey without contribution ids: last-seen login, case-insensitive). The region sits in the project results fragment.",
+          "criteria": [
+            "VL-3: github:jeffbailey in any spelling shows `did:plc:test-jeff is github:jeffbailey — verified today`.",
+            "VL-4: a contested account reads `github:jeffbailey is contested — <did> claims it` on each DID's page and on the GitHub person page; no page says `is` for it.",
+            "VL-17a: after a rename and reuse of the old login, before a re-check, the old login's page shows the first DID's line.",
+            "VL-17b: after `identity verify`, the line is on the new login's page and gone from the old one.",
+            "Philosophy pages and a non-github `subject` show no region."
+          ],
+          "test_file": "tests/acceptance/viewer_linked_identity.rs",
+          "scenario_name": "a_github_persons_page_shows_the_did_that_linked_the_account_in_any_spelling",
+          "scenario_fns": [
+            "viewer_linked_identity::a_github_persons_page_shows_the_did_that_linked_the_account_in_any_spelling",
+            "viewer_linked_identity::a_contested_account_reads_contested_on_every_page_about_it",
+            "viewer_linked_identity::until_jeff_rechecks_a_renamed_accounts_line_stays_on_its_old_logins_page",
+            "viewer_linked_identity::when_jeff_rechecks_a_renamed_accounts_line_moves_to_its_new_logins_page"
+          ],
+          "n_scenarios": [
+            "VL-3 (RED driver)",
+            "VL-4",
+            "VL-17a",
+            "VL-17b"
+          ],
+          "green": [
+            "cargo build -p cli --bins",
+            "cargo test -p cli --test viewer_linked_identity --test viewer_linked_identity_invariants",
+            "cargo test -p cli --test viewer_graph_traversal --test viewer_graph_traversal_invariants",
+            "cargo test -p viewer-domain",
+            "cargo test -p adapter-http-viewer"
+          ],
+          "implementation_notes": "RED driver: VL-3. The handler passes the decided listing to links_of_person; no second login comparison in the viewer (U-6 fallback, ADR-064). The stale line after a rename is the documented limit (D-VL-6, VL-17a); do not add a contribution-link read. Reuse the 04-01 handler helper. DISPATCH CONDITIONS: C-3 and C-5 as 04-01.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "04-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_linked_identity.rs",
+            "crates/viewer-domain/src/traversal.rs",
+            "crates/viewer-domain/src/linked_identity.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a case-sensitive login match; contested lines written as `is`; the page scope applied before link_view; a region on a philosophy page."
+        },
+        {
+          "id": "04-04",
+          "name": "Retracted, superseded, third-party and flawed links never show; a removed peer's link is hidden until she is followed again",
+          "description": "VL-5/6/7 through the moved read: active_link_records (C-GDL-1, U-39, lifecycle) and the U-19 candidate SQL decide what shows; the viewer adds no rule. Each test carries a positive anchor (Rachel's sound line).",
+          "criteria": [
+            "VL-5: a stranger's sameAs about Tobias and each of the five flawed records show on none of the pages; Rachel's page and github:rachelk show exactly her one sound line.",
+            "VL-6: a retracted or superseded link and the retraction record itself never show; Rachel's page shows exactly one line.",
+            "VL-7: after `peer remove`, Rachel's link is on neither page; after she is followed again, it shows verified.",
+            "Neither adapter-http-viewer nor viewer-domain filters links by a predicate literal or a lifecycle rule; `xtask check-arch` stays green.",
+            "Recorded mutation RED (F3): with the retraction/supersession filter dropped, VL-6 fails; with the third-party/flaw rule dropped, VL-5 fails; with the removed-peer filter dropped, VL-7 fails; each reverted and recorded in the execution report before un-ignoring."
+          ],
+          "test_file": "tests/acceptance/viewer_linked_identity.rs",
+          "scenario_name": "a_retracted_or_superseded_link_and_the_retraction_itself_never_show",
+          "scenario_fns": [
+            "viewer_linked_identity::a_strangers_link_about_tobias_and_flawed_link_records_never_show_as_anyones_linked_identity",
+            "viewer_linked_identity::a_retracted_or_superseded_link_and_the_retraction_itself_never_show",
+            "viewer_linked_identity::a_link_from_a_peer_jeff_removed_does_not_show_until_he_follows_her_again"
+          ],
+          "n_scenarios": [
+            "VL-5 (guard)",
+            "VL-6 (guard)",
+            "VL-7 (guard)"
+          ],
+          "green": [
+            "cargo build -p cli --bins",
+            "cargo test -p cli --test viewer_linked_identity --test viewer_linked_identity_invariants",
+            "cargo test -p cli --test identity_link_readers",
+            "cargo test -p claim-domain",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "Guards: the rules already live in the moved read, so these may pass on activation. MUTATION RED (F3), before un-ignoring: run each test --ignored, temporarily break its rule (drop the retraction/supersession fold in active_link_records for VL-6; drop the author = subject / well-formedness check for VL-5; drop the U-19 removed-peer filter in the candidate read for VL-7), show the named test fails on an assertion, revert, and record command, mutant and failure line in the execution report. Then un-ignore; the committed diff is the test file only. CONDITIONAL (F4): only if a RED shows a real gap, fix it in crates/ports/src/identity_link_check.rs or claim-domain, never with a viewer-side filter (D-VL-3, slice-2 lesson B2), and record the gap. depends_on 04-03 is a code dependency (the GitHub person page rows).",
+          "estimate_hours": 2,
+          "depends_on": [
+            "04-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_linked_identity.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a Retracted or Superseded record shown; a retraction projected as a link; a third-party sameAs shown; the removed-peer filter dropped from the candidate read."
+        },
+        {
+          "id": "04-05",
+          "name": "A claim's detail page shows its author's linked identity",
+          "description": "/claims/{cid}: the author's lines sit under the Author row inside the detail fragment, selected as on /score (RecheckScope::Person with the author's bare DID).",
+          "criteria": [
+            "VL-10: Jeff's claim's detail page shows `did:plc:test-jeff is github:jeffbailey — verified today` under its Author row, the same line as his contributor page.",
+            "A claim whose author has no link shows no region; an unknown CID keeps its existing not-found page.",
+            "Existing claim detail suites pass unchanged."
+          ],
+          "test_file": "tests/acceptance/viewer_linked_identity.rs",
+          "scenario_name": "a_claims_detail_page_shows_its_authors_linked_identity",
+          "scenario_fns": [
+            "viewer_linked_identity::a_claims_detail_page_shows_its_authors_linked_identity"
+          ],
+          "n_scenarios": [
+            "VL-10 (RED driver)"
+          ],
+          "green": [
+            "cargo build -p cli --bins",
+            "cargo test -p cli --test viewer_linked_identity --test viewer_linked_identity_invariants",
+            "cargo test -p cli --test viewer_counter_claim_threads --test viewer_counter_claim_threads_invariants",
+            "cargo test -p viewer-domain",
+            "cargo test -p adapter-http-viewer"
+          ],
+          "implementation_notes": "RED driver: VL-10. The author, not the claim's subject, selects the lines. Reuse the 04-01 handler helper. depends_on 04-04 is serialization-only (shared test file). DISPATCH CONDITIONS: C-3 and C-5 as 04-01.",
+          "estimate_hours": 2,
+          "depends_on": [
+            "04-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_linked_identity.rs",
+            "crates/viewer-domain/src/detail.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: the subject's lines shown instead of the author's; the region outside the detail fragment; a non-bare author DID compared."
+        },
+        {
+          "id": "04-06",
+          "name": "Search author groups show each author's linked identity; link rows read `authority not checked here`",
+          "description": "D-VL-10, U-7: each /search author group carries that author's region from the local store (as /score); every link row, selected with claim_domain::identity_link::is_reserved_predicate, carries `authority not checked here`. With no index configured, the unavailable notice shows and no region.",
+          "criteria": [
+            "VL-11: searching github:rachelk shows Rachel's group with her verified line, and her link row, still attributed to her DID, labelled `authority not checked here`.",
+            "A non-link row carries no label.",
+            "VL-19: with no index configured, /search shows its unavailable notice and no linked-identities region.",
+            "One link read per request, shared by every group; the label never comes from a `sameAs` literal (check-arch green).",
+            "Existing network search suites pass unchanged."
+          ],
+          "test_file": "tests/acceptance/viewer_linked_identity.rs",
+          "scenario_name": "network_search_shows_each_authors_linked_identity_and_labels_link_rows",
+          "scenario_fns": [
+            "viewer_linked_identity::network_search_shows_each_authors_linked_identity_and_labels_link_rows"
+          ],
+          "n_scenarios": [
+            "VL-11 (RED driver)",
+            "VL-19"
+          ],
+          "green": [
+            "cargo build -p openlore-indexer -p cli --bins",
+            "cargo test -p cli --test viewer_linked_identity --test viewer_linked_identity_invariants",
+            "cargo test -p cli --test viewer_network_search --test viewer_network_search_invariants --test viewer_search_follow_state",
+            "cargo test -p viewer-domain",
+            "cargo test -p adapter-http-viewer",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver: VL-11. Lines come from this reader's local checks, never from the index; the index row is only labelled. viewer-domain owns the label as a constant matching the CLI's (render/search.rs). One region per author group (DISTILL upstream issue 2 default). depends_on 04-05 is serialization-only (shared files). DISPATCH CONDITIONS: C-3 and C-5 as 04-01.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "04-05"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_linked_identity.rs",
+            "crates/viewer-domain/src/search.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: the label on a non-link row or missing on a link row; a group showing another author's lines; a read per group; a region when no index is configured."
+        },
+        {
+          "id": "04-07",
+          "name": "When a link read fails or the startup probe is refused, every page still loads and says so; the fault seam is release-guarded",
+          "description": "D-VL-7, D-VL-T7/T8: a debug-only seam OPENLORE_VIEWER_FAIL_IDENTITY_LINKS=checks|candidates|lineage fails that read on every page request, never the startup probe. Any failure renders the whole region Unreadable on all four pages. The token joins VIEWER_FAIL_SEAM_TOKENS.",
+          "criteria": [
+            "VL-9: for each failing read, on each of the four pages (search included): status 200, the region shows only `Linked identities could not be read from your local store.`, no line, no standing word, and no refused-probe event.",
+            "VL-14: with the check table dropped (schema version kept), startup emits `viewer.identity_links.probe {refused: true}`, the viewer serves, and all four pages show the notice, a person with no link and /search included.",
+            "No error text, path or SQL reaches a page.",
+            "VL-G: an ungated OPENLORE_VIEWER_FAIL_IDENTITY_LINKS read is flagged by check-arch; the shipped seam is #[cfg(debug_assertions)]-gated and passes."
+          ],
+          "test_file": "tests/acceptance/viewer_linked_identity_invariants.rs",
+          "scenario_name": "when_the_link_store_cannot_be_read_every_page_still_loads_and_says_so",
+          "scenario_fns": [
+            "viewer_linked_identity_invariants::when_the_link_store_cannot_be_read_every_page_still_loads_and_says_so",
+            "xtask::viewer_fail_seam::ungated_identity_links_seam_in_release_path_is_rejected"
+          ],
+          "n_scenarios": [
+            "VL-9 (RED driver, 3 reads × 4 pages)",
+            "VL-14",
+            "VL-G"
+          ],
+          "green": [
+            "cargo build -p openlore-indexer -p cli --bins",
+            "cargo test -p cli --test viewer_linked_identity --test viewer_linked_identity_invariants",
+            "cargo test -p xtask --test viewer_fail_seam",
+            "cargo test -p xtask",
+            "cargo xtask check-arch",
+            "cargo test -p adapter-http-viewer"
+          ],
+          "implementation_notes": "RED driver: VL-9. Append the token and un-ignore VL-G in the same commit as the seam (red-classification DELIVER note, review VL-H2), and remove the stale 'RED until DELIVER 04-07 appends the token' sentence of the slice-4 comment at xtask/tests/viewer_fail_seam.rs:493-494 (F9). The seam sits in adapter-http-viewer's request path only, like the existing viewer seams (ADR-053/054). VL-14 is a real damaged store, not a seam (D-VL-T8); per-request real damage is a documented limit (D-VL-T7). Never a partial region: a failed check read must not turn verified links into `not checked`. depends_on 04-06 is a code dependency (the /search rows).",
+          "estimate_hours": 3,
+          "depends_on": [
+            "04-06"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_linked_identity_invariants.rs",
+            "xtask/tests/viewer_fail_seam.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: the seam ungated (VL-G); the seam failing the startup probe; partial lines on a failed check read; an error string on the page; a refused probe taking the viewer down."
+        },
+        {
+          "id": "04-08",
+          "name": "Showing linked identities asks GitHub nothing and writes nothing; the htmx swap and the full page carry the same region",
+          "description": "C-VL-1/2, ADR-033: guards over the finished region, observed through driving ports: the GitHub double's request log, `identity list` before vs after browsing, and the results fragment vs the full page. The four page kinds are /score?contributor, /project?subject=github:<login>, /claims/{cid} and /search; VL-8 opens four pages (three kinds, no index), VL-13 five pages (all four kinds).",
+          "criteria": [
+            "VL-8: browsing /score for Jeff and for Rachel, /project for github:rachelk and Jeff's claim's /claims/{cid} leaves the GitHub double's log unchanged and Jeff's `identity list` output identical; the store-universe guard (secondary, D-e) is unchanged.",
+            "VL-16: with GitHub unreachable the lines on those four pages are identical to GitHub up.",
+            "VL-13: on each of five pages (/score Jeff, /score Rachel, /project github:rachelk, Jeff's /claims/{cid}, /search github:rachelk) the htmx results swap carries the same region, line for line, as the full page.",
+            "Recorded mutation RED (F3): with a page handler made to call GitHub, VL-8 fails; with the region rendered outside the results fragment, VL-13 fails; each reverted and recorded in the execution report before un-ignoring.",
+            "Slice-4 closure: all 18 slice-4 test fns and VL-G active; no `DELIVER 04-` ignore marker remains."
+          ],
+          "test_file": "tests/acceptance/viewer_linked_identity_invariants.rs",
+          "scenario_name": "showing_linked_identities_asks_github_nothing_changes_nothing_and_reads_the_same_with_github_down",
+          "scenario_fns": [
+            "viewer_linked_identity_invariants::showing_linked_identities_asks_github_nothing_changes_nothing_and_reads_the_same_with_github_down",
+            "viewer_linked_identity_invariants::the_results_swap_and_the_full_page_carry_the_same_linked_identities"
+          ],
+          "n_scenarios": [
+            "VL-8 (guard)",
+            "VL-16 (guard)",
+            "VL-13 (guard, 5 pages)"
+          ],
+          "green": [
+            "cargo build -p openlore-indexer -p cli --bins",
+            "cargo test -p cli --test viewer_linked_identity --test viewer_linked_identity_invariants",
+            "cargo test -p cli --test identity_link_readers --test viewer_htmx --test viewer_htmx_invariants",
+            "cargo test -p xtask",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "Guards; expected green once 04-01..04-07 land. MUTATION RED (F3), before un-ignoring: run each test --ignored, temporarily make one page handler call the injected GithubPort (VL-8) and render the region in the full-page shell instead of the results fragment (VL-13), show the named test fails on an assertion, revert, and record command, mutant and failure line in the execution report. Then un-ignore; the committed diff is the test file only. CONDITIONAL (F4): only if a RED shows a real gap, fix it in crates/adapter-http-viewer/src/lib.rs or crates/cli/src/verbs/ui.rs (move the region into the fragment, never duplicate it; remove the GitHub call or write), never the test, and record the gap. depends_on 04-07 is serialization-only (shared test file).",
+          "estimate_hours": 2,
+          "depends_on": [
+            "04-07"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_linked_identity_invariants.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a GitHub call or a check write on page load; the region only in the full-page shell."
+        }
+      ]
     }
   ],
   "deferred_to_later_slices": {
@@ -1373,6 +1735,12 @@
       "status": "approved",
       "iteration": 2,
       "note": "Re-review iteration 2 rejected only on B-1 (closure traceability, text-only); closed by the orchestrator in upstream-issues.md U-36 closure table; C-1..C-9 applied as conventions, file and note amendments and dispatch conditions. 2026-10-17."
+    },
+    "phase_04": {
+      "status": "approved",
+      "by": "nw-software-crafter-reviewer (2 rounds) + orchestrator",
+      "date": "2026-10-19",
+      "note": "Round 1 rejected on F1-F9; round 2 resolved all but F7 (low, one criterion named a check-arch test fn), which the orchestrator rephrased under the max-2 rule."
     }
   }
 }
