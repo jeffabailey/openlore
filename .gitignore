@@ -45,3 +45,7 @@ atproto/.wrangler/
 # nWave activation marker (keep .nwave/local-config.json trackable)
 .nwave/*
 !.nwave/local-config.json
+
+# The review app's v1 store fixture is a real DuckDB file with its WAL (ADR-088 migration tests).
+!tests/fixtures/review-app-store-v1/store/review-app.duckdb
+!tests/fixtures/review-app-store-v1/store/review-app.duckdb.wal
