@@ -364,6 +364,7 @@ on its own thread with a 20 s startup deadline; `encode_query_component_for_test
 | VL-15 | A check dated in the future is ignored | US-VL-1 | Q-GDL-D4 / Q-RM-3 | 04-02 |
 | VL-20 | A store made before identity links shows every page, and no linked identity it does not hold | US-VL-1, US-VL-2 | IL-13 fixture, platform review F-2 | 04-01 |
 | IR-8e (`identity_link_readers.rs`) | A retraction that repeats the link's evidence never shows as a link (`identity list --did` and the viewer `/score` page) | US-VL-1 | U-51, U-39 | 04-09 |
+| VL-21 (active) | Pages not about a GitHub person show no linked identities (`/project` for a bare login and a DID; `/philosophy` for `github:jeffbailey` and memory-safety). Mutation RED recorded: `github_person` → `Some` for any subject fails with `[/project?subject=jeffbailey] expected no \`Linked identities\` region;` | US-VL-2 | D-VL-1, D-VL-6, 04-03 criterion | 04-03 |
 | VL-8 + VL-16 | Showing linked identities asks GitHub nothing, changes nothing, and reads the same with GitHub down | shared AC | D-VL-8, C-VL-1, C-VL-2 | 04-08 |
 | VL-13 | Results updated in place carry the same linked identities as the full page | shared AC | ADR-033 | 04-08 |
 

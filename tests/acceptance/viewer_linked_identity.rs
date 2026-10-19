@@ -891,3 +891,36 @@ fn a_check_dated_in_the_future_is_ignored() {
     assert_shown(&listing, MY_DID, JEFF_GH, Shown::Associated);
     assert_check_age(&listing, MY_DID, JEFF_GH, "today", false);
 }
+
+/// VL-21 (04-03 criterion: only a GitHub person's page carries the region)
+/// ```gherkin
+/// @driving_port @real-io @edge @us-vl-2 @d-vl-1 @d-vl-6 @c6a @contract-shape:pure-function
+/// Scenario Outline: Pages not about a GitHub person show no linked identities
+///   Given Jeff linked github "jeffbailey" and it is verified
+///   When Jeff opens <page>
+///   Then the page loads and shows no linked-identities region
+///   Examples:
+///     | page                                                    |
+///     | the project survey for subject "jeffbailey" (no github: prefix) |
+///     | the project survey for subject "did:plc:test-jeff"      |
+///     | the philosophy survey for object "github:jeffbailey"    |
+///     | the philosophy survey for memory-safety                 |
+/// ```
+#[test]
+fn pages_not_about_a_github_person_show_no_linked_identities() {
+    let world = LinkWorld::with(&[JEFF_GH]);
+    given_i_linked(&world, JEFF_GH, None);
+    let paths = [
+        "/project?subject=jeffbailey".to_string(),
+        format!("/project?subject={MY_DID}"),
+        "/philosophy?object=github:jeffbailey".to_string(),
+        format!("/philosophy?object={MEMORY_SAFETY}"),
+    ];
+
+    let viewer = open_viewer(&world, ViewerOpts::default());
+    let opened: Vec<ViewerResponse> = paths.iter().map(|p| viewer.get(p)).collect();
+
+    for (path, page) in paths.iter().zip(&opened) {
+        assert_no_region(path, page);
+    }
+}
