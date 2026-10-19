@@ -336,7 +336,6 @@ fn an_account_that_fails_its_check_is_skipped_named_and_hidden() {
 ///   Then the same 2 suggestions are shown in her queue again
 /// ```
 #[test]
-#[ignore = "DELIVER 02-20: re-verifying shows the hidden suggestions again (hidden, not deleted)"]
 fn hidden_suggestions_come_back_after_re_verifying() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);
@@ -376,7 +375,6 @@ fn hidden_suggestions_come_back_after_re_verifying() {
 ///   And priya-tidal's suggestions are shown again
 /// ```
 #[test]
-#[ignore = "DELIVER 02-21: a scan re-checks unverified accounts too (D-RRA-T1)"]
 fn a_scan_re_checks_an_unverified_account_and_reads_it_once_its_did_is_back() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);
@@ -567,7 +565,6 @@ fn when_every_account_fails_nothing_is_read() {
 ///   And the remaining chosen repos are read, each once, and no other repo
 /// ```
 #[test]
-#[ignore = "DELIVER 02-09: a resume reads only the frozen plan's unread repos"]
 fn a_paused_scan_resumes_with_the_same_accounts_and_choices() {
     let world = rra_world();
     let mut browser = given_accounts_verified(&world, &BOTH);

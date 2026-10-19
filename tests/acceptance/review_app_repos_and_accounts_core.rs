@@ -325,6 +325,7 @@ fn sut_scan_intent(
                             SkipReason::Fork => SkipView::Fork,
                             SkipReason::Archived => SkipView::Archived,
                             SkipReason::MissingOrTransferred => SkipView::MissingOrTransferred,
+                            SkipReason::AccountUnverified => SkipView::AccountUnverified,
                         };
                         (s.repo_id, reason)
                     }));
@@ -374,6 +375,7 @@ fn sut_resume(
         .into_iter()
         .map(|(pos, why)| match why {
             CarriedSkip::Removed => (pos, SkipView::Removed),
+            CarriedSkip::AccountUnverified => (pos, SkipView::AccountUnverified),
         })
         .collect();
     (resume.to_read, skipped)
@@ -844,7 +846,6 @@ proptest! {
     /// skipped "account unverified"; an unfinished check → carried
     /// (planned); a passed check, or an import → read.
     #[test]
-    #[ignore = "DELIVER 02-03: U-RRA-D1, skipped rows are final"]
     fn core_rra5_resumes_read_only_the_frozen_plan_each_repo_once(
         plan_len in 1usize..=CAP,
         rounds in proptest::collection::vec(

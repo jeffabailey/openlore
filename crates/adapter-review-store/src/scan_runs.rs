@@ -3,9 +3,9 @@
 use duckdb::types::{TimeUnit, Value};
 use duckdb::{params, OptionalExt};
 use ports::{
-    AccountCheckOutcome, AccountCheckRecord, KpiTally, PlanRowStatus, PlannedScanRepo,
-    RepoSkipReason, ReviewStoreError, ScanCounts, ScanPlanRead, ScanPlanRow, ScanRun, ScanRunPort,
-    ScanStatus, SkippedScanRepo,
+    AccountCheckOutcome, AccountCheckRecord, KpiTally, OutsideDefault, PlanRowStatus,
+    PlannedScanRepo, RepoSkipReason, ReviewStoreError, ScanCounts, ScanPlanRead, ScanPlanRow,
+    ScanRun, ScanRunPort, ScanStatus, SkippedScanRepo,
 };
 
 use crate::secrets::port_error;
@@ -21,8 +21,9 @@ const FINISH_SCAN: &str = "UPDATE scan_runs
 
 // ADR-088 §6: the frozen plan, one row per repo, written before the first read.
 const RECORD_PLAN_ROW: &str = "INSERT INTO scan_run_repos
-    (owner_did, run_id, position, repo_id, full_name, source_kind, source_account_id, status)
-    VALUES (?, ?, ?, ?, ?, 'account', ?, 'planned')";
+    (owner_did, run_id, position, repo_id, full_name, source_kind, source_account_id, status,
+     outside_default)
+    VALUES (?, ?, ?, ?, ?, 'account', ?, 'planned', ?)";
 
 // A skipped chosen repo, after every row already recorded for the run.
 const RECORD_SKIPPED_ROW: &str = "INSERT INTO scan_run_repos
@@ -40,7 +41,7 @@ const LATEST_SKIPPED: &str = "SELECT repo_id, full_name, source_account_id, skip
     ORDER BY position";
 
 // Every plan row of the owner's most recent run (the run `LATEST_SCAN` reads).
-const LATEST_PLAN: &str = "SELECT repo_id, full_name, source_account_id, status
+const LATEST_PLAN: &str = "SELECT repo_id, full_name, source_account_id, status, outside_default
     FROM scan_run_repos
     WHERE owner_did = ? AND run_id = (
         SELECT run_id FROM scan_runs WHERE owner_did = ?
@@ -225,6 +226,7 @@ impl ScanRunPort for ReviewStore {
                             db_id(row.repo_id)?,
                             row.full_name,
                             db_id(row.source_account_id)?,
+                            row.outside_default.map(OutsideDefault::as_str),
                         ],
                     )
                     .map(drop)
@@ -357,6 +359,7 @@ impl ScanPlanRead for ReviewStore {
                         row.get::<_, String>(1)?,
                         row.get::<_, Option<i64>>(2)?,
                         row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
                     ))
                 })
                 .map_err(db_error)?
@@ -364,12 +367,13 @@ impl ScanPlanRead for ReviewStore {
                 .map_err(db_error)?;
             Ok(rows
                 .into_iter()
-                .filter_map(|(repo_id, full_name, account_id, status)| {
+                .filter_map(|(repo_id, full_name, account_id, status, tag)| {
                     Some(ScanPlanRow {
                         repo: PlannedScanRepo {
                             repo_id: u64::try_from(repo_id).ok()?,
                             full_name,
                             source_account_id: u64::try_from(account_id?).ok()?,
+                            outside_default: tag.as_deref().and_then(OutsideDefault::parse),
                         },
                         status: PlanRowStatus::parse(&status)?,
                     })
@@ -503,6 +507,46 @@ mod tests {
                 );
             }
             prop_assert_eq!(store.interrupt_running_scans().unwrap(), Vec::<String>::new(), "a second sweep changes nothing");
+        }
+
+        /// Universe: a paused run's frozen plan, each row with any
+        /// outside-default tag, and the resuming run that records the rows
+        /// it carries (U-RRA-D2). Each resumed row keeps its tag, so its
+        /// suggestions still count for KPI-RRA-1.
+        #[test]
+        fn a_resumed_plan_row_keeps_its_outside_default_tag(
+            tags in proptest::collection::vec(
+                proptest::option::of(proptest::sample::select(OutsideDefault::ALL.to_vec())), 1..10),
+        ) {
+            let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
+            let priya = "did:plc:priya";
+            let plan: Vec<PlannedScanRepo> = tags
+                .iter()
+                .enumerate()
+                .map(|(i, tag)| PlannedScanRepo {
+                    repo_id: 500 + i as u64,
+                    full_name: format!("priya/repo-{i}"),
+                    source_account_id: 1 + i as u64 % 2,
+                    outside_default: *tag,
+                })
+                .collect();
+            store.start_scan(priya, "run-1").unwrap();
+            store.record_plan(priya, "run-1", &plan).unwrap();
+            store.mark_repo_read(priya, "run-1", 0).unwrap();
+            store.finish_scan(priya, "run-1", ScanStatus::RateLimited, None, NONE_FOUND, KpiTally::NONE).unwrap();
+            let carried: Vec<PlannedScanRepo> = store
+                .latest_plan(priya)
+                .unwrap()
+                .into_iter()
+                .filter(|row| row.status == PlanRowStatus::Planned)
+                .map(|row| row.repo)
+                .collect();
+            prop_assert_eq!(&carried[..], &plan[1..]);
+            store.start_scan(priya, "run-2").unwrap();
+            store.record_plan(priya, "run-2", &carried).unwrap();
+            let resumed: Vec<PlannedScanRepo> =
+                store.latest_plan(priya).unwrap().into_iter().map(|row| row.repo).collect();
+            prop_assert_eq!(resumed, carried);
         }
     }
 }

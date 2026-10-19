@@ -314,7 +314,8 @@ pub trait GithubAccountsWrite: Send + Sync {
     ) -> Result<AccountAdmission, ReviewStoreError>;
 }
 
-/// A re-check of one listed account failed (scan, publish, the GitHub step).
+/// A re-check of one listed account changed its standing (scan, publish,
+/// the GitHub step).
 pub trait AccountStatusWrite: Send + Sync {
     /// The account stays, marked unverified, with why.
     fn mark_account_unverified(
@@ -322,6 +323,15 @@ pub trait AccountStatusWrite: Send + Sync {
         owner_did: &str,
         github_user_id: u64,
         verdict: &str,
+    ) -> Result<(), ReviewStoreError>;
+
+    /// The listed account passed a re-check: verified again under the login
+    /// it has now, unless another DID holds it verified (then unchanged).
+    fn mark_account_verified(
+        &self,
+        owner_did: &str,
+        github_user_id: u64,
+        github_login: &str,
     ) -> Result<(), ReviewStoreError>;
 }
 
@@ -551,6 +561,9 @@ pub struct PlannedScanRepo {
     /// `owner/name` as listed when the plan was frozen.
     pub full_name: String,
     pub source_account_id: u64,
+    /// Why the pre-feature scan would never have read it (KPI-RRA-1), kept
+    /// on the row so a resumed run's suggestions carry it too.
+    pub outside_default: Option<OutsideDefault>,
 }
 
 /// How far a run got with one row of its frozen plan (ADR-088 §6).
@@ -581,6 +594,8 @@ pub enum RepoSkipReason {
     /// Gone from the account's complete listing, or a fresh read found it
     /// missing or owned by someone else.
     MissingOrTransferred,
+    /// A resume found its account's bio no longer holds the DID.
+    AccountUnverified,
 }
 
 impl RepoSkipReason {
@@ -590,14 +605,20 @@ impl RepoSkipReason {
             Self::Fork => "fork",
             Self::Archived => "archived",
             Self::MissingOrTransferred => "missing_or_transferred",
+            Self::AccountUnverified => "account_unverified",
         }
     }
 
     /// The reason a stored `skip_reason` names.
     pub fn parse(stored: &str) -> Option<Self> {
-        [Self::Fork, Self::Archived, Self::MissingOrTransferred]
-            .into_iter()
-            .find(|reason| reason.as_str() == stored)
+        [
+            Self::Fork,
+            Self::Archived,
+            Self::MissingOrTransferred,
+            Self::AccountUnverified,
+        ]
+        .into_iter()
+        .find(|reason| reason.as_str() == stored)
     }
 }
 

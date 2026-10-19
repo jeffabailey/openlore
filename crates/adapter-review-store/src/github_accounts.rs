@@ -32,6 +32,14 @@ const MARK_UNVERIFIED: &str = "UPDATE github_accounts
     SET status = 'unverified', last_checked_at = now(), last_verdict = ?
     WHERE owner_did = ? AND github_user_id = ?";
 
+// Verified again by a passing re-check, unless another DID holds the id verified.
+const MARK_VERIFIED: &str = "UPDATE github_accounts
+    SET github_login_seen = ?, status = 'verified', verified_at = now(),
+        last_checked_at = now(), last_verdict = 'verified'
+    WHERE owner_did = ? AND github_user_id = ? AND NOT EXISTS (
+        SELECT 1 FROM github_accounts AS held
+        WHERE held.github_user_id = ? AND held.status = 'verified' AND held.owner_did <> ?)";
+
 const RECORD_ELIGIBLE_COUNT: &str = "UPDATE github_accounts
     SET eligible_count_seen = ? WHERE owner_did = ? AND github_user_id = ?";
 
@@ -158,6 +166,24 @@ impl AccountStatusWrite for ReviewStore {
             conn.execute(MARK_UNVERIFIED, params![verdict, owner_did, id])
                 .map(drop)
                 .map_err(db_error)
+        })
+        .map_err(port_error)
+    }
+
+    fn mark_account_verified(
+        &self,
+        owner_did: &str,
+        github_user_id: u64,
+        github_login: &str,
+    ) -> Result<(), ReviewStoreError> {
+        self.with_connection(|conn| {
+            let id = to_db_id(github_user_id)?;
+            conn.execute(
+                MARK_VERIFIED,
+                params![github_login, owner_did, id, id, owner_did],
+            )
+            .map(drop)
+            .map_err(db_error)
         })
         .map_err(port_error)
     }

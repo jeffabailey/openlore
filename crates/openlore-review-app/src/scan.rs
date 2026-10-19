@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use ports::{
     AccountCheckOutcome, AccountCheckRecord, AccountRepoListing, GithubError, GithubLink,
-    PlanRowStatus, PlannedScanRepo, RepoFacts, ReviewStoreError, SavedRepoChoice, ScanCounts,
-    ScanPlanRow, ScanStatus, SkippedScanRepo, SuggestionSource,
+    PlanRowStatus, PlannedScanRepo, RepoFacts, RepoSkipReason, ReviewStoreError, SavedRepoChoice,
+    ScanCounts, ScanPlanRow, ScanStatus, SkippedScanRepo, SuggestionSource,
 };
 use review_domain::budget::{auto_resume_wait, github_budget_allows, ScanAdmission};
 use review_domain::kpi::{utc_day, KpiEvent};
@@ -28,9 +28,10 @@ use review_domain::lifecycle::suggestion_from_candidate;
 use review_domain::ownership::{prove_ownership, OwnershipRefusal, VerifiedOwnership};
 use review_domain::reconcile::{add_counts, reconcile};
 use review_domain::repo_scope::{
-    eligible_count, listing_with_reads, named_skips, resume_plan, resumes_frozen_plan, scan_intent,
-    unlisted_ticks, AccountCheck, BioCheck, FrozenRow, FrozenScope, LimitRefusal, Listing,
-    PlanSource, PlannedRepo, SavedTicks, ScanAccount, ScanIntent, SCAN_REPO_CAP,
+    carried_repo, eligible_count, listing_with_reads, named_skips, plan_row, resume_plan,
+    resumes_frozen_plan, scan_intent, standing_after_check, unlisted_ticks, AccountCheck, BioCheck,
+    CarriedSkip, FrozenRow, FrozenScope, LimitRefusal, Listing, PlanSource, PlannedRepo,
+    SavedTicks, ScanAccount, ScanIntent, Standing, StandingChange, SCAN_REPO_CAP,
 };
 use review_domain::views::ScanRefused;
 use scraper_domain::derive_candidates;
@@ -278,7 +279,7 @@ enum Checked {
     /// Proven now: the proof its listing is read with.
     Passed(VerifiedOwnership),
     /// Disproven: marked unverified, none of its repos is read.
-    Failed,
+    Failed(OwnershipRefusal),
     /// Not reached: its status is kept, none of its repos is read.
     Unfinished(Halt),
 }
@@ -287,7 +288,7 @@ impl Checked {
     fn outcome(&self) -> AccountCheckOutcome {
         match self {
             Self::Passed(_) => AccountCheckOutcome::Passed,
-            Self::Failed => AccountCheckOutcome::Failed,
+            Self::Failed(_) => AccountCheckOutcome::Failed,
             Self::Unfinished(_) => AccountCheckOutcome::NotReached,
         }
     }
@@ -295,18 +296,19 @@ impl Checked {
     fn bio_check(&self) -> BioCheck {
         match self {
             Self::Passed(_) => BioCheck::Passed,
-            Self::Failed => BioCheck::Failed,
+            Self::Failed(_) => BioCheck::Failed,
             Self::Unfinished(_) => BioCheck::Unfinished,
         }
     }
 }
 
-/// Read the account's profile now and prove ownership again, pinned to the
-/// numeric id that was verified (a login now naming another account is
-/// disproof). A disproof marks the account unverified through the narrow
-/// status port; a check that could not finish changes nothing.
+/// Read the account's profile now by its numeric id (a renamed account
+/// answers under its new login) and prove ownership again, pinned to that
+/// id. The check updates the stored standing through the narrow status
+/// port (D-RRA-T1): a pass re-verifies an unverified account, a disproof
+/// marks it unverified, a check that could not finish changes nothing.
 async fn check_account(app: &App, owner_did: &str, account: &GithubLink) -> Checked {
-    let proof = match app.github.read_account(&account.github_login).await {
+    let proof = match app.github.read_person_by_id(account.github_user_id).await {
         Ok(profile) => prove_ownership(
             owner_did,
             &account_of(&profile),
@@ -314,19 +316,33 @@ async fn check_account(app: &App, owner_did: &str, account: &GithubLink) -> Chec
         ),
         Err(error) => Err(refusal_of(&error)),
     };
-    match proof {
+    let checked = match proof {
         Ok(ownership) => Checked::Passed(ownership),
-        Err(refusal) if refusal.disproves_ownership() => {
-            let _ = app.account_status.mark_account_unverified(
-                owner_did,
-                account.github_user_id,
-                refusal.label(),
-            );
-            Checked::Failed
-        }
+        Err(refusal) if refusal.disproves_ownership() => Checked::Failed(refusal),
         Err(OwnershipRefusal::RateLimited) => Checked::Unfinished(Halt::RateLimited),
         Err(_) => Checked::Unfinished(Halt::Unavailable),
-    }
+    };
+    record_standing(app, owner_did, account, &checked);
+    checked
+}
+
+/// Store what the check changed in the account's standing.
+fn record_standing(app: &App, owner_did: &str, account: &GithubLink, checked: &Checked) {
+    let stored = if account.verified {
+        Standing::Verified
+    } else {
+        Standing::Unverified
+    };
+    let id = account.github_user_id;
+    let _ = match (standing_after_check(stored, checked.bio_check()), checked) {
+        (StandingChange::Reverify, Checked::Passed(ownership)) => app
+            .account_status
+            .mark_account_verified(owner_did, id, ownership.github_login()),
+        (StandingChange::MarkUnverified, Checked::Failed(refusal)) => app
+            .account_status
+            .mark_account_unverified(owner_did, id, refusal.label()),
+        _ => Ok(()),
+    };
 }
 
 /// Why a GitHub failure stopped a check or a listing.
@@ -365,7 +381,7 @@ fn ended_reading_nothing(app: &App, checked: &[(u64, Checked)]) -> Ended {
     let every_account_failed = !checked.is_empty()
         && checked
             .iter()
-            .all(|(_, check)| matches!(check, Checked::Failed));
+            .all(|(_, check)| matches!(check, Checked::Failed(_)));
     if every_account_failed {
         Ended::with_status(ScanStatus::OwnershipFailed)
     } else if halted(Halt::RateLimited) {
@@ -392,7 +408,7 @@ async fn check_and_list(
                 AccountCheck::Unfinished,
             ),
         },
-        Checked::Failed => (Checked::Failed, AccountCheck::Failed),
+        failed @ Checked::Failed(_) => (failed, AccountCheck::Failed),
         Checked::Unfinished(halt) => (Checked::Unfinished(halt), AccountCheck::Unfinished),
     }
 }
@@ -512,6 +528,10 @@ impl ResumedPlan {
             .collect();
         let resume = resume_plan(&frozen, checks, &BTreeSet::new());
         let kept = resume.kept();
+        let skipped_now = resume
+            .skipped
+            .iter()
+            .filter_map(|(old, why)| named_carried_skip(&plan[*old].repo, *why));
         Self {
             rows: kept.iter().map(|old| plan[*old].repo.clone()).collect(),
             to_read: kept
@@ -520,7 +540,7 @@ impl ResumedPlan {
                 .filter(|(_, old)| resume.to_read.contains(old))
                 .map(|(position, _)| position)
                 .collect(),
-            skipped: skipped.to_vec(),
+            skipped: skipped.iter().cloned().chain(skipped_now).collect(),
         }
     }
 
@@ -531,12 +551,17 @@ impl ResumedPlan {
     }
 }
 
-/// A carried plan row as the repo to read.
-fn carried_repo(row: &PlannedScanRepo) -> PlannedRepo {
-    PlannedRepo {
-        repo_id: row.repo_id,
-        full_name: row.full_name.clone(),
-        outside_default: None,
+/// A carried row a resume skips, named for the summary: an account that
+/// failed its check names its repos; a removed source's are not named.
+fn named_carried_skip(row: &PlannedScanRepo, why: CarriedSkip) -> Option<SkippedScanRepo> {
+    match why {
+        CarriedSkip::AccountUnverified => Some(SkippedScanRepo {
+            repo_id: row.repo_id,
+            full_name: row.full_name.clone(),
+            source_account_id: row.source_account_id,
+            reason: RepoSkipReason::AccountUnverified,
+        }),
+        CarriedSkip::Removed => None,
     }
 }
 
@@ -601,11 +626,7 @@ async fn account_listing(
 /// The store rows of a scan's plan, in plan order.
 fn plan_rows(plan: &[(u64, &PlannedRepo)]) -> Vec<PlannedScanRepo> {
     plan.iter()
-        .map(|(account_id, repo)| PlannedScanRepo {
-            repo_id: repo.repo_id,
-            full_name: repo.full_name.clone(),
-            source_account_id: *account_id,
-        })
+        .map(|(account_id, repo)| plan_row(*account_id, repo))
         .collect()
 }
 

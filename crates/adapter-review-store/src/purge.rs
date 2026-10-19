@@ -170,6 +170,7 @@ mod tests {
                 repo_id: c.repo_id,
                 full_name: c.full_name.clone(),
                 source_account_id: github_id,
+                outside_default: None,
             })
             .collect();
         store

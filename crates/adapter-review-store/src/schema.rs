@@ -163,6 +163,7 @@ const CREATE_SCAN_RUN_REPOS: &str = "CREATE TABLE IF NOT EXISTS scan_run_repos (
     source_account_id BIGINT,
     status VARCHAR NOT NULL CHECK (status IN ('planned', 'read', 'skipped')),
     skip_reason VARCHAR,
+    outside_default VARCHAR,
     PRIMARY KEY (owner_did, run_id, position))";
 
 const ADD_SUGGESTION_SOURCE_KIND: &str = "ALTER TABLE suggestions ADD COLUMN source_kind VARCHAR";

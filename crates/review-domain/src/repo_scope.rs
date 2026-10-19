@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ports::{
     AccountAdmission, AccountAdmitted, AccountRefusal, AccountRepoListing, ListedRepo,
-    ListingExtent, OutsideDefault, OwnedRepo, PlanRowStatus, RepoFacts, SavedRepoChoice,
-    ScanStatus, SkippedScanRepo,
+    ListingExtent, OutsideDefault, OwnedRepo, PlanRowStatus, PlannedScanRepo, RepoFacts,
+    SavedRepoChoice, ScanStatus, SkippedScanRepo,
 };
 use scraper_domain::{select_person_repos, DEFAULT_PERSON_REPO_COUNT};
 
@@ -725,6 +725,27 @@ fn from_other_account(plan: AccountPlan) -> AccountPlan {
     }
 }
 
+/// A planned repo of `account_id` as its frozen plan row (ADR-088 §6),
+/// its outside-default tag kept (U-RRA-D2).
+pub fn plan_row(account_id: u64, repo: &PlannedRepo) -> PlannedScanRepo {
+    PlannedScanRepo {
+        repo_id: repo.repo_id,
+        full_name: repo.full_name.clone(),
+        source_account_id: account_id,
+        outside_default: repo.outside_default,
+    }
+}
+
+/// A frozen plan row a resume reads, as the planned repo it was: its
+/// suggestions carry the same outside-default tag (KPI-RRA-1).
+pub fn carried_repo(row: &PlannedScanRepo) -> PlannedRepo {
+    PlannedRepo {
+        repo_id: row.repo_id,
+        full_name: row.full_name.clone(),
+        outside_default: row.outside_default,
+    }
+}
+
 /// Where a row of a frozen plan (and each suggestion it yields) comes
 /// from: a listed account, or an imported repo.
 pub use ports::RepoSource as PlanSource;
@@ -770,6 +791,27 @@ pub enum BioCheck {
 pub enum CarriedSkip {
     /// Its source was removed meanwhile.
     Removed,
+    /// Its account's bio check failed on this resume (final within the scan).
+    AccountUnverified,
+}
+
+/// What a scan's own bio check of a listed account changes in its stored
+/// standing (D-RRA-T1): a pass re-verifies an unverified account, a
+/// failure marks it unverified, an unfinished check changes nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandingChange {
+    Reverify,
+    MarkUnverified,
+    Keep,
+}
+
+/// The standing change a bio check makes to an account stored as `stored`.
+pub fn standing_after_check(stored: Standing, check: BioCheck) -> StandingChange {
+    match (stored, check) {
+        (Standing::Unverified, BioCheck::Passed) => StandingChange::Reverify,
+        (_, BioCheck::Failed) => StandingChange::MarkUnverified,
+        _ => StandingChange::Keep,
+    }
 }
 
 /// What a resume does with a paused run's frozen plan (positions in it).
@@ -810,10 +852,11 @@ enum CarriedRow {
 
 /// Resume a paused run from its frozen plan (CORE-RRA-5, BR-RRA-4): only
 /// its rows still `planned` are considered, never re-planned from the
-/// choice in force now. A row of a removed source is skipped. An account's
-/// rows are read only when its bio check passed now; otherwise (failed,
-/// unfinished, or no check) they stay `planned` for a later resume, which
-/// checks the bio again first. Imports need no check.
+/// choice in force now (design §6.2 step 8). A row of a removed source is
+/// skipped "removed"; an account's rows are read when its bio check passed
+/// now, skipped "account unverified" when it failed (final within the
+/// scan), and stay `planned` for a later resume when it did not finish (or
+/// was not run). Imports need no check.
 pub fn resume_plan(
     rows: &[FrozenRow],
     checks: &BTreeMap<u64, BioCheck>,
@@ -845,9 +888,9 @@ fn carried_row(
         PlanSource::Imported(_) => BioCheck::Passed,
     };
     match check {
-        BioCheck::Unfinished => CarriedRow::Carried,
         _ if removed.contains(&source) => CarriedRow::Skipped(CarriedSkip::Removed),
-        BioCheck::Failed => CarriedRow::Carried,
+        BioCheck::Unfinished => CarriedRow::Carried,
+        BioCheck::Failed => CarriedRow::Skipped(CarriedSkip::AccountUnverified),
         BioCheck::Passed => CarriedRow::Read,
     }
 }
@@ -883,6 +926,24 @@ mod tests {
     }
 
     proptest! {
+        /// U-RRA-D2: a planned repo frozen as a plan row and read back by a
+        /// resume is the same repo with the same outside-default tag.
+        #[test]
+        fn a_resumed_row_is_the_planned_repo_with_its_tag(
+            repo_id in 1u64..10_000,
+            account_id in 1u64..10_000,
+            tag in proptest::option::of(proptest::sample::select(OutsideDefault::ALL.to_vec())),
+        ) {
+            let planned = PlannedRepo {
+                repo_id,
+                full_name: format!("me/repo-{repo_id}"),
+                outside_default: tag,
+            };
+            let row = plan_row(account_id, &planned);
+            prop_assert_eq!(row.source_account_id, account_id);
+            prop_assert_eq!(carried_repo(&row), planned);
+        }
+
         /// Universe: listings and any set of ticked ids. A scan reads exactly
         /// the eligible repos ticked at Save, and tags exactly those ranked
         /// outside today's top 5; with no saved choice it reads today's top 5,

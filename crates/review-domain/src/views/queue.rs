@@ -276,6 +276,10 @@ pub fn skipped_repo_message(skipped: &SkippedScanRepo) -> String {
         RepoSkipReason::Archived => ("archived", "Untick it, or unarchive it on GitHub."),
         RepoSkipReason::Fork => ("a fork", "Untick it."),
         RepoSkipReason::MissingOrTransferred => ("missing or owned by someone else", "Untick it."),
+        RepoSkipReason::AccountUnverified => (
+            "its account's bio no longer holds your DID",
+            "Put your DID back, then verify.",
+        ),
     };
     format!(
         "Skipped {}: {reason} since you chose it. {fix}",
