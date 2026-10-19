@@ -480,6 +480,10 @@ pub fn token_expiry_needs_warning(days_left: i64) -> bool {
     days_left <= TOKEN_EXPIRY_WARNING_DAYS
 }
 
+/// The bound on one GitHub request, whole (review R2): the 10 s the app's
+/// other lookups use (sign-in's identity lookup, the indexer query).
+pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Build the shared `reqwest::Client` the adapter uses for every request.
 ///
 /// Step 01-03 BOOTSTRAP: this constructs a client with a connect timeout
@@ -490,7 +494,11 @@ pub fn token_expiry_needs_warning(days_left: i64) -> bool {
 /// transport dep is introduced.
 pub fn build_client() -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
+        .connect_timeout(REQUEST_TIMEOUT)
+        // Review R2: a whole request (connect, send, every byte of the
+        // answer) is bounded, so a GitHub that accepts and stalls can hold
+        // nothing for longer.
+        .timeout(REQUEST_TIMEOUT)
         .user_agent("openlore-adapter-github")
         // The adapter decides on redirects itself (N-2): see `redirect_target`.
         .redirect(reqwest::redirect::Policy::none())
