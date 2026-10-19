@@ -215,8 +215,10 @@ pub fn import_refusal_message(refusal: ImportRefusal, repo: &str) -> String {
         }
         ImportRefusal::AlreadyImported => format!("github:{repo} is already in your list."),
         ImportRefusal::OverLimit(refusal) => format!(
-            "{} Untick or remove {} before adding another.",
-            over_limit_lead(refusal),
+            "You can choose up to {} repos per scan in total. Adding it would make {}. Untick \
+             or remove {} before adding another.",
+            refusal.limit,
+            refusal.total,
             counted(refusal.excess, "repo", "repos")
         ),
     }

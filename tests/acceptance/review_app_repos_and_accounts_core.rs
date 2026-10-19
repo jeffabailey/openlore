@@ -938,7 +938,6 @@ proptest! {
     /// CORE-RRA-3 (@property @BR-RRA-3 @I-07 @contract-shape:pure-function)
     /// Admitted Saves and imports never reach a state the scan start refuses.
     #[test]
-    #[ignore = "REVIEW-FIX: R6"]
     fn core_rra3_admitted_changes_never_overfill_a_scan(
         start in arb_scope().prop_filter("start within the limit", |s| total_toward_limit(s) <= CAP),
         ops in proptest::collection::vec((any::<bool>(), 0usize..3, 0usize..12), 0..12)

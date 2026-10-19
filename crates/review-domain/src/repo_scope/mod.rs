@@ -74,6 +74,36 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    /// R6: a refused Save and a refused import both name the total the
+    /// change would reach, and how many repos over the cap that is.
+    #[test]
+    fn save_and_import_refusals_name_the_would_be_total() {
+        let saved = ScopeAccount {
+            github_user_id: 1,
+            standing: Standing::Verified,
+            saved: SavedTicks::Saved((1..=10).collect()),
+            ranked_eligible: Vec::new(),
+        };
+        let accounts = [saved];
+        assert_eq!(
+            admit_import(&accounts, &[], 10),
+            Err(LimitRefusal {
+                limit: 10,
+                total: 11,
+                excess: 1
+            })
+        );
+        assert_eq!(
+            admit_save(&accounts, &[], 1, &(1..=12).collect::<Vec<_>>(), 10),
+            Err(LimitRefusal {
+                limit: 10,
+                total: 12,
+                excess: 2
+            })
+        );
+        assert_eq!(admit_import(&accounts[..0], &[7], 10), Ok(2));
+    }
+
     fn listed(id: u64, stars: u64, fork: bool, archived: bool) -> ListedRepo {
         ListedRepo {
             repo_id: id,

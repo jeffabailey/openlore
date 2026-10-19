@@ -143,23 +143,15 @@ pub fn admit_save(
 }
 
 /// Import admission (CORE-RRA-3): one more repo is admitted iff the scan's
-/// total (the same `S + I + D` a Save and a scan start count) stays within
-/// `cap`. Admitted: the total the next scan reads.
+/// total (the same `S + I + D` a Save and a scan start count) with it added
+/// stays within `cap`. Admitted: the total the next scan reads; refused:
+/// that would-be total, as a Save's refusal names it (R6).
 pub fn admit_import(
     accounts: &[ScopeAccount],
     imports: &[u64],
     cap: usize,
 ) -> Result<usize, LimitRefusal> {
-    let total = chosen_total(accounts, imports, cap);
-    if total < cap {
-        Ok(total + 1)
-    } else {
-        Err(LimitRefusal {
-            limit: cap,
-            total,
-            excess: total + 1 - cap,
-        })
-    }
+    within_cap(chosen_total(accounts, imports, cap) + 1, cap)
 }
 
 /// What the next scan reads now: `S + I + D`, the saved ticks, the imports
