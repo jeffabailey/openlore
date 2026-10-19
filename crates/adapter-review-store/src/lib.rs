@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 mod expiry;
+mod github_accounts;
 mod github_links;
 mod kpi;
 mod plans;
@@ -21,15 +22,18 @@ mod secrets;
 mod sessions;
 mod suggestions;
 
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use duckdb::Connection;
 use ports::{ProbeOutcome, ReviewStorePort};
 
-use schema::{schema_verdict, SchemaVerdict, SCHEMA_VERSION};
+use schema::{schema_verdict, SchemaVerdict, SCHEMA_VERSION, V1};
 
 /// Length of the XChaCha20 nonce prefixed to every sealed blob.
 const NONCE_LEN: usize = 24;
@@ -130,6 +134,11 @@ pub enum StoreError {
     SchemaUnknown { found: i64 },
     /// Sealing or opening a secret blob failed.
     Seal,
+    /// The copy of the v1 file could not be made: nothing was migrated.
+    Backup(String),
+    /// The v1 → v2 step stopped before COMMIT ([`MigrationFault`]): the file
+    /// is still v1 and the next start migrates it.
+    MigrationStopped,
 }
 
 impl std::fmt::Display for StoreError {
@@ -144,6 +153,11 @@ impl std::fmt::Display for StoreError {
                 write!(f, "review store schema version {found} is unknown")
             }
             Self::Seal => write!(f, "review store could not seal or open a secret blob"),
+            Self::Backup(e) => write!(f, "review store could not copy the v1 file: {e}"),
+            Self::MigrationStopped => write!(
+                f,
+                "review store v1 -> v2 update stopped before it committed (test fault)"
+            ),
         }
     }
 }
@@ -281,25 +295,44 @@ impl ReviewStore {
     /// [`ReviewStore::open`] with DuckDB's `caps` applied before migrating
     /// (B11); the probe reads them back.
     pub fn open_capped(path: &Path, key: DataKey, caps: DuckDbCaps) -> Result<Self, StoreError> {
-        Self::from_connection(Connection::open(path).map_err(db_error)?, key, caps)
+        Self::open_capped_with(path, key, caps, None)
+    }
+
+    /// [`ReviewStore::open_capped`], with the v1 → v2 step asked to stop at
+    /// `fault` (a development build's test seam, DWD-RRA-16). A v1 file is
+    /// first checkpointed, closed and copied to `review-app.v1.<secs>.bak`
+    /// (never overwriting a copy), then migrated in one transaction.
+    pub fn open_capped_with(
+        path: &Path,
+        key: DataKey,
+        caps: DuckDbCaps,
+        fault: Option<MigrationFault>,
+    ) -> Result<Self, StoreError> {
+        let conn = open_file(path, caps)?;
+        let conn = match schema_verdict(recorded_version(&conn)?) {
+            SchemaVerdict::MigrateFromV1 => {
+                keep_v1_copy(conn, path)?;
+                open_file(path, caps)?
+            }
+            _ => conn,
+        };
+        Self::from_connection(conn, key, caps, fault)
     }
 
     /// An in-memory store (the image self-test: no disk, no network).
     pub fn open_in_memory(key: DataKey) -> Result<Self, StoreError> {
-        Self::from_connection(
-            Connection::open_in_memory().map_err(db_error)?,
-            key,
-            DuckDbCaps::default(),
-        )
+        let conn = Connection::open_in_memory().map_err(db_error)?;
+        apply_caps(&conn, DuckDbCaps::default())?;
+        Self::from_connection(conn, key, DuckDbCaps::default(), None)
     }
 
     fn from_connection(
         conn: Connection,
         key: DataKey,
         caps: DuckDbCaps,
+        fault: Option<MigrationFault>,
     ) -> Result<Self, StoreError> {
-        apply_caps(&conn, caps)?;
-        migrate(&conn)?;
+        migrate(&conn, fault)?;
         Ok(Self {
             conn: Mutex::new(conn),
             key,
@@ -391,24 +424,99 @@ pub(crate) fn recorded_version(conn: &Connection) -> Result<Option<i64>, StoreEr
         .map_err(db_error)
 }
 
-/// Bring a connection to the v1 schema, or refuse it.
-fn migrate(conn: &Connection) -> Result<(), StoreError> {
+/// A point the v1 → v2 step can be asked to stop at (DWD-RRA-16). Only a
+/// development build's configuration can name one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationFault {
+    /// Run every statement of the step, then roll back instead of COMMIT.
+    StopBeforeCommit,
+}
+
+/// Open the store file with DuckDB's `caps` applied (B11).
+fn open_file(path: &Path, caps: DuckDbCaps) -> Result<Connection, StoreError> {
+    let conn = Connection::open(path).map_err(db_error)?;
+    apply_caps(&conn, caps)?;
+    Ok(conn)
+}
+
+/// Bring a connection to this build's schema, or refuse it. A fresh file is
+/// created as v1 and takes the same v1 → v2 step a migrated file takes.
+fn migrate(conn: &Connection, fault: Option<MigrationFault>) -> Result<(), StoreError> {
     match schema_verdict(recorded_version(conn)?) {
         SchemaVerdict::Current => Ok(()),
         SchemaVerdict::Fresh => {
             for ddl in schema::V1_TABLES {
                 conn.execute_batch(ddl).map_err(db_error)?;
             }
-            conn.execute(schema::RECORD_SCHEMA_VERSION, [SCHEMA_VERSION])
+            conn.execute(schema::RECORD_SCHEMA_VERSION, [V1])
                 .map_err(db_error)?;
-            Ok(())
+            migrate_v1_to_v2(conn, fault)
         }
+        SchemaVerdict::MigrateFromV1 => migrate_v1_to_v2(conn, fault),
         SchemaVerdict::TooNew { found } => Err(StoreError::SchemaTooNew {
             found,
             supported: SCHEMA_VERSION,
         }),
         SchemaVerdict::Unknown { found } => Err(StoreError::SchemaUnknown { found }),
     }
+}
+
+/// The whole v1 → v2 step in ONE transaction, ending with the version
+/// (ADR-088 §1): cut off anywhere before COMMIT, the file is still v1.
+fn migrate_v1_to_v2(conn: &Connection, fault: Option<MigrationFault>) -> Result<(), StoreError> {
+    in_transaction(conn, |conn| {
+        for step in schema::V1_TO_V2 {
+            conn.execute_batch(step).map_err(db_error)?;
+        }
+        conn.execute(schema::RECORD_SCHEMA_VERSION, [SCHEMA_VERSION])
+            .map_err(db_error)?;
+        match fault {
+            Some(MigrationFault::StopBeforeCommit) => Err(StoreError::MigrationStopped),
+            None => Ok(()),
+        }
+    })
+}
+
+/// How many later seconds a backup name may move to when one is taken.
+const BACKUP_NAME_ATTEMPTS: u64 = 120;
+
+/// `<stem>.v1.<unix-seconds>.bak` beside the store (pure).
+pub fn v1_backup_name(store_stem: &str, unix_secs: u64) -> String {
+    format!("{store_stem}.v1.{unix_secs}.bak")
+}
+
+/// CHECKPOINT (the WAL folds into the file), close, then copy the file
+/// beside itself under a name no earlier copy holds.
+fn keep_v1_copy(conn: Connection, path: &Path) -> Result<PathBuf, StoreError> {
+    conn.execute_batch("CHECKPOINT").map_err(db_error)?;
+    conn.close().map_err(|(_, e)| db_error(e))?;
+    let backup = |e: std::io::Error| StoreError::Backup(e.to_string());
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("review-app");
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    for secs in now..now + BACKUP_NAME_ATTEMPTS {
+        let target = dir.join(v1_backup_name(stem, secs));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+        {
+            Ok(mut copy) => {
+                std::io::copy(&mut File::open(path).map_err(backup)?, &mut copy)
+                    .and_then(|_| copy.sync_all())
+                    .map_err(backup)?;
+                return Ok(target);
+            }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(backup(e)),
+        }
+    }
+    Err(StoreError::Backup("every backup name is taken".into()))
 }
 
 #[cfg(test)]

@@ -719,7 +719,6 @@ fn priyas_suggestions_are_all_still_there_after_the_update() {
 ///   And the one copy of the old data is unchanged and no second copy is made
 /// ```
 #[test]
-#[ignore = "DELIVER 01-17: the upgrade is idempotent (ADR-088 §5.2)"]
 fn restarting_after_the_update_changes_nothing_priya_sees() {
     let world = rra_world_on_v1_store();
     let mut browser = given_signed_in(&world, Persona::Priya);

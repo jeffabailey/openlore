@@ -1127,6 +1127,48 @@ pub fn scan_viewer_fail_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<
     Ok(findings)
 }
 
+// ---------------------------------------------------------------------------
+// review_app_test_fault_seam (review-app-repos-and-accounts, DWD-RRA-16)
+// ---------------------------------------------------------------------------
+// `REVIEW_APP_TEST_FAULT` lets the MG-3 acceptance scenario cut the v1 -> v2
+// store update off just before COMMIT. A release binary refuses to start with
+// the variable set (config.rs `TestFaultInRelease`), and must not even know
+// the fault names: every occurrence of a fault name sits behind a
+// `#[cfg(...)]` gate, like the viewer fault seams above.
+
+/// The fault names the review app's development build honours.
+const REVIEW_APP_TEST_FAULT_TOKENS: &[&str] = &["migrate_before_commit"];
+
+/// The source trees the review-app test-fault guard scans.
+const REVIEW_APP_TEST_FAULT_GUARDED_DIRS: &[&str] = &[
+    "crates/openlore-review-app/src",
+    "crates/adapter-review-store/src",
+];
+
+/// Effect shell for the review-app test-fault release-build guard: every
+/// source under [`REVIEW_APP_TEST_FAULT_GUARDED_DIRS`] with an UNGATED
+/// [`REVIEW_APP_TEST_FAULT_TOKENS`] entry. A missing tree is "nothing to scan".
+pub fn scan_review_app_test_fault_guard(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for dir in REVIEW_APP_TEST_FAULT_GUARDED_DIRS {
+        for path in rust_sources_under(&workspace_root.join(dir)) {
+            let src = std::fs::read_to_string(&path)?;
+            for token in REVIEW_APP_TEST_FAULT_TOKENS {
+                if let Some(line) = classify_cfg_gated_token(&src, token) {
+                    findings.push(format!(
+                        "{}: test fault `{token}` is NOT behind a `#[cfg(...)]` gate — a \
+                         release binary would honour REVIEW_APP_TEST_FAULT \
+                         (review_app_test_fault_seam, DWD-RRA-16): {}",
+                        path.display(),
+                        line
+                    ));
+                }
+            }
+        }
+    }
+    Ok(findings)
+}
+
 /// The `atproto/` Worker's npm manifests the no-IPLD/CBOR guard reads
 /// (serverless-philosophy-federation, ADR-062 §1/§2).
 const ATPROTO_NPM_MANIFESTS: &[&str] = &["atproto/package.json", "atproto/package-lock.json"];
@@ -2845,10 +2887,15 @@ pub fn scan_indexer_search_events_carry_no_query(
     Ok(findings)
 }
 
-/// Tables keyed by `owner_did` in `review-app.duckdb` (ADR-074).
+/// Tables keyed by `owner_did` in `review-app.duckdb` (ADR-074; v2:
+/// ADR-088 §9).
 const REVIEW_OWNER_TABLES: &[&str] = &[
     "accounts",
     "github_links",
+    "github_accounts",
+    "repo_choices",
+    "imported_repos",
+    "scan_run_repos",
     "suggestions",
     "scan_runs",
     "plans",
@@ -3029,6 +3076,7 @@ pub fn run() -> anyhow::Result<i32> {
     let autoconfirm_findings = scan_autoconfirm_guard(&workspace_root)?;
     let pubkey_seam_findings = scan_pubkey_seam_guard(&workspace_root)?;
     let viewer_fail_seam_findings = scan_viewer_fail_seam_guard(&workspace_root)?;
+    let review_app_test_fault_findings = scan_review_app_test_fault_guard(&workspace_root)?;
     let atproto_npm_findings = scan_atproto_npm_dependencies(&workspace_root)?;
     let publish_write_findings = scan_publish_write_capability(&workspace_root)?;
     let contribution_links_findings = scan_contribution_links_append_only(&workspace_root)?;
@@ -3057,6 +3105,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(autoconfirm_findings);
     rendered.extend(pubkey_seam_findings);
     rendered.extend(viewer_fail_seam_findings);
+    rendered.extend(review_app_test_fault_findings);
     rendered.extend(atproto_npm_findings);
     rendered.extend(publish_write_findings);
     rendered.extend(contribution_links_findings);

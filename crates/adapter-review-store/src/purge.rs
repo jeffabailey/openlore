@@ -11,10 +11,14 @@ use crate::secrets::port_error;
 use crate::{db_error, in_transaction, kpi, ReviewStore, StoreError};
 
 /// Every row the app holds about one owner, children before the account.
-const PURGE_OWNER: [&str; 8] = [
+const PURGE_OWNER: [&str; 12] = [
     "DELETE FROM plans WHERE owner_did = ?",
     "DELETE FROM suggestions WHERE owner_did = ?",
+    "DELETE FROM scan_run_repos WHERE owner_did = ?",
     "DELETE FROM scan_runs WHERE owner_did = ?",
+    "DELETE FROM repo_choices WHERE owner_did = ?",
+    "DELETE FROM imported_repos WHERE owner_did = ?",
+    "DELETE FROM github_accounts WHERE owner_did = ?",
     "DELETE FROM github_links WHERE owner_did = ?",
     "DELETE FROM oauth_auth_requests WHERE owner_did_expected = ?",
     "DELETE FROM oauth_sessions WHERE owner_did = ?",
@@ -54,9 +58,13 @@ mod tests {
     use proptest::prelude::*;
 
     /// Every owner table, dumped whole (byte-for-byte rows, sorted).
-    const UNIVERSE: [&str; 9] = [
+    const UNIVERSE: [&str; 13] = [
         "accounts",
         "github_links",
+        "github_accounts",
+        "repo_choices",
+        "imported_repos",
+        "scan_run_repos",
         "suggestions",
         "scan_runs",
         "plans",

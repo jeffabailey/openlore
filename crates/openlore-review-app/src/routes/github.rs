@@ -142,7 +142,7 @@ async fn check_bio(
 /// Record the proven link; its verification is counted with it.
 fn record_link(app: &App, ownership: &VerifiedOwnership) -> Result<(), OwnershipRefusal> {
     let counted = Counted::of(&LogEvent::GithubVerified);
-    match app.links.record_verified_link(
+    match app.links.record_verified_account(
         ownership.owner_did(),
         ownership.github_login(),
         ownership.github_user_id(),
@@ -166,7 +166,7 @@ fn unverify_if_linked(
     {
         let _ = app
             .links
-            .mark_link_unverified(&session.owner_did, refusal.label());
+            .mark_account_unverified(&session.owner_did, profile.id, refusal.label());
     }
 }
 

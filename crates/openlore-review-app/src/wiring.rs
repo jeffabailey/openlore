@@ -18,7 +18,7 @@ use adapter_github::client::{
     token_days_left, token_expiry_needs_warning, TOKEN_EXPIRATION_HEADER,
 };
 use adapter_github::GithubAdapter;
-use adapter_review_store::{DataKey, DuckDbCaps, ReviewStore};
+use adapter_review_store::{DataKey, DuckDbCaps, MigrationFault, ReviewStore};
 use ports::{
     KpiTally, OAuthPort, ProbeOutcome, ReviewStorePort, RevokeOutcome, ScanRunPort, ScanStatus,
     SecretStorePort,
@@ -34,7 +34,7 @@ use serde_json::{json, Map, Value};
 
 use crate::config::{
     parse_config, parse_data_key, parse_secrets, AppConfig, BuildProfile, DataKeyMaterial,
-    GithubToken, RawSecrets, DEFAULT_OAUTH_SCOPES,
+    GithubToken, RawSecrets, TestFault, DEFAULT_OAUTH_SCOPES,
 };
 use crate::http::{self, App, Surface};
 use crate::limiter::{ScanLimiter, ShareAllowance};
@@ -452,9 +452,11 @@ fn wire(env: &BTreeMap<String, String>) -> Result<Wired, Refusal> {
         memory_limit_mb: Some(config.db_memory_limit_mb),
         threads: Some(config.db_threads),
     };
-    let store = ReviewStore::open_capped(&config.review_db, data_key(secrets.data_key)?, caps)
-        .map(Arc::new)
-        .map_err(|e| refusal(Probe::ReviewStore)(e.to_string()))?;
+    let fault = config.test_fault.map(migration_fault);
+    let store =
+        ReviewStore::open_capped_with(&config.review_db, data_key(secrets.data_key)?, caps, fault)
+            .map(Arc::new)
+            .map_err(|e| refusal(Probe::ReviewStore)(e.to_string()))?;
     if let Some(previous) = previous {
         let rows = store
             .rekey(&data_key(previous)?)
@@ -488,6 +490,20 @@ fn wire(env: &BTreeMap<String, String>) -> Result<Wired, Refusal> {
         github_token: secrets.github_token,
         mapping,
     })
+}
+
+/// The store fault a development build's test fault names (DWD-RRA-16).
+#[cfg(debug_assertions)]
+fn migration_fault(fault: TestFault) -> MigrationFault {
+    match fault {
+        TestFault::MigrateBeforeCommit => MigrationFault::StopBeforeCommit,
+    }
+}
+
+/// A release build holds no test fault (the type has no values).
+#[cfg(not(debug_assertions))]
+fn migration_fault(fault: TestFault) -> MigrationFault {
+    match fault {}
 }
 
 /// Every hard arm; the first refusal wins.

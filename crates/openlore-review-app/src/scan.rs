@@ -130,7 +130,9 @@ pub(crate) async fn run_scan(app: Arc<App>, owner_did: String, run_id: String, l
     let ended = match reverify(&app, &owner_did, &link).await {
         Ok(ownership) => scan_owned_repos(&app, &ownership).await,
         Err(refusal) if refusal.disproves_ownership() => {
-            let _ = app.links.mark_link_unverified(&owner_did, refusal.label());
+            let _ =
+                app.links
+                    .mark_account_unverified(&owner_did, link.github_user_id, refusal.label());
             Ended::with_status(ScanStatus::OwnershipFailed)
         }
         Err(OwnershipRefusal::RateLimited) => paused(&app),

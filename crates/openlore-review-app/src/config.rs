@@ -33,6 +33,19 @@ pub(crate) const SCAN_CONCURRENCY_VAR: &str = "OPENLORE_REVIEW_SCAN_CONCURRENCY"
 /// The test seam that runs a development build's clock ahead, in seconds.
 pub(crate) const CLOCK_SKEW_VAR: &str = "REVIEW_APP_CLOCK_SKEW_SECS";
 
+/// The test seam that cuts a development build's start off at a named
+/// fault (DWD-RRA-16); a release build refuses to start with it set.
+pub(crate) const TEST_FAULT_VAR: &str = "REVIEW_APP_TEST_FAULT";
+
+/// A fault a development build can be asked to stop at. In a release build
+/// the type has no values: a release binary cannot hold a fault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TestFault {
+    /// The v1 → v2 store update stops just before COMMIT; the start fails.
+    #[cfg(debug_assertions)]
+    MigrateBeforeCommit,
+}
+
 /// How far ahead the clock seam may run: up to 60 days, past ADR-073's
 /// 30-day server-side session expiry (U-38).
 const CLOCK_SKEW_RANGE: RangeInclusive<u64> = 0..=60 * 24 * 3600;
@@ -84,6 +97,8 @@ pub(crate) enum ConfigError {
     LoopbackHttpInRelease,
     /// `REVIEW_APP_CLOCK_SKEW_SECS` in a release build.
     ClockSkewInRelease,
+    /// `REVIEW_APP_TEST_FAULT` in a release build.
+    TestFaultInRelease,
 }
 
 impl std::fmt::Display for ConfigError {
@@ -104,6 +119,10 @@ impl std::fmt::Display for ConfigError {
             Self::ClockSkewInRelease => write!(
                 f,
                 "{CLOCK_SKEW_VAR} is a test seam; a release build refuses it"
+            ),
+            Self::TestFaultInRelease => write!(
+                f,
+                "{TEST_FAULT_VAR} is a test seam; a release build refuses it"
             ),
         }
     }
@@ -127,6 +146,9 @@ pub(crate) struct AppConfig {
     /// Seconds a development build's clock runs ahead (the expiry test
     /// seam); always 0 in a release build.
     pub(crate) clock_skew_secs: u64,
+    /// The fault a development build stops at; always `None` in a release
+    /// build.
+    pub(crate) test_fault: Option<TestFault>,
     pub(crate) secrets_dir: PathBuf,
     pub(crate) oauth_scopes: String,
     pub(crate) github_api_base: String,
@@ -156,6 +178,11 @@ pub(crate) fn parse_config(
         (None, _) => 0,
         (Some(_), BuildProfile::Release) => return Err(ConfigError::ClockSkewInRelease),
         (Some(value), BuildProfile::Development) => clock_skew(value)?,
+    };
+    let test_fault = match (get(TEST_FAULT_VAR), profile) {
+        (None, _) => None,
+        (Some(_), BuildProfile::Release) => return Err(ConfigError::TestFaultInRelease),
+        (Some(value), BuildProfile::Development) => Some(test_fault(value)?),
     };
     if !matches!(get("LOG_FORMAT"), None | Some("json")) {
         return Err(ConfigError::Invalid {
@@ -196,6 +223,7 @@ pub(crate) fn parse_config(
         )?,
         scan_concurrency: scan_concurrency(get(SCAN_CONCURRENCY_VAR))?,
         clock_skew_secs,
+        test_fault,
         secrets_dir: PathBuf::from(get("SECRETS_DIR").unwrap_or("/run/secrets")),
         oauth_scopes: get("OAUTH_SCOPES")
             .unwrap_or(DEFAULT_OAUTH_SCOPES)
@@ -262,6 +290,26 @@ fn clock_skew(value: &str) -> Result<u64, ConfigError> {
             value: value.to_string(),
             range: CLOCK_SKEW_RANGE,
         })
+}
+
+/// The named fault (pure, total). Only a development binary compiles the
+/// names in; a release binary knows none (check-arch
+/// `review_app_test_fault_seam`).
+#[cfg(debug_assertions)]
+fn test_fault(value: &str) -> Result<TestFault, ConfigError> {
+    match value {
+        "migrate_before_commit" => Ok(TestFault::MigrateBeforeCommit),
+        _ => Err(ConfigError::Invalid {
+            name: TEST_FAULT_VAR,
+            reason: "not a known test fault",
+        }),
+    }
+}
+
+/// A release binary honours no test fault.
+#[cfg(not(debug_assertions))]
+fn test_fault(_value: &str) -> Result<TestFault, ConfigError> {
+    Err(ConfigError::TestFaultInRelease)
 }
 
 fn socket_addr(name: &'static str, value: &str) -> Result<SocketAddr, ConfigError> {
@@ -616,6 +664,29 @@ mod tests {
                 prop_assert_eq!(dev.clock_skew_secs, secs);
             } else if unset.is_ok() {
                 prop_assert!(!CLOCK_SKEW_RANGE.contains(&secs));
+            }
+        }
+
+        /// A release build refuses the test-fault seam whatever its value
+        /// (DWD-RRA-16); a development build stops only at a fault it
+        /// names, and an unset seam stops nowhere.
+        #[test]
+        fn only_a_development_build_takes_the_test_fault_seam(mut env in env(), value in "[a-z_]{1,24}") {
+            prop_assume!(env.get("REVIEW_APP_ALLOW_LOOPBACK_HTTP").map(|v| v.trim()) != Some("1"));
+            let unset = parse_config(&env, BuildProfile::Development).map(|c| c.test_fault);
+            prop_assert!(matches!(unset, Ok(None) | Err(_)));
+            for named in [value.as_str(), "migrate_before_commit"] {
+                env.insert(TEST_FAULT_VAR.into(), named.to_string());
+                prop_assert_eq!(parse_config(&env, BuildProfile::Release), Err(ConfigError::TestFaultInRelease));
+                if unset.is_ok() {
+                    let dev = parse_config(&env, BuildProfile::Development).map(|c| c.test_fault);
+                    let expected = if named == "migrate_before_commit" {
+                        Ok(Some(TestFault::MigrateBeforeCommit))
+                    } else {
+                        Err(ConfigError::Invalid { name: TEST_FAULT_VAR, reason: "not a known test fault" })
+                    };
+                    prop_assert_eq!(dev, expected);
+                }
             }
         }
 
