@@ -174,6 +174,40 @@ Shipped slice extensions:
     indexer-per-did-pds-fetch):
     `docs/evolution/bluesky-claim-review-app-evolution.md`.
 
+- **review-app-repos-and-accounts: DESIGN 2026-10-19 (PROPOSED) — IN-PLACE EXTENSION of the review
+  app. ZERO new crates, ZERO Lexicon or OAuth-scope change, one store migration
+  (`review-app.duckdb` v1 → v2).** Up to 3 GitHub accounts per sign-in; a saved repo choice per
+  account (top 5 pre-ticked until saved); any public repo importable as private, never-publishable
+  suggestions; one total limit of 10 repos per scan; a fresh repo-owner + bio read at every
+  preview and confirm. Releases R1 choose, R2 accounts + publish check, R3 imports; R4
+  (administered repos) deferred.
+  - **`crates/claim-domain` (PURE, EXTEND)**: NEW `authority` module, owner tier only (first
+    delivery of ADR-086 §4): `may_sign` → `SigningPermit` (private, not serializable) |
+    `SigningRefusal`. owner-only-signing extends it later.
+  - **`crates/review-domain` (PURE, EXTEND)**: NEW `repo_scope` (default ticks, limit arithmetic,
+    scan intent and plan, BR-RRA-5 moves, derived visibility, `outside_default`); `plans`
+    constructors and `restore_plan` take `&SigningPermit`; views for accounts, choose-repos,
+    imports and imported cards; new `KpiEvent`s.
+  - **`crates/ports` (EXTEND)**: `GithubPort::read_repo` + `RepoFacts`; `OwnedRepo` gains
+    `repo_id`, `owner_id`; split read/write ports for accounts, choices, imports; separate
+    `ScopeMovePort` and `ScopeRemovalPort`; scan-plan methods; conditional
+    `add_pending_from_listed_source`.
+  - **`crates/adapter-github` (EXTEND)**: `GET /repos/{o}/{r}` with one same-host redirect.
+  - **`crates/adapter-review-store` (EXTEND)**: v2 (`github_accounts`, `repo_choices`,
+    `imported_repos`, `scan_run_repos`, source columns on `suggestions`); migration in one
+    transaction after a file backup; `removal.rs` (deletes only `pending`); live probe extended.
+  - **`crates/openlore-review-app` (EXTEND)**: `routes/repos.rs`, `routes/imports.rs`
+    (new files), multi-account `routes/github.rs`, plan-based `scan.rs` (frozen plan, resume reads
+    unread rows), `permit_for` in review and publish routes, per-DID scope lock, constant
+    `SCAN_REPO_CAP = 10`.
+  - **`xtask` (EXTEND)**: `review_publish_plan_needs_permit`,
+    `authority_evidence_only_from_adapters`, `signing_permit_not_serializable`,
+    `review_accounts_write_only_in_github_route`; amended
+    `review_store_owner_scoped_sql` (new owner tables; `DELETE` also in removal, `pending` only).
+  - **ADR-088** (store v2, scan plan, removal) + **ADR-089** (publish permit, BR-RRA-1), both
+    Proposed. Design and C4 L1/L2/L3: `docs/feature/review-app-repos-and-accounts/design/`.
+    Supersedes bluesky-claim-review-app `data-models.md` §3.1 (one link per DID).
+
 - **contributor-philosophy-inference: DESIGN 2026-09-27 — IN-PLACE EXTENSION, ZERO new crates,
   ZERO Lexicon change.** `scrape github owner/repo` also records the repo's top-N human
   contributors (one public `/contributors` page, bots excluded) as LOCAL, UNSIGNED, append-only
@@ -835,6 +869,28 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
   Existing ATs that sign `github:` subjects migrate to seeded-check fixtures (list: ADR-086
   Consequences).
 
+### review-app-repos-and-accounts (DESIGN 2026-10-19, proposed)
+
+- **Driving ports**: review-app routes (session + CSRF, existing harness): GitHub step (add,
+  verify, remove with confirm), `GET/POST` choose repos, `POST` import / remove import, Scan
+  again / Resume scan, queue, approve, approve-selected, edit-preview, decline, confirm,
+  confirm-selected, retry, profile, share preview, "Disconnect and forget me".
+- **Pure seams for property tests**: `claim_domain::authority::may_sign` (rule table over
+  generated repo facts and bios); `review_domain::repo_scope` (default ticks = first
+  `min(5, room)` of `select_person_repos`; limit admission; scan plan ⊆ choice ∪ imports and ≤
+  cap; visibility; moves keep the total).
+- **Doubles**: `FakeGithub` + new `read_repo` fixtures (user-owned, org-owned, 301 rename,
+  301 transfer, 404 private/missing, 403 rate limit, outage); listings with ids; profiles by id;
+  `FakePds`; real DuckDB for the store, plus a real v1 file fixture for the migration.
+- **Must-cover behaviors**: US-RRA-001..006, 008..010 scenarios; the @property over every
+  publish request path (zero writes unless the fresh owner id is listed and its bio holds the
+  DID); preview refused for imported and transferred repos; bio removed between preview and
+  confirm marks the account unverified; GitHub unreachable at preview/confirm/scan hides and
+  marks nothing; removal during a scan leaves no pending row of that source; a resumed scan reads
+  only the paused plan's unread repos; renamed account keeps its choice; renamed repo stays
+  ticked; migration of a v1 file keeps every suggestion visible as before; purge leaves zero rows
+  in every new table.
+
 ## For Software Crafter
 
 ### github-did-identity-link (DESIGN 2026-10-14, accepted)
@@ -913,6 +969,39 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
   forbids `adapter-github`. Slice 5 adds `imported_candidates_not_in_scoring_or_inference`.
 - Paradigm: functional (ADR-007) — use @nw-functional-software-crafter.
 
+### review-app-repos-and-accounts (DESIGN 2026-10-19, proposed)
+
+- R1 lands the whole v2 schema and migration (ADR-088) so R2/R3 need no second migration.
+  Migration: backup copy, one transaction, backfill `source_kind='account'` and
+  `source_account_id` from `github_links`; refuse to start on failure (`health.startup.refused`).
+  Verify DuckDB `ADD COLUMN` behaviour in the migration test, do not assume it.
+- `claim_domain::authority` owner tier: `SigningPermit` has private fields, no serde, minted only
+  by `may_sign`. `publish_plan`, `publish_edited_plan`, `restore_plan` take `&SigningPermit`
+  (subject must match). `owner_can_publish` becomes `permit_for` (one `read_repo`, then
+  `read_person_by_id(owner_id)` if listed; per-request memo; no cross-request cache). Retract,
+  share and link plans unchanged.
+- Visibility, limit arithmetic, default ticks, scan intent/plan, moves and `outside_default`
+  are pure in `review_domain::repo_scope`; routes and the scan task only read, call, and write.
+- Scan: freeze intent before admission (refuse "nothing to read" and "over limit" without
+  spending a scan); per account bio check → listing → plan; write plan rows before the first
+  harvest; check the source is still listed before each read; conditional insert; resume reads
+  the paused run's unread rows only.
+- Store: split read/write ports; `ScopeRemovalPort` only in the two remove routes; `DELETE`
+  only in `removal.rs` (pending only), purge and expiry. Scope changes under a per-DID lock.
+- Constants: `SCAN_REPO_CAP = 10` (not configurable, D-RRA-16), `MAX_GITHUB_ACCOUNTS = 3`; every
+  view takes the cap from the one constant.
+- Listing follows up to 3 pages; a truncated listing never proves a chosen repo missing (one
+  `read_repo` decides). Resume: failed account → its rows skipped "account unverified";
+  unfinished → rows carried.
+- Migration: `CHECKPOINT`, close, timestamped backup copy, one transaction; rollback loses
+  private changes since deploy (runbook). Publish and scan hold only `AccountStatusWrite`.
+- `xtask check-arch`: `review_publish_plan_needs_permit`, `authority_evidence_only_from_adapters`
+  (allowlist shared with owner-only-signing), `signing_permit_not_serializable`,
+  `review_accounts_write_only_in_github_route`; extend `REVIEW_OWNER_TABLES`; amend the
+  review-store `DELETE` rule. Contract tests for `read_repo` and the paged listing are a required
+  CI gate.
+- Paradigm: functional (ADR-007) — use @nw-functional-software-crafter.
+
 ## CLI surface (cumulative)
 
 | Verb | Shipped in | Spec'd by |
@@ -950,6 +1039,10 @@ Level 3 Components for `claim-domain`) live in the slice-01 architecture
 design:
 
 - **`docs/feature/openlore-foundation/design/architecture-design.md`**
+
+Review app (current C4 L1/L2/L3 for the repos-and-accounts extension):
+`docs/feature/review-app-repos-and-accounts/design/architecture-design.md` §2-4 (base:
+`docs/architecture/bluesky-claim-review-app/architecture-design.md`).
 
 These diagrams are versioned with the feature workspace; when slices 02-05
 land, each will produce its own architecture-design.md and this brief will
