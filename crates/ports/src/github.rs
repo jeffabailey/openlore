@@ -330,6 +330,16 @@ pub struct OwnedRepo {
     pub pushed_at: Option<String>,
 }
 
+/// One owned-repo row with GitHub's immutable numeric ids (C-RRA-D3): a
+/// choice is keyed by `repo_id`, so a rename keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedRepo {
+    pub repo_id: u64,
+    /// The numeric id of the repo's owner (`owner.id`).
+    pub owner_id: u64,
+    pub repo: OwnedRepo,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

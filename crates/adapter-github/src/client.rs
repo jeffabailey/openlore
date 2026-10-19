@@ -382,6 +382,35 @@ pub fn parse_owned_repos(body: &serde_json::Value) -> Result<Vec<ports::OwnedRep
         .collect())
 }
 
+/// Reshape a `GET /users/{user}/repos` array into [`ports::ListedRepo`]s:
+/// each [`parse_owned_repos`] row with its numeric `id` and `owner.id`; a
+/// row missing either is left out (a choice is keyed by them). PURE.
+pub fn parse_listed_repos(body: &serde_json::Value) -> Result<Vec<ports::ListedRepo>, String> {
+    let rows = body
+        .as_array()
+        .ok_or_else(|| "the user repos response was not a JSON array".to_string())?;
+    let owned = parse_owned_repos(body)?;
+    Ok(rows
+        .iter()
+        .filter(|row| text(row, "full_name").is_some())
+        .zip(owned)
+        .filter_map(|(row, repo)| {
+            Some(ports::ListedRepo {
+                repo_id: positive_id(row)?,
+                owner_id: positive_id(row.get("owner")?)?,
+                repo,
+            })
+        })
+        .collect())
+}
+
+/// A positive numeric `id`.
+fn positive_id(body: &serde_json::Value) -> Option<u64> {
+    body.get("id")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|id| *id > 0)
+}
+
 /// A non-blank string field, trimmed.
 fn text(body: &serde_json::Value, key: &str) -> Option<String> {
     body.get(key)
@@ -725,6 +754,39 @@ mod tests {
         assert_eq!(repos[0].stars, 5);
         assert!(repos[1].fork && repos[1].archived);
         assert!(parse_owned_repos(&serde_json::json!({"message": "x"})).is_err());
+    }
+
+    // bypass: a field-mapping example (the adapter has no proptest dev-dep).
+    #[test]
+    fn listed_repos_carry_the_repo_and_owner_ids_and_drop_rows_without_them() {
+        let repos = parse_listed_repos(&serde_json::json!([
+            {"id": 11, "owner": {"id": 4_210_001_u64}, "full_name": "priyaraman/kelp", "fork": true},
+            {"id": 12, "owner": {}, "full_name": "priyaraman/no-owner-id"},
+            {"owner": {"id": 1}, "full_name": "priyaraman/no-id"},
+            {"id": 13, "owner": {"id": 1}},
+            {"id": 14, "owner": {"id": 1}, "full_name": "priyaraman/tidepool", "archived": true}
+        ]))
+        .unwrap();
+        let ids: Vec<(u64, u64, &str, bool, bool)> = repos
+            .iter()
+            .map(|r| {
+                (
+                    r.repo_id,
+                    r.owner_id,
+                    r.repo.full_name.as_str(),
+                    r.repo.fork,
+                    r.repo.archived,
+                )
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                (11, 4_210_001, "priyaraman/kelp", true, false),
+                (14, 1, "priyaraman/tidepool", false, true)
+            ]
+        );
+        assert!(parse_listed_repos(&serde_json::json!({"message": "x"})).is_err());
     }
 
     proptest::proptest! {

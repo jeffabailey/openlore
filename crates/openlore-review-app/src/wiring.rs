@@ -20,12 +20,12 @@ use adapter_github::client::{
 use adapter_github::GithubAdapter;
 use adapter_review_store::{DataKey, DuckDbCaps, MigrationFault, ReviewStore};
 use ports::{
-    KpiTally, OAuthPort, ProbeOutcome, ReviewStorePort, RevokeOutcome, ScanRunPort, ScanStatus,
-    SecretStorePort,
+    KpiTally, OAuthPort, OutsideDefault, ProbeOutcome, ReviewStorePort, RevokeOutcome, ScanRunPort,
+    ScanStatus, SecretStorePort,
 };
 use review_domain::kpi::{
-    approval_events, rollup_day, seconds_until_next_rollup, sign_in_refusal_event, sum_counters,
-    utc_day, KpiEvent,
+    approval_events, outside_default_events, rollup_day, seconds_until_next_rollup,
+    sign_in_refusal_event, sum_counters, utc_day, KpiEvent,
 };
 use review_domain::signin::{permission_mode, SignInFailure};
 use review_domain::views::ScanRefused;
@@ -113,6 +113,9 @@ pub(crate) enum LogEvent<'a> {
     /// changed it first; never which or whose).
     SuggestionApproved {
         edited: bool,
+        /// Counted when today's top 5 would never have produced it
+        /// (KPI-RRA-1); never logged.
+        outside_default: Option<OutsideDefault>,
     },
     /// A person was forgotten (by herself or on request) and how the
     /// revocation at her PDS ended.
@@ -136,7 +139,13 @@ fn counters_of(event: &LogEvent<'_>) -> Vec<KpiEvent> {
         LogEvent::GithubVerifyRefused(_) => vec![KpiEvent::GithubVerifyFail],
         LogEvent::ScanFinished(ScanStatus::Completed) => vec![KpiEvent::ScanCompleted],
         LogEvent::SuggestionDeclined => vec![KpiEvent::SuggestionDeclined],
-        LogEvent::SuggestionApproved { edited } => approval_events(*edited),
+        LogEvent::SuggestionApproved {
+            edited,
+            outside_default,
+        } => approval_events(*edited)
+            .into_iter()
+            .chain(outside_default_events(*outside_default))
+            .collect(),
         LogEvent::SharePosted => vec![KpiEvent::SharePosted],
         LogEvent::RetractPosted => vec![KpiEvent::RetractPosted],
         LogEvent::Disconnect(_) => vec![KpiEvent::Disconnect],
@@ -237,7 +246,7 @@ fn describe(event: LogEvent<'_>) -> (Level, &'static str, Vec<(&'static str, Val
         LogEvent::SuggestionDeclined => (Info, "suggestion.declined", vec![]),
         LogEvent::SharePosted => (Info, "share.posted", vec![]),
         LogEvent::RetractPosted => (Info, "retract.posted", vec![]),
-        LogEvent::SuggestionApproved { edited } => {
+        LogEvent::SuggestionApproved { edited, .. } => {
             (Info, "suggestion.approved", vec![("edited", json!(edited))])
         }
         LogEvent::Disconnect(outcome) => (
@@ -646,6 +655,8 @@ fn app(wired: Wired) -> App {
         links: wired.store.clone(),
         scans: wired.store.clone(),
         review_read: wired.store.clone(),
+        choices_read: wired.store.clone(),
+        choices_write: wired.store.clone(),
         plans: wired.store.clone(),
         forget: wired.store.clone(),
         kpi: wired.store.clone(),

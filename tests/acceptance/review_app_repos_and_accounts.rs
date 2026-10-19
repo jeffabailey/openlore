@@ -49,7 +49,6 @@ use review_app::*;
 /// AP-3; GitHub unreachable / rate-limited: RC-5, AS-3, AP-2, IC-5 (waiver
 /// recorded in `distill/wave-decisions.md`).
 #[test]
-#[ignore = "DELIVER 01-01: walking skeleton — choose repos, scan the choice, publish outside the top 5"]
 fn priya_publishes_a_claim_about_a_repo_her_old_top_5_never_read() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);

@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use ports::claim_domain::UnsignedClaim;
-use ports::{KpiCounterRow, Suggestion};
+use ports::{KpiCounterRow, OutsideDefault, Suggestion};
 
 use crate::signin::SignInFailure;
 
@@ -25,13 +25,16 @@ pub enum KpiEvent {
     SuggestionApproved,
     SuggestionApprovedEdited,
     SuggestionDeclined,
+    /// KPI-RRA-1: an action on a suggestion today's top 5 would never have
+    /// produced.
+    SuggestionActedOutsideDefault,
     SharePosted,
     RetractPosted,
     Disconnect,
 }
 
 impl KpiEvent {
-    pub const ALL: [KpiEvent; 13] = [
+    pub const ALL: [KpiEvent; 14] = [
         Self::SignInStarted,
         Self::SignInCompleted,
         Self::SignInDenied,
@@ -42,6 +45,7 @@ impl KpiEvent {
         Self::SuggestionApproved,
         Self::SuggestionApprovedEdited,
         Self::SuggestionDeclined,
+        Self::SuggestionActedOutsideDefault,
         Self::SharePosted,
         Self::RetractPosted,
         Self::Disconnect,
@@ -60,6 +64,7 @@ impl KpiEvent {
             Self::SuggestionApproved => "suggestion.approved",
             Self::SuggestionApprovedEdited => "suggestion.approved.edited",
             Self::SuggestionDeclined => "suggestion.declined",
+            Self::SuggestionActedOutsideDefault => "suggestion.acted.outside_default",
             Self::SharePosted => "share.posted",
             Self::RetractPosted => "retract.posted",
             Self::Disconnect => "disconnect",
@@ -93,6 +98,16 @@ pub fn approval_was_edited(published: &UnsignedClaim, offered: Option<&Suggestio
 pub fn approval_events(edited: bool) -> Vec<KpiEvent> {
     std::iter::once(KpiEvent::SuggestionApproved)
         .chain(edited.then_some(KpiEvent::SuggestionApprovedEdited))
+        .collect()
+}
+
+/// The counters an owner's action on a suggestion adds for where it came
+/// from: one `suggestion.acted.outside_default` when today's top 5 would
+/// never have produced it (KPI-RRA-1).
+pub fn outside_default_events(outside_default: Option<OutsideDefault>) -> Vec<KpiEvent> {
+    outside_default
+        .map(|OutsideDefault::OwnedChoice| KpiEvent::SuggestionActedOutsideDefault)
+        .into_iter()
         .collect()
 }
 

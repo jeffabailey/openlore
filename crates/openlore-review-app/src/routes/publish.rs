@@ -169,7 +169,15 @@ fn mark_published(app: &App, plan: &PublishPlan) {
         .into_iter()
         .find(|suggestion| &suggestion.key == plan.key());
     let edited = approval_was_edited(plan.claim(), offered.as_ref());
-    let counted = Counted::of(&LogEvent::SuggestionApproved { edited });
+    let outside_default = app
+        .review_read
+        .outside_default(plan.owner_did(), plan.key())
+        .ok()
+        .flatten();
+    let counted = Counted::of(&LogEvent::SuggestionApproved {
+        edited,
+        outside_default,
+    });
     let moved = app.review_write.change_state(
         plan.owner_did(),
         plan.key(),
@@ -178,6 +186,9 @@ fn mark_published(app: &App, plan: &PublishPlan) {
         counted.tally(),
     );
     if matches!(moved, Ok(true)) {
-        emit(LogEvent::SuggestionApproved { edited });
+        emit(LogEvent::SuggestionApproved {
+            edited,
+            outside_default,
+        });
     }
 }

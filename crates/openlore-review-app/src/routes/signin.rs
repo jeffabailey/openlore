@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use crate::http::{App, PageRequest, Reply};
 use crate::limiter::unix_now_secs;
 use crate::routes::{
-    github, github_link, profile, publish, retract, review, scan, settings, share,
+    github, github_link, profile, publish, repos, retract, review, scan, settings, share,
 };
 use crate::wiring::{emit, observe, Counted, LogEvent};
 
@@ -54,6 +54,8 @@ pub(crate) enum PageRoute {
     ConfirmShare,
     RetractPreview,
     ConfirmRetract,
+    ChooseRepos,
+    SaveRepoChoice,
     Settings,
     ForgetMePreview,
     ConfirmForgetMe,
@@ -84,6 +86,8 @@ pub(crate) fn page_route(method: &Method, path: &str) -> Option<PageRoute> {
         ("POST", "/share") => Some(PageRoute::ConfirmShare),
         ("GET", "/retract") => Some(PageRoute::RetractPreview),
         ("POST", "/retract") => Some(PageRoute::ConfirmRetract),
+        ("GET", views::REPOS_PATH) => Some(PageRoute::ChooseRepos),
+        ("POST", views::REPOS_PATH) => Some(PageRoute::SaveRepoChoice),
         ("GET", "/settings") => Some(PageRoute::Settings),
         ("GET", "/settings/forget") => Some(PageRoute::ForgetMePreview),
         ("POST", "/settings/forget") => Some(PageRoute::ConfirmForgetMe),
@@ -113,6 +117,7 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         }
         PageRoute::ConfirmShare if same_origin => share::confirm_share(app, request).await,
         PageRoute::ConfirmRetract if same_origin => retract::confirm_retract(app, request).await,
+        PageRoute::SaveRepoChoice if same_origin => repos::save_choice(app, request).await,
         PageRoute::ConfirmForgetMe if same_origin => {
             settings::confirm_forget_me(app, request).await
         }
@@ -132,7 +137,9 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         | PageRoute::ConfirmPublishSelected
         | PageRoute::ConfirmShare
         | PageRoute::ConfirmRetract
+        | PageRoute::SaveRepoChoice
         | PageRoute::ConfirmForgetMe => forbidden(),
+        PageRoute::ChooseRepos => repos::choose_repos(app, request).await,
         PageRoute::Settings => settings::settings(app, request),
         PageRoute::ForgetMePreview => settings::forget_me_preview(app, request),
         PageRoute::PdsReturn => pds_return(app, request).await,

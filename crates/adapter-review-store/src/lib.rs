@@ -16,6 +16,7 @@ mod kpi;
 mod plans;
 mod probe;
 mod purge;
+mod repo_choices;
 mod scan_runs;
 pub mod schema;
 mod secrets;
@@ -389,6 +390,11 @@ impl ReviewStore {
             })
         })
     }
+}
+
+/// A GitHub numeric id (account or repo) as its `BIGINT` column holds it.
+pub(crate) fn db_id(github_id: u64) -> Result<i64, StoreError> {
+    i64::try_from(github_id).map_err(|_| StoreError::Database("GitHub id out of range".into()))
 }
 
 /// `work` in one transaction: committed when it succeeds, rolled back when

@@ -1,7 +1,9 @@
 //! The scan task (component-boundaries: Scan task row; ADR-076 §3). It runs
 //! in the background: a fresh ownership re-check mints the
 //! [`VerifiedOwnership`] no repo read can happen without (I-BRA-4), then
-//! `select_person_repos` → per repo: harvest → `derive_candidates` →
+//! the account's saved choice (or today's top 5) is frozen as the run's plan
+//! (`repo_scope::account_plan`, ADR-088 §6) → per planned repo: harvest →
+//! `derive_candidates` →
 //! `reconcile` → persist. Each repo's suggestions are stored as soon as that
 //! repo completes, so a paused scan keeps its partial results, and a resumed
 //! one offers only keys never seen before. The run records what it found
@@ -12,13 +14,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ports::{GithubError, GithubLink, OwnedRepo, ScanCounts, ScanStatus};
+use ports::{GithubError, GithubLink, PlannedScanRepo, ScanCounts, ScanStatus, SuggestionSource};
 use review_domain::budget::{auto_resume_wait, github_budget_allows, ScanAdmission};
 use review_domain::lifecycle::suggestion_from_candidate;
 use review_domain::ownership::{prove_ownership, OwnershipRefusal, VerifiedOwnership};
 use review_domain::reconcile::{add_counts, reconcile};
+use review_domain::repo_scope::{account_plan, AccountChoice, PlannedRepo};
 use review_domain::views::ScanRefused;
-use scraper_domain::{derive_candidates, select_person_repos, DEFAULT_PERSON_REPO_COUNT};
+use scraper_domain::derive_candidates;
 
 use crate::http::App;
 use crate::limiter::unix_now_secs;
@@ -128,7 +131,7 @@ pub(crate) fn resume_on_its_own(app: Arc<App>, owner_did: String, interrupted_by
 /// record how it ended; a scan paused for GitHub's budget resumes on its own.
 pub(crate) async fn run_scan(app: Arc<App>, owner_did: String, run_id: String, link: GithubLink) {
     let ended = match reverify(&app, &owner_did, &link).await {
-        Ok(ownership) => scan_owned_repos(&app, &ownership).await,
+        Ok(ownership) => scan_owned_repos(&app, &ownership, &run_id, link.github_user_id).await,
         Err(refusal) if refusal.disproves_ownership() => {
             let _ =
                 app.links
@@ -169,29 +172,69 @@ async fn reverify(
     prove_ownership(owner_did, &account_of(&profile), Some(link.github_user_id))
 }
 
-/// The repo stages; they can only run with proof in hand.
-async fn scan_owned_repos(app: &App, ownership: &VerifiedOwnership) -> Ended {
-    let repos = match app.github.list_owned_repos(ownership.github_login()).await {
-        Ok(repos) => repos,
+/// The repo stages; they can only run with proof in hand. The account's
+/// choice in force now is frozen as the run's plan before the first read
+/// (BR-RRA-4), and exactly the planned repos are read.
+async fn scan_owned_repos(
+    app: &App,
+    ownership: &VerifiedOwnership,
+    run_id: &str,
+    account_id: u64,
+) -> Ended {
+    let listing = match app
+        .github
+        .list_account_repos(ownership.github_login())
+        .await
+    {
+        Ok(listing) => listing,
         Err(error) => return failed(app, &error),
     };
-    let selection = select_person_repos(&repos, DEFAULT_PERSON_REPO_COUNT);
+    let owner_did = ownership.owner_did();
+    let Ok(saved) = app.choices_read.saved_choice(owner_did, account_id) else {
+        return Ended::with_status(ScanStatus::Interrupted);
+    };
+    let plan = account_plan(&listing, AccountChoice::of(&saved));
+    if app
+        .scans
+        .record_plan(owner_did, run_id, &plan_rows(&plan, account_id))
+        .is_err()
+    {
+        return Ended::with_status(ScanStatus::Interrupted);
+    }
     let mut found = ScanCounts::default();
-    for repo in &selection.chosen {
+    for (position, repo) in plan.iter().enumerate() {
         if !github_budget_allows(app.github.last_rate_budget().map(|b| b.remaining)) {
             return paused(app).after_finding(found);
         }
-        match scan_repo(app, ownership.owner_did(), repo).await {
+        match scan_repo(app, owner_did, repo, account_id).await {
             Ok(counts) => found = add_counts(found, counts),
             Err(ended) => return ended.after_finding(found),
         }
+        let _ = app.scans.mark_repo_read(owner_did, run_id, position);
     }
     Ended::with_status(ScanStatus::Completed).after_finding(found)
 }
 
-/// Harvest one repo, derive and reconcile its suggestions, persist the new;
-/// what it found counts toward the scan's summary.
-async fn scan_repo(app: &App, owner_did: &str, repo: &OwnedRepo) -> Result<ScanCounts, Ended> {
+/// The store rows of an account's plan, in plan order.
+fn plan_rows(plan: &[PlannedRepo], account_id: u64) -> Vec<PlannedScanRepo> {
+    plan.iter()
+        .map(|repo| PlannedScanRepo {
+            repo_id: repo.repo_id,
+            full_name: repo.full_name.clone(),
+            source_account_id: account_id,
+        })
+        .collect()
+}
+
+/// Harvest one planned repo, derive and reconcile its suggestions, persist
+/// the new with where they came from; what it found counts toward the
+/// scan's summary.
+async fn scan_repo(
+    app: &App,
+    owner_did: &str,
+    repo: &PlannedRepo,
+    account_id: u64,
+) -> Result<ScanCounts, Ended> {
     let Some((owner, name)) = repo.full_name.split_once('/') else {
         return Ok(ScanCounts::default());
     };
@@ -213,8 +256,13 @@ async fn scan_repo(app: &App, owner_did: &str, repo: &OwnedRepo) -> Result<ScanC
         .into_iter()
         .collect();
     let reconciled = reconcile(&existing, derived);
+    let source = SuggestionSource {
+        account_id,
+        repo_id: repo.repo_id,
+        outside_default: repo.outside_default,
+    };
     app.review_write
-        .add_pending(owner_did, &reconciled.new)
+        .add_pending_from(owner_did, &source, &reconciled.new)
         .map(|()| reconciled.counts())
         .map_err(interrupted)
 }

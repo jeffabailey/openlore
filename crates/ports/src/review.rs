@@ -404,6 +404,67 @@ pub trait ScanRunPort: Send + Sync {
     /// The owners with a run paused for GitHub's budget (`rate_limited`),
     /// sorted: at startup their scans are scheduled to resume.
     fn owners_with_paused_scans(&self) -> Result<Vec<String>, ReviewStoreError>;
+
+    /// Freeze `run_id`'s plan before its first read (ADR-088 §6): one
+    /// `planned` row per repo, its position the order of `rows`.
+    fn record_plan(
+        &self,
+        owner_did: &str,
+        run_id: &str,
+        rows: &[PlannedScanRepo],
+    ) -> Result<(), ReviewStoreError>;
+
+    /// The planned repo at `position` of `run_id` was read.
+    fn mark_repo_read(
+        &self,
+        owner_did: &str,
+        run_id: &str,
+        position: usize,
+    ) -> Result<(), ReviewStoreError>;
+}
+
+/// One repo of a scan's frozen plan, read for the account it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedScanRepo {
+    pub repo_id: u64,
+    /// `owner/name` as listed when the plan was frozen.
+    pub full_name: String,
+    pub source_account_id: u64,
+}
+
+/// One repo of a saved choice (ADR-088 §3): every repo shown at Save is
+/// kept, ticked or not, keyed by GitHub's numeric repo id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedRepoChoice {
+    pub repo_id: u64,
+    /// `owner/name` as shown at Save.
+    pub full_name: String,
+    pub ticked: bool,
+}
+
+/// READS of an owner's saved repo choices (the choose page, the scan).
+pub trait RepoChoiceRead: Send + Sync {
+    /// The saved choice of one of the owner's accounts; empty when none was
+    /// ever saved (today's default ticks apply).
+    fn saved_choice(
+        &self,
+        owner_did: &str,
+        github_user_id: u64,
+    ) -> Result<Vec<SavedRepoChoice>, ReviewStoreError>;
+}
+
+/// WRITES of an owner's saved repo choice (the choose page's Save only).
+pub trait RepoChoiceWrite: Send + Sync {
+    /// Save `rows` as the account's choice: each row's tick replaces the
+    /// stored one, and a stored repo not among `rows` is no longer ticked.
+    /// `tally` is added in the same transaction.
+    fn save_choice(
+        &self,
+        owner_did: &str,
+        github_user_id: u64,
+        rows: &[SavedRepoChoice],
+        tally: KpiTally<'_>,
+    ) -> Result<(), ReviewStoreError>;
 }
 
 /// A suggestion's identity (BR-1): one per (subject, predicate, object).
@@ -457,6 +518,37 @@ pub struct Suggestion {
     pub source_repo: String,
 }
 
+/// Why a suggestion's repo is one the pre-feature scan would never have
+/// read (`suggestions.outside_default`, KPI-RRA-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutsideDefault {
+    /// An owned repo the owner chose outside today's default top 5.
+    OwnedChoice,
+}
+
+impl OutsideDefault {
+    pub const ALL: [OutsideDefault; 1] = [Self::OwnedChoice];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OwnedChoice => "owned_choice",
+        }
+    }
+
+    pub fn parse(stored: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|tag| tag.as_str() == stored)
+    }
+}
+
+/// Where a batch of suggestions came from: a repo of one of the owner's
+/// GitHub accounts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SuggestionSource {
+    pub account_id: u64,
+    pub repo_id: u64,
+    pub outside_default: Option<OutsideDefault>,
+}
+
 /// Owner-scoped READS of the suggestion queue (page renders).
 pub trait ReviewStateRead: Send + Sync {
     /// The owner's pending suggestions, in a stable order.
@@ -467,6 +559,14 @@ pub trait ReviewStateRead: Send + Sync {
         &self,
         owner_did: &str,
     ) -> Result<Vec<(SuggestionKey, SuggestionState)>, ReviewStoreError>;
+
+    /// Whether the owner's suggestion `key` came from a repo outside
+    /// today's default top 5 (`None`: inside it, or not found).
+    fn outside_default(
+        &self,
+        owner_did: &str,
+        key: &SuggestionKey,
+    ) -> Result<Option<OutsideDefault>, ReviewStoreError>;
 }
 
 /// Owner-scoped WRITES to the suggestion queue (transitions).
@@ -475,6 +575,15 @@ pub trait ReviewStateWrite: Send + Sync {
     fn add_pending(
         &self,
         owner_did: &str,
+        suggestions: &[Suggestion],
+    ) -> Result<(), ReviewStoreError>;
+
+    /// [`add_pending`](Self::add_pending), noting the account repo each
+    /// came from and whether it was outside today's default.
+    fn add_pending_from(
+        &self,
+        owner_did: &str,
+        source: &SuggestionSource,
         suggestions: &[Suggestion],
     ) -> Result<(), ReviewStoreError>;
 

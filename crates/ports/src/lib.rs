@@ -38,11 +38,12 @@ pub mod review;
 pub use review::{
     AuthenticatedIdentity, BeginAuthorizationError, CompleteAuthorizationError, CreatedRecord,
     ForgetPort, GithubAccountsRead, GithubAccountsWrite, GithubLink, GithubLinkPort,
-    KpiCounterPort, KpiCounterRow, KpiTally, LinkRecorded, NewWebSession, OAuthPort, PdsCallback,
-    PlanKind, PublishPlanPort, RepoWriteError, ReviewStateRead, ReviewStateWrite, ReviewStoreError,
-    ReviewStorePort, RevokeOutcome, ScanCounts, ScanRun, ScanRunPort, ScanStatus, SecretStorePort,
-    SessionPort, StoredPublishPlan, Suggestion, SuggestionKey, SuggestionState, TakenPublishPlan,
-    UserRepoReadPort, UserRepoWritePort, WebSession,
+    KpiCounterPort, KpiCounterRow, KpiTally, LinkRecorded, NewWebSession, OAuthPort,
+    OutsideDefault, PdsCallback, PlanKind, PlannedScanRepo, PublishPlanPort, RepoChoiceRead,
+    RepoChoiceWrite, RepoWriteError, ReviewStateRead, ReviewStateWrite, ReviewStoreError,
+    ReviewStorePort, RevokeOutcome, SavedRepoChoice, ScanCounts, ScanRun, ScanRunPort, ScanStatus,
+    SecretStorePort, SessionPort, StoredPublishPlan, Suggestion, SuggestionKey, SuggestionSource,
+    SuggestionState, TakenPublishPlan, UserRepoReadPort, UserRepoWritePort, WebSession,
 };
 
 // -----------------------------------------------------------------------------
@@ -118,7 +119,7 @@ pub use peer_storage::{
 // pure `scraper-domain` derivation crate (step 01-02) consumes these shapes.
 
 pub use github::{
-    CandidateClaim, CandidateClaimError, GithubAccountProfile, GithubError, OwnedRepo,
+    CandidateClaim, CandidateClaimError, GithubAccountProfile, GithubError, ListedRepo, OwnedRepo,
     PersonProfile, RawContributor, Signal, SignalKind, TargetKind,
 };
 
@@ -563,6 +564,11 @@ pub trait GithubPort: Send + Sync {
     /// `GET /users/{user}/repos?type=owner&sort=pushed&per_page=100`, the RAW
     /// rows (forks and archived repos included).
     async fn list_owned_repos(&self, user: &str) -> Result<Vec<OwnedRepo>, GithubError>;
+
+    /// [`list_owned_repos`](Self::list_owned_repos) with GitHub's numeric
+    /// repo and owner ids on each row (the choose page and the scan key
+    /// choices by them); rows without both ids are left out.
+    async fn list_account_repos(&self, user: &str) -> Result<Vec<ListedRepo>, GithubError>;
 
     /// The rate budget GitHub reported on the most recent response, if any
     /// (ADR-076 §2: a scan reads it before each repo).

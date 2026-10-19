@@ -3,13 +3,14 @@
 //! a pending suggestion is never readable by another DID (I-BRA-1).
 
 use duckdb::params;
+use duckdb::OptionalExt;
 use ports::{
-    KpiTally, ReviewStateRead, ReviewStateWrite, ReviewStoreError, Suggestion, SuggestionKey,
-    SuggestionState,
+    KpiTally, OutsideDefault, ReviewStateRead, ReviewStateWrite, ReviewStoreError, Suggestion,
+    SuggestionKey, SuggestionSource, SuggestionState,
 };
 
 use crate::secrets::port_error;
-use crate::{db_error, ReviewStore, StoreError};
+use crate::{db_error, db_id, ReviewStore, StoreError};
 
 const READ_PENDING: &str = "SELECT subject, predicate, object, confidence_bp, evidence, signals,
     source_repo FROM suggestions WHERE owner_did = ? AND state = 'pending'
@@ -23,6 +24,16 @@ const ADD_PENDING: &str = "INSERT INTO suggestions
      state, first_suggested_at, state_changed_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', now(), now())
     ON CONFLICT DO NOTHING";
+
+const ADD_PENDING_FROM_ACCOUNT: &str = "INSERT INTO suggestions
+    (owner_did, subject, predicate, object, confidence_bp, evidence, signals, source_repo,
+     state, first_suggested_at, state_changed_at, source_kind, source_account_id,
+     source_repo_id, outside_default)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', now(), now(), 'account', ?, ?, ?)
+    ON CONFLICT DO NOTHING";
+
+const READ_OUTSIDE_DEFAULT: &str = "SELECT outside_default FROM suggestions
+    WHERE owner_did = ? AND subject = ? AND predicate = ? AND object = ?";
 
 const CHANGE_STATE: &str = "UPDATE suggestions SET state = ?, state_changed_at = now()
     WHERE owner_did = ? AND subject = ? AND predicate = ? AND object = ? AND state = ?";
@@ -59,6 +70,24 @@ impl ReviewStateRead for ReviewStore {
                 })
                 .map_err(db_error)?;
             rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+        })
+        .map_err(port_error)
+    }
+
+    fn outside_default(
+        &self,
+        owner_did: &str,
+        key: &SuggestionKey,
+    ) -> Result<Option<OutsideDefault>, ReviewStoreError> {
+        self.with_connection(|conn| {
+            conn.query_row(
+                READ_OUTSIDE_DEFAULT,
+                params![owner_did, key.subject, key.predicate, key.object],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(|stored| stored.flatten().as_deref().and_then(OutsideDefault::parse))
+            .map_err(db_error)
         })
         .map_err(port_error)
     }
@@ -109,6 +138,40 @@ impl ReviewStateWrite for ReviewStore {
                         to_json(&s.evidence),
                         to_json(&s.why),
                         s.source_repo,
+                    ],
+                )
+                .map(drop)
+                .map_err(db_error)
+            })
+        })
+        .map_err(port_error)
+    }
+
+    fn add_pending_from(
+        &self,
+        owner_did: &str,
+        source: &SuggestionSource,
+        suggestions: &[Suggestion],
+    ) -> Result<(), ReviewStoreError> {
+        self.with_connection(|conn| {
+            let account_id = db_id(source.account_id)?;
+            let repo_id = db_id(source.repo_id)?;
+            let outside_default = source.outside_default.map(OutsideDefault::as_str);
+            suggestions.iter().try_for_each(|s| {
+                conn.execute(
+                    ADD_PENDING_FROM_ACCOUNT,
+                    params![
+                        owner_did,
+                        s.key.subject,
+                        s.key.predicate,
+                        s.key.object,
+                        s.confidence_bp,
+                        to_json(&s.evidence),
+                        to_json(&s.why),
+                        s.source_repo,
+                        account_id,
+                        repo_id,
+                        outside_default,
                     ],
                 )
                 .map(drop)

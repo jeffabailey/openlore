@@ -2,10 +2,12 @@
 
 use duckdb::types::{TimeUnit, Value};
 use duckdb::{params, OptionalExt};
-use ports::{KpiTally, ReviewStoreError, ScanCounts, ScanRun, ScanRunPort, ScanStatus};
+use ports::{
+    KpiTally, PlannedScanRepo, ReviewStoreError, ScanCounts, ScanRun, ScanRunPort, ScanStatus,
+};
 
 use crate::secrets::port_error;
-use crate::{db_error, ReviewStore, StoreError};
+use crate::{db_error, db_id, in_transaction, ReviewStore, StoreError};
 
 const START_SCAN: &str = "INSERT INTO scan_runs
     (owner_did, run_id, status, started_at) VALUES (?, ?, 'running', now())";
@@ -14,6 +16,14 @@ const FINISH_SCAN: &str = "UPDATE scan_runs
     SET status = ?, resume_after = to_timestamp(?), finished_at = now(),
         new_count = ?, published_count = ?, declined_count = ?
     WHERE owner_did = ? AND run_id = ?";
+
+// ADR-088 §6: the frozen plan, one row per repo, written before the first read.
+const RECORD_PLAN_ROW: &str = "INSERT INTO scan_run_repos
+    (owner_did, run_id, position, repo_id, full_name, source_kind, source_account_id, status)
+    VALUES (?, ?, ?, ?, ?, 'account', ?, 'planned')";
+
+const MARK_REPO_READ: &str = "UPDATE scan_run_repos SET status = 'read'
+    WHERE owner_did = ? AND run_id = ? AND position = ?";
 
 // Restart sweep, one owner at a time (every statement owner-scoped).
 const OWNERS_WITH_RUNNING_SCANS: &str =
@@ -128,6 +138,51 @@ impl ScanRunPort for ReviewStore {
     fn owners_with_paused_scans(&self) -> Result<Vec<String>, ReviewStoreError> {
         self.with_connection(|conn| owners_where(conn, OWNERS_WITH_PAUSED_SCANS))
             .map_err(port_error)
+    }
+
+    fn record_plan(
+        &self,
+        owner_did: &str,
+        run_id: &str,
+        rows: &[PlannedScanRepo],
+    ) -> Result<(), ReviewStoreError> {
+        self.with_connection(|conn| {
+            in_transaction(conn, |conn| {
+                rows.iter().enumerate().try_for_each(|(position, row)| {
+                    conn.execute(
+                        RECORD_PLAN_ROW,
+                        params![
+                            owner_did,
+                            run_id,
+                            stored_count(position),
+                            db_id(row.repo_id)?,
+                            row.full_name,
+                            db_id(row.source_account_id)?,
+                        ],
+                    )
+                    .map(drop)
+                    .map_err(db_error)
+                })
+            })
+        })
+        .map_err(port_error)
+    }
+
+    fn mark_repo_read(
+        &self,
+        owner_did: &str,
+        run_id: &str,
+        position: usize,
+    ) -> Result<(), ReviewStoreError> {
+        self.with_connection(|conn| {
+            conn.execute(
+                MARK_REPO_READ,
+                params![owner_did, run_id, stored_count(position)],
+            )
+            .map(drop)
+            .map_err(db_error)
+        })
+        .map_err(port_error)
     }
 
     fn latest_scan(&self, owner_did: &str) -> Result<Option<ScanRun>, ReviewStoreError> {

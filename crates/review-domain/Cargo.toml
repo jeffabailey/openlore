@@ -16,6 +16,9 @@ maud = { workspace = true }
 # its re-export, claim-domain's display-only confidence bucket.
 ports = { path = "../ports" }
 serde_json = { workspace = true }
+# Today's owned-repo ranking (`select_person_repos`): the choose page's order
+# and default ticks reuse it unchanged (component-boundaries §1). PURE.
+scraper-domain = { path = "../scraper-domain" }
 # Bluesky counts a post's length in grapheme clusters (300 max, I-BRA-6).
 unicode-segmentation = "1"
 

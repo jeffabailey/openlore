@@ -17,6 +17,7 @@ pub mod ownership;
 pub mod plans;
 pub mod published;
 pub mod reconcile;
+pub mod repo_scope;
 pub mod selection;
 pub mod share;
 pub mod signin;

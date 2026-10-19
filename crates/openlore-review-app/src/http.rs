@@ -16,8 +16,8 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ports::{
     ForgetPort, GithubLinkPort, GithubPort, IdentityLookupPort, KpiCounterPort, OAuthPort,
-    PublishPlanPort, RepoListingPort, ReviewStateRead, ReviewStateWrite, ScanRunPort, SessionPort,
-    UserRepoReadPort, UserRepoWritePort,
+    PublishPlanPort, RepoChoiceRead, RepoChoiceWrite, RepoListingPort, ReviewStateRead,
+    ReviewStateWrite, ScanRunPort, SessionPort, UserRepoReadPort, UserRepoWritePort,
 };
 use review_domain::signin::PermissionMode;
 use scraper_domain::SignalPredicateMapping;
@@ -76,6 +76,9 @@ pub(crate) struct App {
     pub(crate) scans: Arc<dyn ScanRunPort>,
     pub(crate) review_read: Arc<dyn ReviewStateRead>,
     pub(crate) review_write: Arc<dyn ReviewStateWrite>,
+    pub(crate) choices_read: Arc<dyn RepoChoiceRead>,
+    /// Held by the choose page's Save only.
+    pub(crate) choices_write: Arc<dyn RepoChoiceWrite>,
     pub(crate) plans: Arc<dyn PublishPlanPort>,
     pub(crate) repo_write: Arc<dyn UserRepoWritePort>,
     pub(crate) repo_read: Arc<dyn UserRepoReadPort>,

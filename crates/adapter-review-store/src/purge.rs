@@ -52,8 +52,9 @@ mod tests {
     use super::*;
     use crate::DataKey;
     use ports::{
-        GithubLinkPort, KpiCounterPort, NewWebSession, ReviewStateRead, ReviewStateWrite,
-        SecretStorePort, SessionPort, Suggestion, SuggestionKey,
+        GithubLinkPort, KpiCounterPort, NewWebSession, PlannedScanRepo, RepoChoiceWrite,
+        ReviewStateRead, ReviewStateWrite, SavedRepoChoice, ScanRunPort, SecretStorePort,
+        SessionPort, Suggestion, SuggestionKey,
     };
     use proptest::prelude::*;
 
@@ -151,6 +152,28 @@ mod tests {
             })
             .collect();
         store.add_pending(owner, &suggestions).unwrap();
+        let chosen: Vec<SavedRepoChoice> = (0..n)
+            .map(|i| SavedRepoChoice {
+                repo_id: i as u64 + 1,
+                full_name: format!("{owner}/repo{i}"),
+                ticked: i % 2 == 0,
+            })
+            .collect();
+        store
+            .save_choice(owner, github_id, &chosen, KpiTally::NONE)
+            .unwrap();
+        store.start_scan(owner, &format!("run-{owner}")).unwrap();
+        let plan: Vec<PlannedScanRepo> = chosen
+            .iter()
+            .map(|c| PlannedScanRepo {
+                repo_id: c.repo_id,
+                full_name: c.full_name.clone(),
+                source_account_id: github_id,
+            })
+            .collect();
+        store
+            .record_plan(owner, &format!("run-{owner}"), &plan)
+            .unwrap();
         store.count("2026-10-04", "signin.completed").unwrap();
     }
 

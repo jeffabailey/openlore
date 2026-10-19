@@ -43,8 +43,8 @@
 
 use async_trait::async_trait;
 use ports::{
-    GithubAccountProfile, GithubError, GithubPort, OwnedRepo, PersonProfile, ProbeOutcome,
-    RateBudget, RawContributor, Signal, TargetKind,
+    GithubAccountProfile, GithubError, GithubPort, ListedRepo, OwnedRepo, PersonProfile,
+    ProbeOutcome, RateBudget, RawContributor, Signal, TargetKind,
 };
 
 pub mod client;
@@ -426,6 +426,14 @@ impl GithubPort for GithubAdapter {
         let path = format!("/users/{user}/repos?type=owner&sort=pushed&per_page=100");
         let body = self.get_public(&path, user).await?;
         client::parse_owned_repos(&body).map_err(GithubError::ApiShape)
+    }
+
+    /// The same one request as [`list_owned_repos`](Self::list_owned_repos),
+    /// each row with its numeric repo and owner ids.
+    async fn list_account_repos(&self, user: &str) -> Result<Vec<ListedRepo>, GithubError> {
+        let path = format!("/users/{user}/repos?type=owner&sort=pushed&per_page=100");
+        let body = self.get_public(&path, user).await?;
+        client::parse_listed_repos(&body).map_err(GithubError::ApiShape)
     }
 
     fn last_rate_budget(&self) -> Option<RateBudget> {
