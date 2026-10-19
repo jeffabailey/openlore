@@ -1328,3 +1328,40 @@ fn network_search_leaves_a_github_row_that_is_not_a_link_unlabelled() {
         found.stdout
     );
 }
+
+/// IR-8e (error, lifecycle — U-51 / U-39; chained on IR-8c)
+/// ```gherkin
+/// @driving_port @real-io @error @u-51 @u-39 @gdl-d5 @c2b @contract-shape:unbounded-preservation
+/// Scenario: A retraction that repeats the link's evidence never shows as a link
+///   Given Jeff follows Rachel, who published a link to github "rachelk"
+///   And Rachel retracted that link with a record repeating its subject, predicate, object and evidence, and Jeff pulled her claims again
+///   When Jeff lists linked identities for did:plc:rachel-test
+///   Then nothing links did:plc:rachel-test to github:rachelk
+///   And Rachel's contributor page in his viewer shows no linked-identities region
+/// ```
+#[test]
+#[ignore = "DELIVER 04-09: a retraction that repeats the link's evidence never shows (U-51)"]
+fn a_retraction_that_repeats_the_links_evidence_never_shows_as_a_link() {
+    let mut world = LinkWorld::with(&[RACHEL_GH]);
+    let link = link_spec(RACHEL_DID, RACHEL_GH);
+    let cids = given_peer_published(&mut world, Peer::Rachel, vec![link.clone()]);
+    // Another client's retraction: the `retracts` reference plus the link's
+    // full triple AND evidence (U-51) — a well-formed link apart from that
+    // reference.
+    let retraction = PeerClaimSpec {
+        evidence: link.evidence.clone(),
+        ..peer_retraction_of(&link, &cids[0])
+    };
+    given_peer_published(&mut world, Peer::Rachel, vec![retraction]);
+
+    let listed = when_i_list_with(&world, &["--did", RACHEL_DID], None);
+
+    assert_eq!(listed.status, 0, "{}\n{}", listed.stdout, listed.stderr);
+    assert_shown(&listed, RACHEL_DID, RACHEL_GH, Shown::Nothing);
+    let page = support::viewer_identities::when_i_open_page(
+        &world,
+        None,
+        &support::viewer_identities::PersonPage::Contributor(RACHEL_DID),
+    );
+    support::viewer_identities::assert_no_region("Rachel's page", &page);
+}

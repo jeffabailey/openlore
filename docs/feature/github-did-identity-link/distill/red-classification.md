@@ -103,6 +103,7 @@ missing region or the unbound seam.
 | VL-13 | `the_results_swap_and_the_full_page_carry_the_same_linked_identities` | `[Jeff's page, full page] expected a \`Linked identities\` region;` | MISSING_FUNCTIONALITY ✅ |
 | VL-G | `xtask::viewer_fail_seam::ungated_identity_links_seam_in_release_path_is_rejected` | `an ungated OPENLORE_VIEWER_FAIL_IDENTITY_LINKS read would ship a link-read backdoor in a release binary and MUST be flagged, got: []` | MISSING_FUNCTIONALITY ✅ (token not yet in `VIEWER_FAIL_SEAM_TOKENS`) |
 
+| IR-8e (U-51) | `identity_link_readers::a_retraction_that_repeats_the_links_evidence_never_shows_as_a_link` | `did:plc:rachel-test and github:rachelk must not be shown as a link at all;` (the retraction repeating the evidence lists as Rachel's link; run `--run-ignored ignored-only -E 'test(a_retraction_that_repeats)'`, `cargo clippy -p cli --tests` clean) | MISSING_FUNCTIONALITY ✅ |
 Result: **0 BROKEN, 0 WRONG_ASSERTION.** Not yet reached (an earlier row fails first), each using
 only shipped behaviour: VL-2's proof-gone rows (`identity verify --github rachelk` after a bio or
 account change on the GitHub double), VL-9's `/search` rows and the VL-14 damaged-store row
