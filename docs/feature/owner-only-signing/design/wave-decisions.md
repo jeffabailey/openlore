@@ -236,7 +236,7 @@ Source: `docs/feature/owner-only-signing/distill/wave-decisions.md` § Upstream 
 - **U-OOS-1** — OOS-D13 superseded (above); slice 4 = share-draft rule only.
 - **OOS-D7 clarification** — GitHub unavailable at sign time (above).
 
-### Proposed rulings — PROPOSED, need user confirmation (not accepted)
+### Rulings P-OOS-1..3 — ACCEPTED (user, 2026-10-20, chose each recommended ruling)
 
 | ID | Question | Proposed ruling | Alternative |
 |---|---|---|---|
