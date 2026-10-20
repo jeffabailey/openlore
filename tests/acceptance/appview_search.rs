@@ -750,6 +750,7 @@ fn local_first_preserved() {
     // search.hung (false). The local store mutated only by the authoring verbs,
     // never by search.
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:rust-lang/rust", None);
     let object = "org.openlore.philosophy.reproducible-builds";
 
     // -- Precondition: the discovery indexer is UNREACHABLE — `OPENLORE_INDEXER_URL`

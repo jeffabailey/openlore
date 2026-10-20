@@ -22,6 +22,7 @@ use support::*;
 #[test]
 fn a_claim_added_while_the_viewer_runs_shows_up_in_the_viewer() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:concurrent-org/shared-store", None);
     let viewer = ViewerServer::start(&env);
     assert_eq!(viewer.get("/claims").status, 200, "the viewer serves first");
 

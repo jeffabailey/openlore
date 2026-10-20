@@ -481,6 +481,7 @@ fn counter_claim_rejects_self_counter_with_retract_hint() {
     // publish with "n"), so a genuine self-target lives in the user's own
     // `claims` table. The CombinedClaimLookup resolves the own store FIRST,
     // so this is the row that trips the self-counter guard (WD-34).
+    seed_repo_authority(&env, "github:rust-lang/rust", None);
     let seed = run_openlore_with_stdin(
         &env,
         &[

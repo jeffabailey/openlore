@@ -463,6 +463,7 @@ pub fn given_i_signed(
         args.push("--evidence");
         args.push(url);
     }
+    seed_repo_authority(env, subject, now);
     let outcome = openlore_with(
         env,
         &args,

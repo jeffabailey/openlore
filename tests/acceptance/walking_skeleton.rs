@@ -130,6 +130,7 @@ fn walking_skeleton_claim_commands_fail_loudly_when_not_initialized() {
 fn walking_skeleton_compose_preview_contains_not_as_truth_and_waits_for_confirmation() {
     // Given Jeff has authenticated as did:plc:test-jeff (via initialized env)
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:rust-lang/rust", None);
 
     // When Jeff runs `openlore claim add` with all flags and DOES NOT
     // send Enter (we read stdout and kill the process before
@@ -222,6 +223,7 @@ fn walking_skeleton_compose_rejects_confidence_outside_unit_interval() {
 #[test]
 fn walking_skeleton_compose_preview_shows_bucket_label_but_signed_payload_has_only_numeric() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:mastodon/mastodon", None);
 
     // Compose with confidence 0.55 and sign (Enter); skip publish (n).
     let outcome = run_openlore_with_stdin(
@@ -306,7 +308,10 @@ fn walking_skeleton_sign_writes_atomic_local_file_with_no_network_call() {
             "claim",
             "add",
             "--subject",
-            "github:rust-lang/rust",
+            // I-9 (owner-only-signing U-OOS-2): signing stays offline-capable
+            // for any subject outside `github:`, whose assertions need a
+            // fresh repo check; this offline beat keeps a non-github subject.
+            "https://www.rust-lang.org/",
             "--predicate",
             "embodiesPhilosophy",
             "--object",
@@ -431,6 +436,8 @@ fn walking_skeleton_re_canonicalization_produces_identical_cids() {
     // canonicalize identical pre-images. The SystemClockAdapter honors
     // this env var as a test-only seam (production behavior unchanged).
     let pinned_now = "2026-05-26T12:00:00Z";
+    seed_repo_authority(&env_first, "github:rust-lang/rust", Some(pinned_now));
+    seed_repo_authority(&env_second, "github:rust-lang/rust", Some(pinned_now));
 
     let outcome_first =
         run_openlore_claim_add_with_pinned_now(&env_first, &first_args, "\nn\n", pinned_now);
@@ -535,6 +542,7 @@ fn parse_cid_from_stdout(stdout: &str) -> String {
 #[test]
 fn walking_skeleton_publish_prints_at_uri_and_retract_hint_after_signing() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:rust-lang/rust", None);
 
     let outcome = run_openlore_with_stdin(
         &env,
@@ -610,6 +618,7 @@ fn parse_at_uri_from_stdout(stdout: &str) -> String {
 #[test]
 fn walking_skeleton_publish_is_idempotent_on_re_run_with_same_cid() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:rust-lang/rust", None);
 
     // First publish via chained flow. Step 05-08 wired this; the
     // chained-Y branch funnels through the same `publish_signed_claim`
@@ -693,6 +702,7 @@ fn walking_skeleton_publish_is_idempotent_on_re_run_with_same_cid() {
 #[test]
 fn walking_skeleton_pds_unreachable_leaves_local_claim_intact_and_retry_actionable() {
     let mut env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:rust-lang/rust", None);
     env.pds.simulate_unreachable();
 
     let outcome = run_openlore_with_stdin(
@@ -760,6 +770,7 @@ fn walking_skeleton_pds_unreachable_leaves_local_claim_intact_and_retry_actionab
 #[test]
 fn walking_skeleton_graph_query_returns_just_published_claim_byte_for_byte() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:rust-lang/rust", None);
 
     // Step 05-11: the support-level `fixture_jeff_rust_memory_safety()`
     // builder is still a DELIVER scaffold (US-001 Example 1 fixture has
@@ -837,6 +848,7 @@ fn walking_skeleton_graph_query_returns_just_published_claim_byte_for_byte() {
 #[test]
 fn walking_skeleton_graph_query_default_is_local_only_and_footer_announces_it() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:rust-lang/rust", None);
 
     // Seed one claim so the query has something to render
     let _ = run_openlore_with_stdin(
@@ -896,6 +908,7 @@ fn walking_skeleton_graph_query_empty_result_is_explained_not_silent() {
 #[test]
 fn walking_skeleton_retract_publishes_new_counter_claim_referencing_original() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:rust-lang/rust", None);
 
     // Publish original — chained Y branch funnels through the single
     // publish code path (ADR-003), so we can parse the CID out of the
@@ -956,6 +969,7 @@ fn walking_skeleton_retract_publishes_new_counter_claim_referencing_original() {
 #[test]
 fn walking_skeleton_retract_preserves_original_record_in_local_and_remote_stores() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:rust-lang/rust", None);
     let subject = "github:rust-lang/rust";
 
     // Step 1: Publish original via chained Y flow (single publish code
@@ -1042,6 +1056,7 @@ fn walking_skeleton_retract_preserves_original_record_in_local_and_remote_stores
 #[test]
 fn walking_skeleton_corrective_workflow_publishes_new_claim_and_retracts_old() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:rust-lang/rust", None);
     let subject = "github:rust-lang/rust";
 
     // Step 1 — Publish typo'd claim (wrong evidence URL). Use the
@@ -1152,6 +1167,7 @@ fn walking_skeleton_corrective_workflow_publishes_new_claim_and_retracts_old() {
 #[test]
 fn walking_skeleton_calibration_anxiety_user_cancels_and_re_runs_with_lower_confidence() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:rust-lang/rust", None);
 
     // First invocation: confidence 0.9, then cancel (close stdin without
     // sending Enter — the binary should exit non-zero / cleanly)

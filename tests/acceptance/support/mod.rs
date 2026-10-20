@@ -3437,6 +3437,7 @@ fn seed_own_plus_peer_graph(
     let mut seeded: Vec<SeededClaim> = Vec::new();
     for own in own_claims {
         let confidence = own.confidence.to_string();
+        seed_repo_authority(env, own.subject, None);
         let added = run_openlore_with_stdin(
             env,
             &[
@@ -7999,6 +8000,84 @@ impl Drop for ViewerServer {
     }
 }
 
+// -----------------------------------------------------------------------------
+// owner-only-signing (step 02-06, ruling F4): repo authority for shipped suites
+// -----------------------------------------------------------------------------
+
+/// GIVEN (owner-only-signing, ADR-087 RepoListed): the repo a
+/// `github:<owner>/<repo>` subject names lists this env's DID in its
+/// `.github/openlore-authority` file, and the env re-checked it with the REAL
+/// `openlore authority verify --subject <subject>` verb at `now` (the
+/// subprocess clock; `None` = the real clock, matching the later signing
+/// run). The check is Attested (repo-listed) and dated at the signing clock,
+/// so a `claim add` about the repo would pass the repo gate (02-07): attested
+/// and at most 7 days old. GitHub is a fake serving only that repo (owned by
+/// an organization, so the listing — never ownership — is the grant). Any
+/// other subject (not `github:`, a person, malformed) needs no repo
+/// authority and is left alone.
+pub fn seed_repo_authority(env: &TestEnv, subject: &str, now: Option<&str>) {
+    let Some((owner, name)) = repo_of_github_subject(subject) else {
+        return;
+    };
+    let owner_id = 7_000_000
+        + owner
+            .bytes()
+            .fold(0_u64, |acc, byte| (acc * 31 + u64::from(byte)) % 1_000_000);
+    let github = openlore_test_support::FakeGithubAccounts::start(vec![
+        openlore_test_support::GithubAccount::new(owner, owner_id)
+            .organization()
+            .repo(openlore_test_support::GithubRepo::owned(name)),
+    ]);
+    github.set_authority_file(
+        owner,
+        name,
+        Some(openlore_test_support::AuthorityFile::Lists(format!(
+            "# OpenLore signers for this repo\n{}\n",
+            env.identity.author_did()
+        ))),
+    );
+    let outcome = people::openlore_with(
+        env,
+        &["authority", "verify", "--subject", subject],
+        people::Invocation {
+            github_base: Some(github.base_url()),
+            now,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        outcome.status, 0,
+        "precondition: `authority verify --subject {subject}` must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+}
+
+/// [`seed_repo_authority`] for every distinct subject in `subjects`.
+pub fn seed_repo_authority_for_all<'a>(
+    env: &TestEnv,
+    subjects: impl IntoIterator<Item = &'a str>,
+    now: Option<&str>,
+) {
+    let mut seen: Vec<String> = Vec::new();
+    for subject in subjects {
+        let key = subject.to_lowercase();
+        if !seen.contains(&key) {
+            seed_repo_authority(env, subject, now);
+            seen.push(key);
+        }
+    }
+}
+
+/// `(owner, repo)` when `subject` is `github:<owner>/<repo>`.
+fn repo_of_github_subject(subject: &str) -> Option<(&str, &str)> {
+    let (scheme, path) = subject.split_once(':')?;
+    if !scheme.eq_ignore_ascii_case("github") {
+        return None;
+    }
+    let (owner, name) = path.split_once('/')?;
+    (!owner.is_empty() && !name.is_empty() && !name.contains('/')).then_some((owner, name))
+}
+
 /// Seed `count` of the operator's OWN signed claims into the env's REAL slice-01
 /// `claims` table through the PRODUCTION write path — the `openlore claim add`
 /// verb (Pillar 3: the production composition root, the SAME store the viewer
@@ -8071,6 +8150,7 @@ pub fn seed_own_claim_with_evidence(
         args.push(url);
     }
 
+    seed_repo_authority(env, subject, None);
     let outcome = run_openlore_with_stdin(env, &args, "\n");
     if outcome.status != 0 {
         panic!(
@@ -18310,6 +18390,7 @@ pub fn assert_init_refused_with(init: &CliOutcome, message: &str, reason_code: &
 /// CID. This is a Given (precondition), never the expected end-state.
 pub fn seed_one_signed_local_claim(env: &TestEnv, confidence: f64) -> String {
     let confidence_arg = format!("{confidence}");
+    seed_repo_authority(env, "github:rust-lang/rust", None);
     let added = run_openlore_with_stdin(
         env,
         &[

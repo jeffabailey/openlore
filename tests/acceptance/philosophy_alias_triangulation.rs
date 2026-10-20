@@ -197,6 +197,7 @@ fn own_philosophy_claim_args<'a>(
 /// (the alias claim is filtered out by the exact-`object` read) → the RED driver.
 fn seed_alias_triangulation(env: &TestEnv) -> AliasTriangulation {
     // -- The LOCAL user's OWN claim on the ALIAS object (author "(you)"). --
+    seed_repo_authority(env, ALIAS_SUBJECT, None);
     let own = run_openlore_with_stdin(
         env,
         &own_philosophy_claim_args(ALIAS_SUBJECT, ALIAS_OBJECT, ALIAS_CONFIDENCE),
@@ -583,6 +584,7 @@ fn graph_query_other_class_object_returns_only_its_exact_matches() {
 
     // Seed TWO of the LOCAL user's own claims in DISTINCT equivalence classes:
     // one on `dependency-pinning`, one on `mem-safety` (the memory-safety class).
+    seed_repo_authority(&env, OTHER_CLASS_SUBJECT, None);
     let dep = run_openlore_with_stdin(
         &env,
         &own_philosophy_claim_args(OTHER_CLASS_SUBJECT, OTHER_CLASS_OBJECT, "0.90"),
@@ -594,6 +596,7 @@ fn graph_query_other_class_object_returns_only_its_exact_matches() {
          --- stdout ---\n{}\n--- stderr ---\n{}",
         dep.stdout, dep.stderr
     );
+    seed_repo_authority(&env, ALIAS_SUBJECT, None);
     let mem = run_openlore_with_stdin(
         &env,
         &own_philosophy_claim_args(ALIAS_SUBJECT, ALIAS_OBJECT, ALIAS_CONFIDENCE),

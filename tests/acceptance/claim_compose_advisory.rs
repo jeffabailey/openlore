@@ -246,6 +246,7 @@ fn sole_signed_claim_text(env: &TestEnv) -> String {
 #[test]
 fn compose_advisory_known_object_shows_resolution_and_signs_normally() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, SUBJECT, None);
 
     // `\nn\n` = <Enter> to sign locally, then `n` to defer publish — the same
     // two-prompt confirmation shape the slice-01 walking skeleton uses (WS-6).
@@ -300,6 +301,7 @@ fn compose_advisory_known_object_shows_resolution_and_signs_normally() {
 #[test]
 fn compose_advisory_alias_object_resolves_to_canonical_and_marks_alias() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, SUBJECT, None);
 
     // Empty stdin = the preview is printed, then the process waits/cancels at the
     // sign prompt WITHOUT writing (slice-01 WS-3 no-write-before-confirm seam).
@@ -349,6 +351,7 @@ fn compose_advisory_alias_object_resolves_to_canonical_and_marks_alias() {
 #[test]
 fn compose_advisory_unknown_object_warns_but_still_signs_when_confirmed() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, SUBJECT, None);
 
     let outcome = run_openlore_with_stdin(&env, &philosophy_claim_args(UNKNOWN_OBJECT), "\nn\n");
 
@@ -402,6 +405,7 @@ fn compose_advisory_unknown_object_warns_but_still_signs_when_confirmed() {
 #[test]
 fn compose_advisory_does_not_alter_the_signed_object_bytes() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, SUBJECT, None);
 
     let outcome = run_openlore_with_stdin(&env, &philosophy_claim_args(ALIAS_OBJECT), "\nn\n");
 
@@ -461,6 +465,7 @@ fn compose_advisory_does_not_alter_the_signed_object_bytes() {
 #[test]
 fn compose_advisory_absent_for_non_philosophy_object() {
     let env = TestEnv::initialized();
+    seed_repo_authority(&env, "github:rust-lang/cargo", None);
 
     let outcome = run_openlore_with_stdin(&env, &nonphilosophy_claim_args(), "\nn\n");
 

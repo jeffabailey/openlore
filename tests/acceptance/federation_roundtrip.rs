@@ -47,6 +47,7 @@ fn federation_roundtrip_publish_three_claims_different_predicates_all_round_trip
 {
     let env = TestEnv::initialized();
     let fixtures = fixture_three_claims_different_predicates();
+    seed_repo_authority_for_all(&env, fixtures.iter().map(|f| f.subject.as_str()), None);
     assert_eq!(
         fixtures.len(),
         3,
@@ -150,6 +151,7 @@ fn parse_cid_from_stdout(stdout: &str) -> String {
 fn federation_roundtrip_pds_record_rkey_equals_claim_cid() {
     let env = TestEnv::initialized();
     let fixture = fixture_jeff_rust_memory_safety();
+    seed_repo_authority(&env, &fixture.subject, None);
 
     let outcome = run_openlore_with_stdin(
         &env,
@@ -220,6 +222,7 @@ fn federation_roundtrip_pds_record_rkey_equals_claim_cid() {
 fn federation_roundtrip_at_uri_is_reconstructible_from_author_did_and_claim_cid() {
     let env = TestEnv::initialized();
     let fixture = fixture_jeff_rust_memory_safety();
+    seed_repo_authority(&env, &fixture.subject, None);
 
     let outcome = run_openlore_with_stdin(
         &env,
@@ -311,6 +314,7 @@ fn parse_at_uri_from_stdout(stdout: &str) -> String {
 fn federation_roundtrip_graph_query_output_matches_compose_preview_field_for_field() {
     let env = TestEnv::initialized();
     let fixture = fixture_jeff_rust_memory_safety();
+    seed_repo_authority(&env, &fixture.subject, None);
 
     // Capture the compose preview output (sign+publish). The compose
     // preview is written to stdout BEFORE the sign prompt is consumed

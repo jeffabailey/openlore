@@ -55,6 +55,7 @@ fn federated_query_returns_author_and_peer_claims_grouped_by_author_did() {
     // first two-prompt step signs + persists locally, which is all the
     // federated READ path needs). `\n` confirms the sign prompt; the
     // empty publish answer declines publishing (local-only).
+    seed_repo_authority(&env, subject, None);
     let own = run_openlore_with_stdin(
         &env,
         &[
@@ -226,6 +227,7 @@ fn federated_query_renders_identical_content_from_different_authors_as_two_separ
     // content triple but a DIFFERENT confidence (0.91 vs Rachel's 0.42). `\n`
     // confirms the sign prompt; `N\n` declines publishing (local-only — the
     // federated READ path only needs the locally-signed claim). --
+    seed_repo_authority(&env, subject, None);
     let own = run_openlore_with_stdin(
         &env,
         &[
@@ -424,6 +426,7 @@ fn federated_query_default_without_flag_is_byte_identical_to_slice_01_behavior()
 
     // -- The LOCAL user adds ONE of their own claims (the only row the
     // default, non-federated path may ever surface). --
+    seed_repo_authority(&env, subject, None);
     let own = run_openlore_with_stdin(
         &env,
         &[
@@ -592,6 +595,7 @@ fn federated_query_with_zero_peers_subscribed_degrades_with_hint() {
     // (UAT scenario #4; US-FED-003 AC #7). `\n` confirms the sign prompt;
     // `N\n` declines publishing (local-only — the federated READ path only
     // needs the locally-signed claim). --
+    seed_repo_authority(&env, subject, None);
     let own = run_openlore_with_stdin(
         &env,
         &[
@@ -1021,6 +1025,7 @@ fn federated_query_renders_inline_counter_template_per_peer_row_by_default() {
     // NOT carry a counter template — you do not counter your own claim
     // (WD-42; own rows are excluded). `\n` confirms the sign prompt; `N\n`
     // declines publishing (local-only). --
+    seed_repo_authority(&env, subject, None);
     let own = run_openlore_with_stdin(
         &env,
         &[
@@ -1186,6 +1191,7 @@ fn federated_query_no_merged_rows_across_multi_author_multi_record_fixture() {
     // -- Author 1: the LOCAL user (Maria) adds ONE of her OWN claims. `\n`
     // confirms the sign prompt; `N\n` declines publishing (local-only — the
     // federated READ path only needs the locally-signed claim). --
+    seed_repo_authority(&env, subject, None);
     let own = run_openlore_with_stdin(
         &env,
         &[
