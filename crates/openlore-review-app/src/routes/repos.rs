@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use hyper::StatusCode;
 use ports::{
     AccountRepoListing, GithubError, GithubLink, ImportedRepo, KpiTally, RepoSource,
-    SavedRepoChoice, WebSession,
+    SavedRepoChoice, WebSession, LISTING_PAGE_LIMIT,
 };
 use review_domain::budget::PageReadAdmission;
 use review_domain::kpi::{choice_saved_events, utc_day, KpiEvent};
@@ -196,19 +196,24 @@ pub(crate) fn page_reads_admitted(app: &App, owner_did: &str, wanted: usize) -> 
 
 /// List each of `verified` once, admitted with `also` more requests the
 /// action makes (R3); `None` when the allowance refuses: nothing was asked.
+/// Each listing is admitted for its page limit, every page an HTTP request
+/// (re-review N2); the pages a listing did not take are given back, and a
+/// failed listing keeps its whole admission (which page failed is unknown).
 pub(crate) async fn read_listings(
     app: &App,
     owner_did: &str,
     verified: &[(u64, &str)],
     also: usize,
 ) -> Option<Listings> {
-    if !page_reads_admitted(app, owner_did, verified.len() + also) {
+    if !page_reads_admitted(app, owner_did, verified.len() * LISTING_PAGE_LIMIT + also) {
         return None;
     }
     let mut listings = Vec::with_capacity(verified.len());
     for (github_user_id, login) in verified {
         let answer = match app.github.list_account_repos(login).await {
             Ok(listing) => {
+                app.page_reads
+                    .refund(owner_did, LISTING_PAGE_LIMIT - listing.pages_read());
                 let _ = app.listing_note.record_eligible_count(
                     owner_did,
                     *github_user_id,

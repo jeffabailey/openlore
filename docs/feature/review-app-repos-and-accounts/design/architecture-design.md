@@ -226,6 +226,29 @@ own htmx fragment with a loading state (NFR-RRA-2). No cache (a cached listing w
 transferred repos). A failed listing shows the cause and the next step and leaves the saved
 choice alone (AC-001.5). Unverified accounts show the fix and a link, no listing (AC-001.7).
 
+### 6.5 Page-action GitHub requests (review R3, re-review N1/N2)
+
+Page actions (opening "Choose repos", Save, "Add repo", Verify, and the owner and bio reads of
+every preview, confirm and batch publish) share one server token with scans. Pure
+`review_domain::budget::admit_page_requests` admits them; the shell only keeps the request times.
+
+| Allowance | Number | Why |
+|---|---|---|
+| Per DID, per hour | 200 HTTP requests (`PAGE_READS_PER_HOUR`) | Generous for one person's clicks (3 accounts listed in full = 9 requests); bounds one runaway tab. |
+| App-wide, per hour | 1000 HTTP requests (`APP_PAGE_READS_PER_HOUR`) | A fifth of GitHub's 5000/h for an authenticated token: however many people click, at least 4000/h stay for scans (about 10 requests per repo, ≤ 10 repos per scan). |
+| Scan floor | 300 remaining (`GITHUB_REMAINING_FLOOR`, unchanged) | Scans pause there; pages are not judged on GitHub's reported remaining. |
+
+- **Every HTTP request counts** (re-review N2): a listing is admitted for its page limit (3) and
+  the pages it did not take are given back (`AccountRepoListing::pages_read`); a failed listing
+  keeps its whole admission. A permit's repo read and bio read are admitted one request each
+  (re-review N1); a refusal is an unfinished check, so the page says to try again in a few
+  minutes, nothing is written and a confirmed plan is put back.
+- **Why an app-wide share, not a page floor on GitHub's reported remaining:** a floor below 300
+  would also need GitHub's reset time, because a refused page makes no request and so never
+  sees the budget refill; the share counts only the app's own requests, so it cannot go stale,
+  and pages keep working while a scan waits at the 300 floor (scan pause tests report 120
+  remaining and still use pages). GitHub's own refusal of a page is relayed as it answers.
+
 ## 7. BR-RRA-1: how an unsigned suggestion cannot reach approve or publish (ADR-089)
 
 1. **Type.** `claim_domain::authority::may_sign` is the only way to mint a `SigningPermit`

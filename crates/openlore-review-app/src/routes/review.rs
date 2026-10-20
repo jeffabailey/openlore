@@ -27,6 +27,7 @@ use review_domain::views::{self, AccountChecked, EditView, QueueNotice, QueueVie
 use crate::http::{App, PageRequest, Reply};
 use crate::limiter::unix_now_secs;
 use crate::routes::github::github_step_of;
+use crate::routes::repos::page_reads_admitted;
 use crate::routes::signin::{
     csrf_token_for, csrf_token_of, current_session, field, fields, signed_in_post, to_landing,
 };
@@ -583,6 +584,13 @@ impl<'a> PublishChecks<'a> {
         .any(|(key, source)| key.subject == subject && matches!(source, RepoSource::Imported(_)))
     }
 
+    /// One permit read admitted against the owner's page allowance and the
+    /// app's (re-review N1): refused, nothing is asked and the check is
+    /// unfinished, so nothing is written and a confirmed plan is put back.
+    fn github_read_admitted(&self) -> bool {
+        page_reads_admitted(self.app, self.owner_did, 1)
+    }
+
     async fn repo(&mut self, subject: &str) -> RepoAnswer {
         if let Some(known) = self.repos.get(subject) {
             return known.clone();
@@ -592,6 +600,7 @@ impl<'a> PublishChecks<'a> {
             .and_then(|repo| repo.split_once('/'));
         let answer = match named {
             None => RepoAnswer::Gone,
+            Some(_) if !self.github_read_admitted() => RepoAnswer::Unfinished,
             Some((owner, name)) => match self.app.github.read_repo(owner, name).await {
                 Ok(facts) => RepoAnswer::Found(facts),
                 Err(error) if error.is_gone() => RepoAnswer::Gone,
@@ -605,6 +614,9 @@ impl<'a> PublishChecks<'a> {
     async fn bio(&mut self, owner_id: u64) -> BioAnswer {
         if let Some(known) = self.bios.get(&owner_id) {
             return known.clone();
+        }
+        if !self.github_read_admitted() {
+            return BioAnswer::Unfinished;
         }
         let answer = match self.app.github.read_person_by_id(owner_id).await {
             Ok(profile) => BioAnswer::Bio(profile.bio.clone()),

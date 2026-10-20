@@ -149,8 +149,15 @@ pub fn github_budget_allows(remaining: Option<u64>) -> bool {
 }
 
 /// GitHub requests one DID's page actions (opening "Choose repos", Save,
-/// "Add repo", Verify) may make per hour (review R3).
+/// "Add repo", Verify, a publish's owner and bio reads) may make per hour
+/// (review R3); each HTTP request counts, a listing page included (re-review
+/// N2).
 pub const PAGE_READS_PER_HOUR: usize = 200;
+
+/// GitHub requests every DID's page actions together may make per hour
+/// (re-review N2): a fifth of the server token's 5000, so page actions can
+/// never take the budget scans run on, however many people use the app.
+pub const APP_PAGE_READS_PER_HOUR: usize = 1_000;
 
 /// Whether a page action may make its GitHub requests now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,23 +165,50 @@ pub enum PageReadAdmission {
     Admitted,
     /// This DID's page actions made their hour's allowance of requests.
     OwnerAllowanceSpent,
+    /// Everyone's page actions together made the app's hourly share.
+    AppAllowanceSpent,
+}
+
+/// The requests among `recent_ages_secs` made inside the last hour.
+fn spent_in_hour(recent_ages_secs: &[u64]) -> usize {
+    recent_ages_secs
+        .iter()
+        .filter(|age| **age < HOUR_SECS)
+        .count()
 }
 
 /// Admit a page action of one DID that asks GitHub for `wanted` requests,
 /// given the ages (seconds) of that DID's recent page requests: admitted
 /// while her requests inside the hour, `wanted` included, stay within
-/// [`PAGE_READS_PER_HOUR`]. GitHub's own budget is not judged here: scans
-/// pause at [`GITHUB_REMAINING_FLOOR`] so the budget below it stays for
-/// page actions, and GitHub's refusal of one is relayed as it answers.
+/// [`PAGE_READS_PER_HOUR`].
 pub fn admit_page_reads(recent_ages_secs: &[u64], wanted: usize) -> PageReadAdmission {
-    let spent = recent_ages_secs
-        .iter()
-        .filter(|age| **age < HOUR_SECS)
-        .count();
-    if spent + wanted <= PAGE_READS_PER_HOUR {
+    if spent_in_hour(recent_ages_secs) + wanted <= PAGE_READS_PER_HOUR {
         PageReadAdmission::Admitted
     } else {
         PageReadAdmission::OwnerAllowanceSpent
+    }
+}
+
+/// Admit a page action asking GitHub for `wanted` requests against both
+/// allowances: the DID's own ([`admit_page_reads`]) and the app's share
+/// across every DID ([`APP_PAGE_READS_PER_HOUR`]), given the ages (seconds)
+/// of the DID's and of all recent page requests. GitHub's reported remaining
+/// budget is not judged: scans pause at [`GITHUB_REMAINING_FLOOR`], and the
+/// app's share caps what pages spend, so a page still works while a scan
+/// waits at the floor; GitHub's own refusal of a page is relayed as it
+/// answers.
+pub fn admit_page_requests(
+    owner_ages_secs: &[u64],
+    app_ages_secs: &[u64],
+    wanted: usize,
+) -> PageReadAdmission {
+    match admit_page_reads(owner_ages_secs, wanted) {
+        PageReadAdmission::Admitted
+            if spent_in_hour(app_ages_secs) + wanted > APP_PAGE_READS_PER_HOUR =>
+        {
+            PageReadAdmission::AppAllowanceSpent
+        }
+        admission => admission,
     }
 }
 
@@ -461,6 +495,30 @@ mod tests {
             prop_assert_eq!(admit_page_reads(&ages, wanted), expected);
             let with_old = [ages.clone(), vec![3_600]].concat();
             prop_assert_eq!(admit_page_reads(&with_old, wanted), expected);
+        }
+
+        /// Re-review N2. Universe: (the DID's recent page-request ages, the
+        /// app's, wanted). Admitted exactly when the DID's hour plus
+        /// `wanted` stays within 200 AND the app's hour plus `wanted` within
+        /// 1000; the DID's own allowance is named first.
+        #[test]
+        fn a_page_action_reads_github_only_within_the_owners_and_the_apps_hourly_allowance(
+            owner in prop::collection::vec(0u64..(2 * HOUR_SECS), 0..260),
+            others in prop::collection::vec(0u64..(2 * HOUR_SECS), 0..1_300),
+            wanted in 0usize..10,
+        ) {
+            let app = [owner.clone(), others].concat();
+            let in_hour = |ages: &[u64]| ages.iter().filter(|a| **a < 3_600).count();
+            let expected = if in_hour(&owner) + wanted > 200 {
+                PageReadAdmission::OwnerAllowanceSpent
+            } else if in_hour(&app) + wanted > 1_000 {
+                PageReadAdmission::AppAllowanceSpent
+            } else {
+                PageReadAdmission::Admitted
+            };
+            prop_assert_eq!(admit_page_requests(&owner, &app, wanted), expected);
+            let app_with_old = [app.clone(), vec![HOUR_SECS; 50]].concat();
+            prop_assert_eq!(admit_page_requests(&owner, &app_with_old, wanted), expected);
         }
 
         /// Universe: (event ages, limit, window). Allowed exactly while the

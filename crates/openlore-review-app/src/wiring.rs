@@ -24,7 +24,7 @@ use ports::{
     AccountCheckOutcome, KpiTally, OAuthPort, OutsideDefault, ProbeOutcome, ReviewStorePort,
     RevokeOutcome, ScanRunPort, ScanStatus, SecretStorePort,
 };
-use review_domain::budget::{admit_page_reads, PageReadAdmission};
+use review_domain::budget::{admit_page_requests, PageReadAdmission};
 use review_domain::kpi::{
     account_check_event, approval_events, decline_events, outside_default_events,
     publish_refusal_events, publish_refusal_label, rollup_day, seconds_until_next_rollup,
@@ -804,29 +804,63 @@ impl ScopeLocks {
     }
 }
 
-/// Each DID's page-action GitHub requests in the last hour (in memory;
-/// resets on restart, like [`crate::routes::github::VerifyAttempts`]).
+/// Each DID's page-action GitHub requests in the last hour, and everyone's
+/// together (in memory; resets on restart, like
+/// [`crate::routes::github::VerifyAttempts`]).
 #[derive(Default)]
-pub(crate) struct PageReads(Mutex<HashMap<String, Vec<std::time::Instant>>>);
+pub(crate) struct PageReads(Mutex<PageRequestTimes>);
+
+#[derive(Default)]
+struct PageRequestTimes {
+    by_owner: HashMap<String, Vec<std::time::Instant>>,
+    app: Vec<std::time::Instant>,
+}
+
+/// The ages, in whole seconds at `now`, of `times`.
+fn ages_at(now: std::time::Instant, times: &[std::time::Instant]) -> Vec<u64> {
+    times
+        .iter()
+        .map(|at| now.duration_since(*at).as_secs())
+        .collect()
+}
 
 impl PageReads {
     /// Admit `wanted` GitHub requests by `owner_did` against her hourly
-    /// allowance ([`admit_page_reads`]); admitted requests are spent.
+    /// allowance and the app's ([`admit_page_requests`]); admitted requests
+    /// are spent from both.
     pub(crate) fn admit(&self, owner_did: &str, wanted: usize) -> PageReadAdmission {
         let mut spent = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let PageRequestTimes { by_owner, app } = &mut *spent;
         let now = std::time::Instant::now();
         let hour = Duration::from_secs(review_domain::budget::HOUR_SECS);
-        let recent = spent.entry(owner_did.to_string()).or_default();
-        recent.retain(|at| now.duration_since(*at) < hour);
-        let ages: Vec<u64> = recent
-            .iter()
-            .map(|at| now.duration_since(*at).as_secs())
-            .collect();
-        let admission = admit_page_reads(&ages, wanted);
+        let in_hour = |at: &std::time::Instant| now.duration_since(*at) < hour;
+        by_owner.retain(|_, times| {
+            times.retain(in_hour);
+            !times.is_empty()
+        });
+        app.retain(in_hour);
+        let owner = by_owner.get(owner_did).map_or(&[][..], Vec::as_slice);
+        let admission = admit_page_requests(&ages_at(now, owner), &ages_at(now, app), wanted);
         if admission == PageReadAdmission::Admitted {
-            recent.extend(std::iter::repeat_n(now, wanted));
+            by_owner
+                .entry(owner_did.to_string())
+                .or_default()
+                .extend(std::iter::repeat_n(now, wanted));
+            app.extend(std::iter::repeat_n(now, wanted));
         }
         admission
+    }
+
+    /// Give back `unused` of `owner_did`'s admitted requests that were never
+    /// made (a listing admitted for its page limit took fewer pages).
+    pub(crate) fn refund(&self, owner_did: &str, unused: usize) {
+        let mut spent = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let PageRequestTimes { by_owner, app } = &mut *spent;
+        if let Some(times) = by_owner.get_mut(owner_did) {
+            let given_back = unused.min(times.len());
+            times.truncate(times.len() - given_back);
+            app.truncate(app.len().saturating_sub(given_back));
+        }
     }
 }
 
@@ -944,6 +978,33 @@ mod tests {
         );
         drop(held);
         assert!(locks.hold_within("did:plc:priya", short).await.is_ok());
+    }
+
+    /// Re-review N2: every DID's page requests share the app's hourly
+    /// share; once spent, a DID with allowance left is refused too, and a
+    /// refund gives back only what that DID spent.
+    #[test]
+    fn page_requests_of_every_did_share_the_apps_hourly_share() {
+        use review_domain::budget::{APP_PAGE_READS_PER_HOUR, PAGE_READS_PER_HOUR};
+        let reads = PageReads::default();
+        let owners = APP_PAGE_READS_PER_HOUR / PAGE_READS_PER_HOUR;
+        for n in 0..owners {
+            assert_eq!(
+                reads.admit(&format!("did:plc:owner{n}"), PAGE_READS_PER_HOUR),
+                PageReadAdmission::Admitted
+            );
+        }
+        let late = "did:plc:late";
+        assert_eq!(reads.admit(late, 1), PageReadAdmission::AppAllowanceSpent);
+        reads.refund(late, 5);
+        assert_eq!(reads.admit(late, 1), PageReadAdmission::AppAllowanceSpent);
+        reads.refund("did:plc:owner0", 3);
+        assert_eq!(reads.admit(late, 3), PageReadAdmission::Admitted);
+        assert_eq!(reads.admit(late, 1), PageReadAdmission::AppAllowanceSpent);
+        assert_eq!(
+            reads.admit("did:plc:owner1", 1),
+            PageReadAdmission::OwnerAllowanceSpent
+        );
     }
 
     /// Review R3: admitted page requests are spent against the DID's hourly

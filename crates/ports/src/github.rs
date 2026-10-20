@@ -372,6 +372,23 @@ pub struct AccountRepoListing {
     pub extent: ListingExtent,
 }
 
+impl AccountRepoListing {
+    /// The HTTP requests (pages) this listing took (re-review N2): every
+    /// page but the last is full, so a complete listing of `n` repos took
+    /// `ceil(n / LISTING_PAGE_SIZE)` pages (one when empty), a truncated one
+    /// [`LISTING_PAGE_LIMIT`].
+    pub fn pages_read(&self) -> usize {
+        match self.extent {
+            ListingExtent::Truncated => LISTING_PAGE_LIMIT,
+            ListingExtent::Complete => self
+                .repos
+                .len()
+                .div_ceil(LISTING_PAGE_SIZE)
+                .clamp(1, LISTING_PAGE_LIMIT),
+        }
+    }
+}
+
 /// Who owns a repo and one repo's facts now (ADR-089 §1): defined by the
 /// authority gate that decides from them, re-exported for the port.
 pub use claim_domain::authority::{RepoFacts, RepoOwnerKind};
@@ -398,6 +415,40 @@ mod tests {
                 value,
                 source_url,
             })
+    }
+
+    fn listing_of(rows: usize, extent: ListingExtent) -> AccountRepoListing {
+        let row = |i: usize| ListedRepo {
+            repo_id: i as u64 + 1,
+            owner_id: 7,
+            repo: OwnedRepo {
+                full_name: format!("owner/repo{i}"),
+                description: None,
+                language: None,
+                stars: 0,
+                fork: false,
+                archived: false,
+                pushed_at: None,
+            },
+        };
+        AccountRepoListing {
+            repos: (0..rows).map(row).collect(),
+            extent,
+        }
+    }
+
+    proptest! {
+        /// Re-review N2. Universe: (rows read, extent). A complete listing
+        /// took one page per started 100 rows (at least one); a truncated
+        /// one took the page limit; never fewer than 1 nor more than 3.
+        #[test]
+        fn a_listing_counts_the_pages_it_took(rows in 0usize..=300, truncated: bool) {
+            let extent = if truncated { ListingExtent::Truncated } else { ListingExtent::Complete };
+            let pages = listing_of(rows, extent).pages_read();
+            let expected = if truncated { 3 } else { rows.div_ceil(100).max(1) };
+            prop_assert_eq!(pages, expected);
+            prop_assert!((1..=LISTING_PAGE_LIMIT).contains(&pages));
+        }
     }
 
     proptest! {
