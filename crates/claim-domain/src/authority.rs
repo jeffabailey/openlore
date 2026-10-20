@@ -592,12 +592,39 @@ mod gate_from_checks_tests {
         )
     }
 
+    /// ADR-087 §1 stated over the evidence, independently of the gate: the
+    /// reason a refusal about `login` gives. A link whose latest check saw the
+    /// login unverified, or that was never checked under its linked login, is
+    /// not verified; a link checked since under another login names a login
+    /// that is no longer current; no link naming the login is no link at all.
+    fn adr_087_reason(login: &str, links: &[LinkedAccountEvidence]) -> Unattested {
+        let same = |other: &str| other.eq_ignore_ascii_case(login);
+        let not_verified = links.iter().any(|l| match &l.latest_check {
+            Some(check) => same(&check.login_seen) && check.verdict != CheckVerdict::Verified,
+            None => same(&l.linked_login),
+        });
+        let renamed_since = links.iter().any(|l| {
+            same(&l.linked_login)
+                && l.latest_check
+                    .as_ref()
+                    .is_some_and(|c| !same(&c.login_seen))
+        });
+        if not_verified {
+            Unattested::LinkNotVerified
+        } else if renamed_since {
+            Unattested::LoginNotCurrent
+        } else {
+            Unattested::NoLink
+        }
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(256))]
 
         /// A permit exists iff some link's LATEST check is verified and saw
         /// the subject login; its basis is that account. A refusal names the
-        /// subject and hands off to the subject login's owner.
+        /// subject, says the ADR-087 §1 reason and hands off to the subject
+        /// login's owner — never to the signer.
         #[test]
         fn a_permit_needs_a_verified_latest_check_that_saw_the_subject_login(
             subject_login in login(),
@@ -621,6 +648,7 @@ mod gate_from_checks_tests {
                 }
                 Err(refusal) => {
                     prop_assert!(owners.is_empty(), "{links:?}");
+                    prop_assert_eq!(refusal.reason, adr_087_reason(&subject_login, &links));
                     prop_assert_eq!(refusal.subject, subject);
                     prop_assert_eq!(
                         refusal.can_sign,

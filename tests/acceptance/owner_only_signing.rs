@@ -120,7 +120,6 @@ fn only_jeff_can_sign_what_is_said_about_jeffs_github_account() {
 ///     | Jeff linked "jeffbailey"                                          | tobiasw    | you have no identity link to        | tobiasw, after link     |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing PS-2: pending DELIVER"]
 fn a_person_claim_jeff_cannot_attest_is_refused_says_why_and_who_can_sign() {
     let rows: [RefusalRow; 3] = [
         ("no link", |_| {}, JEFF_GH, Refusal::NoLink),
@@ -512,7 +511,6 @@ fn jeff_still_signs_about_his_account_when_its_bio_also_names_another_identity()
 ///     | jeffbailey | nothing is signed; he is told it is no longer the login of his linked account |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing PS-8: pending DELIVER"]
 fn after_jeff_renames_his_github_account_he_signs_only_under_the_new_login() {
     let rows: [(Account, Option<Refusal>); 2] = [
         (JEFF_RENAMED, None),

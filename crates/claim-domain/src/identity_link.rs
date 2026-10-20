@@ -1121,6 +1121,22 @@ mod tests {
         }
     }
 
+    proptest::proptest! {
+        /// Exact-token matching: a bio naming a longer DID that starts with
+        /// the signer's, or only a prefix of the signer's DID, never verifies it.
+        #[test]
+        fn a_did_prefix_or_extension_never_verifies(
+            did in "did:[a-z]{1,8}:[A-Za-z0-9]{2,24}",
+            extension in "[A-Za-z0-9]{1,8}",
+        ) {
+            let longer = format!("see {did}{extension} here");
+            let shorter = format!("see {} here", &did[..did.len() - 1]);
+            for bio in [longer, shorter] {
+                proptest::prop_assert_ne!(bio_verdict(Some(&bio), &did), BioVerdict::Verified, "{}", bio);
+            }
+        }
+    }
+
     /// A token is DID-shaped only as `did:<lowercase method>:<rest>`: an
     /// empty or uppercase method, or another scheme, is no DID at all.
     #[test]
