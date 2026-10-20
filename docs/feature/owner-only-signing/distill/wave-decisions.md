@@ -197,3 +197,19 @@ from `support/authority.rs`), a non-`github:` subject, or a changed expectation:
 Internal Sentinel cycles 1-2 approved revision 0; the four-reviewer gate then rejected it.
 Review iteration 1 (this revision) addresses every finding — `acceptance-review.md` § Review
 iteration 1.
+
+Iteration 2 (re-review of ed27d3d, with design a600ad3, stories 680f56b, rulings 9288ea0):
+
+- Review type: full review (4 reviewers), 2 iterations.
+- Eclipse / PO: rejected -> revised -> **approved** (open for the user: proposed job J-011).
+- Architect / SA: rejected -> revised -> **approved** (residual: guardrail call sites each beside a
+  primary Then — DELIVER spot check; keep GitHub request counts trimmed).
+- Forge / PA: rejected -> revised -> **approved**, on condition the active guards pass: PS-3, PS-7
+  and IC-5 ran green locally at ed27d3d (9 run, 9 passed, 47 skipped). Actions: measure the
+  acceptance build on the next CI run; optional sign-time token row in RA-6 (N1).
+- Sentinel / AD: needs_revision -> revised -> **conditionally approved**: the Mandate-8 waiver
+  (R1, GDL D-e precedent) needs the user's acknowledgement. R-2: RA-12 is red today only through
+  its secondary guardrail because its primary Thens are preservation Thens that already hold; this
+  is the nature of a preservation scenario, recorded as a known exception, not fixed.
+
+Handoff to DELIVER: ready once the user acknowledges the Mandate-8 waiver.
