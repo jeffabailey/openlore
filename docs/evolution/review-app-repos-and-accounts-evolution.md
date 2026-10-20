@@ -153,8 +153,10 @@ All waves ran on 2026-10-19.
 
 - N1, N2: a permit's repo and bio reads spend the page allowance; every page
   HTTP request counts, and pages share 1000/h app-wide (`4b054ce`).
-- N3: left unchanged. The reason was settled in the re-review and is not
-  recorded in the feature directory.
+- N3: left unchanged. It asked to remove dead code
+  (`review_domain::lifecycle::visible_and_approvable` and the adapter-duckdb
+  probe's `dead_code` allowance); both predate this feature, and a shipped
+  acceptance test calls the first.
 - N4: a v1 copy that cannot be deleted warns and is retried each start
   (`f88e99c`).
 - N5: the design now says why listings read before the lock are safe for
