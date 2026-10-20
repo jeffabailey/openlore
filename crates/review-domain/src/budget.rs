@@ -312,6 +312,18 @@ mod tests {
         );
     }
 
+    /// Mutation pin (re-review re-run): a page request exactly an hour old
+    /// no longer counts against the DID's allowance or the app's.
+    #[test]
+    fn a_page_request_exactly_an_hour_old_has_expired() {
+        let owner_full = vec![HOUR_SECS; PAGE_READS_PER_HOUR];
+        let app_full = vec![HOUR_SECS; APP_PAGE_READS_PER_HOUR];
+        assert_eq!(
+            admit_page_requests(&owner_full, &app_full, 1),
+            PageReadAdmission::Admitted
+        );
+    }
+
     proptest! {
         /// Universe: when a DID posted before, and now. A share is spent iff
         /// fewer than 5 of those posts are under 86 400 s old; the spent list

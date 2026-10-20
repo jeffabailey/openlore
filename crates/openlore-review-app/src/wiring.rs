@@ -1073,6 +1073,22 @@ mod tests {
         );
     }
 
+    /// Mutation pin (re-review re-run): a refund gives the DID back the
+    /// requests it was admitted for but never made.
+    #[test]
+    fn a_refund_gives_the_did_back_its_unused_requests() {
+        let reads = PageReads::default();
+        let allowance = review_domain::budget::PAGE_READS_PER_HOUR;
+        let priya = "did:plc:priya";
+        assert_eq!(reads.admit(priya, allowance), PageReadAdmission::Admitted);
+        reads.refund(priya, 3);
+        assert_eq!(reads.admit(priya, 3), PageReadAdmission::Admitted);
+        assert_eq!(
+            reads.admit(priya, 1),
+            PageReadAdmission::OwnerAllowanceSpent
+        );
+    }
+
     /// Mutation pin (Phase 5): an account add's start and each scan's bio
     /// check reach the KPI counters.
     #[test]

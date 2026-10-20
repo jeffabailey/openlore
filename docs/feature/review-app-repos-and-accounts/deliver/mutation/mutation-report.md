@@ -300,3 +300,100 @@ No file under `tests/acceptance/` was changed.
   --tests` are clean for the touched packages, and
   `cargo nextest run -p claim-domain -p review-domain -p ports -p adapter-github -p adapter-review-store -p openlore-review-app -p xtask`
   passes (see the commit that adds this report).
+
+## Re-review fixes re-run
+
+The main run mutated `c088606`. The re-review fixes `c088606..c17b68f`
+changed production lines that were never mutated, so this run mutates only
+those lines.
+
+**Result: 54 of 55 viable mutants caught (98.2%). PASS.**
+The first pass caught 52 of 55 (94.5%). Two new tests killed 2 of the 3
+survivors. The last one is equivalent.
+
+### Command
+
+```
+git diff c088606..c17b68f -- <scope files> > scope.diff
+cargo mutants --list --in-diff scope.diff --json --diff > mutants.json
+```
+
+Scope: `crates/review-domain/src/{budget.rs, views/settings.rs}`,
+`crates/ports/src/github.rs`, `crates/adapter-review-store/src/lib.rs`,
+`crates/openlore-review-app/src/{wiring,admin}.rs` and
+`routes/{review,repos,github,publish,settings}.rs`. The mutants were
+listed on `9c7a0a2` (`c17b68f` plus the main run's tests). Those tests only
+add lines below the mutated ones, so the diff's line numbers still match.
+All 90 listed mutants ran. Nothing was sampled.
+
+The runner is the same one the main run used. It applied each mutant with
+`patch` in one of three scratch worktrees of `9c7a0a2`, each with its own
+`CARGO_TARGET_DIR`, and ran the same stages per owning crate
+(`--no-run` failing means unviable, a test failing means caught), with
+`NEXTEST_TEST_THREADS=4`. Every stage passed on unmutated `9c7a0a2` first
+(539 tests). No mutant timed out.
+
+### Totals
+
+| Outcome | Count |
+|---|---|
+| caught | 54 (52 in the first pass, plus 2 after the new tests) |
+| missed | 1 (3 in the first pass) |
+| unviable | 35 |
+| timeout | 0 |
+| **total listed** | **90** |
+
+**Kill rate = 54 / (54 + 1) = 98.2%.**
+
+| File | Caught (first pass) | Caught (new tests) | Missed | Unviable |
+|---|---|---|---|---|
+| crates/adapter-review-store/src/lib.rs | 3 | 0 | 0 | 1 |
+| crates/openlore-review-app/src/admin.rs | 1 | 0 | 0 | 12 |
+| crates/openlore-review-app/src/routes/github.rs | 1 | 0 | 0 | 0 |
+| crates/openlore-review-app/src/routes/publish.rs | 0 | 0 | 0 | 3 |
+| crates/openlore-review-app/src/routes/repos.rs | 9 | 0 | 0 | 1 |
+| crates/openlore-review-app/src/routes/review.rs | 9 | 0 | 0 | 6 |
+| crates/openlore-review-app/src/routes/settings.rs | 0 | 0 | 0 | 2 |
+| crates/openlore-review-app/src/wiring.rs | 10 | 1 | 1 | 8 |
+| crates/ports/src/github.rs | 2 | 0 | 0 | 0 |
+| crates/review-domain/src/budget.rs | 13 | 1 | 0 | 2 |
+| crates/review-domain/src/views/settings.rs | 2 | 0 | 0 | 0 |
+| **Total** | **52** | **2** | **1** | **35** |
+
+The N1 permit-read admission (`github_read_admitted`, the `repo` guard and
+the `bio` check), the N2 listing admission and refund in `read_listings`,
+the N6 `under_scope` status writes, and `pages_read` have no surviving
+mutant. The unviable mutants replace a return value with
+`Default::default()` for a type that has no `Default` (`Reply`,
+`Response<Full<Bytes>>`, `StoreError`, `LogEvent`, `ForgetFailure`). Because
+of this, the N7 `put_back` lines in `publish.rs` and the N8 `ScopeBusy`
+arms in `settings.rs` and `admin.rs` produced no viable mutant, so this run
+says nothing about them either way.
+
+### Survivors resolved by new tests (2)
+
+Each kill was checked by applying the mutant together with the new test
+and running only that test (verified: it fails).
+
+| Mutant | Function | New test |
+|---|---|---|
+| `budget.rs:176` `spent_in_hour`: `< HOUR_SECS` changed to `<=` | a request exactly an hour old still counted | `budget::tests::a_page_request_exactly_an_hour_old_has_expired` |
+| `wiring.rs:878` `PageReads::refund`: `times.len() - given_back` changed to `+` | the DID's own requests never given back (only the app's) | `wiring::tests::a_refund_gives_the_did_back_its_unused_requests` |
+
+### Still missed (1)
+
+- **`wiring.rs:853` `PageReads::admit`: `in_hour` `< hour` changed to
+  `<= hour`. Equivalent in practice.** This is the same boundary as #481
+  in the main run. The two differ only when a request is exactly 3600 s
+  old to the nanosecond on `Instant`. The boundary is pinned in
+  `budget::spent_in_hour` by the new test above.
+
+### Post-mutation safety
+
+- The three scratch worktrees (`rra-rerun-1` to `rra-rerun-3`) and their
+  target folders were removed. `openlore-rra` was never mutated.
+- On `9c7a0a2` plus the two new tests, `cargo fmt --all` made no changes,
+  `cargo clippy -p review-domain -p ports -p adapter-review-store -p openlore-review-app --tests -- -D warnings`
+  is clean, and `cargo nextest run` for the same four packages passes
+  (541 tests).
+- No file under `tests/acceptance/` was changed.
