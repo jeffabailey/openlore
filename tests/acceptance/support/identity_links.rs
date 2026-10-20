@@ -1207,6 +1207,54 @@ impl LinkWorld {
     }
 }
 
+impl LinkWorld {
+    /// My store is a frozen copy checked in under `fixture` (an `EXPORT
+    /// DATABASE` dump in `db_export/` plus the rest of the home in `home/`),
+    /// beside GitHub serving `accounts`. Generalises
+    /// [`LinkWorld::with_frozen_pre_v7_store`] for later frozen stores
+    /// (owner-only-signing RA-12b: the frozen v7 store).
+    pub fn with_frozen_store_from(fixture: &Path, accounts: &[Account]) -> Self {
+        let env = TestEnv::fresh();
+        copy_tree(&fixture.join("home"), &env.home);
+        let conn = duckdb::Connection::open(env.duckdb_path()).expect("create store");
+        let dump = fixture.join("db_export");
+        let read = |f: &str| std::fs::read_to_string(dump.join(f)).expect("fixture dump file");
+        conn.execute_batch(&read("schema.sql"))
+            .expect("frozen schema");
+        conn.execute_batch(
+            &read("load.sql").replace(FIXTURE_DIR_TOKEN, &dump.display().to_string()),
+        )
+        .expect("frozen rows");
+        drop(conn);
+        Self {
+            env,
+            github: FakeGithubAccounts::start(accounts.iter().map(|a| a.on_github()).collect()),
+            peers: BTreeMap::new(),
+            github_token: Cell::new(None),
+        }
+    }
+}
+
+/// Fixture regeneration only: dump `env`'s store into `fixture/db_export`
+/// (relocatable) and copy the rest of its home into `fixture/home`.
+pub fn freeze_store_into(env: &TestEnv, fixture: &Path) {
+    let _ = std::fs::remove_dir_all(fixture.join("home"));
+    let _ = std::fs::remove_dir_all(fixture.join("db_export"));
+    copy_tree(&env.home, &fixture.join("home"));
+    let _ = std::fs::remove_file(fixture.join("home/.local/share/openlore/openlore.duckdb"));
+    let _ = std::fs::remove_file(fixture.join("home/.local/share/openlore/openlore.duckdb.wal"));
+    let conn = duckdb::Connection::open(env.duckdb_path()).expect("open store");
+    let dump = fixture.join("db_export");
+    conn.execute_batch(&format!("EXPORT DATABASE '{}';", dump.display()))
+        .expect("export the store");
+    let load = std::fs::read_to_string(dump.join("load.sql")).expect("load.sql");
+    std::fs::write(
+        dump.join("load.sql"),
+        load.replace(&dump.display().to_string(), FIXTURE_DIR_TOKEN),
+    )
+    .expect("rewrite load.sql");
+}
+
 /// The frozen store's recorded `graph query --object memory-safety --federated`
 /// output, captured with the pre-v7 binary when the fixture was made.
 pub fn pre_v7_golden_claims() -> String {

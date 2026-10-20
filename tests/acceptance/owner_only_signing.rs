@@ -15,8 +15,16 @@
 //! `support/authority.rs`.
 //!
 //! Every scenario is `#[ignore]`d (house rule D-d: a red test on trunk blocks
-//! every image job). DELIVER enables WS-OOS-1 first; it fails today for the
-//! business reason (row 2: `claim add` signs Rachel's account).
+//! every image job) EXCEPT the active guards PS-3 and PS-7, which hold today
+//! and must hold after DELIVER (scaffold policy, DWD-OOS-2). DELIVER enables
+//! WS-OOS-1 first; it fails today for the business reason (row 2: `claim
+//! add` signs Rachel's account).
+//!
+//! Observation (ruling R1, GDL D-e): PRIMARY Thens read exit status, the
+//! refusal text, what Jeff sees through `graph query` / `identity list` and
+//! the wire JSON on his PDS (`assert_jeff_sees_no_change`,
+//! `assert_signed_and_kept_locally`, `assert_published_marking`); the store
+//! universe is the labelled SECONDARY `guardrail_*` (Mandate-8 waiver).
 //!
 //! State machine (C2a) of "may Jeff sign an assertion about github:<login>?"
 //! (person tier, ADR-087 §1), from this reader's local checks:
@@ -48,7 +56,7 @@ use support::*;
 /// WS-OOS-1
 /// ```gherkin
 /// @walking_skeleton @driving_port @driving_adapter @real-io @security @kpi-oos-1
-/// @oos-d4 @c-oos-1 @contract-shape:bounded-change
+/// @oos-d4 @c-oos-1 @s-oos-1 @contract-shape:bounded-change
 /// Scenario Outline: Only Jeff can sign what is said about Jeff's GitHub account
 ///   Given Jeff has publicly linked his GitHub account "jeffbailey" to his identity
 ///   When Jeff signs and publishes "<account> adheres to memory-safety"
@@ -77,6 +85,7 @@ fn only_jeff_can_sign_what_is_said_about_jeffs_github_account() {
     let world = authority_world();
     given_jeff_linked_his_account(&world);
     let rachels = Subject::Person(RACHEL_GH);
+    let seen = what_jeff_sees(&world, rachels);
     let before = capture_authority_universe(&world.env);
 
     let refused = when_jeff_signs(&world, rachels, Some(CHECK_PLUS_2_DAYS));
@@ -89,7 +98,8 @@ fn only_jeff_can_sign_what_is_said_about_jeffs_github_account() {
         None,
         "rachelk",
     );
-    assert_authority_store_unchanged("rachelk", &before, &world.env);
+    assert_jeff_sees_no_change("rachelk", &seen, &world, rachels);
+    guardrail_store_unchanged("rachelk", &before, &world.env);
 }
 
 // =============================================================================
@@ -98,7 +108,7 @@ fn only_jeff_can_sign_what_is_said_about_jeffs_github_account() {
 
 /// PS-2 (table over why Jeff holds no person authority)
 /// ```gherkin
-/// @driving_port @real-io @error @security @kpi-oos-1 @c6b @contract-shape:unbounded-preservation
+/// @driving_port @real-io @error @security @kpi-oos-1 @c6b @s-oos-1 @contract-shape:unbounded-preservation
 /// Scenario Outline: A person claim Jeff cannot attest is refused, says why and who can sign
 ///   Given <situation>
 ///   When Jeff signs and publishes "<account> adheres to memory-safety"
@@ -138,6 +148,7 @@ fn a_person_claim_jeff_cannot_attest_is_refused_says_why_and_who_can_sign() {
         let world = authority_world();
         situation(&world);
         let subject = Subject::Person(account);
+        let seen = what_jeff_sees(&world, subject);
         let before = capture_authority_universe(&world.env);
 
         let refused = when_jeff_signs(&world, subject, Some(CHECK_PLUS_2_DAYS));
@@ -150,7 +161,8 @@ fn a_person_claim_jeff_cannot_attest_is_refused_says_why_and_who_can_sign() {
             None,
             row,
         );
-        assert_authority_store_unchanged(row, &before, &world.env);
+        assert_jeff_sees_no_change(row, &seen, &world, subject);
+        guardrail_store_unchanged(row, &before, &world.env);
     }
 }
 
@@ -158,17 +170,17 @@ fn a_person_claim_jeff_cannot_attest_is_refused_says_why_and_who_can_sign() {
 // Dispute and withdrawal stay open (KPI-OOS-3, C-OOS-2)
 // =============================================================================
 
-/// PS-3 (table over the two exempt kinds; chained on WS-OOS-1)
+/// PS-3 (table over the two exempt kinds; chained on WS-OOS-1; review H-1)
 /// ```gherkin
-/// @driving_port @real-io @kpi-oos-3 @c-oos-2 @oos-d11 @guardrail @contract-shape:bounded-change
+/// @driving_port @real-io @kpi-oos-3 @c-oos-2 @oos-d11 @guardrail @s-oos-2 @contract-shape:bounded-change
 /// Scenario Outline: Jeff can always dispute or withdraw, whatever authority he holds
 ///   Given <situation>
 ///   When Jeff <acts>
-///   Then the dispute or withdrawal is signed and reaches his published repo
+///   Then his published repo holds <record>
 ///   Examples:
-///     | situation                                                                       | acts                                                     |
-///     | Rachel published "rachelk adheres to memory-safety" and Jeff pulled it          | disputes Rachel's claim about her own account            |
-///     | Jeff signed and published about "jeffbailey", then his bio stopped naming him   | withdraws his own claim about "jeffbailey"               |
+///     | situation                                                                     | acts                                          | record                                                          |
+///     | Rachel published "rachelk adheres to memory-safety" and Jeff pulled it        | disputes Rachel's claim about her own account | his dispute of Rachel's claim, about github:rachelk             |
+///     | Jeff signed and published about "jeffbailey", then his bio stopped naming him | withdraws his own claim about "jeffbailey"    | his withdrawal of that claim, about github:jeffbailey           |
 /// ```
 #[test]
 // ACTIVE regression guard (KPI-OOS-3): holds today and must hold after DELIVER.
@@ -176,37 +188,35 @@ fn jeff_can_always_dispute_or_withdraw_whatever_authority_he_holds() {
     // Row 1 — a non-owner disputes the owner's claim.
     let mut world = authority_world();
     given_jeff_linked_his_account(&world);
-    let rachels = given_rachel_published(
-        &mut world,
-        vec![peer_claim_about(Subject::Person(RACHEL_GH))],
-    );
-    let pds_before = world.env.pds.records().len();
+    let rachels_account = Subject::Person(RACHEL_GH);
+    let rachels = given_rachel_published(&mut world, vec![peer_claim_about(rachels_account)]);
+    let published_before = world.env.pds.records().len();
 
     let disputed = when_jeff_counters(&world, &rachels[0], CHECK_PLUS_2_DAYS);
 
     assert_eq!(disputed.status, 0, "[counter] {}\n{}", disputed.stdout, disputed.stderr);
-    assert_eq!(
-        world.env.pds.records().len(),
-        pds_before + 1,
-        "[counter] the dispute reached Jeff's published repo"
+    assert_published_marking(
+        &world,
+        published_before,
+        "counters",
+        &rachels[0],
+        rachels_account,
+        "counter",
     );
 
     // Row 2 — a former owner withdraws.
     let world = authority_world();
     given_jeff_linked_his_account(&world);
-    let own = given_jeff_signed_and_published(&world, Subject::Person(JEFF_GH), CHECK_PLUS_2_DAYS);
+    let own_account = Subject::Person(JEFF_GH);
+    let own = given_jeff_signed_and_published(&world, own_account, CHECK_PLUS_2_DAYS);
     bio_drops_the_did(&world, JEFF_GH);
     given_i_verified(&world, Some(CHECK_PLUS_7_DAYS));
-    let pds_before = world.env.pds.records().len();
+    let published_before = world.env.pds.records().len();
 
     let withdrawn = when_jeff_retracts(&world, &own, CHECK_PLUS_9_DAYS);
 
     assert_eq!(withdrawn.status, 0, "[retract] {}\n{}", withdrawn.stdout, withdrawn.stderr);
-    assert_eq!(
-        world.env.pds.records().len(),
-        pds_before + 1,
-        "[retract] the withdrawal reached Jeff's published repo"
-    );
+    assert_published_marking(&world, published_before, "retracts", &own, own_account, "retract");
 }
 
 // =============================================================================
@@ -215,7 +225,7 @@ fn jeff_can_always_dispute_or_withdraw_whatever_authority_he_holds() {
 
 /// PS-4 (boundary table over the age of Jeff's latest link check)
 /// ```gherkin
-/// @driving_port @real-io @boundary @c1b @i-9 @c-oos-9 @oos-d7 @security @contract-shape:bounded-change
+/// @driving_port @real-io @boundary @c1b @i-9 @c-oos-9 @oos-d7 @security @s-oos-3 @contract-shape:bounded-change
 /// Scenario Outline: With the network off, Jeff signs about himself only from a check at most 7 days old
 ///   Given Jeff linked "jeffbailey" and his link was checked on 1 October at 09:00
 ///   And the network is off
@@ -243,6 +253,7 @@ fn with_the_network_off_jeff_signs_about_himself_only_from_a_check_at_most_7_day
     for (now, refusal) in rows {
         let world = authority_world();
         given_jeff_linked_his_account(&world);
+        let seen = what_jeff_sees(&world, own);
         let asked_before = world.github_paths().len();
         let before = capture_authority_universe(&world.env);
 
@@ -251,8 +262,8 @@ fn with_the_network_off_jeff_signs_about_himself_only_from_a_check_at_most_7_day
         assert_github_not_asked(&world, asked_before, now);
         match refusal {
             None => {
-                assert_eq!(outcome.status, 0, "[{now}] {}\n{}", outcome.stdout, outcome.stderr);
-                assert_authority_store_delta(
+                assert_signed_and_kept_locally(now, &outcome, &seen, &world, own);
+                guardrail_store_delta(
                     &before,
                     &world.env,
                     &[
@@ -263,9 +274,60 @@ fn with_the_network_off_jeff_signs_about_himself_only_from_a_check_at_most_7_day
             }
             Some(reason) => {
                 assert_signing_refused(&outcome, own, reason, None, Some(&command), now);
-                assert_authority_store_unchanged(now, &before, &world.env);
+                assert_jeff_sees_no_change(now, &seen, &world, own);
+                guardrail_store_unchanged(now, &before, &world.env);
             }
         }
+    }
+}
+
+/// PS-9 (ruling R3: GitHub cannot answer at signing time; chained on PS-4's Given)
+/// ```gherkin
+/// @driving_port @real-io @infrastructure-failure @c7a @i-9 @r-3 @security @s-oos-3 @contract-shape:bounded-change
+/// Scenario Outline: When GitHub cannot answer as Jeff signs from an import, his latest check decides, as offline
+///   Given Jeff linked "jeffbailey" and his link was checked on 1 October at 09:00
+///   And Rachel's signed claims say two repos built by BurntSushi and jeffbailey are memory-safe
+///   And <trouble> once the import has read his profile
+///   When Jeff reads "jeffbailey" as a person and signs his memory-safety candidate at <time>
+///   Then <outcome>
+///   And his linked identities read as before (the failed re-check recorded nothing)
+///   Examples:
+///     | trouble                                         | time            | outcome                                                                        |
+///     | GitHub says it is too busy to answer            | 3 October 09:00 | the claim is signed and reaches his published repo                             |
+///     | GitHub cannot be reached                        | 3 October 09:00 | the claim is signed and reaches his published repo                             |
+///     | GitHub says it is too busy to answer            | 8 October 09:01 | nothing is signed; he is told to re-check authority, with the command to run   |
+/// ```
+#[test]
+#[ignore = "DISTILL owner-only-signing PS-9: pending DELIVER (slice 1; ruling R3)"]
+fn when_github_cannot_answer_as_jeff_signs_from_an_import_his_latest_check_decides() {
+    let own = Subject::Person(JEFF_GH);
+    let rows: [(ProfileTrouble, &str, Option<Refusal>); 3] = [
+        (ProfileTrouble::TooBusy, CHECK_PLUS_2_DAYS, None),
+        (ProfileTrouble::Unreachable, CHECK_PLUS_2_DAYS, None),
+        (ProfileTrouble::TooBusy, CHECK_PLUS_7_DAYS_1_MIN, Some(Refusal::CheckTooOld)),
+    ];
+    for (trouble, now, refusal) in rows {
+        let row = format!("{trouble:?} at {now}");
+        let world = store_where_jeff_and_burntsushi_build_memory_safe_repos();
+        github_stops_answering_jeffs_profile_after(&world, 1, trouble);
+        let seen = what_jeff_sees(&world, own);
+        let before = capture_authority_universe(&world.env);
+
+        let outcome = when_jeff_scrapes_person_and_signs(&world, JEFF_GH, now);
+
+        match refusal {
+            None => assert_signed_and_published(&world, &outcome, own),
+            Some(reason) => {
+                assert_signing_refused(&outcome, own, reason, None, Some(&verify_command(own)), &row);
+                assert_nothing_signed_or_published(&row, &seen, &world, own);
+                guardrail_nothing_signed(&row, &before, &world.env);
+            }
+        }
+        assert_eq!(
+            what_jeff_sees(&world, own).identities,
+            seen.identities,
+            "[{row}] the failed re-check recorded nothing"
+        );
     }
 }
 
@@ -298,7 +360,7 @@ fn store_where_jeff_and_burntsushi_build_memory_safe_repos() -> LinkWorld {
 
 /// PS-5 (table over whose adherence Jeff signs)
 /// ```gherkin
-/// @driving_port @real-io @security @kpi-oos-1 @uc-9 @a-8 @contract-shape:bounded-change
+/// @driving_port @real-io @security @kpi-oos-1 @uc-9 @a-8 @s-oos-1 @contract-shape:bounded-change
 /// Scenario Outline: Jeff signs an inferred adherence only about himself
 ///   Given Jeff linked "jeffbailey"
 ///   And Rachel's signed claims say two repos built by BurntSushi and jeffbailey are memory-safe
@@ -322,6 +384,7 @@ fn jeff_signs_an_inferred_adherence_only_about_himself() {
         let subject = Subject::Person(person);
         let listed = when_jeff_lists_inferred_people(&world);
         let n = candidate_number_naming(&listed, subject);
+        let seen = what_jeff_sees(&world, subject);
         let before = capture_authority_universe(&world.env);
 
         let outcome = when_jeff_signs_inferred(&world, n, CHECK_PLUS_2_DAYS);
@@ -337,7 +400,8 @@ fn jeff_signs_an_inferred_adherence_only_about_himself() {
                     None,
                     person.login,
                 );
-                assert_authority_store_unchanged(person.login, &before, &world.env);
+                assert_jeff_sees_no_change(person.login, &seen, &world, subject);
+                guardrail_store_unchanged(person.login, &before, &world.env);
             }
         }
     }
@@ -345,7 +409,7 @@ fn jeff_signs_an_inferred_adherence_only_about_himself() {
 
 /// PS-6 (chained on PS-5's Given)
 /// ```gherkin
-/// @driving_port @real-io @kpi-oos-1 @adr-086-10 @contract-shape:unbounded-preservation
+/// @driving_port @real-io @kpi-oos-1 @adr-086-10 @s-oos-1 @contract-shape:unbounded-preservation
 /// Scenario: Jeff's inferred people say who can sign each candidate, and listing writes nothing
 ///   Given Jeff linked "jeffbailey"
 ///   And Rachel's signed claims say two repos built by BurntSushi and jeffbailey are memory-safe
@@ -358,6 +422,7 @@ fn jeff_signs_an_inferred_adherence_only_about_himself() {
 #[ignore = "DISTILL owner-only-signing PS-6: pending DELIVER"]
 fn jeffs_inferred_people_say_who_can_sign_each_candidate_and_listing_writes_nothing() {
     let world = store_where_jeff_and_burntsushi_build_memory_safe_repos();
+    let seen = what_jeff_sees(&world, Subject::Person(JEFF_GH));
     let before = capture_authority_universe(&world.env);
 
     let listed = when_jeff_lists_inferred_people(&world);
@@ -369,7 +434,8 @@ fn jeffs_inferred_people_say_who_can_sign_each_candidate_and_listing_writes_noth
         Subject::Person(BURNTSUSHI_GH),
         Some(CanSign::Login(BURNTSUSHI_GH.login)),
     );
-    assert_authority_store_unchanged("listing", &before, &world.env);
+    assert_jeff_sees_no_change("listing", &seen, &world, Subject::Person(JEFF_GH));
+    guardrail_store_unchanged("listing", &before, &world.env);
 }
 
 // =============================================================================
@@ -378,7 +444,7 @@ fn jeffs_inferred_people_say_who_can_sign_each_candidate_and_listing_writes_noth
 
 /// PS-7
 /// ```gherkin
-/// @driving_port @real-io @edge @security @uc-2 @adr-087-1 @contract-shape:bounded-change
+/// @driving_port @real-io @edge @security @uc-2 @adr-087-1 @guardrail @s-oos-1 @contract-shape:bounded-change
 /// Scenario: Jeff still signs about his account when its bio also names another identity
 ///   Given the "jeffbailey" bio names both Jeff's identity and Rachel's
 ///   And Jeff and Rachel both published a link to "jeffbailey", and Jeff re-checked every link in his store (both verify)
@@ -386,7 +452,8 @@ fn jeffs_inferred_people_say_who_can_sign_each_candidate_and_listing_writes_noth
 ///   Then the claim is signed and reaches his published repo
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing PS-7: pending DELIVER"]
+// ACTIVE regression guard (review H-3): holds today (nothing is gated) and
+// must keep holding once the gate lands — a contested account still signs.
 fn jeff_still_signs_about_his_account_when_its_bio_also_names_another_identity() {
     let mut world = authority_world();
     given_jeff_linked_his_account(&world);
@@ -402,7 +469,7 @@ fn jeff_still_signs_about_his_account_when_its_bio_also_names_another_identity()
 
 /// PS-8 (table over the old and the new login)
 /// ```gherkin
-/// @driving_port @real-io @edge @g-2 @a-14 @adr-087-1 @security @contract-shape:bounded-change
+/// @driving_port @real-io @edge @g-2 @a-14 @adr-087-1 @security @s-oos-1 @contract-shape:bounded-change
 /// Scenario Outline: After Jeff renames his GitHub account, he signs only under the new login
 ///   Given Jeff linked "jeffbailey", renamed the account to "jeff-b" and re-checked his link
 ///   When Jeff signs and publishes "<login> adheres to memory-safety"
@@ -425,6 +492,7 @@ fn after_jeff_renames_his_github_account_he_signs_only_under_the_new_login() {
         i_renamed_my_account(&world, JEFF_GH, JEFF_RENAMED, openlore_test_support::OldLogin::NotFound);
         given_i_verified(&world, Some(LINKED_AT));
         let subject = Subject::Person(login);
+        let seen = what_jeff_sees(&world, subject);
         let before = capture_authority_universe(&world.env);
 
         let outcome = when_jeff_signs(&world, subject, Some(CHECK_PLUS_2_DAYS));
@@ -433,7 +501,8 @@ fn after_jeff_renames_his_github_account_he_signs_only_under_the_new_login() {
             None => assert_signed_and_published(&world, &outcome, subject),
             Some(reason) => {
                 assert_signing_refused(&outcome, subject, reason, None, None, login.login);
-                assert_authority_store_unchanged(login.login, &before, &world.env);
+                assert_jeff_sees_no_change(login.login, &seen, &world, subject);
+                guardrail_store_unchanged(login.login, &before, &world.env);
             }
         }
     }

@@ -1,13 +1,14 @@
 # Acceptance Test Design — owner-only-signing (DISTILL)
 
-- **Wave**: DISTILL · **Date**: 2026-10-20 · **Designer**: Quinn (nw-acceptance-designer)
+- **Wave**: DISTILL · **Date**: 2026-10-20 (revision 1 after the four-reviewer gate, same day) · **Designer**: Quinn (nw-acceptance-designer)
 - **Crafter target (DELIVER)**: `@nw-functional-software-crafter` (ADR-007)
-- **Language**: Rust (`[lang-mode] rust`) · `[policy-mode] inherit` (one section appended) · `[port-mode] inherit` (`tests/common/state_delta.rs`)
+- **Language**: Rust (`[lang-mode] rust`) · `[policy-mode] inherit` · `[port-mode] inherit` (`tests/common/state_delta.rs`)
 - **Framework**: Rust std `#[test]` + subprocess, Gherkin in doc comments (house convention: `identity_link*.rs`, `infer_people_sign.rs`, `review_app_*.rs`); proptest at layer 2 only.
-- **Skip marker**: `#[ignore = "DISTILL owner-only-signing <ID>: pending DELIVER …"]` on every scenario, the walking skeleton included (house rule D-d: a red test on trunk blocks every image job). The default run is green.
-- **Inherits**: DESIGN only (OOS-D1..D15, A-1..A-14, C-OOS-1..9, ADR-086/087), reconciled against the shipped ADR-088/089 (see `wave-decisions.md` § Upstream Issues). No DISCUSS (stories derived below), no DEVOPS (project CI acceptance stage).
+- **Skip marker**: `#[ignore = "DISTILL owner-only-signing <ID>: pending DELIVER …"]` on every scenario, the walking skeleton included (house rule D-d), EXCEPT the active guards PS-3, PS-7 and IC-5 (scaffold policy, DWD-OOS-2: a scenario that holds today and must hold after DELIVER runs active). The default run is green.
+- **Inherits**: DESIGN (OOS-D1..D15, A-1..A-14, C-OOS-1..9, ADR-086/087 incl. the 2026-10-20 corrections a600ad3 and rulings P-OOS-1..3), DISCUSS `user-stories.md` (S-OOS-1..9, written in parallel; IDs unchanged). No DEVOPS (project CI acceptance stage).
+- **Observation rule** (ruling R1, GDL D-e): every PRIMARY Then reads a driving port — exit status, CLI output (`authority verify`, `candidates list`, `graph query`, `identity list`, refusal text), PDS wire JSON, viewer / review-app pages, GitHub's request log. The store universe is a labelled SECONDARY guardrail (`guardrail_*`) under the Mandate-8 waiver in `wave-decisions.md`.
 
-The `.rs` files are the scenario SSOT; this is the map.
+The `.rs` files are the scenario SSOT; this is the map. Every scenario doc comment carries `@s-oos-N` and `@contract-shape:…`.
 
 ## 1. Inputs read
 
@@ -21,112 +22,123 @@ The `.rs` files are the scenario SSOT; this is the map.
 | ✓ | `docs/product/journeys/{scrape-propose-sign, author-and-publish-claim, infer-contributor-philosophy, explore-the-graph}.yaml` | failure modes, chained narrative |
 | ✓ | `docs/architecture/atdd-infrastructure-policy.md` | mechanisms (appended: repo-authority ports) |
 | ✓ | prior art: `tests/acceptance/identity_link*.rs`, `infer_people_sign.rs`, `review_app_repos_and_accounts*.rs`, `docs/feature/{github-did-identity-link, review-app-repos-and-accounts}/distill/*` | harness, style, ignore convention, layer-2 `sut_*` seam |
-| ⊘ | `docs/feature/owner-only-signing/discuss/` | **missing** — WARN: stories derived from DESIGN (§3) |
+| ✓ | `docs/feature/owner-only-signing/discuss/user-stories.md` (revision 1) | S-OOS-1..9 with job ids; tags `@s-oos-N` |
 | ⊘ | `docs/feature/owner-only-signing/devops/` | **missing** — WARN: project CI acceptance stage, default environment |
 
 ## 2. Test files
 
 | File (`tests/acceptance/`) | Slice | Layer | Scenario fns (rows) | Registered in |
 |---|---|---|---|---|
-| `owner_only_signing.rs` | 1 — person gate, WS, exemptions (PS-3 ACTIVE guard), offline window, inference | 3 subprocess | 8 (17) | `crates/cli/Cargo.toml` |
-| `owner_only_signing_repos.rs` | 2 — repo authority, `authority verify`, `scrape --sign`, `claim publish`, upgrade; 5 — imported candidates | 3 subprocess | 16 + 4 (37 + 4) | `crates/cli/Cargo.toml` |
-| `owner_only_signing_readers.rs` | 3 — labels, `score_attested`, `--include-unattested`, viewer, search | 3/4 subprocess + viewer + indexer | 10 (16) | `crates/cli/Cargo.toml` |
+| `owner_only_signing.rs` | 1 — person gate, WS, exemptions (PS-3, PS-7 ACTIVE), offline window, sign-time GitHub failure, inference | 3 subprocess | 9 (20) | `crates/cli/Cargo.toml` |
+| `owner_only_signing_repos.rs` | 2 — repo authority, `authority verify`, `scrape --sign`, `claim publish`, upgrades (pre-v7, v7), budget; 5 — imported candidates (IC-5 ACTIVE) | 3 subprocess | 18 + 5 (50 + 5) + 1 fixture regenerator | `crates/cli/Cargo.toml` |
+| `owner_only_signing_readers.rs` | 3 — labels, `score_attested`, `--include-unattested`, viewer, search | 3/4 subprocess + viewer + indexer | 11 (17) | `crates/cli/Cargo.toml` |
 | `owner_only_signing_core.rs` | 1-3 pure core | 2 proptest (256 cases) | 5 properties + 1 example | `crates/cli/Cargo.toml` |
-| `owner_only_signing_review_app.rs` | 4 remainder — share draft (UC-21) | 4 HTTP | 1 (1) | `crates/openlore-review-app/Cargo.toml` |
-| **Total** | | | **45 test fns** (39 example scenarios, 76 example rows; 6 layer-2) | |
+| `owner_only_signing_review_app.rs` | 4 remainder — share draft (UC-21, P-OOS-2) | 4 HTTP | 1 (1) | `crates/openlore-review-app/Cargo.toml` |
+| **Total** | | | **50 test fns** (44 example scenarios, 93 example rows; 6 layer-2) + 1 regenerator | |
 
-Vocabulary: `support/authority.rs` (NEW; typed domain module, wording pins, store universe), reusing `support/identity_links.rs` (`LinkWorld`, link steps) and `support/people.rs` (spawn, scrape, infer).
-Double (test-support, additive): `FakeGithubAccounts` gains `AuthorityFile` (`Lists`, `Symlink`, `Submodule`, `Directory`, `Oversize`, `NotUtf8`, `OnlyOnAnotherBranch`) served at `/repos/{o}/{r}/contents/.github/openlore-authority` (base64, 60-column wrap, keyed by the repo's current path), `redirect_repo_to_another_host`, `exhaust_budget_at_authority_reads`, oracle `authority_file_reads_of`; one unit test.
+Vocabulary: `support/authority.rs` (typed domain module, wording pins, `WhatJeffSees` port view, SECONDARY guardrails), reusing `support/identity_links.rs` (`LinkWorld`, link steps; revision 1 adds `with_frozen_store_from` / `freeze_store_into`) and `support/people.rs`.
+Double (test-support, additive): `FakeGithubAccounts` serves `AuthorityFile` shapes at `/repos/{o}/{r}/contents/.github/openlore-authority`, `redirect_repo_to_another_host`, `exhaust_budget_at_authority_reads`, `authority_file_reads_of`; revision 1 adds `rate_limit_profile_after` / `drop_profile_after` (a profile served N more times, then 403 / 503). Two unit tests.
+Fixture (revision 1): `tests/fixtures/owner-only-signing-v7-store/` — frozen v7 store (EXPORT DATABASE dump, no `.duckdb`), regenerated by `regenerate_the_frozen_v7_store_fixture`.
 
-**Mix** (primary category of each example scenario fn; rule: non-happy = error/refusal, boundary, edge, infrastructure-failure, guardrail/security): walking skeleton 1 · happy 11 · error/refusal 8 · boundary 3 · edge 10 · infrastructure-failure 2 · guardrail/security 4. **Non-happy: 27 / 39 fns (69 %)**; strict refusal-row share (rows whose Then is a refusal or "nothing written") ≈ 33 / 76 rows (43 %), review F-08. `@security` on 18 fns (forged/spoofed counter, cross-host redirect, symlink/submodule/directory/oversize/non-UTF-8 file, prefix-colliding and uppercase DIDs, offline window, renamed login).
+**Mix** (primary category of each example scenario fn; non-happy = error/refusal, boundary, edge, infrastructure-failure, guardrail/security): walking skeleton 1 · happy 13 · error/refusal 5 · boundary 2 · edge 9 · infrastructure-failure 4 · guardrail/security 10. **Non-happy: 30 / 44 fns (68 %)**; strict refusal-row share (rows whose Then is a refusal or "nothing written / unchanged") ≈ 48 / 93 rows (52 %). `@security` on 20 fns.
 
-## 3. Stories derived from DESIGN (no DISCUSS wave)
+## 3. Stories (DISCUSS `user-stories.md`, IDs unchanged)
 
-| Story | From | Scenarios |
-|---|---|---|
-| S-OOS-1 Only the owner of a GitHub account signs about it; others get the hand-off | A-1, A-2, OOS-D4, C-OOS-1, KPI-OOS-1, slice 1 | WS-OOS-1, PS-2, PS-5, PS-6, PS-7, PS-8, RA-2 (person row), CORE-OOS-2/3/4 |
-| S-OOS-2 Anyone can always dispute; the author can always withdraw | OOS-D11, C-OOS-2, KPI-OOS-3 | PS-3, CORE-OOS-1/2 |
-| S-OOS-3 Signing works offline from a check ≤ 7 days old, never otherwise | OOS-D7, C-OOS-9, I-9 exception, A-6 | PS-4, RA-10, RA-15, CORE-OOS-4/4x |
-| S-OOS-4 Only the repo's owner or a DID its authority file lists signs about the repo; anyone imports | A-3, A-12, OOS-D5, ADR-087 §2-3, KPI-OOS-4 | RA-1, RA-2, RA-3, RA-8, RA-13, CORE-OOS-3 |
-| S-OOS-5 Anyone re-checks authority from public data; failures change nothing | OOS-D6, ADR-087 §4-6, C-OOS-3/4 | RA-4, RA-5, RA-6, RA-7, RA-9, RA-14 |
-| S-OOS-6 A never-published claim publishes only with a permit | OOS-D8, ADR-086 §4, OOS-D3 | RA-11a, RA-11b, RA-12 |
-| S-OOS-7 Readers label every `github:` assertion and weigh only attested ones | OOS-D9/D10, C-OOS-5/6/8, KPI-OOS-2, UC-7/11/16/20 | RD-1..RD-10, CORE-OOS-5 |
-| S-OOS-8 The review app's share draft quotes only claims whose authority holds | UC-21, ADR-086 §8 | SA-1 |
-| S-OOS-9 Imported candidates are kept locally, never federated, never weighed | A-11, OOS-D12 B, C-OOS-7 | IC-1..IC-4 |
+| Story | Scenarios (`@s-oos-N`) |
+|---|---|
+| S-OOS-1 Only the owner of a GitHub account signs about it; others get the hand-off | WS-OOS-1, PS-2, PS-5, PS-6, PS-7, PS-8, RA-2 (person row), CORE-OOS-2/3/4 |
+| S-OOS-2 Anyone can always dispute; the author can always withdraw | PS-3, CORE-OOS-1/2 |
+| S-OOS-3 Signing works offline from a check ≤ 7 days old, never otherwise (and online verbs fall back to it when GitHub cannot answer) | PS-4, PS-9, RA-10, RA-12b, RA-15, CORE-OOS-4/4x |
+| S-OOS-4 Only the repo's owner or a DID its authority file lists signs about the repo; anyone imports | RA-1, RA-2, RA-3, RA-8, RA-13, CORE-OOS-3 |
+| S-OOS-5 Anyone re-checks authority from public data; failures change nothing | RA-4, RA-5, RA-6, RA-7, RA-9, RA-14, RA-16 |
+| S-OOS-6 A never-published claim publishes only with a permit; upgrades keep everything | RA-11a, RA-11b, RA-12, RA-12b |
+| S-OOS-7 Readers label every `github:` assertion and weigh only attested ones | RD-1..RD-11, CORE-OOS-5 |
+| S-OOS-8 The review app quotes and publishes only claims whose authority holds | SA-1; publish half already shipped (ruling R8): `review_app_repos_and_accounts_several.rs` AP-1/AP-2/AP-4, `review_app_publish_permit_alone.rs`, `no_request_publishes_a_suggestion_about_a_repo_the_owner_doesnt_own` (`crates/openlore-review-app/tests`); link prompt = GDL slice 3 `review_app_identity_link.rs` |
+| S-OOS-9 Imported candidates are kept locally, never federated, never weighed, never inferred from | IC-1..IC-5 |
 
 ## 4. Traceability — scenario → decision (elevator pitch = test name in words)
 
 | ID | Elevator pitch | Traces to |
 |---|---|---|
-| WS-OOS-1 | Only Jeff can sign what is said about Jeff's GitHub account (2 rows) | OOS-D4, C-OOS-1, KPI-OOS-1, slice 1 |
-| PS-2 | A person claim Jeff cannot attest is refused, says why and who can sign (3 rows) | ADR-087 §1, ADR-086 §10 |
-| PS-3 | Jeff can always dispute or withdraw, whatever authority he holds (2 rows) | OOS-D11, KPI-OOS-3 |
-| PS-4 | With the network off, Jeff signs about himself only from a check at most 7 days old (4 rows) | ADR-086 §5, I-9, A-6 |
-| PS-5 | Jeff signs an inferred adherence only about himself (2 rows) | UC-9, A-8 |
-| PS-6 | Jeff's inferred people say who can sign each candidate, and listing writes nothing | ADR-086 §10, CPI D-1 |
-| PS-7 | Jeff still signs about his account when its bio also names another identity | UC-2 |
-| PS-8 | After Jeff renames his GitHub account, he signs only under the new login (2 rows) | ADR-087 §1, G-2, A-14 |
+| WS-OOS-1 | Only Jeff can sign what is said about Jeff's GitHub account (2 rows) | OOS-D4, C-OOS-1, KPI-OOS-1 |
+| PS-2 | A person claim Jeff cannot attest is refused, says why and who can sign (3) | ADR-087 §1, ADR-086 §10 |
+| PS-3 | Jeff can always dispute or withdraw, whatever authority he holds (2; ACTIVE; wire body asserted) | OOS-D11, KPI-OOS-3 |
+| PS-4 | With the network off, Jeff signs about himself only from a check at most 7 days old (4) | ADR-086 §5, I-9, A-6 |
+| PS-5 | Jeff signs an inferred adherence only about himself (2) | UC-9, A-8 |
+| PS-6 | Jeff's inferred people say who can sign each candidate, and listing writes nothing | ADR-086 §10 |
+| PS-7 | Jeff still signs about his account when its bio also names another identity (ACTIVE) | UC-2 |
+| PS-8 | After Jeff renames his GitHub account, he signs only under the new login (2) | ADR-087 §1, G-2 |
+| PS-9 | When GitHub cannot answer as Jeff signs from an import, his latest check decides (3) | ruling R3, ADR-086 §5 clarification |
 | RA-1 | Jeff imports his own repo and signs what it shows | ADR-087 §2, KPI-OOS-4 |
-| RA-2 | Jeff imports anything public, but signing what he cannot attest is refused with a hand-off (3 rows) | ADR-086 §10, OOS-D12 |
-| RA-3 | An organization repo is signed only by a DID its authority file lists exactly (11 rows) | ADR-087 §3, lie catalogue |
-| RA-4 | Re-checking authority labels each peer's repo claims and records one observation per repo | ADR-087 §4/§6 |
-| RA-5 | When GitHub cannot answer, re-checking records nothing and changes nothing (3 rows) | ADR-087 §4 redirect policy |
-| RA-6 | When GitHub's budget runs out mid-import, the candidates are listed and signing waits for the reset | ADR-087 §6 budget |
+| RA-2 | Jeff imports anything public, but signing what he cannot attest is refused with a hand-off (3) | ADR-086 §10, OOS-D12 |
+| RA-3 | An organization repo is signed only by an identity its authority file lists exactly (11) | ADR-087 §3, lie catalogue |
+| RA-4 | Re-checking authority labels each peer's repo claims from one look at each repo | ADR-087 §4/§6, C-OOS-4 |
+| RA-5 | When GitHub cannot answer, re-checking records nothing and changes nothing (3) | ADR-087 §4 |
+| RA-6 | When GitHub's budget runs out mid-import, the candidates are listed and his latest check decides (2) | ADR-087 §6 (a600ad3) |
 | RA-7 | After Jeff transfers his repo, his earlier claim reads third-party and nothing is withdrawn | ADR-086 §6, C-OOS-5 |
-| RA-8 | After Jeff renames his repo, he signs only under the name GitHub serves now (2 rows) | A-10, ADR-089 §2 (`RepoRenamed`) |
+| RA-8 | After Jeff renames his repo, he signs only under the name GitHub serves now (2) | A-10, ADR-089 §2 |
 | RA-9 | A listed identity stays listed whoever observed the repo last | review H-2 |
-| RA-10 | With the network off, Jeff signs a repo claim only from fresh checks (4 rows) | ADR-086 §5 (older check) |
-| RA-11a | A claim Jeff signed about someone else's repo before owner-only signing is never published | OOS-D3, OOS-D8 |
-| RA-11b | Publishing a stored claim later asks for authority only if it was never published (3 rows) | ADR-086 §4 (`published_at IS NULL`) |
-| RA-12 | Opening a store made before owner-only signing keeps everything in it | ADR-087 §5 (v8) |
-| RA-13 | Signing from an import re-checks Jeff's own link first (2 rows) | ADR-087 §6, N-2 |
+| RA-10 | With the network off, Jeff signs a repo claim only from fresh checks (6; listed 7 d / 7 d + 1 min) | ADR-086 §5 |
+| RA-11a | A claim Jeff signed about someone else's repo before owner-only signing is never published (2: online / offline) | OOS-D3, OOS-D8 |
+| RA-11b | Publishing a stored claim later asks for authority only if it was never published (3) | ADR-086 §4 |
+| RA-12 | Opening a store made before owner-only signing keeps everything in it | ADR-087 §5 |
+| RA-12b | Jeff's identity-link checks carry over when his store gains owner-only signing (3; frozen v7 store) | ADR-087 §5, ruling R5 |
+| RA-13 | Signing from an import re-checks Jeff's own link first (5; incl. GitHub failing) | ADR-087 §6, N-2, ruling R3 |
 | RA-14 | With no GitHub claims in his store, re-checking authority asks GitHub nothing | C3/C4b |
 | RA-15 | A repo GitHub does not have is recorded as not found and cannot be signed | ADR-087 §4 (404) |
+| RA-16 | When GitHub's budget is gone, re-checking says so, records nothing and never shows his token (3) | ADR-087 §6, ruling R4 |
 | IC-1 | Jeff reviews what he imported, offline, one repo at a time | OOS-D12 B |
 | IC-2 | Importing a repo keeps its candidates locally and nowhere else | C-OOS-7 |
 | IC-3 | With nothing imported, the list says so | C1a |
-| IC-4 | Importing the same repo twice lists each candidate once (DISTILL proposal, U-OOS-6) | C4a |
+| IC-4 | Importing the same repo twice lists each candidate once, as last imported | P-OOS-3 |
+| IC-5 | Imported candidates never feed Jeff's inferred people (ACTIVE) | C-OOS-7, review PO F-05 |
 | RD-1 | Every claim about a repo is shown with whose word it is | ADR-086 §8 |
 | RD-2 | The weighted view counts only attested claims and says what it left out | OOS-D9, KPI-OOS-2 |
 | RD-3 | Jeff can see the claims left out, per author, without changing the weight | OOS-D9 |
-| RD-4 | Nothing but an attested claim moves the weight (6 rows incl. a foreign withdrawal; row 1 confirms A-13) | KPI-OOS-2, UC-16/20 |
-| RD-5 | A claim marked as a dispute is shown as a dispute, not as someone's word about the repo | ADR-086 §2 |
-| RD-6 | Jeff's viewer weighs and labels claims exactly as his terminal does | KPI-OOS-2 (viewer) |
-| RD-7 | Network search labels every GitHub claim, using Jeff's own check when he has one (2 rows) | UC-7, OOS-D10, C-OOS-8 |
-| RD-8 | Claims made before owner-only signing are judged by the same rule, with no cut-off date | OOS-D3, ADR-086 §7 |
+| RD-4 | Nothing but an attested claim moves the weight (6) | KPI-OOS-2, UC-16/20 |
+| RD-5 | A claim marked as a dispute is shown as a dispute | ADR-086 §2 |
+| RD-6 | Jeff's viewer weighs and labels claims exactly as his terminal does | KPI-OOS-2 |
+| RD-7 | Network search labels every GitHub claim, using Jeff's own check when he has one (2) | UC-7, C-OOS-8 |
+| RD-8 | Claims made before owner-only signing are judged by the same rule | ADR-086 §7 |
 | RD-9 | Inferred people show the authority of each repo claim they rest on | UC-10 |
-| RD-10 | After Jeff renames his account, his claim about the old login reads third-party and stays published | G-2, A-14 (review F-02) |
-| SA-1 | Priya's share post names only claims about repos she still owns | UC-21 |
+| RD-10 | After Jeff renames his account, his claim about the old login reads third-party | G-2, A-14 |
+| RD-11 | Asking for unattested claims without the weighted view is a usage mistake | P-OOS-1 |
+| SA-1 | Priya's share post names only claims about repos she still owns | UC-21, P-OOS-2 |
 
-### Layer 2 (`owner_only_signing_core.rs`)
+**KPI traceability** (ruling R8): KPI-OOS-1 — WS-OOS-1, PS-2, PS-5, PS-6, RA-1, RA-2, RA-11a/b, CORE-OOS-4, plus the shipped review-app publish tests cited under S-OOS-8. KPI-OOS-2 — RD-2, RD-3, RD-4, RD-6, RD-10, IC-2, CORE-OOS-5. KPI-OOS-3 — PS-3 (active). KPI-OOS-4 — RA-1, RA-3, RA-4.
+
+**Constraint enforcement outside acceptance** (ruling R9, F-06/F-07): C-OOS-8 (indexer gains no GitHub capability) — `xtask check-arch` `INDEXER_FORBIDDEN_DEPS` (DELIVER adds `adapter-github`), plus RD-7 at the port. C-OOS-4 (authority reader-local, never federated, insert-only) — `xtask check-arch` `repo_authority_checks_insert_only` + `authority_readers_hold_no_write_handle` (DESIGN component table) and the shipped `identity_link_checks_insert_only`, plus RA-4 / RA-16 at the port (nothing published, nothing recorded). C-OOS-7 additionally `imported_candidates_not_in_scoring_or_inference` + IC-2 / IC-5.
+
+### Layer 2 (`owner_only_signing_core.rs`, all `@contract-shape:pure-function`)
 
 | ID | Property | Binding | Traces to |
 |---|---|---|---|
-| CORE-OOS-1 | only disputes, withdrawals and links are weightless kinds; single marker → exact kind | `todo!()` → `authority::kind` | ADR-086 §2 |
-| CORE-OOS-2 | only GitHub assertions need authority; malformed `github:` never exempt | `todo!()` → `authority::requirement` | ADR-086 §1, C-OOS-1 |
-| CORE-OOS-3 | attested exactly when the ADR-087 table says so (exact DID token incl. uppercase / prefix / punctuation lies; org never Owner; latest check + current login) | `todo!()` → `authority::classify` | ADR-087 §1-3 |
-| CORE-OOS-4 / 4x | permit iff exempt or freshly attested (older check ≥ 0 and ≤ 7 days); edges 0 / 7 d / 7 d + 1 min / −1 min by example | `todo!()` → CLI gate over local checks | ADR-086 §5, A-6 |
-| CORE-OOS-5 | `score_attested == score(eligible)`; unchanged by added counters (incl. spoofed), retractions, links, unattested assertions | `todo!()` → `score_attested`; oracle uses the REAL `scoring::score` | KPI-OOS-2 |
+| CORE-OOS-1 | only disputes, withdrawals and links are weightless kinds | `todo!()` → `authority::kind` | ADR-086 §2 |
+| CORE-OOS-2 | only GitHub assertions need authority; malformed `github:` never exempt | `todo!()` → `authority::requirement` | ADR-086 §1 |
+| CORE-OOS-3 | attested exactly when the ADR-087 table says so | `todo!()` → `authority::classify` | ADR-087 §1-3 |
+| CORE-OOS-4 / 4x | gate = decision table `GateRow` G1..G8 (ADR-086 §5 / ADR-087 §7); 4x anchors G3/G4/G8 by example | `todo!()` → CLI gate over local checks | ADR-086 §5, A-6 |
+| CORE-OOS-5 | `score_attested == score(eligible)`; unmoved by weightless rows | `todo!()` → `score_attested`; oracle uses REAL `scoring::score` | KPI-OOS-2 |
+
+Layer-2 CM-A exception: these call the pure core directly (Mandate 9 layer 2; ADR-007 functional core API); each is mirrored at layer 3 through the binary (module doc).
 
 ## 5. Adapter and driving-adapter coverage
 
 | Adapter / port | @real-io scenario |
 |---|---|
-| `openlore` CLI — `claim add`, `claim counter`, `claim retract`, `claim publish` | WS-OOS-1, PS-2/3/4/7/8, RA-8/10/11a/11b/15 |
-| `openlore` CLI — `scrape github <owner/repo> --sign`, `scrape person --sign` | RA-1, RA-2, RA-3, RA-6, RA-13 |
-| `openlore` CLI — `infer people [--sign]` | PS-5, PS-6, RD-9 |
-| `openlore` CLI — `authority verify [--subject]` (NEW) | RA-4, RA-5, RA-7, RA-9, RA-14, RA-15 |
-| `openlore` CLI — `candidates list [--subject]` (NEW, slice 5) | IC-1, IC-3, IC-4 |
-| `openlore` CLI — `graph query [--weighted] [--include-unattested] [--explain]`, `search` | RD-1..RD-5, RD-7, RD-8 |
+| `openlore` CLI — `claim add`, `claim counter`, `claim retract`, `claim publish` | WS-OOS-1, PS-2/3/4/7/8, RA-8/10/11a/11b/12b/15 |
+| `openlore` CLI — `scrape github <owner/repo> --sign`, `scrape person --sign` | RA-1, RA-2, RA-3, RA-6, RA-13, PS-9 |
+| `openlore` CLI — `infer people [--sign]` | PS-5, PS-6, RD-9, IC-5 |
+| `openlore` CLI — `authority verify [--subject]` (NEW) | RA-4, RA-5, RA-7, RA-9, RA-14, RA-15, RA-16 |
+| `openlore` CLI — `candidates list [--subject]` (NEW, slice 5) | IC-1, IC-2, IC-3, IC-4 |
+| `openlore` CLI — `graph query [--weighted] [--include-unattested] [--explain]`, `search`, `identity list` | RD-1..RD-5, RD-7, RD-8, RD-11, RA-12, RA-12b, every `WhatJeffSees` observation |
 | viewer `/score`, `/project` | RD-6 |
 | review app share preview | SA-1 |
-| `adapter-github` `read_repo_authority` (+ redirect policy) | RA-1, RA-3, RA-4, RA-5 (cross-host), RA-8 (same-host rename) |
-| `adapter-duckdb` v8 `repo_authority_checks` (read + insert-only write) | RA-1, RA-4, RA-6, RA-10, RA-12 |
-| `adapter-duckdb` v8 `imported_candidates` | IC-1..IC-4 |
-| `adapter-duckdb` v7 `identity_link_checks` (read; write via `--sign` refresh) | PS-4, RA-13 |
-| single publish path (`FakePds`) | WS-OOS-1, RA-1, RA-11b |
-
-The REQUIRED recorded-fixture contract test of the GitHub `/repos` + contents shapes (ADR-087 Earned Trust fixtures) is an adapter test owned by DELIVER, not acceptance (U-OOS-8).
+| `adapter-github` `read_repo_authority` (+ redirect policy; exact policy pinned by the recorded-fixture test, U-OOS-8) | RA-1, RA-3, RA-4, RA-5, RA-8, RA-16 |
+| `adapter-github` sign-time link refresh failing (rate limit / unreachable) | PS-9, RA-13 |
+| `adapter-duckdb` v8 `repo_authority_checks` | RA-1, RA-4, RA-6, RA-10, RA-12, RA-12b |
+| `adapter-duckdb` v8 `imported_candidates` | IC-1..IC-5 |
+| `adapter-duckdb` v7 `identity_link_checks` (read; write via `--sign` refresh) | PS-4, PS-9, RA-12b, RA-13 |
+| single publish path (`FakePds`) | WS-OOS-1, PS-3, RA-1, RA-11b |
 
 ## 6. Scenarios (Gherkin, extracted from the doc comments)
 
@@ -136,7 +148,7 @@ The REQUIRED recorded-fixture contract test of the GitHub `/repos` + contents sh
 
 ```gherkin
 @walking_skeleton @driving_port @driving_adapter @real-io @security @kpi-oos-1
-@oos-d4 @c-oos-1 @contract-shape:bounded-change
+@oos-d4 @c-oos-1 @s-oos-1 @contract-shape:bounded-change
 Scenario Outline: Only Jeff can sign what is said about Jeff's GitHub account
   Given Jeff has publicly linked his GitHub account "jeffbailey" to his identity
   When Jeff signs and publishes "<account> adheres to memory-safety"
@@ -150,7 +162,7 @@ Scenario Outline: Only Jeff can sign what is said about Jeff's GitHub account
 **PS-2 (table over why Jeff holds no person authority)** — `a_person_claim_jeff_cannot_attest_is_refused_says_why_and_who_can_sign`
 
 ```gherkin
-@driving_port @real-io @error @security @kpi-oos-1 @c6b @contract-shape:unbounded-preservation
+@driving_port @real-io @error @security @kpi-oos-1 @c6b @s-oos-1 @contract-shape:unbounded-preservation
 Scenario Outline: A person claim Jeff cannot attest is refused, says why and who can sign
   Given <situation>
   When Jeff signs and publishes "<account> adheres to memory-safety"
@@ -163,24 +175,24 @@ Scenario Outline: A person claim Jeff cannot attest is refused, says why and who
     | Jeff linked "jeffbailey"                                          | tobiasw    | you have no identity link to        | tobiasw, after link     |
 ```
 
-**PS-3 (table over the two exempt kinds; chained on WS-OOS-1)** — `jeff_can_always_dispute_or_withdraw_whatever_authority_he_holds`
+**PS-3 (table over the two exempt kinds; chained on WS-OOS-1; review H-1)** — `jeff_can_always_dispute_or_withdraw_whatever_authority_he_holds`
 
 ```gherkin
-@driving_port @real-io @kpi-oos-3 @c-oos-2 @oos-d11 @guardrail @contract-shape:bounded-change
+@driving_port @real-io @kpi-oos-3 @c-oos-2 @oos-d11 @guardrail @s-oos-2 @contract-shape:bounded-change
 Scenario Outline: Jeff can always dispute or withdraw, whatever authority he holds
   Given <situation>
   When Jeff <acts>
-  Then the dispute or withdrawal is signed and reaches his published repo
+  Then his published repo holds <record>
   Examples:
-    | situation                                                                       | acts                                                     |
-    | Rachel published "rachelk adheres to memory-safety" and Jeff pulled it          | disputes Rachel's claim about her own account            |
-    | Jeff signed and published about "jeffbailey", then his bio stopped naming him   | withdraws his own claim about "jeffbailey"               |
+    | situation                                                                     | acts                                          | record                                                          |
+    | Rachel published "rachelk adheres to memory-safety" and Jeff pulled it        | disputes Rachel's claim about her own account | his dispute of Rachel's claim, about github:rachelk             |
+    | Jeff signed and published about "jeffbailey", then his bio stopped naming him | withdraws his own claim about "jeffbailey"    | his withdrawal of that claim, about github:jeffbailey           |
 ```
 
 **PS-4 (boundary table over the age of Jeff's latest link check)** — `with_the_network_off_jeff_signs_about_himself_only_from_a_check_at_most_7_days_old`
 
 ```gherkin
-@driving_port @real-io @boundary @c1b @i-9 @c-oos-9 @oos-d7 @security @contract-shape:bounded-change
+@driving_port @real-io @boundary @c1b @i-9 @c-oos-9 @oos-d7 @security @s-oos-3 @contract-shape:bounded-change
 Scenario Outline: With the network off, Jeff signs about himself only from a check at most 7 days old
   Given Jeff linked "jeffbailey" and his link was checked on 1 October at 09:00
   And the network is off
@@ -195,10 +207,28 @@ Scenario Outline: With the network off, Jeff signs about himself only from a che
     | 20 September 09:00      | nothing is signed (a check dated after now counts as missing); same command  |
 ```
 
+**PS-9 (ruling R3: GitHub cannot answer at signing time; chained on PS-4's Given)** — `when_github_cannot_answer_as_jeff_signs_from_an_import_his_latest_check_decides`
+
+```gherkin
+@driving_port @real-io @infrastructure-failure @c7a @i-9 @r-3 @security @s-oos-3 @contract-shape:bounded-change
+Scenario Outline: When GitHub cannot answer as Jeff signs from an import, his latest check decides, as offline
+  Given Jeff linked "jeffbailey" and his link was checked on 1 October at 09:00
+  And Rachel's signed claims say two repos built by BurntSushi and jeffbailey are memory-safe
+  And <trouble> once the import has read his profile
+  When Jeff reads "jeffbailey" as a person and signs his memory-safety candidate at <time>
+  Then <outcome>
+  And his linked identities read as before (the failed re-check recorded nothing)
+  Examples:
+    | trouble                                         | time            | outcome                                                                        |
+    | GitHub says it is too busy to answer            | 3 October 09:00 | the claim is signed and reaches his published repo                             |
+    | GitHub cannot be reached                        | 3 October 09:00 | the claim is signed and reaches his published repo                             |
+    | GitHub says it is too busy to answer            | 8 October 09:01 | nothing is signed; he is told to re-check authority, with the command to run   |
+```
+
 **PS-5 (table over whose adherence Jeff signs)** — `jeff_signs_an_inferred_adherence_only_about_himself`
 
 ```gherkin
-@driving_port @real-io @security @kpi-oos-1 @uc-9 @a-8 @contract-shape:bounded-change
+@driving_port @real-io @security @kpi-oos-1 @uc-9 @a-8 @s-oos-1 @contract-shape:bounded-change
 Scenario Outline: Jeff signs an inferred adherence only about himself
   Given Jeff linked "jeffbailey"
   And Rachel's signed claims say two repos built by BurntSushi and jeffbailey are memory-safe
@@ -214,7 +244,7 @@ Scenario Outline: Jeff signs an inferred adherence only about himself
 **PS-6 (chained on PS-5's Given)** — `jeffs_inferred_people_say_who_can_sign_each_candidate_and_listing_writes_nothing`
 
 ```gherkin
-@driving_port @real-io @kpi-oos-1 @adr-086-10 @contract-shape:unbounded-preservation
+@driving_port @real-io @kpi-oos-1 @adr-086-10 @s-oos-1 @contract-shape:unbounded-preservation
 Scenario: Jeff's inferred people say who can sign each candidate, and listing writes nothing
   Given Jeff linked "jeffbailey"
   And Rachel's signed claims say two repos built by BurntSushi and jeffbailey are memory-safe
@@ -227,7 +257,7 @@ Scenario: Jeff's inferred people say who can sign each candidate, and listing wr
 **PS-7** — `jeff_still_signs_about_his_account_when_its_bio_also_names_another_identity`
 
 ```gherkin
-@driving_port @real-io @edge @security @uc-2 @adr-087-1 @contract-shape:bounded-change
+@driving_port @real-io @edge @security @uc-2 @adr-087-1 @guardrail @s-oos-1 @contract-shape:bounded-change
 Scenario: Jeff still signs about his account when its bio also names another identity
   Given the "jeffbailey" bio names both Jeff's identity and Rachel's
   And Jeff and Rachel both published a link to "jeffbailey", and Jeff re-checked every link in his store (both verify)
@@ -238,7 +268,7 @@ Scenario: Jeff still signs about his account when its bio also names another ide
 **PS-8 (table over the old and the new login)** — `after_jeff_renames_his_github_account_he_signs_only_under_the_new_login`
 
 ```gherkin
-@driving_port @real-io @edge @g-2 @a-14 @adr-087-1 @security @contract-shape:bounded-change
+@driving_port @real-io @edge @g-2 @a-14 @adr-087-1 @security @s-oos-1 @contract-shape:bounded-change
 Scenario Outline: After Jeff renames his GitHub account, he signs only under the new login
   Given Jeff linked "jeffbailey", renamed the account to "jeff-b" and re-checked his link
   When Jeff signs and publishes "<login> adheres to memory-safety"
@@ -249,26 +279,27 @@ Scenario Outline: After Jeff renames his GitHub account, he signs only under the
     | jeffbailey | nothing is signed; he is told it is no longer the login of his linked account |
 ```
 
-
 ### `owner_only_signing_repos.rs`
 
 **RA-1** — `jeff_imports_his_own_repo_and_signs_what_it_shows`
 
 ```gherkin
-@driving_port @driving_adapter @real-io @kpi-oos-1 @kpi-oos-4 @adr-087-2 @oos-d5 @contract-shape:bounded-change
+@driving_port @driving_adapter @real-io @kpi-oos-1 @kpi-oos-4 @adr-087-2 @oos-d5 @s-oos-4 @contract-shape:bounded-change
 Scenario: Jeff imports his own repo and signs what it shows
   Given Jeff linked "jeffbailey", the account that owns jeffbailey/tidepool
   When Jeff imports jeffbailey/tidepool and signs candidate 1
   Then the claim is signed and reaches his published repo
-  And the repo's authority was observed once, as owned by a user with no authority file
+  And his claim about tidepool reads "owner"
+  And GitHub was asked once for tidepool's authority file
 ```
 
 **RA-2 (table over what Jeff imports and tries to sign; Jeff is linked)** — `jeff_imports_anything_public_but_signing_what_he_cannot_attest_is_refused_with_a_hand_off`
 
 ```gherkin
-@driving_port @real-io @error @security @kpi-oos-1 @adr-086-10 @oos-d12 @c-oos-7 @contract-shape:bounded-change
+@driving_port @real-io @error @security @kpi-oos-1 @adr-086-10 @oos-d12 @c-oos-7 @s-oos-4 @s-oos-1 @contract-shape:bounded-change
 Scenario Outline: Jeff imports anything public, but signing what he cannot attest is refused with a hand-off
   Given Jeff linked "jeffbailey"
+  And Rachel's signed claim says her repo rachelk/kelp is memory-safe, and Jeff recorded kelp's contributors (rachelk)
   When Jeff runs <import> and asks to sign candidate 1
   Then the candidates are still listed and nothing is signed or published
   And he is told "<reason>", who can sign it, and the command they would run
@@ -282,74 +313,78 @@ Scenario Outline: Jeff imports anything public, but signing what he cannot attes
 **RA-3 (table over the authority file on acme-tools/anvil; Jeff has NO** — `an_organization_repo_is_signed_only_by_a_did_its_authority_file_lists_exactly`
 
 ```gherkin
-@driving_port @real-io @security @c6a @adr-087-3 @kpi-oos-4 @contract-shape:bounded-change
-Scenario Outline: An organization repo is signed only by a DID its authority file lists exactly
+@driving_port @real-io @security @c6a @adr-087-3 @kpi-oos-4 @s-oos-4 @contract-shape:bounded-change
+Scenario Outline: An organization repo is signed only by an identity its authority file lists exactly
   Given acme-tools/anvil is owned by the organization acme-tools
-  And its default branch holds <file>
+  And its main branch holds <file>
   When Jeff imports acme-tools/anvil and signs candidate 1
   Then <outcome>
   Examples:
-    | file                                                           | outcome                                          |
-    | an authority file listing Jeff's identity                      | signed and published                             |
-    | an authority file listing Jeff's identity in capitals          | refused: is owned by the organization            |
-    | an authority file listing "did:plc:test-jeffrey"               | refused: is owned by the organization            |
-    | an authority file where Jeff's identity is commented out       | refused: is owned by the organization            |
-    | a symlink named like the authority file                        | refused: is not a valid authority file           |
-    | a submodule named like the authority file                      | refused: is not a valid authority file           |
-    | a directory named like the authority file                      | refused: is not a valid authority file           |
-    | an authority file of exactly 4 KiB that lists Jeff's identity  | signed and published                             |
-    | an authority file over 4 KiB that lists Jeff's identity        | refused: is not a valid authority file           |
-    | an authority file listing Jeff's identity that is not plain text | refused: is not a valid authority file           |
-    | Jeff's identity listed only on another branch                  | refused: is owned by the organization            |
+    | file                                                                    | outcome                                           |
+    | an authority file listing Jeff's identity                               | signed and published                              |
+    | an authority file listing Jeff's identity in capital letters            | refused: the organization has not listed him      |
+    | an authority file listing an identity that merely starts like Jeff's    | refused: the organization has not listed him      |
+    | an authority file where Jeff's identity is commented out                | refused: the organization has not listed him      |
+    | a shortcut to another file, in place of the authority file              | refused: not a usable authority file              |
+    | a link to another project, in place of the authority file               | refused: not a usable authority file              |
+    | a folder instead of a file                                              | refused: not a usable authority file              |
+    | an authority file of exactly 4 KiB that lists Jeff's identity           | signed and published                              |
+    | an authority file over 4 KiB that lists Jeff's identity                 | refused: not a usable authority file              |
+    | an authority file listing Jeff's identity that isn't plain text         | refused: not a usable authority file              |
+    | Jeff's identity listed only in a file on a branch other than the main one | refused: the organization has not listed him    |
 ```
 
 **RA-4** — `rechecking_authority_labels_each_peers_repo_claims_and_records_one_observation_per_repo`
 
 ```gherkin
-@driving_port @real-io @adr-087-6 @c-oos-3 @c-oos-4 @kpi-oos-4 @contract-shape:bounded-change
-Scenario: Re-checking authority labels each peer's repo claims and records one observation per repo
+@driving_port @real-io @adr-087-6 @c-oos-3 @c-oos-4 @kpi-oos-4 @s-oos-5 @contract-shape:bounded-change
+Scenario: Re-checking authority labels each peer's repo claims from one look at each repo
   Given acme-tools/anvil's authority file lists Rachel's identity
   And Rachel published claims about acme-tools/anvil and jeffbailey/tidepool, and Jeff pulled both
   When Jeff re-checks authority
   Then her anvil claim reads "repo-listed" and her tidepool claim "third-party"
-  And exactly one observation of each repo was recorded, from one repo read and one authority-file read each
-  And nothing else in his store or published repo changed
+  And GitHub was asked once for each repo and once for each repo's authority file
+  And nothing reached his published repo
 ```
 
 **RA-5 (table over how GitHub fails; chained on RA-4's Given)** — `when_github_cannot_answer_rechecking_records_nothing_and_changes_nothing`
 
 ```gherkin
-@driving_port @real-io @infrastructure-failure @security @c7a @adr-087-4 @contract-shape:unbounded-preservation
+@driving_port @real-io @infrastructure-failure @security @c7a @adr-087-4 @s-oos-5 @contract-shape:unbounded-preservation
 Scenario Outline: When GitHub cannot answer, re-checking records nothing and changes nothing
   Given Rachel published a claim about acme-tools/anvil and Jeff pulled it
   And <trouble>
   When Jeff re-checks the authority of acme-tools/anvil
   Then he is told GitHub could not be asked
-  And nothing in his store or published repo changed
+  And every claim about anvil and his linked identities read as before, and nothing reached his published repo
   Examples:
-    | trouble                                                       |
-    | GitHub says it is too busy to answer                          |
-    | GitHub cannot be reached                                      |
-    | GitHub answers the repo read by sending him to another site   |
+    | trouble                                                  |
+    | GitHub says it is too busy to answer                     |
+    | GitHub cannot be reached                                 |
+    | GitHub sends him to another site when he asks about anvil |
 ```
 
-**RA-6** — `when_githubs_budget_runs_out_mid_import_the_candidates_are_listed_and_signing_waits_for_the_reset`
+**RA-6 (table; ADR-087 §6 as corrected by design a600ad3: when the budget** — `when_githubs_budget_runs_out_mid_import_the_candidates_are_listed_and_his_latest_check_decides`
 
 ```gherkin
-@driving_port @real-io @infrastructure-failure @c7a @adr-087-6 @contract-shape:bounded-change
-Scenario: When GitHub's budget runs out mid-import, the candidates are listed and signing waits for the reset
-  Given Jeff linked "jeffbailey"
+@driving_port @real-io @infrastructure-failure @c7a @c7b @adr-087-6 @r-3 @s-oos-5 @contract-shape:bounded-change
+Scenario Outline: When GitHub's budget runs out mid-import, the candidates are listed and his latest check decides
+  Given Jeff linked "jeffbailey" on 1 October at 09:00
+  And <earlier check>
   And GitHub's budget runs out after the harvest of jeffbailey/tidepool, before its authority is read
-  When Jeff imports jeffbailey/tidepool and asks to sign candidate 1
+  When Jeff imports jeffbailey/tidepool and asks to sign candidate 1 on 3 October
   Then the candidates are listed
-  And nothing is signed or published, and no observation of tidepool is recorded
-  And he is told GitHub could not be asked and when to retry
+  And <outcome>
+  Examples:
+    | earlier check                                      | outcome                                                                                       |
+    | Jeff has never re-checked tidepool's authority     | nothing is signed or published; he is told GitHub could not be asked, when to retry, and the re-check command |
+    | Jeff re-checked tidepool's authority on 1 October  | the claim is signed and published, on his 1 October checks                                    |
 ```
 
 **RA-7 (chained on RA-1)** — `after_jeff_transfers_his_repo_his_earlier_claim_reads_third_party_and_nothing_is_withdrawn`
 
 ```gherkin
-@driving_port @real-io @adr-086-6 @oos-d6 @c-oos-5 @contract-shape:bounded-change
+@driving_port @real-io @adr-086-6 @oos-d6 @c-oos-5 @s-oos-5 @contract-shape:bounded-change
 Scenario: After Jeff transfers his repo, his earlier claim reads third-party and nothing is withdrawn
   Given Jeff signed and published a claim about jeffbailey/tidepool while he owned it
   And Jeff then transferred tidepool to the organization acme-tools
@@ -361,7 +396,7 @@ Scenario: After Jeff transfers his repo, his earlier claim reads third-party and
 **RA-8 (table over the old and the new repo name)** — `after_jeff_renames_his_repo_he_signs_only_under_the_name_github_serves_now`
 
 ```gherkin
-@driving_port @real-io @edge @security @a-10 @adr-087-4 @adr-089-2 @contract-shape:bounded-change
+@driving_port @real-io @edge @security @a-10 @adr-087-4 @adr-089-2 @s-oos-4 @contract-shape:bounded-change
 Scenario Outline: After Jeff renames his repo, he signs only under the name GitHub serves now
   Given Jeff linked "jeffbailey" and renamed jeffbailey/tidepool to jeffbailey/tidepool-rs
   And Jeff re-checked the authority of <name>
@@ -376,7 +411,7 @@ Scenario Outline: After Jeff renames his repo, he signs only under the name GitH
 **RA-9 (observation order, review H-2)** — `a_listed_identity_stays_listed_whoever_observed_the_repo_last`
 
 ```gherkin
-@driving_port @real-io @security @h-2 @adr-087-4 @contract-shape:pure-function
+@driving_port @real-io @security @h-2 @adr-087-4 @s-oos-5 @contract-shape:bounded-change
 Scenario: A listed identity stays listed whoever observed the repo last
   Given acme-tools/anvil's authority file lists Rachel's identity, and Rachel's claim about it was pulled
   And Jeff re-checked authority, then imported acme-tools/anvil himself
@@ -387,7 +422,7 @@ Scenario: A listed identity stays listed whoever observed the repo last
 **RA-14 (C4b: re-check with nothing to re-check)** — `with_no_github_claims_in_his_store_rechecking_authority_asks_github_nothing`
 
 ```gherkin
-@driving_port @real-io @edge @c3 @c4b @adr-087-6 @contract-shape:unbounded-preservation
+@driving_port @real-io @edge @c3 @c4b @adr-087-6 @s-oos-5 @contract-shape:unbounded-preservation
 Scenario: With no GitHub claims in his store, re-checking authority asks GitHub nothing
   Given Jeff's store holds no claim about a GitHub account or repo
   When Jeff re-checks authority
@@ -398,7 +433,7 @@ Scenario: With no GitHub claims in his store, re-checking authority asks GitHub 
 **RA-15 (C6b: the repo GitHub does not have)** — `a_repo_github_does_not_have_is_recorded_as_not_found_and_cannot_be_signed`
 
 ```gherkin
-@driving_port @real-io @error @adr-087-4 @c6b @contract-shape:bounded-change
+@driving_port @real-io @error @adr-087-4 @c6b @s-oos-3 @contract-shape:bounded-change
 Scenario: A repo GitHub does not have is recorded as not found and cannot be signed
   Given Jeff re-checked the authority of acme-tools/vanished, which GitHub does not have
   And the network is off
@@ -406,10 +441,10 @@ Scenario: A repo GitHub does not have is recorded as not found and cannot be sig
   Then nothing is signed; he is told it was not found on GitHub
 ```
 
-**RA-10 (table over the checks behind an offline repo signature)** — `with_the_network_off_jeff_signs_a_repo_claim_only_from_fresh_checks`
+**RA-10 (table over the checks behind an offline repo signature; review** — `with_the_network_off_jeff_signs_a_repo_claim_only_from_fresh_checks`
 
 ```gherkin
-@driving_port @real-io @boundary @c1b @i-9 @c-oos-9 @security @contract-shape:bounded-change
+@driving_port @real-io @boundary @c1b @i-9 @c-oos-9 @security @s-oos-3 @contract-shape:bounded-change
 Scenario Outline: With the network off, Jeff signs a repo claim only from fresh checks
   Given <checks>
   And the network is off
@@ -417,71 +452,114 @@ Scenario Outline: With the network off, Jeff signs a repo claim only from fresh 
   Then <outcome>
   And GitHub is not asked anything
   Examples:
-    | checks                                                                                      | repo                  | time        | outcome                                         |
-    | Jeff linked "jeffbailey" and re-checked tidepool's authority on 1 October                   | jeffbailey/tidepool   | 3 October   | signed and kept locally                         |
-    | anvil's authority file lists Jeff; Jeff re-checked anvil on 1 October (no identity link)    | acme-tools/anvil      | 3 October   | signed and kept locally                         |
-    | Jeff's link was checked on 1 October; he imported tidepool on 3 October                     | jeffbailey/tidepool   | 8 Oct 09:01 | refused: the older check is over 7 days old     |
-    | Jeff linked "jeffbailey" but tidepool was never observed                                    | jeffbailey/tidepool   | 3 October   | refused: authority has not been checked         |
+    | checks                                                                                    | repo                | time            | outcome                                             |
+    | Jeff linked "jeffbailey" and re-checked tidepool's authority on 1 October                 | jeffbailey/tidepool | 3 October 09:00 | signed and kept locally                             |
+    | anvil's authority file lists Jeff; Jeff re-checked anvil on 1 October (no identity link)  | acme-tools/anvil    | 3 October 09:00 | signed and kept locally                             |
+    | anvil's authority file lists Jeff; Jeff re-checked anvil on 1 October (no identity link)  | acme-tools/anvil    | 8 October 09:00 | signed and kept locally (exactly 7 days)            |
+    | anvil's authority file lists Jeff; Jeff re-checked anvil on 1 October (no identity link)  | acme-tools/anvil    | 8 October 09:01 | refused: checked over 7 days ago; names the re-check |
+    | Jeff's link was checked on 1 October; he imported tidepool on 3 October                   | jeffbailey/tidepool | 8 October 09:01 | refused: the older check is over 7 days old         |
+    | Jeff linked "jeffbailey" but tidepool was never observed                                  | jeffbailey/tidepool | 3 October 09:00 | refused: authority has not been checked             |
 ```
 
-**RA-11a** — `a_claim_jeff_signed_about_someone_elses_repo_before_owner_only_signing_is_never_published`
+**RA-11a (table: online and network off; review Forge 5)** — `a_claim_jeff_signed_about_someone_elses_repo_before_owner_only_signing_is_never_published`
 
 ```gherkin
-@driving_port @real-io @error @security @kpi-oos-1 @oos-d3 @adr-086-4 @contract-shape:unbounded-preservation
-Scenario: A claim Jeff signed about someone else's repo before owner-only signing is never published
+@driving_port @real-io @error @security @kpi-oos-1 @oos-d3 @adr-086-4 @i-9 @s-oos-6 @contract-shape:unbounded-preservation
+Scenario Outline: A claim Jeff signed about someone else's repo before owner-only signing is never published
   Given Jeff's store was made before owner-only signing and holds his unpublished claim about BurntSushi/ripgrep
-  When Jeff publishes that claim
+  When Jeff publishes that claim <how>
   Then nothing reaches his published repo
   And he is told the authority of BurntSushi/ripgrep has not been checked, with the command to check it
+  Examples:
+    | how                  |
+    | with the network on  |
+    | with the network off |
 ```
 
 **RA-11b (table over a stored claim's history; chained on RA-1)** — `publishing_a_stored_claim_later_asks_for_authority_only_if_it_was_never_published`
 
 ```gherkin
-@driving_port @real-io @c4a @kpi-oos-1 @adr-086-4 @contract-shape:bounded-change
+@driving_port @real-io @c4a @kpi-oos-1 @adr-086-4 @s-oos-6 @contract-shape:bounded-change
 Scenario Outline: Publishing a stored claim later asks for authority only if it was never published
   Given Jeff linked "jeffbailey" and re-checked tidepool's authority on 1 October
   And <history>
   When Jeff publishes that claim on 8 October
   Then <outcome>
   Examples:
-    | history                                                                        | outcome                                                |
-    | he signed a claim about tidepool without publishing it                         | it reaches his published repo                          |
-    | he signed it without publishing, then transferred tidepool and re-checked      | refused: is owned by the organization; nothing published |
-    | he signed and published it, then transferred tidepool and re-checked           | succeeds again, and his published repo is unchanged    |
+    | history                                                                    | outcome                                                     |
+    | he signed a claim about tidepool without publishing it                     | it reaches his published repo                               |
+    | he signed it without publishing, then transferred tidepool and re-checked  | refused: the organization has not listed him; nothing published |
+    | he signed and published it, then transferred tidepool and re-checked       | succeeds again, and his published repo is unchanged         |
 ```
 
-**RA-12 (upgrade)** — `opening_a_store_made_before_owner_only_signing_keeps_everything_in_it`
+**RA-12 (upgrade; ruling R1: CLI behaviour is the primary evidence)** — `opening_a_store_made_before_owner_only_signing_keeps_everything_in_it`
 
 ```gherkin
-@driving_port @real-io @c4a @adr-087-5 @contract-shape:unbounded-preservation
+@driving_port @real-io @c4a @adr-087-5 @s-oos-6 @contract-shape:unbounded-preservation
 Scenario: Opening a store made before owner-only signing keeps everything in it
   Given Jeff's store was made before identity links and owner-only signing
   When Jeff reads every claim about memory-safety, twice
-  Then the store records the identity-link and repo-authority upgrades, once each
-  And every claim, peer claim and contributor it held is unchanged
+  Then both reads list his claim about BurntSushi/ripgrep and Rachel's about rust-lang/regex
+  And the second read is identical to the first
 ```
 
-**RA-13 (table over Jeff's own link at signing time)** — `signing_from_an_import_rechecks_jeffs_own_link_first`
+**RA-12b (upgrade from the frozen v7 store; review Forge 1, ruling R5)** — `jeffs_identity_link_checks_carry_over_when_his_store_gains_owner_only_signing`
 
 ```gherkin
-@driving_port @real-io @n-2 @adr-087-6 @security @contract-shape:bounded-change
+@driving_port @real-io @c4a @adr-087-5 @i-9 @s-oos-6 @s-oos-3 @contract-shape:bounded-change
+Scenario Outline: Jeff's identity-link checks carry over when his store gains owner-only signing
+  Given Jeff's store was made after identity links but before owner-only signing
+  And it holds his link to "jeffbailey", first checked on 20 September and re-checked on 1 October at 09:00
+  When Jeff <acts>, with the network off
+  Then <outcome>
+  Examples:
+    | acts                                                          | outcome                                                                   |
+    | lists his linked identities on 3 October                      | they read exactly as the previous version printed them                    |
+    | signs "jeffbailey adheres to memory-safety" on 3 October       | the claim is signed and kept locally (the 1 October check is 2 days old)  |
+    | signs "jeffbailey adheres to memory-safety" on 8 October 09:01 | nothing is signed; he is told to re-check authority, with the command     |
+```
+
+**RA-13 (table over Jeff's own link at signing time; ruling R3 adds the** — `signing_from_an_import_rechecks_jeffs_own_link_first`
+
+```gherkin
+@driving_port @real-io @n-2 @adr-087-6 @security @c7a @r-3 @s-oos-4 @contract-shape:bounded-change
 Scenario Outline: Signing from an import re-checks Jeff's own link first
-  Given Jeff linked "jeffbailey" on 1 October and has not re-checked it since
-  And <bio>
-  When Jeff imports jeffbailey/tidepool and signs candidate 1 on 21 October
+  Given Jeff linked "jeffbailey" on 1 October at 09:00 and has not re-checked it since
+  And <github>
+  When Jeff imports jeffbailey/tidepool and signs candidate 1 on <day>
   Then GitHub was asked for jeffbailey's profile before signing
   And <outcome>
   Examples:
-    | bio                                     | outcome                                                       |
-    | the bio still names Jeff's identity     | the claim is signed and published                             |
-    | the bio no longer names Jeff's identity | nothing is signed; he is told his identity link is not verified |
+    | github                                                   | day        | outcome                                                                  |
+    | the bio still names Jeff's identity                      | 21 October | the claim is signed and published                                        |
+    | the bio no longer names Jeff's identity                  | 21 October | nothing is signed; he is told his identity link is not verified          |
+    | GitHub says it is too busy to answer for his profile     | 3 October  | the claim is signed and published, on his 1 October check                |
+    | GitHub cannot be reached for his profile                 | 3 October  | the claim is signed and published, on his 1 October check                |
+    | GitHub says it is too busy to answer for his profile     | 21 October | nothing is signed; he is told to re-check authority, with the command    |
+```
+
+**RA-16 (table over GitHub's budget at the authority read; review Forge 2,** — `when_githubs_budget_is_gone_rechecking_says_so_records_nothing_and_never_shows_his_token`
+
+```gherkin
+@driving_port @real-io @infrastructure-failure @security @c7a @adr-087-6 @r-4 @s-oos-5 @contract-shape:unbounded-preservation
+Scenario Outline: When GitHub's budget is gone, re-checking says so, records nothing and never shows his token
+  Given Rachel published a claim about acme-tools/anvil and Jeff pulled it
+  And <budget>
+  When Jeff re-checks the authority of acme-tools/anvil
+  Then he is told GitHub could not be asked
+  And every claim about anvil and his linked identities read as before, and nothing reached his published repo
+  And no line he sees shows his token
+  Examples:
+    | budget                                                                  |
+    | he has no token and GitHub's budget for him runs out as it reads anvil   |
+    | he has a token and its budget runs out as GitHub reads anvil             |
+    | he has a token that GitHub no longer accepts                            |
 ```
 
 **IC-1** — `jeff_reviews_what_he_imported_offline_one_repo_at_a_time`
 
 ```gherkin
-@driving_port @real-io @oos-d12 @c-oos-7 @a-11 @contract-shape:pure-function
+@driving_port @real-io @oos-d12 @c-oos-7 @a-11 @s-oos-9 @contract-shape:unbounded-preservation
 Scenario: Jeff reviews what he imported, offline, one repo at a time
   Given Jeff imported acme-tools/anvil and rachelk/kelp
   And the network is off
@@ -498,38 +576,50 @@ Scenario: Importing a repo keeps its candidates locally and nowhere else
   Given anvil's authority file lists Rachel, Rachel claims anvil pins its dependencies, and Jeff re-checked anvil
   And Jeff's weighted view of dependency-pinning weighs anvil
   When Jeff imports acme-tools/anvil
-  Then his imported candidates grew
-  And nothing reached his published repo, nothing was signed
+  Then his imported candidates list anvil's dependency-pinning candidate
+  And nothing reached his published repo, and he signed nothing about anvil
   And his weighted view of dependency-pinning is unchanged
 ```
 
 **IC-3 (empty)** — `with_nothing_imported_the_list_says_so`
 
 ```gherkin
-@driving_port @real-io @edge @c1a @contract-shape:unbounded-preservation
+@driving_port @real-io @edge @c1a @s-oos-9 @contract-shape:unbounded-preservation
 Scenario: With nothing imported, the list says so
   Given Jeff has imported nothing
   When Jeff lists his imported candidates
   Then he is told there are no imported candidates, and the command succeeds
+  And what he sees about acme-tools/anvil is unchanged
 ```
 
-**IC-4 (apply twice — DISTILL proposal, upstream U-OOS-6)** — `importing_the_same_repo_twice_lists_each_candidate_once`
+**IC-4 (apply twice — ruling P-OOS-3, accepted 2026-10-20, resolves U-OOS-6)** — `importing_the_same_repo_twice_lists_each_candidate_once`
 
 ```gherkin
-@driving_port @real-io @c4a @spec-ambiguity @contract-shape:pure-function
-Scenario: Importing the same repo twice lists each candidate once
+@driving_port @real-io @c4a @p-oos-3 @s-oos-9 @contract-shape:unbounded-preservation
+Scenario: Importing the same repo twice lists each candidate once, as last imported
   Given Jeff imported acme-tools/anvil on 1 October and again on 3 October
   When Jeff lists his imported candidates
-  Then anvil's dependency-pinning candidate is listed once
+  Then anvil's dependency-pinning candidate is listed once, from the 3 October import
 ```
 
+**IC-5 (review PO F-05; ACTIVE guard)** — `imported_candidates_never_feed_jeffs_inferred_people`
+
+```gherkin
+@driving_port @real-io @guardrail @c-oos-7 @a-11 @s-oos-9 @contract-shape:unbounded-preservation
+Scenario: Imported candidates never feed Jeff's inferred people
+  Given Rachel's signed claim says acme-tools/anvil is memory-safe, and Jeff recorded anvil's contributors, BurntSushi first
+  And Jeff imported acme-tools/anvil, whose own candidate says it pins its dependencies
+  When Jeff lists his inferred people
+  Then BurntSushi is proposed for memory-safety, from Rachel's signed claim
+  And no one is proposed for dependency-pinning
+```
 
 ### `owner_only_signing_readers.rs`
 
 **RD-1** — `every_claim_about_a_repo_is_shown_with_whose_word_it_is`
 
 ```gherkin
-@driving_port @real-io @adr-086-8 @oos-d9 @c-oos-5 @contract-shape:pure-function
+@driving_port @real-io @adr-086-8 @oos-d9 @c-oos-5 @s-oos-7 @contract-shape:unbounded-preservation
 Scenario: Every claim about a repo is shown with whose word it is
   Given Jeff signed a claim about his repo tidepool
   And acme-tools/anvil's authority file lists Rachel, who claims anvil, tidepool and rachelk/kelp
@@ -543,7 +633,7 @@ Scenario: Every claim about a repo is shown with whose word it is
 **RD-2 (chained on RD-1)** — `the_weighted_view_counts_only_attested_claims_and_says_what_it_left_out`
 
 ```gherkin
-@driving_port @real-io @kpi-oos-2 @c-oos-6 @oos-d9 @adr-022 @contract-shape:unbounded-preservation
+@driving_port @real-io @kpi-oos-2 @c-oos-6 @oos-d9 @adr-022 @s-oos-7 @contract-shape:unbounded-preservation
 Scenario: The weighted view counts only attested claims and says what it left out
   Given the store of RD-1
   When Jeff asks for the weighted view of memory-safety, explaining tidepool's weight
@@ -555,7 +645,7 @@ Scenario: The weighted view counts only attested claims and says what it left ou
 **RD-3 (chained on RD-2)** — `jeff_can_see_the_claims_left_out_per_author_without_changing_the_weight`
 
 ```gherkin
-@driving_port @real-io @kpi-oos-2 @c-oos-6 @oos-d9 @contract-shape:unbounded-preservation
+@driving_port @real-io @kpi-oos-2 @c-oos-6 @oos-d9 @s-oos-7 @contract-shape:unbounded-preservation
 Scenario: Jeff can see the claims left out, per author, without changing the weight
   Given the store of RD-1, and the weighted view of memory-safety it gives
   When Jeff asks for the weighted view of memory-safety including unattested claims
@@ -586,7 +676,7 @@ Scenario Outline: Nothing but an attested claim moves the weight
 **RD-5 (chained on RD-4 row 1)** — `a_claim_marked_as_a_dispute_is_shown_as_a_dispute`
 
 ```gherkin
-@driving_port @real-io @security @uc-16 @adr-086-2 @s-oos-7 @contract-shape:pure-function
+@driving_port @real-io @security @uc-16 @adr-086-2 @s-oos-7 @contract-shape:unbounded-preservation
 Scenario: A claim marked as a dispute is shown as a dispute, not as someone's word about the repo
   Given anvil's authority file lists Jeff, and Jeff re-checked anvil and signed and published "anvil is memory-safe"
   And Rachel published a claim about anvil marked as disputing Jeff's claim, and Jeff pulled it
@@ -598,7 +688,7 @@ Scenario: A claim marked as a dispute is shown as a dispute, not as someone's wo
 **RD-6 (chained on RD-1)** — `jeffs_viewer_weighs_and_labels_claims_exactly_as_his_terminal_does`
 
 ```gherkin
-@driving_port @real-io @kpi-oos-2 @adr-086-8 @contract-shape:unbounded-preservation
+@driving_port @real-io @kpi-oos-2 @adr-086-8 @s-oos-7 @contract-shape:unbounded-preservation
 Scenario: Jeff's viewer weighs and labels claims exactly as his terminal does
   Given the store of RD-1
   When Jeff opens Rachel's score page and tidepool's project page in his viewer
@@ -609,7 +699,7 @@ Scenario: Jeff's viewer weighs and labels claims exactly as his terminal does
 **RD-7 (table: no local check vs a local check)** — `network_search_labels_every_github_claim_using_jeffs_own_check_when_he_has_one`
 
 ```gherkin
-@driving_port @real-io @security @uc-7 @oos-d10 @c-oos-8 @contract-shape:pure-function
+@driving_port @real-io @security @uc-7 @oos-d10 @c-oos-8 @s-oos-7 @contract-shape:unbounded-preservation
 Scenario Outline: Network search labels every GitHub claim, using Jeff's own check when he has one
   Given the network index holds <claim>
   And <local>
@@ -624,7 +714,7 @@ Scenario Outline: Network search labels every GitHub claim, using Jeff's own che
 **RD-8** — `claims_made_before_owner_only_signing_are_judged_by_the_same_rule`
 
 ```gherkin
-@driving_port @real-io @oos-d3 @adr-086-7 @a-7 @contract-shape:pure-function
+@driving_port @real-io @oos-d3 @adr-086-7 @a-7 @s-oos-7 @contract-shape:unbounded-preservation
 Scenario: Claims made before owner-only signing are judged by the same rule, with no cut-off date
   Given Jeff's store was made before owner-only signing, with his claim about BurntSushi/ripgrep and Rachel's pulled claim about rust-lang/regex
   And Jeff re-checked authority
@@ -635,7 +725,7 @@ Scenario: Claims made before owner-only signing are judged by the same rule, wit
 **RD-9** — `inferred_people_show_the_authority_of_each_repo_claim_they_rest_on`
 
 ```gherkin
-@driving_port @real-io @uc-10 @adr-086-8 @contract-shape:unbounded-preservation
+@driving_port @real-io @uc-10 @adr-086-8 @s-oos-7 @contract-shape:unbounded-preservation
 Scenario: Inferred people show the authority of each repo claim they rest on
   Given anvil's authority file lists Rachel, Rachel claims anvil is memory-safe, and Jeff re-checked anvil
   And Jeff recorded anvil's contributors, BurntSushi first
@@ -656,23 +746,32 @@ Scenario: After Jeff renames his GitHub account, his claim about the old login r
   And nothing was withdrawn from his published repo
 ```
 
+**RD-11 (C5a mode combination; ruling P-OOS-1 accepted 2026-10-20)** — `asking_for_unattested_claims_without_the_weighted_view_is_a_usage_mistake`
+
+```gherkin
+@driving_port @real-io @error @c5a @p-oos-1 @s-oos-7 @contract-shape:unbounded-preservation
+Scenario: Asking for unattested claims without the weighted view is a usage mistake
+  Given the store of RD-1
+  When Jeff reads every claim about memory-safety including unattested claims, without asking for the weighted view
+  Then he is told the unattested section needs the weighted view, and the command fails as a usage mistake
+  And no claim is listed
+```
 
 ### `owner_only_signing_review_app.rs`
 
 **SA-1** — `priyas_share_post_names_only_claims_about_repos_she_still_owns`
 
 ```gherkin
-@driving_port @real-io @uc-21 @adr-086-8 @spec-ambiguity @contract-shape:pure-function
+@driving_port @real-io @uc-21 @adr-086-8 @p-oos-2 @s-oos-8 @contract-shape:unbounded-preservation
 Scenario: Priya's share post names only claims about repos she still owns
   Given Priya published "tidepool is test-driven" and "kelp pins its dependencies"
   And she then transferred kelp to tidal-labs
-  When she opens the share preview
+  When she opens the share preview, which looks again at her bio and at who owns each repo
   Then the draft names test-driven and not dependency-pinning
   And the page lists kelp's claim as "not counted: authority not proven"
   And nothing has been posted
 ```
 
-
 ## 7. Step reuse (Mandate-12 criterion 4, informational)
 
-Rust adaptation: vocabulary-function invocations in the three CLI scenario files ÷ distinct `support/authority.rs` functions they call = **304 / 52 = 5.84×** (plus the reused GDL `identity_links` and `people` steps, not counted). Natural ceiling for a journey-rich, refusal-table-heavy feature; not a gate.
+Rust adaptation: invocations of `support/authority.rs` public functions in the three CLI scenario files ÷ distinct functions invoked = **411 / 67 = 6.13×** (plus the reused GDL `identity_links` and `people` steps, not counted). Natural ceiling; not a gate.

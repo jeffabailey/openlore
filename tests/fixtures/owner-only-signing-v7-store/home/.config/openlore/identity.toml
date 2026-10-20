@@ -1,0 +1,3 @@
+schema_version = 1
+handle = "jeff.test"
+did = "did:plc:test-jeff"

@@ -404,6 +404,11 @@ struct GhState {
     /// owner-only-signing: authority-file reads answer `403` rate-limited
     /// (the budget runs out after the harvest, before the authority read).
     authority_reads_rate_limited: AtomicBool,
+    /// owner-only-signing (sign-time refresh, DWD-OOS-19): profile reads of
+    /// an account (lowercase login) are served normally `served` more times,
+    /// then answer `403` rate-limited (`true`) or `503` (`false`) — GitHub
+    /// stops answering one account's profile part way through an import.
+    profile_trouble_after: Mutex<BTreeMap<String, (usize, bool)>>,
 }
 
 impl GhState {
@@ -631,6 +636,28 @@ impl FakeGithubAccounts {
         self.state
             .authority_reads_rate_limited
             .store(exhausted, Ordering::SeqCst);
+    }
+
+    /// owner-only-signing: `login`'s profile (by login or id) is served
+    /// normally `served` more times, then every read answers `403`
+    /// rate-limited (resetting in an hour). `served = 1` lets `scrape person`
+    /// read the profile it imports and refuses the signer's link refresh.
+    pub fn rate_limit_profile_after(&self, login: &str, served: usize) {
+        self.state
+            .profile_trouble_after
+            .lock()
+            .unwrap()
+            .insert(login.to_ascii_lowercase(), (served, true));
+    }
+
+    /// owner-only-signing: as [`Self::rate_limit_profile_after`], but GitHub
+    /// cannot be reached for that profile (`503`).
+    pub fn drop_profile_after(&self, login: &str, served: usize) {
+        self.state
+            .profile_trouble_after
+            .lock()
+            .unwrap()
+            .insert(login.to_ascii_lowercase(), (served, false));
     }
 
     /// Number of authority-file reads of `full_name` (`owner/name`, any case).
@@ -1066,6 +1093,45 @@ fn route(state: &GhState, req: HttpRequest) -> HttpResponse {
             &headers,
         )
     };
+    // owner-only-signing: a profile that stops answering after `served` reads.
+    let profile_login = match segments.as_slice() {
+        ["users", login] => accounts
+            .get(&login.to_ascii_lowercase())
+            .map(|a| a.login.to_ascii_lowercase()),
+        ["user", id] => accounts
+            .values()
+            .find(|a| a.id.to_string() == *id)
+            .map(|a| a.login.to_ascii_lowercase()),
+        _ => None,
+    };
+    if let Some(login) = profile_login {
+        let mut troubles = state.profile_trouble_after.lock().unwrap();
+        if let Some((served, rate_limited)) = troubles.get_mut(&login) {
+            if *served > 0 {
+                *served -= 1;
+            } else if *rate_limited {
+                let reset = now_secs() + 3_600;
+                return json_with_headers(
+                    403,
+                    &serde_json::json!({
+                        "message": "API rate limit exceeded",
+                        "documentation_url": "https://docs.github.com/rest/overview/rate-limits"
+                    }),
+                    &[
+                        ("x-ratelimit-limit", "60".to_string()),
+                        ("x-ratelimit-remaining", "0".to_string()),
+                        ("x-ratelimit-reset", reset.to_string()),
+                    ],
+                );
+            } else {
+                return json_with_headers(
+                    503,
+                    &serde_json::json!({"message": "Service Unavailable"}),
+                    &headers,
+                );
+            }
+        }
+    }
     match segments.as_slice() {
         ["users", login]
             if accounts
@@ -1636,6 +1702,18 @@ mod tests {
         assert_eq!(gh.authority_file_reads_of("priyaraman/tidepool"), 7);
         gh.redirect_repo_to_another_host("priyaraman", "tidepool");
         assert_eq!(get(&gh, "/repos/priyaraman/tidepool").0, 301);
+    }
+
+    #[test]
+    fn a_profile_stops_answering_after_the_reads_it_serves() {
+        let gh = FakeGithubAccounts::start(vec![priya(), GithubAccount::new("other", 9)]);
+        gh.rate_limit_profile_after("priyaraman", 1);
+        assert_eq!(get(&gh, "/users/priyaraman").0, 200, "the first read is served");
+        assert_eq!(get(&gh, "/users/priyaraman").0, 403);
+        assert_eq!(get(&gh, "/user/4210001").0, 403, "by id too");
+        assert_eq!(get(&gh, "/users/other").0, 200, "per account");
+        gh.drop_profile_after("priyaraman", 0);
+        assert_eq!(get(&gh, "/users/priyaraman").0, 503);
     }
 
     #[test]

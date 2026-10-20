@@ -10,13 +10,18 @@
 //! policy: `FakeGithubAccounts` (+ the ADR-087 repo-authority lie catalogue,
 //! `AuthorityFile`), `PeerPds`, `FakePds`, `FakeIdentity`.
 //!
-//! **Observation order** (GDL decision D-e, kept): a scenario's PRIMARY Then
-//! observes through driving ports — exit code, the refusal and hand-off text,
-//! the reader labels, the wire JSON my PDS received, GitHub's request log.
-//! The fail-closed store universe (`assert_authority_store_*`: the house
-//! `store_universe_slots` + `identity_link_checks` + the v8
-//! `repo_authority_checks` rows + `imported_candidates` count) is the Mandate-8
-//! SECONDARY guardrail.
+//! **Observation order** (GDL decision D-e, applied as orchestrator ruling
+//! R1 of review iteration 1): a scenario's PRIMARY Then observes through
+//! driving ports — exit code, the refusal and hand-off text, the reader
+//! labels, `graph query` / `identity list` / `authority verify` /
+//! `candidates list` output ([`WhatJeffSees`]), the wire JSON my PDS
+//! received, and GitHub's request log (an external side effect with a
+//! budget, observed at the driven-port boundary — GDL D-VL-T13, ruling R2).
+//! The fail-closed store universe (`guardrail_*`: the house
+//! `store_universe_slots` + `identity_link_checks` + `authority.repo_observations`
+//! + `candidates.imported.count`) is a labelled SECONDARY guardrail under the
+//! explicit Mandate-8 waiver in `distill/wave-decisions.md`, never the only
+//! evidence for a Then.
 //!
 //! **Wording pins** (Q-OOS-D1, DISTILL-owned, DWD-OOS-3): the constants and
 //! `Refusal::phrase` / `CanSign::phrase` below are the only places a rendered
@@ -238,6 +243,12 @@ pub const RIPGREP: RepoRef = RepoRef::new("BurntSushi", "ripgrep");
 /// Rachel's pulled claim in the same frozen store.
 pub const REGEX: RepoRef = RepoRef::new("rust-lang", "regex");
 
+/// A philosophy's short name as readers print it (`memory-safety`); it is
+/// also a substring of the full id, so it matches either rendering.
+pub fn short_name(philosophy: &str) -> &str {
+    philosophy.rsplit('.').next().unwrap_or(philosophy)
+}
+
 /// `authority verify` with no `github:` claim to re-check.
 pub const NOTHING_TO_RECHECK: &str = "No GitHub claims to re-check";
 
@@ -247,6 +258,10 @@ pub const NO_IMPORTED_CANDIDATES: &str = "No imported candidates";
 pub const NOT_COUNTED: &str = "not counted";
 /// The `--include-unattested` section heading.
 pub const UNATTESTED_SECTION: &str = "Unattested claims, by author";
+/// The usage error for `--include-unattested` without `--weighted` (P-OOS-1).
+pub const INCLUDE_UNATTESTED_NEEDS_WEIGHTED: &str = "--include-unattested requires --weighted";
+/// The budget refusal's retry hint (ADR-087 §6).
+pub const RETRY_AFTER: &str = "retry after";
 
 // -----------------------------------------------------------------------------
 // Pinned instants (`OPENLORE_TEST_NOW`); LINKED_AT is GDL's 2026-10-01T09:00Z.
@@ -373,6 +388,38 @@ pub fn frozen_store_world() -> LinkWorld {
             .repo(GithubRepo::owned(REGEX.name)),
     );
     world
+}
+
+/// The checked-in copy of a store made by the binary at schema head v7
+/// (`tests/fixtures/owner-only-signing-v7-store`, README there), BEFORE
+/// DELIVER adds v8: Jeff's link to `jeffbailey`, first checked on
+/// 20 September (`BEFORE_THE_CHECK`) and re-checked on 1 October (`LINKED_AT`).
+pub fn v7_fixture_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/owner-only-signing-v7-store")
+}
+
+/// The frozen v7 store beside GitHub serving Jeff (no network needed).
+pub fn frozen_v7_store_world() -> LinkWorld {
+    LinkWorld::with_frozen_store_from(&v7_fixture_dir(), &[JEFF_GH])
+}
+
+/// `openlore identity list` as the v7 binary printed it at `V7_LISTED_AT`.
+pub fn v7_golden_identity_list() -> String {
+    std::fs::read_to_string(v7_fixture_dir().join("identity_list.txt"))
+        .expect("golden identity list")
+}
+
+/// The instant the v7 golden `identity list` was printed at.
+pub const V7_LISTED_AT: &str = CHECK_PLUS_2_DAYS;
+
+/// Fixture regeneration only: freeze `env`'s v7 store and its golden
+/// `identity list` output.
+pub fn freeze_v7_store(env: &TestEnv, golden_identity_list: &str) {
+    let dir = v7_fixture_dir();
+    freeze_store_into(env, &dir);
+    std::fs::write(dir.join("identity_list.txt"), golden_identity_list)
+        .expect("write golden identity list");
 }
 
 /// A network-index record: `author`'s memory-safety claim about `subject`.
@@ -514,6 +561,18 @@ pub fn when_jeff_publishes(world: &LinkWorld, cid: &str, now: &str) -> CliOutcom
     )
 }
 
+/// WHEN: Jeff publishes the stored claim `cid` with the network disabled.
+pub fn when_jeff_publishes_offline(world: &LinkWorld, cid: &str, now: &str) -> CliOutcome {
+    openlore_with(
+        &world.env,
+        &["claim", "publish", cid],
+        Invocation {
+            offline: true,
+            ..on_github(world, "", Some(now))
+        },
+    )
+}
+
 /// WHEN: Jeff re-checks authority (`authority verify [filters…]`) at `now`.
 pub fn when_jeff_verifies_authority(
     world: &LinkWorld,
@@ -523,6 +582,84 @@ pub fn when_jeff_verifies_authority(
     let mut args = vec!["authority", "verify"];
     args.extend_from_slice(filters);
     openlore_with(&world.env, &args, on_github(world, "", now))
+}
+
+/// A personal access token the GitHub double accepts; must never be echoed.
+pub const JEFFS_GITHUB_TOKEN: &str = "ghp_ownerOnlySigningFixture00000000000000";
+
+/// How Jeff's GitHub budget stands when he re-checks authority (RA-16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GithubBudget {
+    /// No token; the anonymous budget runs out at the authority-file read.
+    AnonymousExhausted,
+    /// A token is configured and its budget runs out at the authority-file read.
+    TokenExhausted,
+    /// The configured token is rejected (expired or revoked).
+    TokenRejected,
+}
+
+impl GithubBudget {
+    /// The token Jeff has configured, if any.
+    pub fn token(self) -> Option<&'static str> {
+        match self {
+            GithubBudget::AnonymousExhausted => None,
+            GithubBudget::TokenExhausted => Some(JEFFS_GITHUB_TOKEN),
+            GithubBudget::TokenRejected => Some(REJECTED_GITHUB_TOKEN),
+        }
+    }
+}
+
+/// GIVEN (outside OpenLore): GitHub's budget for Jeff stands as `budget`.
+pub fn githubs_budget_is(world: &LinkWorld, budget: GithubBudget) {
+    match budget {
+        GithubBudget::AnonymousExhausted | GithubBudget::TokenExhausted => {
+            world.github.exhaust_budget_at_authority_reads(true)
+        }
+        GithubBudget::TokenRejected => world.github.reject_token(true),
+    }
+}
+
+/// WHEN: Jeff re-checks authority (`authority verify [filters…]`) with his
+/// configured token (if any) at `now`.
+pub fn when_jeff_verifies_authority_with(
+    world: &LinkWorld,
+    filters: &[&str],
+    budget: GithubBudget,
+    now: &str,
+) -> CliOutcome {
+    let mut args = vec!["authority", "verify"];
+    args.extend_from_slice(filters);
+    openlore_with(
+        &world.env,
+        &args,
+        Invocation {
+            github_token: budget.token(),
+            ..on_github(world, "", Some(now))
+        },
+    )
+}
+
+/// How GitHub fails Jeff's own profile at signing time (ruling R3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileTrouble {
+    /// GitHub says it is too busy (rate-limited).
+    TooBusy,
+    /// GitHub cannot be reached.
+    Unreachable,
+}
+
+/// GIVEN (outside OpenLore): GitHub answers Jeff's profile `served` more
+/// times (what the import itself reads), then fails it with `trouble` — so
+/// the sign-time refresh of his own link cannot finish.
+pub fn github_stops_answering_jeffs_profile_after(
+    world: &LinkWorld,
+    served: usize,
+    trouble: ProfileTrouble,
+) {
+    match trouble {
+        ProfileTrouble::TooBusy => world.github.rate_limit_profile_after(JEFF_GH.login, served),
+        ProfileTrouble::Unreachable => world.github.drop_profile_after(JEFF_GH.login, served),
+    }
 }
 
 /// GIVEN: Jeff re-checked authority for every `github:` claim in his store.
@@ -676,6 +813,11 @@ pub fn when_jeff_weighs_contributor(world: &LinkWorld, did: &str) -> CliOutcome 
             ..on_github(world, "", None)
         },
     )
+}
+
+/// Contributors of Rachel's repo kelp: Rachel alone.
+pub fn rachel_contributes() -> Vec<FakeContributor> {
+    vec![FakeContributor::human(RACHEL_GH.login, RACHEL_GH.id, 300)]
 }
 
 /// Contributors of a repo where Jeff (`jeffbailey`) and BurntSushi both commit.
@@ -934,7 +1076,161 @@ pub fn weighted_rows_about(stdout: &str, subject: Subject) -> Vec<String> {
 }
 
 // =============================================================================
-// Store universe (SECONDARY guardrail, Mandate 8)
+// What Jeff sees through his own commands (PRIMARY, ruling R1)
+// =============================================================================
+
+/// What Jeff can see about one subject through his own commands and his
+/// published repo — the PRIMARY evidence for "nothing signed, published or
+/// recorded" (D-e / R1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WhatJeffSees {
+    /// `graph query --subject <s> --federated` (offline): every claim about
+    /// the subject, his and his peers', with its label.
+    pub claims_about: String,
+    /// `identity list`: his links and what his latest check of each saw.
+    pub identities: String,
+    /// The wire JSON of every record his PDS holds.
+    pub published: Vec<String>,
+}
+
+/// Look at `subject` the way Jeff would (read-only verbs, offline).
+pub fn what_jeff_sees(world: &LinkWorld, subject: Subject) -> WhatJeffSees {
+    let claims = when_jeff_reads_subject(world, subject);
+    let identities = when_i_list(world, None);
+    WhatJeffSees {
+        claims_about: claims.stdout,
+        identities: identities.stdout,
+        published: world
+            .env
+            .pds
+            .records()
+            .into_iter()
+            .map(|r| r.body)
+            .collect(),
+    }
+}
+
+/// How many of Jeff's own claims about `subject` a reader lists (one `cid:`
+/// line per claim entry).
+fn jeffs_entries(stdout: &str, subject: Subject) -> usize {
+    rows_about(stdout, MY_DID, &subject.uri())
+        .iter()
+        .filter(|l| l.trim_start().starts_with("cid:"))
+        .count()
+}
+
+/// THEN (PRIMARY): Jeff sees exactly what he saw before — no claim of his
+/// appeared, nothing reached his published repo, and no check he can see
+/// was recorded.
+pub fn assert_jeff_sees_no_change(row: &str, before: &WhatJeffSees, world: &LinkWorld, subject: Subject) {
+    let after = what_jeff_sees(world, subject);
+    assert_eq!(
+        after.published, before.published,
+        "[{row}] nothing reached Jeff's published repo"
+    );
+    assert_eq!(
+        after.claims_about, before.claims_about,
+        "[{row}] every claim about {} reads as before (nothing signed)",
+        subject.uri()
+    );
+    assert_eq!(
+        after.identities, before.identities,
+        "[{row}] his linked identities and their checks read as before (nothing recorded)"
+    );
+}
+
+/// THEN (PRIMARY) for import verbs, which may record observations: no claim
+/// of Jeff's about `subject` appeared and nothing reached his published repo.
+pub fn assert_nothing_signed_or_published(
+    row: &str,
+    before: &WhatJeffSees,
+    world: &LinkWorld,
+    subject: Subject,
+) {
+    let after = what_jeff_sees(world, subject);
+    assert_eq!(
+        after.published, before.published,
+        "[{row}] nothing reached Jeff's published repo"
+    );
+    assert_eq!(
+        jeffs_entries(&after.claims_about, subject),
+        jeffs_entries(&before.claims_about, subject),
+        "[{row}] no claim of Jeff's about {} appeared;\n{}",
+        subject.uri(),
+        after.claims_about
+    );
+}
+
+/// THEN (PRIMARY): the claim was signed and kept locally — the run
+/// succeeded, Jeff's claim about `subject` is now listed, and nothing
+/// reached his published repo (the network is off).
+pub fn assert_signed_and_kept_locally(
+    row: &str,
+    outcome: &CliOutcome,
+    before: &WhatJeffSees,
+    world: &LinkWorld,
+    subject: Subject,
+) {
+    assert_eq!(outcome.status, 0, "[{row}] Jeff may sign;{}", context(outcome));
+    let after = what_jeff_sees(world, subject);
+    assert_eq!(
+        jeffs_entries(&after.claims_about, subject),
+        jeffs_entries(&before.claims_about, subject) + 1,
+        "[{row}] Jeff's claim about {} is now listed;\n{}",
+        subject.uri(),
+        after.claims_about
+    );
+    assert_eq!(
+        after.published, before.published,
+        "[{row}] offline: nothing reached Jeff's published repo"
+    );
+}
+
+/// THEN (PRIMARY, wire): the newest record on Jeff's PDS is his `kind`
+/// (`counters` / `retracts`) of `target`, about `subject`.
+pub fn assert_published_marking(
+    world: &LinkWorld,
+    published_before: usize,
+    kind: &str,
+    target: &str,
+    subject: Subject,
+    row: &str,
+) {
+    let bodies = pds_bodies(&world.env);
+    assert_eq!(
+        bodies.len(),
+        published_before + 1,
+        "[{row}] exactly one record reached Jeff's published repo: {bodies:?}"
+    );
+    let (_, record) = bodies
+        .iter()
+        .find(|(_, v)| {
+            v["references"].as_array().is_some_and(|r| {
+                r.iter().any(|x| x["type"] == kind && x["cid"] == target)
+            })
+        })
+        .unwrap_or_else(|| panic!("[{row}] a record that {kind} {target}: {bodies:?}"));
+    assert_eq!(
+        record["subject"],
+        subject.uri().as_str(),
+        "[{row}] it is about {}: {record}",
+        subject.uri()
+    );
+    assert_eq!(
+        bare(record["author"].as_str().unwrap_or_default()),
+        MY_DID,
+        "[{row}] it is Jeff's: {record}"
+    );
+}
+
+/// THEN: no output line names the GitHub token's value (scrape_auth no-leak
+/// pattern, US-SCR-004).
+pub fn assert_token_never_shown(outcome: &CliOutcome, token: &str) {
+    assert_token_value_absent(outcome, token);
+}
+
+// =============================================================================
+// Store universe (SECONDARY guardrail — Mandate-8 waiver, wave-decisions)
 // =============================================================================
 
 /// One recorded repo observation (timestamps and ids excluded).
@@ -956,8 +1252,9 @@ fn table_exists(conn: &duckdb::Connection, table: &str) -> bool {
     .unwrap_or_else(|e| panic!("look up table {table}: {e}"))
 }
 
-/// Every recorded repo observation, sorted (empty only when the store or the
-/// v8 table does not exist yet; any other read failure panics).
+/// GUARDRAIL read: every recorded repo observation, sorted (empty only when
+/// the store or the v8 table does not exist yet; any other read failure
+/// panics).
 pub fn repo_checks(env: &TestEnv) -> Vec<RepoCheckRow> {
     let path = env.duckdb_path();
     if !path.exists() {
@@ -997,7 +1294,8 @@ pub fn repo_checks(env: &TestEnv) -> Vec<RepoCheckRow> {
     rows
 }
 
-/// Number of imported candidates kept locally (0 before slice 5's table).
+/// GUARDRAIL read: number of imported candidates kept locally (0 before
+/// slice 5's table exists).
 pub fn imported_candidate_count(env: &TestEnv) -> i64 {
     let path = env.duckdb_path();
     if !path.exists() {
@@ -1013,32 +1311,37 @@ pub fn imported_candidate_count(env: &TestEnv) -> i64 {
     .unwrap_or_else(|e| panic!("count imported candidates: {e}"))
 }
 
+/// Slot: the repo authority observations Jeff's store holds.
+pub const REPO_OBSERVATIONS: &str = "authority.repo_observations";
+/// Slot: how many imported candidates Jeff's store keeps.
+pub const IMPORTED_CANDIDATES: &str = "candidates.imported.count";
+
 /// The authority universe: the identity-link universe + repo observations +
 /// imported candidates.
 pub fn authority_universe_slots() -> HashSet<String> {
     let mut slots = link_universe_slots();
-    slots.insert("local.repo_authority_checks".to_string());
-    slots.insert("local.imported_candidates.row_count".to_string());
+    slots.insert(REPO_OBSERVATIONS.to_string());
+    slots.insert(IMPORTED_CANDIDATES.to_string());
     slots
 }
 
-/// Capture the authority universe.
+/// Capture the authority universe (SECONDARY guardrail).
 pub fn capture_authority_universe(env: &TestEnv) -> HashMap<String, String> {
     let mut snapshot = capture_link_universe(env);
     snapshot.insert(
-        "local.repo_authority_checks".to_string(),
+        REPO_OBSERVATIONS.to_string(),
         format!("{:?}", repo_checks(env)),
     );
     snapshot.insert(
-        "local.imported_candidates.row_count".to_string(),
+        IMPORTED_CANDIDATES.to_string(),
         imported_candidate_count(env).to_string(),
     );
     snapshot
 }
 
-/// GUARDRAIL: nothing in my store, my PDS, my link checks or my repo
-/// observations changed. `row` names the table row on failure.
-pub fn assert_authority_store_unchanged(row: &str, before: &HashMap<String, String>, env: &TestEnv) {
+/// SECONDARY GUARDRAIL (fail-closed): nothing in the store universe
+/// changed. Never the only evidence for a Then. `row` names the table row.
+pub fn guardrail_store_unchanged(row: &str, before: &HashMap<String, String>, env: &TestEnv) {
     let after = capture_authority_universe(env);
     let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         assert_state_delta(before, &after, &authority_universe_slots(), &Delta::new())
@@ -1049,12 +1352,13 @@ pub fn assert_authority_store_unchanged(row: &str, before: &HashMap<String, Stri
             .cloned()
             .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
             .unwrap_or_default();
-        panic!("[{row}] {reason}");
+        panic!("[{row}] guardrail: {reason}");
     }
 }
 
-/// GUARDRAIL: exactly the named slots changed; every other slot is unchanged.
-pub fn assert_authority_store_delta(
+/// SECONDARY GUARDRAIL: exactly the named slots changed; every other slot
+/// is unchanged.
+pub fn guardrail_store_delta(
     before: &HashMap<String, String>,
     env: &TestEnv,
     changes: &[(&str, String)],
@@ -1066,15 +1370,15 @@ pub fn assert_authority_store_delta(
     assert_state_delta(before, &after, &authority_universe_slots(), &expected);
 }
 
-/// GUARDRAIL for import verbs (which may record observations): nothing was
-/// signed, kept as a claim, or published.
-pub fn assert_nothing_signed(row: &str, before: &HashMap<String, String>, env: &TestEnv) {
+/// SECONDARY GUARDRAIL for import verbs (which may record observations):
+/// no claim row, claim file or PDS record was added.
+pub fn guardrail_nothing_signed(row: &str, before: &HashMap<String, String>, env: &TestEnv) {
     let after = capture_authority_universe(env);
     for slot in ["local.claims.row_count", "local.claim_files", "pds.records.len"] {
         assert_eq!(
             before.get(slot),
             after.get(slot),
-            "[{row}] `{slot}` must not change: nothing is signed or published"
+            "[{row}] guardrail: `{slot}` must not change"
         );
     }
 }

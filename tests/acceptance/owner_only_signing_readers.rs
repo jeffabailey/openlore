@@ -19,7 +19,9 @@
 //! Layer 3/4 — example-only (Mandate 9). The unbounded weight invariant over
 //! generated feeds is CORE-OOS-5 in `owner_only_signing_core.rs` (layer 2);
 //! here RD-4 pins it through both driving ports with one example per kind.
-//! Every scenario is `#[ignore]`d pending DELIVER.
+//! Every scenario is `#[ignore]`d pending DELIVER. Every Then reads a
+//! driving port (reader output, viewer pages, PDS wire); the store universe
+//! is only a labelled SECONDARY guardrail (ruling R1).
 
 mod support;
 
@@ -62,7 +64,7 @@ fn labelled_store() -> LinkWorld {
 
 /// RD-1
 /// ```gherkin
-/// @driving_port @real-io @adr-086-8 @oos-d9 @c-oos-5 @contract-shape:pure-function
+/// @driving_port @real-io @adr-086-8 @oos-d9 @c-oos-5 @s-oos-7 @contract-shape:unbounded-preservation
 /// Scenario: Every claim about a repo is shown with whose word it is
 ///   Given Jeff signed a claim about his repo tidepool
 ///   And acme-tools/anvil's authority file lists Rachel, who claims anvil, tidepool and rachelk/kelp
@@ -92,7 +94,7 @@ fn every_claim_about_a_repo_is_shown_with_whose_word_it_is() {
 
 /// RD-2 (chained on RD-1)
 /// ```gherkin
-/// @driving_port @real-io @kpi-oos-2 @c-oos-6 @oos-d9 @adr-022 @contract-shape:unbounded-preservation
+/// @driving_port @real-io @kpi-oos-2 @c-oos-6 @oos-d9 @adr-022 @s-oos-7 @contract-shape:unbounded-preservation
 /// Scenario: The weighted view counts only attested claims and says what it left out
 ///   Given the store of RD-1
 ///   When Jeff asks for the weighted view of memory-safety, explaining tidepool's weight
@@ -143,7 +145,7 @@ fn the_weighted_view_counts_only_attested_claims_and_says_what_it_left_out() {
 
 /// RD-3 (chained on RD-2)
 /// ```gherkin
-/// @driving_port @real-io @kpi-oos-2 @c-oos-6 @oos-d9 @contract-shape:unbounded-preservation
+/// @driving_port @real-io @kpi-oos-2 @c-oos-6 @oos-d9 @s-oos-7 @contract-shape:unbounded-preservation
 /// Scenario: Jeff can see the claims left out, per author, without changing the weight
 ///   Given the store of RD-1, and the weighted view of memory-safety it gives
 ///   When Jeff asks for the weighted view of memory-safety including unattested claims
@@ -279,7 +281,7 @@ fn nothing_but_an_attested_claim_moves_the_weight() {
 
 /// RD-5 (chained on RD-4 row 1)
 /// ```gherkin
-/// @driving_port @real-io @security @uc-16 @adr-086-2 @s-oos-7 @contract-shape:pure-function
+/// @driving_port @real-io @security @uc-16 @adr-086-2 @s-oos-7 @contract-shape:unbounded-preservation
 /// Scenario: A claim marked as a dispute is shown as a dispute, not as someone's word about the repo
 ///   Given anvil's authority file lists Jeff, and Jeff re-checked anvil and signed and published "anvil is memory-safe"
 ///   And Rachel published a claim about anvil marked as disputing Jeff's claim, and Jeff pulled it
@@ -288,7 +290,7 @@ fn nothing_but_an_attested_claim_moves_the_weight() {
 ///   And it carries no authority label
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RD-5: pending DELIVER (may already hold: keep as a guard)"]
+#[ignore = "DISTILL owner-only-signing RD-5: pending DELIVER (Given needs `authority verify`; re-checked for activation in review iteration 1)"]
 fn a_claim_marked_as_a_dispute_is_shown_as_a_dispute() {
     let anvil = Subject::Repo(ANVIL);
     let mut world = authority_world();
@@ -324,7 +326,7 @@ fn a_claim_marked_as_a_dispute_is_shown_as_a_dispute() {
 
 /// RD-6 (chained on RD-1)
 /// ```gherkin
-/// @driving_port @real-io @kpi-oos-2 @adr-086-8 @contract-shape:unbounded-preservation
+/// @driving_port @real-io @kpi-oos-2 @adr-086-8 @s-oos-7 @contract-shape:unbounded-preservation
 /// Scenario: Jeff's viewer weighs and labels claims exactly as his terminal does
 ///   Given the store of RD-1
 ///   When Jeff opens Rachel's score page and tidepool's project page in his viewer
@@ -362,7 +364,7 @@ fn jeffs_viewer_weighs_and_labels_claims_exactly_as_his_terminal_does() {
 
 /// RD-7 (table: no local check vs a local check)
 /// ```gherkin
-/// @driving_port @real-io @security @uc-7 @oos-d10 @c-oos-8 @contract-shape:pure-function
+/// @driving_port @real-io @security @uc-7 @oos-d10 @c-oos-8 @s-oos-7 @contract-shape:unbounded-preservation
 /// Scenario Outline: Network search labels every GitHub claim, using Jeff's own check when he has one
 ///   Given the network index holds <claim>
 ///   And <local>
@@ -415,7 +417,7 @@ fn network_search_labels_every_github_claim_using_jeffs_own_check_when_he_has_on
 
 /// RD-8
 /// ```gherkin
-/// @driving_port @real-io @oos-d3 @adr-086-7 @a-7 @contract-shape:pure-function
+/// @driving_port @real-io @oos-d3 @adr-086-7 @a-7 @s-oos-7 @contract-shape:unbounded-preservation
 /// Scenario: Claims made before owner-only signing are judged by the same rule, with no cut-off date
 ///   Given Jeff's store was made before owner-only signing, with his claim about BurntSushi/ripgrep and Rachel's pulled claim about rust-lang/regex
 ///   And Jeff re-checked authority
@@ -437,7 +439,7 @@ fn claims_made_before_owner_only_signing_are_judged_by_the_same_rule() {
 
 /// RD-9
 /// ```gherkin
-/// @driving_port @real-io @uc-10 @adr-086-8 @contract-shape:unbounded-preservation
+/// @driving_port @real-io @uc-10 @adr-086-8 @s-oos-7 @contract-shape:unbounded-preservation
 /// Scenario: Inferred people show the authority of each repo claim they rest on
 ///   Given anvil's authority file lists Rachel, Rachel claims anvil is memory-safe, and Jeff re-checked anvil
 ///   And Jeff recorded anvil's contributors, BurntSushi first
@@ -454,6 +456,7 @@ fn inferred_people_show_the_authority_of_each_repo_claim_they_rest_on() {
     given_rachel_published(&mut world, vec![peer_claim_about(anvil)]);
     given_jeff_verified_authority(&world, LINKED_AT);
     given_repo_scraped(&world.env, &ANVIL.full(), jeff_and_burntsushi_contribute(), None);
+    let seen = what_jeff_sees(&world, anvil);
     let before = capture_authority_universe(&world.env);
 
     let listed = when_jeff_lists_inferred_people(&world);
@@ -468,7 +471,8 @@ fn inferred_people_show_the_authority_of_each_repo_claim_they_rest_on() {
                 .contains(Authority::RepoListed.label()),
         "the source claim reads `repo-listed`:\n{block}"
     );
-    assert_authority_store_unchanged("infer", &before, &world.env);
+    assert_jeff_sees_no_change("infer", &seen, &world, anvil);
+    guardrail_store_unchanged("infer", &before, &world.env);
 }
 
 /// RD-10 (reader side of G-2; review F-02; chained on PS-8)
@@ -496,4 +500,45 @@ fn after_jeff_renames_his_account_his_claim_about_the_old_login_reads_third_part
     assert_eq!(read.status, 0, "{}\n{}", read.stdout, read.stderr);
     assert_labelled(&read, MY_DID, Subject::Person(JEFF_GH), Authority::ThirdParty);
     assert_eq!(world.env.pds.records().len(), pds_before, "nothing withdrawn");
+}
+
+// =============================================================================
+// `--include-unattested` needs `--weighted` (ruling P-OOS-1, resolves U-OOS-7)
+// =============================================================================
+
+/// RD-11 (C5a mode combination; ruling P-OOS-1 accepted 2026-10-20)
+/// ```gherkin
+/// @driving_port @real-io @error @c5a @p-oos-1 @s-oos-7 @contract-shape:unbounded-preservation
+/// Scenario: Asking for unattested claims without the weighted view is a usage mistake
+///   Given the store of RD-1
+///   When Jeff reads every claim about memory-safety including unattested claims, without asking for the weighted view
+///   Then he is told the unattested section needs the weighted view, and the command fails as a usage mistake
+///   And no claim is listed
+/// ```
+#[test]
+#[ignore = "DISTILL owner-only-signing RD-11: pending DELIVER (slice 3; ruling P-OOS-1)"]
+fn asking_for_unattested_claims_without_the_weighted_view_is_a_usage_mistake() {
+    let world = labelled_store();
+
+    let read = when_jeff_reads_philosophy(
+        &world,
+        MEMORY_SAFETY,
+        &["--include-unattested"],
+        Some(CHECK_PLUS_2_DAYS),
+    );
+
+    assert_eq!(read.status, 2, "a usage mistake exits 2;\n{}\n{}", read.stdout, read.stderr);
+    assert!(
+        format!("{}\n{}", read.stdout, read.stderr).contains(INCLUDE_UNATTESTED_NEEDS_WEIGHTED),
+        "says `{INCLUDE_UNATTESTED_NEEDS_WEIGHTED}`;\n{}\n{}",
+        read.stdout,
+        read.stderr
+    );
+    for author in [MY_DID, RACHEL_DID] {
+        assert!(
+            !read.stdout.contains(author),
+            "no claim is listed;\n{}",
+            read.stdout
+        );
+    }
 }

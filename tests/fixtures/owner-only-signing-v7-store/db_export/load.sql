@@ -1,0 +1,11 @@
+COPY claims FROM '@FIXTURE_DIR@/claims.csv' (FORMAT 'csv', force_not_null ('subject', 'predicate', 'object', 'confidence', 'author_did', 'composed_at', 'artifact_path', 'inserted_at', 'cid'), quote '"', delimiter ',', header 1);
+COPY contribution_links FROM '@FIXTURE_DIR@/contribution_links.csv' (FORMAT 'csv', force_not_null ('repo_key', 'person_key', 'repo_subject', 'person_subject', 'github_user_id', 'rank', 'contributions', 'first_observed_at', 'last_observed_at'), quote '"', delimiter ',', header 1);
+COPY identity_link_checks FROM '@FIXTURE_DIR@/identity_link_checks.csv' (FORMAT 'csv', force_not_null ('subject_did', 'github_user_id', 'login_seen', 'verdict', 'checked_at', 'check_id'), quote '"', delimiter ',', header 1);
+COPY peer_claims FROM '@FIXTURE_DIR@/peer_claims.csv' (FORMAT 'csv', force_not_null ('author_did', 'subject', 'predicate', 'object', 'confidence', 'composed_at', 'fetched_at', 'fetched_from_pds', 'signed_record_path', 'cid'), quote '"', delimiter ',', header 1);
+COPY peer_subscriptions FROM '@FIXTURE_DIR@/peer_subscriptions.csv' (FORMAT 'csv', force_not_null ('peer_handle', 'peer_pds_endpoint', 'subscribed_at', 'peer_did'), quote '"', delimiter ',', header 1);
+COPY philosophies FROM '@FIXTURE_DIR@/philosophies.csv' (FORMAT 'csv', force_not_null ('object_id', 'name', 'description', 'author_did', 'composed_at', 'artifact_path', 'inserted_at', 'cid'), quote '"', delimiter ',', header 1);
+COPY schema_version FROM '@FIXTURE_DIR@/schema_version.csv' (FORMAT 'csv', force_not_null ('applied_at', 'description', 'version'), quote '"', delimiter ',', header 1);
+COPY claim_evidence FROM '@FIXTURE_DIR@/claim_evidence.csv' (FORMAT 'csv', force_not_null ('cid', 'evidence', 'ordinal'), quote '"', delimiter ',', header 1);
+COPY claim_references FROM '@FIXTURE_DIR@/claim_references.csv' (FORMAT 'csv', force_not_null ('referencing_cid', 'referenced_cid', 'ref_type'), quote '"', delimiter ',', header 1);
+COPY peer_claim_evidence FROM '@FIXTURE_DIR@/peer_claim_evidence.csv' (FORMAT 'csv', force_not_null ('cid', 'evidence', 'ordinal'), quote '"', delimiter ',', header 1);
+COPY peer_claim_references FROM '@FIXTURE_DIR@/peer_claim_references.csv' (FORMAT 'csv', force_not_null ('referencing_cid', 'referenced_cid', 'ref_type'), quote '"', delimiter ',', header 1);

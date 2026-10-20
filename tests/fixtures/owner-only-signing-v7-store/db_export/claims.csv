@@ -1,0 +1,2 @@
+cid,subject,predicate,object,confidence,author_did,composed_at,published_at,at_uri,artifact_path,inserted_at
+bafyreickgcpodagwcb5k2d63ntmfslmp7y7tavqhbqsuv4bnqefuku3gqe,did:plc:test-jeff,sameAs,github:jeffbailey,1.0,did:plc:test-jeff,2026-09-20 09:00:00,2026-09-20 09:00:00,at://did:plc:test-jeff/org.openlore.claim/bafyreickgcpodagwcb5k2d63ntmfslmp7y7tavqhbqsuv4bnqefuku3gqe,/var/folders/0z/5s704ssj3477w2t4n4f_zp000000gn/T/.tmpLf0fyb/.local/share/openlore/claims/bafyreickgcpodagwcb5k2d63ntmfslmp7y7tavqhbqsuv4bnqefuku3gqe.json,2026-10-20 12:40:34.870378

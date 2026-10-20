@@ -1,0 +1,26 @@
+CREATE SEQUENCE identity_link_check_ids INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START 9 NO CYCLE;;
+CREATE TABLE claims(cid VARCHAR PRIMARY KEY, subject VARCHAR NOT NULL, predicate VARCHAR NOT NULL, "object" VARCHAR NOT NULL, confidence DOUBLE NOT NULL, author_did VARCHAR NOT NULL, composed_at TIMESTAMP NOT NULL, published_at TIMESTAMP, at_uri VARCHAR, artifact_path VARCHAR NOT NULL, inserted_at TIMESTAMP DEFAULT(now()) NOT NULL, CHECK(((confidence >= 0.0) AND (confidence <= 1.0))));;
+CREATE TABLE contribution_links(repo_key VARCHAR, person_key VARCHAR, repo_subject VARCHAR NOT NULL, person_subject VARCHAR NOT NULL, github_user_id BIGINT NOT NULL, rank INTEGER NOT NULL, contributions BIGINT NOT NULL, first_observed_at TIMESTAMP NOT NULL, last_observed_at TIMESTAMP NOT NULL, CHECK((rank >= 1)), CHECK((contributions >= 0)), PRIMARY KEY(repo_key, person_key));;
+CREATE TABLE identity_link_checks(check_id BIGINT DEFAULT(nextval('identity_link_check_ids')) PRIMARY KEY, subject_did VARCHAR NOT NULL, github_user_id BIGINT NOT NULL, login_seen VARCHAR NOT NULL, verdict VARCHAR NOT NULL, checked_at TIMESTAMP NOT NULL, CHECK((verdict IN ('verified', 'did_missing', 'different_did', 'no_bio', 'account_not_found'))));;
+CREATE TABLE peer_claims(cid VARCHAR PRIMARY KEY, author_did VARCHAR NOT NULL, subject VARCHAR NOT NULL, predicate VARCHAR NOT NULL, "object" VARCHAR NOT NULL, confidence DOUBLE NOT NULL, composed_at TIMESTAMP NOT NULL, fetched_at TIMESTAMP NOT NULL, fetched_from_pds VARCHAR NOT NULL, signed_record_path VARCHAR NOT NULL, provenance VARCHAR DEFAULT('app-signed'), CHECK(((confidence >= 0.0) AND (confidence <= 1.0))), CHECK((author_did != '')), CHECK((cid != '')));;
+CREATE TABLE peer_subscriptions(peer_did VARCHAR PRIMARY KEY, peer_handle VARCHAR NOT NULL, peer_pds_endpoint VARCHAR NOT NULL, subscribed_at TIMESTAMP NOT NULL, removed_at TIMESTAMP);;
+CREATE TABLE philosophies(cid VARCHAR PRIMARY KEY, object_id VARCHAR NOT NULL UNIQUE, "name" VARCHAR NOT NULL, description VARCHAR NOT NULL, author_did VARCHAR NOT NULL, composed_at TIMESTAMP NOT NULL, artifact_path VARCHAR NOT NULL, inserted_at TIMESTAMP DEFAULT(now()) NOT NULL, CHECK((cid != '')), CHECK((object_id != '')), CHECK((author_did != '')));;
+CREATE TABLE schema_version("version" INTEGER PRIMARY KEY, applied_at TIMESTAMP NOT NULL, description VARCHAR NOT NULL);;
+CREATE TABLE claim_evidence(cid VARCHAR, evidence VARCHAR NOT NULL, ordinal INTEGER, PRIMARY KEY(cid, ordinal), FOREIGN KEY (cid) REFERENCES claims(cid));;
+CREATE TABLE claim_references(referencing_cid VARCHAR, referenced_cid VARCHAR, ref_type VARCHAR, CHECK((ref_type IN ('retracts', 'corrects', 'counters', 'supersedes'))), PRIMARY KEY(referencing_cid, referenced_cid, ref_type), FOREIGN KEY (referencing_cid) REFERENCES claims(cid));;
+CREATE TABLE peer_claim_evidence(cid VARCHAR, evidence VARCHAR NOT NULL, ordinal INTEGER, PRIMARY KEY(cid, ordinal), FOREIGN KEY (cid) REFERENCES peer_claims(cid));;
+CREATE TABLE peer_claim_references(referencing_cid VARCHAR, referenced_cid VARCHAR, ref_type VARCHAR, CHECK((ref_type IN ('retracts', 'corrects', 'counters', 'supersedes'))), PRIMARY KEY(referencing_cid, referenced_cid, ref_type), FOREIGN KEY (referencing_cid) REFERENCES peer_claims(cid));;
+CREATE INDEX idx_claims_author ON claims(author_did);;
+CREATE INDEX idx_claims_composed_at ON claims(composed_at);;
+CREATE INDEX idx_claims_subject ON claims(subject);;
+CREATE INDEX idx_claim_references_referenced ON claim_references(referenced_cid);;
+CREATE INDEX idx_contribution_links_user_id ON contribution_links(github_user_id);;
+CREATE INDEX idx_identity_link_checks_link ON identity_link_checks(subject_did, github_user_id);;
+CREATE INDEX idx_peer_claims_author ON peer_claims(author_did);;
+CREATE INDEX idx_peer_claims_composed_at ON peer_claims(composed_at);;
+CREATE INDEX idx_peer_claims_subject ON peer_claims(subject);;
+CREATE INDEX idx_peer_claim_refs_referenced ON peer_claim_references(referenced_cid);;
+CREATE INDEX idx_peer_subs_active ON peer_subscriptions(peer_did);;
+CREATE INDEX idx_philosophies_author ON philosophies(author_did);;
+CREATE INDEX idx_philosophies_object_id ON philosophies(object_id);;
+

@@ -8,10 +8,12 @@
 //! (github-did-identity-link slice 3, `review_app_identity_link.rs`). Only the
 //! share-draft narrowing is new here.
 //!
-//! "Attested" in the app (which keeps no CLI check store, C-OOS-4) is read as
-//! the owner tier holding NOW: the share request re-reads each quoted repo's
-//! owner and that owner's bio, as publish does (ADR-089 §4). This reading is
-//! a DISTILL proposal pending U-OOS-4.
+//! "Attested" in the app (which keeps no CLI check store, C-OOS-4) is the
+//! owner tier holding NOW — ruling P-OOS-2 (accepted 2026-10-20, resolves
+//! U-OOS-4): the share request re-reads the user's bio and each quoted repo's
+//! owner, as publish does (ADR-089 §4), quotes a claim only if that read
+//! permits it, and lists a repo whose read fails or no longer holds as
+//! "not counted: authority not proven".
 //!
 //! Driving port: the REAL `openlore-review-app` over HTTP. Fakes:
 //! `FakeGithubAccounts`, the ATProto network. Layer 4: example-only.
@@ -28,17 +30,17 @@ const NOT_COUNTED_LINE: &str = "not counted: authority not proven";
 
 /// SA-1
 /// ```gherkin
-/// @driving_port @real-io @uc-21 @adr-086-8 @spec-ambiguity @contract-shape:pure-function
+/// @driving_port @real-io @uc-21 @adr-086-8 @p-oos-2 @s-oos-8 @contract-shape:unbounded-preservation
 /// Scenario: Priya's share post names only claims about repos she still owns
 ///   Given Priya published "tidepool is test-driven" and "kelp pins its dependencies"
 ///   And she then transferred kelp to tidal-labs
-///   When she opens the share preview
+///   When she opens the share preview, which looks again at her bio and at who owns each repo
 ///   Then the draft names test-driven and not dependency-pinning
 ///   And the page lists kelp's claim as "not counted: authority not proven"
 ///   And nothing has been posted
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing SA-1: pending DELIVER (slice 4; U-OOS-4 ruling)"]
+#[ignore = "DISTILL owner-only-signing SA-1: pending DELIVER (slice 4; ruling P-OOS-2)"]
 fn priyas_share_post_names_only_claims_about_repos_she_still_owns() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);

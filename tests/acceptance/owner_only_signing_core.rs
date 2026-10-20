@@ -29,6 +29,18 @@
 //! CORE-OOS-5 calls the REAL `scoring::score`. DELIVER binds one property per
 //! step and may move it into `crates/claim-domain/tests` (RRA DWD-RRA-7).
 //!
+//! ## Layer-2 CM-A exception (Mandate 1, documented)
+//!
+//! These properties call the pure core directly, not a driving port. That is
+//! the documented exception for layer 2 (Mandate 9: PBT full at layers 1-2;
+//! ADR-007: `claim_domain::authority` and `scoring` are the functional core's
+//! public API, with no I/O to wire). Mandate 1 (driving ports only) is
+//! enforced at layer 3: every behaviour here is also pinned through the
+//! `openlore` binary (CORE-OOS-4 ↔ PS-4/RA-10/RA-12b, CORE-OOS-3 ↔ RA-3/RD-1,
+//! CORE-OOS-5 ↔ RD-2/RD-4). CM-A evidence lists this file separately.
+//!
+//! Every property carries `@contract-shape:pure-function` (review M-3).
+//!
 //! Tier B (state-machine PBT) is not added: `classify` / `may_sign` are pure
 //! projections of (claim, latest checks, now) — a FORALL over generated
 //! states explores the same space without a command protocol; the
@@ -369,6 +381,85 @@ fn oracle_repo(author: &str, ev: &EvidenceView) -> Expected {
     e
 }
 
+/// CORE-OOS-4 oracle — the ADR-086 §5 / ADR-087 §7 signing-gate decision
+/// table, one variant per row (review M-5). "Fresh" = `0 ≤ age ≤ 7 days`; a
+/// check dated in the future is missing (DWD-OOS-14); age never changes the
+/// tier, only the gate.
+///
+/// | Row | Requirement (ADR-086 §1-2) | Tier that holds (ADR-087 §1-3) | Checks it rests on | Gate |
+/// |---|---|---|---|---|
+/// | G1 | Exempt (not `github:`, or a dispute / withdrawal / link) | — | — | permit |
+/// | G2 | malformed `github:` subject | — | — | refuse (fail closed) |
+/// | G3 | Person | Owner(X) | latest (D, X) link check, fresh | permit |
+/// | G4 | Person | Owner(X) | latest (D, X) link check, > 7 days | refuse, names `authority verify` |
+/// | G5 | Repo | RepoListed | latest repo observation, fresh | permit |
+/// | G6 | Repo | Owner(X) | latest repo observation AND latest (D, X) link check, the older fresh | permit |
+/// | G7 | Repo | RepoListed and/or Owner | none of the above fresh | refuse, names `authority verify` |
+/// | G8 | Person / Repo | none (Unattested / NotChecked) | — | refuse with the hand-off |
+///
+/// CORE-OOS-4x pins G3 (0 and 7 days) and G4 (7 days + 1 minute), and a
+/// future-dated check (G8: missing) by example.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GateRow {
+    G1Exempt,
+    G2Malformed,
+    G3PersonFresh,
+    G4PersonStale,
+    G5ListedFresh,
+    G6OwnerFresh,
+    G7RepoStale,
+    G8Unattested,
+}
+
+impl GateRow {
+    fn permits(self) -> bool {
+        matches!(
+            self,
+            GateRow::G1Exempt | GateRow::G3PersonFresh | GateRow::G5ListedFresh | GateRow::G6OwnerFresh
+        )
+    }
+}
+
+fn is_fresh(age_minutes: i64) -> bool {
+    (0..=WINDOW_MINUTES).contains(&age_minutes)
+}
+
+fn oracle_gate_row(claim: &ClaimView, ev: &EvidenceView) -> GateRow {
+    match oracle_requirement(claim) {
+        Some(RequirementView::Exempt) => GateRow::G1Exempt,
+        None => GateRow::G2Malformed,
+        Some(RequirementView::Person { login }) => {
+            let e = oracle_person(&claim.author, &login, ev);
+            if e.owner_ids.is_empty() {
+                return GateRow::G8Unattested;
+            }
+            let fresh = e.owner_ids.iter().any(|id| {
+                latest_check(ev, &claim.author, *id).is_some_and(|c| c.verified && is_fresh(c.age_minutes))
+            });
+            if fresh { GateRow::G3PersonFresh } else { GateRow::G4PersonStale }
+        }
+        Some(RequirementView::Repo { .. }) => {
+            let e = oracle_repo(&claim.author, ev);
+            if e.owner_ids.is_empty() && !e.listed {
+                return GateRow::G8Unattested;
+            }
+            let repo_age = match &ev.repo {
+                Some(RepoObsView::Found { age_minutes, .. }) => *age_minutes,
+                _ => -1,
+            };
+            if e.listed && is_fresh(repo_age) {
+                return GateRow::G5ListedFresh;
+            }
+            let owner_fresh = is_fresh(repo_age)
+                && e.owner_ids.iter().any(|id| {
+                    latest_check(ev, &claim.author, *id)
+                        .is_some_and(|c| is_fresh(c.age_minutes) && is_fresh(c.age_minutes.max(repo_age)))
+                });
+            if owner_fresh { GateRow::G6OwnerFresh } else { GateRow::G7RepoStale }
+        }
+    }
+}
+
 // =============================================================================
 // Generators
 // =============================================================================
@@ -646,6 +737,7 @@ proptest! {
 
     /// CORE-OOS-1 — a dispute, a withdrawal or an identity link is never an
     /// assertion, and nothing else is anything but an assertion.
+    /// `@property @s-oos-2 @contract-shape:pure-function`
     #[test]
     #[ignore = "DISTILL owner-only-signing CORE-OOS-1: bind sut_kind (DELIVER slice 1)"]
     fn only_disputes_withdrawals_and_links_are_weightless_kinds(claim in arb_claim()) {
@@ -658,6 +750,7 @@ proptest! {
 
     /// CORE-OOS-2 — only GitHub assertions need authority, and a malformed
     /// GitHub subject never slips through as exempt.
+    /// `@property @s-oos-1 @s-oos-2 @contract-shape:pure-function`
     #[test]
     #[ignore = "DISTILL owner-only-signing CORE-OOS-2: bind sut_requirement (DELIVER slice 1)"]
     fn only_github_assertions_need_authority(claim in arb_claim()) {
@@ -670,6 +763,7 @@ proptest! {
 
     /// CORE-OOS-3 — a claim reads as its author's word about a GitHub
     /// subject exactly when the ADR-087 table says so.
+    /// `@property @s-oos-1 @s-oos-4 @contract-shape:pure-function`
     #[test]
     #[ignore = "DISTILL owner-only-signing CORE-OOS-3: bind sut_classify (DELIVER slices 1-2)"]
     fn a_claim_is_attested_exactly_when_the_authority_table_says_so(
@@ -698,50 +792,28 @@ proptest! {
     }
 
     /// CORE-OOS-4 — the signing gate permits only an exempt claim or an
-    /// attested one whose older check is at most 7 days old.
+    /// attested one whose older check is at most 7 days old: the oracle is
+    /// the ADR-086 §5 / ADR-087 §7 decision table [`GateRow`] (review M-5),
+    /// anchored by CORE-OOS-4x.
+    /// `@property @s-oos-1 @s-oos-3 @contract-shape:pure-function`
     #[test]
     #[ignore = "DISTILL owner-only-signing CORE-OOS-4: bind sut_may_sign (DELIVER slice 1)"]
     fn the_gate_permits_only_exempt_or_freshly_attested_claims(
         claim in arb_claim(),
         evidence in arb_evidence(true),
     ) {
+        let row = oracle_gate_row(&claim, &evidence);
         let got = sut_may_sign(&claim, &evidence, WINDOW_MINUTES);
-        let fresh = |age: i64| (0..=WINDOW_MINUTES).contains(&age);
-        let permitted = match oracle_requirement(&claim) {
-            Some(RequirementView::Exempt) => true,
-            None => false,
-            Some(RequirementView::Person { login }) => {
-                let e = oracle_person(&claim.author, &login, &evidence);
-                e.owner_ids.iter().any(|id| {
-                    evidence.checks.iter().any(|c| {
-                        c.did == claim.author && c.github_id == *id && c.verified && fresh(c.age_minutes)
-                    })
-                })
-            }
-            Some(RequirementView::Repo { .. }) => {
-                let e = oracle_repo(&claim.author, &evidence);
-                let repo_age = match &evidence.repo {
-                    Some(RepoObsView::Found { age_minutes, .. }) => *age_minutes,
-                    _ => -1,
-                };
-                let owner_ok = e.owner_ids.iter().any(|id| {
-                    evidence.checks.iter().any(|c| {
-                        c.did == claim.author && c.github_id == *id && fresh(c.age_minutes.max(repo_age))
-                            && c.age_minutes >= 0
-                    })
-                }) && fresh(repo_age);
-                (e.listed && fresh(repo_age)) || owner_ok
-            }
-        };
         match &got {
-            PermitView::Permit => prop_assert!(permitted, "permit not allowed: {:?} {:?}", claim, evidence),
-            PermitView::Refused { .. } => prop_assert!(!permitted, "refused a permitted claim: {:?} {:?}", claim, evidence),
+            PermitView::Permit => prop_assert!(row.permits(), "{:?} permits nothing: {:?} {:?}", row, claim, evidence),
+            PermitView::Refused { .. } => prop_assert!(!row.permits(), "{:?} must permit: {:?} {:?}", row, claim, evidence),
         }
     }
 
     /// CORE-OOS-5 — the weight is the score of exactly the attested (or
     /// non-GitHub) assertions, and adding disputes, withdrawals, links or
     /// unattested GitHub assertions never moves it (KPI-OOS-2).
+    /// `@property @s-oos-7 @contract-shape:pure-function`
     #[test]
     #[ignore = "DISTILL owner-only-signing CORE-OOS-5: bind sut_score_attested (DELIVER slice 3)"]
     fn nothing_but_attested_assertions_moves_the_weight(
@@ -756,7 +828,9 @@ proptest! {
     }
 }
 
-/// CORE-OOS-4x — the window's edges, by example (A-6: "≤ 7 days").
+/// CORE-OOS-4x — the window's edges, by example (A-6: "≤ 7 days"); anchors
+/// [`GateRow`] G3 / G4 / G8 (future-dated = missing).
+/// `@s-oos-3 @contract-shape:pure-function`
 #[test]
 #[ignore = "DISTILL owner-only-signing CORE-OOS-4x: bind sut_may_sign (DELIVER slice 1)"]
 fn the_signing_window_includes_seven_days_and_excludes_the_minute_after() {
