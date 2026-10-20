@@ -17,7 +17,9 @@
 //!
 //! PURE: no clock, no store, no network.
 
-use crate::identity_link::{bio_verdict, BioVerdict, CheckVerdict};
+use crate::identity_link::{bio_verdict, link_predicate, BioVerdict, CheckVerdict};
+use crate::references::ReferenceStance;
+use crate::ReferenceType;
 
 /// Who owns a repo, as GitHub's `owner.type` says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,12 +199,14 @@ fn still_named(subject: &str, repo: RepoRead<'_>) -> Result<(), SigningRefusal> 
 /// The tier of authority an assertion about `subject` needs (ADR-086 §1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Requirement {
-    /// Not a `github:` subject: anyone may sign.
+    /// Not a `github:` subject, or not an assertion: anyone may sign.
     Exempt,
     /// `github:<login>`: only the account's owner may sign.
     Person(PersonSubject),
     /// `github:<owner>/<repo>`: the repo's owner or a DID its authority file lists.
     Repo { owner: String, name: String },
+    /// A `github:` subject that names no account or repo: nobody may sign.
+    Malformed,
 }
 
 /// A `github:<login>` subject. Built only by [`requirement`].
@@ -224,24 +228,99 @@ impl PersonSubject {
     }
 }
 
-/// Which authority an assertion about `subject` needs. The `github` scheme is
-/// matched without letter case; any `github:` subject is Required, never
-/// Exempt — a malformed one fails closed.
-pub fn requirement(subject: &str) -> Requirement {
-    match subject.split_once(':') {
-        Some((scheme, path)) if scheme.eq_ignore_ascii_case("github") => match path.split_once('/')
-        {
-            Some((owner, name)) => Requirement::Repo {
-                owner: owner.to_string(),
-                name: name.to_string(),
-            },
-            None => Requirement::Person(PersonSubject {
-                uri: subject.to_string(),
-                login: path.to_string(),
-            }),
-        },
+/// The claim fields authority is decided from: what it is about, what it
+/// says and the types of the references it carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClaimShape<'a> {
+    pub subject: &'a str,
+    pub predicate: &'a str,
+    pub reference_types: &'a [ReferenceType],
+}
+
+/// What a claim is (ADR-086 §2). Only an assertion carries weight and needs
+/// authority; a withdrawal, a dispute or an identity link never does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimKind {
+    Assertion,
+    Retraction,
+    Counter,
+    IdentityLink,
+}
+
+/// The kind of `claim`: a withdrawal if it carries a `retracts` reference, a
+/// dispute if it carries a `counters` one, an identity link if its predicate
+/// is exactly `sameAs`; anything else — `supersedes` and `corrects` too — is
+/// an assertion.
+pub fn kind(claim: ClaimShape<'_>) -> ClaimKind {
+    let carries = |stance| {
+        claim
+            .reference_types
+            .iter()
+            .any(|reference| reference.stance() == stance)
+    };
+    if carries(ReferenceStance::Withdraws) {
+        ClaimKind::Retraction
+    } else if carries(ReferenceStance::Disputes) {
+        ClaimKind::Counter
+    } else if claim.predicate == link_predicate() {
+        ClaimKind::IdentityLink
+    } else {
+        ClaimKind::Assertion
+    }
+}
+
+/// Which authority `claim` needs. Only an assertion about a `github:`
+/// subject needs any. The `github` scheme is matched without letter case,
+/// and a `github:` subject naming no account or repo is [`Requirement::Malformed`],
+/// never Exempt (fail closed, DWD-OOS-7).
+pub fn requirement(claim: ClaimShape<'_>) -> Requirement {
+    match (kind(claim), github_path(claim.subject)) {
+        (ClaimKind::Assertion, Some(path)) => github_requirement(claim.subject, path),
         _ => Requirement::Exempt,
     }
+}
+
+/// The path after a `github:` scheme in any letter case; `None` for any
+/// other subject.
+fn github_path(subject: &str) -> Option<&str> {
+    let (scheme, path) = subject.split_once(':')?;
+    scheme.eq_ignore_ascii_case("github").then_some(path)
+}
+
+/// `github:<login>` names a person, `github:<owner>/<repo>` a repo; any
+/// other path is malformed.
+fn github_requirement(subject: &str, path: &str) -> Requirement {
+    match path.split('/').collect::<Vec<_>>().as_slice() {
+        [login] if is_github_login(login) => Requirement::Person(PersonSubject {
+            uri: subject.to_string(),
+            login: login.to_string(),
+        }),
+        [owner, name] if is_github_login(owner) && is_github_repo_name(name) => Requirement::Repo {
+            owner: owner.to_string(),
+            name: name.to_string(),
+        },
+        _ => Requirement::Malformed,
+    }
+}
+
+/// A GitHub login: 1-39 ASCII letters, digits or hyphens, not starting or
+/// ending with a hyphen.
+fn is_github_login(login: &str) -> bool {
+    (1..=39).contains(&login.len())
+        && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !login.starts_with('-')
+        && !login.ends_with('-')
+}
+
+/// A GitHub repo name: 1-100 ASCII letters, digits, `-`, `_` or `.`, other
+/// than `.` and `..`.
+fn is_github_repo_name(name: &str) -> bool {
+    (1..=100).contains(&name.len())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && name != "."
+        && name != ".."
 }
 
 /// One of the signer's active identity links (ADR-084) with this reader's
@@ -461,8 +540,16 @@ mod gate_from_checks_tests {
 
     const JEFF: &str = "did:plc:jeff";
 
+    fn assertion_about(subject: &str) -> ClaimShape<'_> {
+        ClaimShape {
+            subject,
+            predicate: "adheresToPhilosophy",
+            reference_types: &[],
+        }
+    }
+
     fn person(subject: &str) -> PersonSubject {
-        match requirement(subject) {
+        match requirement(assertion_about(subject)) {
             Requirement::Person(person) => person,
             other => panic!("{subject} is a person subject, got {other:?}"),
         }
@@ -550,7 +637,8 @@ mod gate_from_checks_tests {
             scheme in proptest::sample::select(vec!["github", "GitHub", "GITHUB", "https", "did", "npm"]),
             path in "[a-zA-Z0-9/_-]{0,12}",
         ) {
-            let required = requirement(&format!("{scheme}:{path}"));
+            let subject = format!("{scheme}:{path}");
+            let required = requirement(assertion_about(&subject));
             prop_assert_eq!(
                 required == Requirement::Exempt,
                 !scheme.eq_ignore_ascii_case("github")
@@ -615,7 +703,7 @@ mod gate_from_checks_tests {
     #[test]
     fn a_repo_subject_requires_repo_authority() {
         assert_eq!(
-            requirement("github:jeffbailey/tidepool"),
+            requirement(assertion_about("github:jeffbailey/tidepool")),
             Requirement::Repo {
                 owner: "jeffbailey".to_string(),
                 name: "tidepool".to_string()

@@ -184,12 +184,59 @@ struct FeedRow {
 // SUT bindings (RED until DELIVER binds each to ONE production call)
 // =============================================================================
 
-fn sut_kind(_claim: &ClaimView) -> KindView {
-    todo!("RED: bind to claim_domain::authority::kind (owner-only-signing slice 1)")
+fn sut_kind(claim: &ClaimView) -> KindView {
+    use claim_domain::authority::{kind, ClaimKind, ClaimShape};
+    use claim_domain::ReferenceType;
+    let reference_types: Vec<ReferenceType> = claim
+        .references
+        .iter()
+        .map(|r| match r {
+            RefView::Retracts => ReferenceType::Retracts,
+            RefView::Counters => ReferenceType::Counters,
+            RefView::Supersedes => ReferenceType::Supersedes,
+            RefView::Corrects => ReferenceType::Corrects,
+        })
+        .collect();
+    match kind(ClaimShape {
+        subject: &claim.subject,
+        predicate: &claim.predicate,
+        reference_types: &reference_types,
+    }) {
+        ClaimKind::Assertion => KindView::Assertion,
+        ClaimKind::Retraction => KindView::Retraction,
+        ClaimKind::Counter => KindView::Counter,
+        ClaimKind::IdentityLink => KindView::IdentityLink,
+    }
 }
 
-fn sut_requirement(_claim: &ClaimView) -> RequirementView {
-    todo!("RED: bind to claim_domain::authority::requirement (owner-only-signing slice 1)")
+fn sut_requirement(claim: &ClaimView) -> RequirementView {
+    use claim_domain::authority::{requirement, ClaimShape, Requirement};
+    use claim_domain::ReferenceType;
+    let reference_types: Vec<ReferenceType> = claim
+        .references
+        .iter()
+        .map(|r| match r {
+            RefView::Retracts => ReferenceType::Retracts,
+            RefView::Counters => ReferenceType::Counters,
+            RefView::Supersedes => ReferenceType::Supersedes,
+            RefView::Corrects => ReferenceType::Corrects,
+        })
+        .collect();
+    match requirement(ClaimShape {
+        subject: &claim.subject,
+        predicate: &claim.predicate,
+        reference_types: &reference_types,
+    }) {
+        Requirement::Exempt => RequirementView::Exempt,
+        Requirement::Person(person) => RequirementView::Person {
+            login: person.login().to_string(),
+        },
+        Requirement::Repo { owner, name } => RequirementView::Repo { owner, name },
+        // The view has no malformed row: its contract is only "never Exempt".
+        Requirement::Malformed => RequirementView::Person {
+            login: claim.subject.clone(),
+        },
+    }
 }
 
 fn sut_classify(_claim: &ClaimView, _evidence: &EvidenceView) -> AuthorityView {
@@ -753,7 +800,6 @@ proptest! {
     /// assertion, and nothing else is anything but an assertion.
     /// `@property @s-oos-2 @contract-shape:pure-function`
     #[test]
-    #[ignore = "DISTILL owner-only-signing CORE-OOS-1: bind sut_kind (DELIVER slice 1)"]
     fn only_disputes_withdrawals_and_links_are_weightless_kinds(claim in arb_claim()) {
         let kind = sut_kind(&claim);
         prop_assert_eq!(kind != KindView::Assertion, oracle_is_non_weight(&claim), "{:?}", claim);
@@ -766,7 +812,6 @@ proptest! {
     /// GitHub subject never slips through as exempt.
     /// `@property @s-oos-1 @s-oos-2 @contract-shape:pure-function`
     #[test]
-    #[ignore = "DISTILL owner-only-signing CORE-OOS-2: bind sut_requirement (DELIVER slice 1)"]
     fn only_github_assertions_need_authority(claim in arb_claim()) {
         let got = sut_requirement(&claim);
         match oracle_requirement(&claim) {

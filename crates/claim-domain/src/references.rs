@@ -54,7 +54,30 @@
 //! than a verify-time signature failure. ADR-008 §Behavioral rule 4 +
 //! Earned Trust 2/3.
 
-use crate::{canonicalize, compute_cid, Cid, ClaimError, ClaimLookup, UnsignedClaim};
+use crate::{
+    canonicalize, compute_cid, Cid, ClaimError, ClaimLookup, ReferenceType, UnsignedClaim,
+};
+
+/// What a reference makes of the claim that carries it (ADR-086 §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReferenceStance {
+    /// `retracts`: the author withdraws the claim it points at.
+    Withdraws,
+    /// `counters`: the claim disputes the one it points at.
+    Disputes,
+    /// `supersedes` / `corrects`: the claim is a new assertion in its place.
+    Revises,
+}
+
+impl ReferenceType {
+    pub(crate) fn stance(self) -> ReferenceStance {
+        match self {
+            ReferenceType::Retracts => ReferenceStance::Withdraws,
+            ReferenceType::Counters => ReferenceStance::Disputes,
+            ReferenceType::Supersedes | ReferenceType::Corrects => ReferenceStance::Revises,
+        }
+    }
+}
 
 /// Compute the body CID of an unsigned claim — its canonical-CBOR CID
 /// with `references` cleared to `[]`. This is the claim's stable

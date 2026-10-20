@@ -38,7 +38,7 @@ use claim_domain::{
     UnsignedClaim,
 };
 
-use claim_domain::authority::{may_sign_from_checks, requirement, Requirement};
+use claim_domain::authority::{may_sign_from_checks, requirement, ClaimShape, Requirement};
 use claim_domain::identity_link::is_reserved_predicate;
 use lexicon::ObjectAdvisory;
 
@@ -109,21 +109,42 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
         ));
     }
 
-    // Owner-only signing (ADR-086/087): an assertion about a person's GitHub
-    // account is signed only by its owner, judged from this reader's local
-    // checks. A refusal happens before any prompt or side effect: nothing is
-    // signed, written or published. Exempt and repo subjects keep today's
-    // path until the repo tier lands (accepted transitional risk T1).
-    if let Requirement::Person(person) = requirement(&args.subject) {
-        let links = wiring.signer_linked_accounts(wiring.clock.now_utc())?;
-        if let Err(refusal) = may_sign_from_checks(&wiring.identity.author_did().0, &person, &links)
-        {
-            eprint!("{}", render_signing_refused(&refusal));
+    // Owner-only signing (ADR-086/087): every claim asks what authority it
+    // needs. An assertion about a person's GitHub account is signed only by
+    // its owner, judged from this reader's local checks; a `github:` subject
+    // that names no account or repo is never signed (fail closed). A refusal
+    // happens before any prompt or side effect: nothing is signed, written or
+    // published. Exempt and repo subjects keep today's path until the repo
+    // tier lands (accepted transitional risk T1).
+    let claim = ClaimShape {
+        subject: &args.subject,
+        predicate: &args.predicate,
+        reference_types: &[],
+    };
+    match requirement(claim) {
+        Requirement::Person(person) => {
+            let links = wiring.signer_linked_accounts(wiring.clock.now_utc())?;
+            if let Err(refusal) =
+                may_sign_from_checks(&wiring.identity.author_did().0, &person, &links)
+            {
+                eprint!("{}", render_signing_refused(&refusal));
+                return Ok(ClaimAddOutcome {
+                    exit_code: 1,
+                    stdout: String::new(),
+                });
+            }
+        }
+        Requirement::Malformed => {
+            eprintln!(
+                "Not signed: {} names no GitHub account (github:<login>) or repo (github:<owner>/<repo>).",
+                args.subject
+            );
             return Ok(ClaimAddOutcome {
                 exit_code: 1,
                 stdout: String::new(),
             });
         }
+        Requirement::Exempt | Requirement::Repo { .. } => {}
     }
 
     // Step 2: assemble the composed claim. composed_at comes from the
