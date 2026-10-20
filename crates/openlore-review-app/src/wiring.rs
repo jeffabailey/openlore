@@ -81,6 +81,10 @@ fn refusal(probe: Probe) -> impl FnOnce(String) -> Refusal {
     move |detail| Refusal { probe, detail }
 }
 
+/// What the operator does about a v1 copy the app could not delete.
+const V1_COPY_FIX: &str = "delete the review-app.v1.<secs>.bak file beside the review store; \
+     the store is already upgraded";
+
 /// The closed catalogue of events the app emits.
 pub(crate) enum LogEvent<'a> {
     AppReady,
@@ -119,6 +123,9 @@ pub(crate) enum LogEvent<'a> {
     ScanRefused(ScanRefused),
     /// The server GitHub token expires within the warning window (A-8).
     GithubTokenExpiring(i64),
+    /// A v1 copy of the store is left beside the upgraded file and could
+    /// not be deleted (re-review N4): the fix only, never the path.
+    V1CopyNotRemoved,
     /// An owner declined a suggestion (KPI count; never which one or whose),
     /// with where it came from (KPI-RRA-1).
     SuggestionDeclined {
@@ -350,6 +357,11 @@ fn describe(event: LogEvent<'_>) -> (Level, &'static str, Vec<(&'static str, Val
             Warn,
             "github.token.expiring",
             vec![("days_left", json!(days_left))],
+        ),
+        LogEvent::V1CopyNotRemoved => (
+            Warn,
+            "store.v1_copy.not_removed",
+            vec![("fix", json!(V1_COPY_FIX))],
         ),
         LogEvent::StartupRefused(r) => (
             Error,
@@ -583,20 +595,25 @@ fn migration_fault(fault: TestFault) -> MigrationFault {
 
 /// The store opened at v2 and passed its probe: its v1 copies go (ADR-088,
 /// user decision 2026-10-19: delete after upgrade). One that cannot be
-/// deleted refuses the start, so no copy outlives a successful upgrade.
-fn discard_v1_backups(wired: &Wired) -> Result<(), Refusal> {
-    wired
-        .store
-        .discard_v1_backups(&wired.config.review_db)
-        .map(drop)
-        .map_err(|e| refusal(Probe::ReviewStore)(format!("deleting the v1 copy: {e}")))
+/// deleted does not stop the app (the store is already upgraded and
+/// probed): a startup warning is logged and every later start, `probe`
+/// included, tries again (re-review N4). `None` when nothing is left.
+fn discard_v1_backups(store: &ReviewStore, review_db: &Path) -> Option<LogEvent<'static>> {
+    store
+        .discard_v1_backups(review_db)
+        .err()
+        .map(|_| LogEvent::V1CopyNotRemoved)
 }
 
-/// Every hard arm; the first refusal wins.
+/// Every hard arm; the first refusal wins. The v1 copies are discarded
+/// only here, after the store opened at v2 (its migration committed) and
+/// passed its probe, on `serve` and `probe` alike.
 async fn probe(wired: &Wired) -> Result<(), Refusal> {
     arm(Probe::OAuthClient, wired.oauth.probe())?;
     arm(Probe::ReviewStore, wired.store.probe())?;
-    discard_v1_backups(wired)?;
+    if let Some(warning) = discard_v1_backups(&wired.store, &wired.config.review_db) {
+        emit(warning);
+    }
     github_token_arm(&wired.config.github_api_base, &wired.github_token).await
 }
 
@@ -978,6 +995,29 @@ mod tests {
         );
         drop(held);
         assert!(locks.hold_within("did:plc:priya", short).await.is_ok());
+    }
+
+    /// Re-review N4: a v1 copy that cannot be deleted does not stop the
+    /// start: a warning naming the fix (never the path) is logged, and a
+    /// later start deletes the copy once it can.
+    #[test]
+    fn a_v1_copy_that_cannot_be_deleted_warns_and_a_later_start_deletes_it() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let review_db = dir.path().join("review-app.duckdb");
+        let store = ReviewStore::open(&review_db, DataKey::generate()).expect("a v2 store");
+        let stuck = dir.path().join("review-app.v1.1700000000.bak");
+        std::fs::create_dir(&stuck).expect("a copy that will not go");
+
+        let warning = discard_v1_backups(&store, &review_db).expect("a warning");
+        let line = event_line(7, warning);
+        assert_eq!(line["level"], "warn");
+        assert_eq!(line["event"], "store.v1_copy.not_removed");
+        assert!(!line.to_string().contains(&*dir.path().to_string_lossy()));
+
+        std::fs::remove_dir(&stuck).expect("cleared");
+        std::fs::write(&stuck, b"v1").expect("a deletable copy");
+        assert!(discard_v1_backups(&store, &review_db).is_none());
+        assert!(!stuck.exists(), "the later start deleted it");
     }
 
     /// Re-review N2: every DID's page requests share the app's hourly

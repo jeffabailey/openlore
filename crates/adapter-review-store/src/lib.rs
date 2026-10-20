@@ -139,6 +139,9 @@ pub enum StoreError {
     Seal,
     /// The copy of the v1 file could not be made: nothing was migrated.
     Backup(String),
+    /// A v1 copy left beside the upgraded store could not be deleted. The
+    /// store is already v2: removing the named file by hand is the fix.
+    BackupNotRemoved { path: String, reason: String },
     /// The v1 → v2 step stopped before COMMIT ([`MigrationFault`]): the file
     /// is still v1 and the next start migrates it.
     MigrationStopped,
@@ -157,6 +160,11 @@ impl std::fmt::Display for StoreError {
             }
             Self::Seal => write!(f, "review store could not seal or open a secret blob"),
             Self::Backup(e) => write!(f, "review store could not copy the v1 file: {e}"),
+            Self::BackupNotRemoved { path, reason } => write!(
+                f,
+                "review store could not remove the leftover v1 copy {path} ({reason}); \
+                 the store is already upgraded: remove {path}"
+            ),
             Self::MigrationStopped => write!(
                 f,
                 "review store v1 -> v2 update stopped before it committed (test fault)"
@@ -351,12 +359,22 @@ impl ReviewStore {
     /// proves the store opened at v2, its migration committed; the root
     /// calls this only after the store passed its probe. Returns how many
     /// files went.
+    /// Every copy is tried; the first that would not go is the error (a
+    /// later start tries again).
     pub fn discard_v1_backups(&self, path: &Path) -> Result<usize, StoreError> {
-        let copies = v1_backups_beside(path).map_err(|e| StoreError::Backup(e.to_string()))?;
-        for copy in &copies {
-            std::fs::remove_file(copy).map_err(|e| StoreError::Backup(e.to_string()))?;
+        let copies = v1_backups_beside(path).map_err(|e| backup_not_removed(path, &e))?;
+        let failures: Vec<StoreError> = copies
+            .iter()
+            .filter_map(|copy| {
+                std::fs::remove_file(copy)
+                    .err()
+                    .map(|e| backup_not_removed(copy, &e))
+            })
+            .collect();
+        match failures.into_iter().next() {
+            Some(first) => Err(first),
+            None => Ok(copies.len()),
         }
-        Ok(copies.len())
     }
 
     /// The caps applied at open.
@@ -545,6 +563,14 @@ pub fn is_v1_backup_name(store_stem: &str, file_name: &str) -> bool {
         .is_some_and(|secs| !secs.is_empty() && secs.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// `copy` could not be deleted (or its folder listed) for `error`.
+fn backup_not_removed(copy: &Path, error: &std::io::Error) -> StoreError {
+    StoreError::BackupNotRemoved {
+        path: copy.display().to_string(),
+        reason: error.to_string(),
+    }
+}
+
 /// The v1 copies beside the store at `path`, oldest name first.
 fn v1_backups_beside(path: &Path) -> std::io::Result<Vec<PathBuf>> {
     let stem = store_stem(path);
@@ -605,6 +631,23 @@ fn keep_v1_copy(conn: Connection, path: &Path) -> Result<PathBuf, StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Re-review N4: a copy that would not go is named with its fix, not
+    /// reported as a failed copy.
+    #[test]
+    fn a_leftover_v1_copy_names_the_file_and_its_fix() {
+        let shown = StoreError::BackupNotRemoved {
+            path: "/data/review-app.v1.7.bak".into(),
+            reason: "permission denied".into(),
+        }
+        .to_string();
+        assert!(
+            shown.contains("remove /data/review-app.v1.7.bak"),
+            "{shown}"
+        );
+        assert!(shown.contains("already upgraded"), "{shown}");
+        assert!(!shown.contains("could not copy"), "{shown}");
+    }
     use proptest::prelude::*;
 
     /// bypass: literal blobs around the nonce length. A blob too short to
