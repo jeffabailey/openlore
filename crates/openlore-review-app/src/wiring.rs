@@ -1072,4 +1072,42 @@ mod tests {
             PageReadAdmission::Admitted
         );
     }
+
+    /// Mutation pin (Phase 5): an account add's start and each scan's bio
+    /// check reach the KPI counters.
+    #[test]
+    fn an_add_start_and_a_scans_account_checks_are_counted() {
+        assert_eq!(
+            counters_of(&LogEvent::AccountAddStarted),
+            [KpiEvent::AccountAddStarted]
+        );
+        let checked = |outcome| counters_of(&LogEvent::ScanAccountChecked(outcome));
+        assert_eq!(checked(AccountCheckOutcome::Passed), Vec::<KpiEvent>::new());
+        assert_eq!(
+            checked(AccountCheckOutcome::Failed),
+            [KpiEvent::ScanAccountFailed]
+        );
+        assert_eq!(
+            checked(AccountCheckOutcome::NotReached),
+            [KpiEvent::ScanAccountUnfinished]
+        );
+    }
+
+    /// Mutation pin (Phase 5): a DID's lock is dropped once nobody holds
+    /// or waits for it, so the map does not grow with every DID seen.
+    #[tokio::test]
+    async fn a_free_scope_lock_is_dropped() {
+        let locks = ScopeLocks::default();
+        drop(locks.hold("did:plc:first").await);
+        let held = locks.hold("did:plc:second").await;
+        let owners: Vec<String> = locks
+            .by_owner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(owners, ["did:plc:second"]);
+        drop(held);
+    }
 }

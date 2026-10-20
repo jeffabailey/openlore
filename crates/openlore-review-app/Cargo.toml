@@ -146,5 +146,11 @@ name = "page_github_requests"
 path = "tests/page_github_requests.rs"
 harness = true
 
+# Phase 5 mutation pins (crafter-owned): page behaviour no suite pinned.
+[[test]]
+name = "page_mutation_pins"
+path = "tests/page_mutation_pins.rs"
+harness = true
+
 [lints]
 workspace = true

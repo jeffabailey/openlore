@@ -385,3 +385,29 @@ fn the_v1_copy_is_deleted_after_the_upgrade() {
     assert_eq!(again.discard_v1_backups(&path).expect("discard"), 0);
     assert!(backups(dir.path()).is_empty());
 }
+
+/// A v1 copy the folder refuses fails the start with the folder's own
+/// reason, not as if every backup name were taken; nothing is migrated.
+#[test]
+#[cfg(unix)]
+fn a_copy_the_folder_refuses_fails_with_the_folders_reason() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, path) = v1_store();
+    let before = dump(&path, &V1_TABLES);
+    let mode = |m| std::fs::Permissions::from_mode(m);
+    std::fs::set_permissions(dir.path(), mode(0o555)).expect("read-only folder");
+    let folder_refuses = std::fs::write(dir.path().join("probe"), b"").is_err();
+    let opened = ReviewStore::open(&path, key()).err();
+    std::fs::set_permissions(dir.path(), mode(0o755)).expect("writable again");
+    if !folder_refuses {
+        return; // root ignores folder permissions: nothing to observe
+    }
+    match opened {
+        Some(adapter_review_store::StoreError::Backup(reason)) => {
+            assert_ne!(reason, "every backup name is taken")
+        }
+        other => panic!("expected the folder's refusal, got {other:?}"),
+    }
+    assert!(backups(dir.path()).is_empty());
+    assert_eq!(dump(&path, &V1_TABLES), before, "the store is still v1");
+}

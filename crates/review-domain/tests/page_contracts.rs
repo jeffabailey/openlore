@@ -962,6 +962,21 @@ fn the_batch_preview_shows_every_record_and_confirms_them_all() {
     assert!(html.contains(NOT_AS_TRUTH_NOTICE));
 }
 
+/// Mutation pin (Phase 5): each confirm names the suggestion its plan
+/// publishes, so a confirm re-aimed at another suggestion publishes nothing.
+#[test]
+fn each_confirm_names_the_suggestion_its_plan_publishes() {
+    let first = plan();
+    let named = format!(
+        r#"name="suggestion" value="{}""#,
+        review_domain::selection::selection_value(first.key())
+    );
+    let single = approval_preview_page(&first, CSRF);
+    assert_eq!(single.matches(&named).count(), 1, "{single}");
+    let batch = batch_preview_page(&[first.clone(), first.clone()], CSRF);
+    assert_eq!(batch.matches(&named).count(), 2, "{batch}");
+}
+
 /// U-45 on the batch page: a write the PDS may have stored is never called
 /// "Not published"; it says it may have been saved and that Retry checks.
 #[test]

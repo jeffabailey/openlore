@@ -160,4 +160,52 @@ mod tests {
         assert_eq!(store.imports("did:plc:priya").unwrap(), [cargo()]);
         assert!(store.imports("did:plc:dmitri").unwrap().is_empty());
     }
+
+    /// A move writes the shown choice only for an account with no saved
+    /// choice yet, then ticks the moved repo; a saved choice is kept as is.
+    #[test]
+    fn a_move_writes_the_shown_choice_only_where_none_was_saved() {
+        use ports::{GithubAccountsWrite, RepoChoiceRead, RepoChoiceWrite};
+        let priya = "did:plc:priya";
+        let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
+        for account in [7, 8] {
+            store
+                .add_or_reverify(
+                    priya,
+                    &format!("login-{account}"),
+                    account,
+                    3,
+                    KpiTally::NONE,
+                )
+                .unwrap();
+        }
+        let choice = |repo_id, name: &str, ticked| SavedRepoChoice {
+            repo_id,
+            full_name: name.into(),
+            ticked,
+        };
+        store
+            .save_choice(priya, 8, &[choice(9, "me/kept", true)], KpiTally::NONE)
+            .unwrap();
+        let shown = [choice(1, "me/shown", false)];
+        for account in [7, 8] {
+            store.add_import(priya, &cargo(), KpiTally::NONE).unwrap();
+            let moved = store
+                .move_import_to_account(priya, &cargo(), account, &shown, KpiTally::NONE)
+                .unwrap();
+            assert!(moved);
+        }
+        let ticks = |account| {
+            let mut rows: Vec<(u64, bool)> = store
+                .saved_choice(priya, account)
+                .unwrap()
+                .iter()
+                .map(|row| (row.repo_id, row.ticked))
+                .collect();
+            rows.sort_unstable();
+            rows
+        };
+        assert_eq!(ticks(7), [(1, false), (2_001, true)]);
+        assert_eq!(ticks(8), [(9, true), (2_001, true)]);
+    }
 }

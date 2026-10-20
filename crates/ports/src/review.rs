@@ -1053,6 +1053,23 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    /// Mutation pin (Phase 5): each stored plan-row status reads back.
+    #[test]
+    fn each_stored_plan_row_status_reads_back() {
+        let read: Vec<Option<PlanRowStatus>> = ["planned", "read", "skipped", "done"]
+            .map(PlanRowStatus::parse)
+            .to_vec();
+        assert_eq!(
+            read,
+            [
+                Some(PlanRowStatus::Planned),
+                Some(PlanRowStatus::Read),
+                Some(PlanRowStatus::Skipped),
+                None
+            ]
+        );
+    }
+
     fn any_status() -> impl Strategy<Value = ScanStatus> {
         proptest::sample::select(ScanStatus::ALL.to_vec())
     }

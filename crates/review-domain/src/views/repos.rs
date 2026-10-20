@@ -441,6 +441,40 @@ fn imports_section(imports: &[ImportedRepo], csrf_token: &str) -> Markup {
 mod tests {
     use super::*;
 
+    /// Mutation pin (Phase 5): only a refused change is a refusal (the
+    /// page answers 422 for it); a save or a removal is not.
+    #[test]
+    fn only_a_refused_change_is_a_refusal() {
+        let over = LimitRefusal {
+            limit: 10,
+            total: 11,
+            excess: 1,
+        };
+        let notices = [
+            (ReposNotice::Saved { reads: 5 }, false),
+            (
+                ReposNotice::ImportRemoved {
+                    repo: "rust-lang/cargo".into(),
+                    deleted_pending: 0,
+                },
+                false,
+            ),
+            (ReposNotice::OverLimit(over), true),
+            (
+                ReposNotice::ImportRefused {
+                    refusal: ImportRefusal::NotFound,
+                    repo: "rust-lang/cargo".into(),
+                },
+                true,
+            ),
+            (ReposNotice::GithubBusy, true),
+            (ReposNotice::ScopeBusy, true),
+        ];
+        for (notice, refusal) in notices {
+            assert_eq!(notice.is_refusal(), refusal, "{notice:?}");
+        }
+    }
+
     // bypass: the wording pins of the DISCUSS mockups, as a table.
     #[test]
     fn saved_and_skipped_lines_count_in_words() {

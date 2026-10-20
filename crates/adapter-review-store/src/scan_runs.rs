@@ -646,4 +646,35 @@ mod tests {
         assert_eq!(store.latest_scan(priya).unwrap(), None);
         assert_eq!(rows_of(sam), 1, "another DID's plan is recorded");
     }
+
+    /// A plan row of either source reads back with that source: an
+    /// account's row with its account, an imported row as its own repo.
+    #[test]
+    fn a_plan_row_reads_back_with_its_source() {
+        let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
+        let priya = "did:plc:priya";
+        let plan = vec![
+            PlannedScanRepo {
+                repo_id: 7,
+                full_name: "priyaraman/tidepool".into(),
+                source: RepoSource::Account(1),
+                outside_default: None,
+            },
+            PlannedScanRepo {
+                repo_id: 2_001,
+                full_name: "rust-lang/cargo".into(),
+                source: RepoSource::Imported(2_001),
+                outside_default: None,
+            },
+        ];
+        store.start_scan(priya, "run-1").unwrap();
+        store.record_plan(priya, "run-1", &plan).unwrap();
+        let read: Vec<PlannedScanRepo> = store
+            .latest_plan(priya)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.repo)
+            .collect();
+        assert_eq!(read, plan);
+    }
 }

@@ -279,6 +279,87 @@ mod tests {
         assert_eq!((list.forks_skipped, list.archived_skipped), (1, 1));
     }
 
+    /// Mutation pins (Phase 5): the choose list's counts, room, "new"
+    /// marks and default comparison, on the DISCUSS listing.
+    #[test]
+    fn the_choose_list_marks_new_repos_and_the_room_its_default_ticks_leave() {
+        let listing = [
+            listed(1, 412, false, false),
+            listed(2, 900, true, false),
+            listed(3, 88, false, false),
+            listed(5, 51, false, false),
+            listed(6, 37, false, false),
+            listed(7, 12, false, false),
+            listed(8, 3, false, false),
+        ];
+        assert_eq!(eligible_count(&listing), 6);
+
+        let default = choose_list(&listing, AccountChoice::Default);
+        assert!(default.rows.iter().all(|row| !row.new_since_choice));
+        assert_eq!(default.room, TicksRoom::Fits);
+
+        let whole_top = [1, 3, 5, 6, 7];
+        let fits = choose_list(&listing, AccountChoice::DefaultTicks(&whole_top));
+        assert_eq!(fits.room, TicksRoom::Fits);
+        assert!(fits.rows.iter().all(|row| !row.new_since_choice));
+        let cut = choose_list(&listing, AccountChoice::DefaultTicks(&whole_top[..2]));
+        assert_eq!(cut.room, TicksRoom::LimitReached);
+
+        let saved = choice_to_save(&listing[..5], &whole_top.into_iter().collect());
+        let new: Vec<u64> = choose_list(&listing, AccountChoice::of(&saved))
+            .rows
+            .iter()
+            .filter(|row| row.new_since_choice)
+            .map(|row| row.repo_id)
+            .collect();
+        assert_eq!(new, [7, 8]);
+        assert!(!differs_from_default(
+            &listing,
+            &choice_to_save(&listing, &whole_top.into_iter().collect())
+        ));
+        assert!(differs_from_default(
+            &listing,
+            &choice_to_save(&listing, &[1, 8].into_iter().collect())
+        ));
+    }
+
+    /// Mutation pin (Phase 5, KPI-RRA-1): only the repos of an account
+    /// after the owner's first are tagged as another account's.
+    #[test]
+    fn only_repos_of_a_later_account_are_tagged_other_account() {
+        let check = |owner: u64, ids: [u64; 2]| {
+            AccountCheck::Passed(Listing::of(
+                ids.iter()
+                    .map(|id| ListedRepo {
+                        owner_id: owner,
+                        ..listed(*id, 10, false, false)
+                    })
+                    .collect(),
+            ))
+        };
+        let account = |github_user_id| ScanAccount {
+            github_user_id,
+            saved: SavedTicks::NeverSaved,
+            eligible_seen: None,
+        };
+        let scope = FrozenScope {
+            accounts: vec![account(1), account(2)],
+            imports: Vec::new(),
+            cap: SCAN_REPO_CAP,
+        };
+        let plan = scope.plan(&[check(1, [11, 12]), check(2, [21, 22])]);
+        let tags: Vec<(u64, u64, Option<OutsideDefault>)> = plan
+            .owned_repos()
+            .iter()
+            .map(|(account_id, repo)| (*account_id, repo.repo_id, repo.outside_default))
+            .collect();
+        let other = Some(OutsideDefault::OtherAccount);
+        assert_eq!(
+            tags,
+            [(1, 11, None), (1, 12, None), (2, 21, other), (2, 22, other)]
+        );
+    }
+
     fn plan_source() -> impl Strategy<Value = PlanSource> {
         prop_oneof![
             (1u64..5).prop_map(PlanSource::Account),

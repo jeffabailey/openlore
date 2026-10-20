@@ -812,4 +812,78 @@ mod tests {
             prop_assert_eq!(summary.contains(&declined), declined_hidden > 0);
         }
     }
+
+    /// Mutation pin (Phase 5): the over-limit refusal names the cap, the
+    /// total and how many to untick.
+    #[test]
+    fn an_over_limit_scan_says_how_many_to_untick() {
+        let refusal = LimitRefusal {
+            limit: 10,
+            total: 12,
+            excess: 2,
+        };
+        assert_eq!(
+            scan_over_limit_message(refusal),
+            "You can choose up to 10 repos per scan in total. You have 12 chosen. Untick 2 to scan."
+        );
+    }
+
+    /// Mutation pin (Phase 5): each card names the account its own
+    /// suggestion came from, not another card's.
+    #[test]
+    fn each_card_names_the_account_its_suggestion_came_from() {
+        let suggestion = |subject: &str| Suggestion {
+            key: SuggestionKey {
+                subject: subject.into(),
+                predicate: "embodiesPhilosophy".into(),
+                object: "org.openlore.philosophy.memory-safety".into(),
+            },
+            confidence_bp: 2500,
+            evidence: vec![],
+            why: vec![],
+            source_repo: subject.trim_start_matches("github:").into(),
+        };
+        let pending = [
+            suggestion("github:priyaraman/tidepool"),
+            suggestion("github:priya-tidal/kelp"),
+        ];
+        let card_accounts = [
+            (pending[0].key.clone(), "priyaraman"),
+            (pending[1].key.clone(), "priya-tidal"),
+        ];
+        let page = review_page_of_scan(
+            &QueueView {
+                handle: "priyaraman.bsky.social",
+                csrf_token: "csrf",
+                github: GithubStep::Verified {
+                    login: "priyaraman",
+                },
+                latest_scan: None,
+                pending: &pending,
+                tally: Tally {
+                    pending: 2,
+                    declined: 0,
+                    published: 0,
+                    retracted: 0,
+                },
+                notice: None,
+            },
+            &ScanDetails {
+                card_accounts: &card_accounts,
+                ..ScanDetails::default()
+            },
+        );
+        let cards: Vec<&str> = page.split("<article").skip(1).collect();
+        assert_eq!(cards.len(), 2, "{page}");
+        assert!(
+            cards[0].contains("from github.com/priyaraman<"),
+            "{}",
+            cards[0]
+        );
+        assert!(
+            cards[1].contains("from github.com/priya-tidal<"),
+            "{}",
+            cards[1]
+        );
+    }
 }

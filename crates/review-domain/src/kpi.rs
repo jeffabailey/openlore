@@ -457,6 +457,151 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    /// Mutation pins (review-app-repos-and-accounts Phase 5): each refusal
+    /// counts its own KPI event, and the operator labels are the documented
+    /// names.
+    #[test]
+    fn each_account_add_refusal_counts_and_names_its_kind() {
+        let counted = [
+            (
+                OwnershipRefusal::DidMissing,
+                Some(AccountAddRefused::DidMissing),
+            ),
+            (OwnershipRefusal::NoBio, Some(AccountAddRefused::DidMissing)),
+            (
+                OwnershipRefusal::DifferentDid("did:plc:x".into()),
+                Some(AccountAddRefused::DidMissing),
+            ),
+            (
+                OwnershipRefusal::IdentityChanged,
+                Some(AccountAddRefused::DidMissing),
+            ),
+            (
+                OwnershipRefusal::LinkedToAnotherAccount,
+                Some(AccountAddRefused::HeldByAnother),
+            ),
+            (
+                OwnershipRefusal::RateLimited,
+                Some(AccountAddRefused::Unreachable),
+            ),
+            (
+                OwnershipRefusal::GithubUnavailable,
+                Some(AccountAddRefused::Unreachable),
+            ),
+            (OwnershipRefusal::AccountNotFound, None),
+            (OwnershipRefusal::TooManyAttempts, None),
+        ];
+        for (refusal, expected) in counted {
+            assert_eq!(
+                AccountAddRefused::of_check(&refusal),
+                expected,
+                "{refusal:?}"
+            );
+        }
+        let labels: Vec<&str> = [
+            AccountAddRefused::DidMissing,
+            AccountAddRefused::HeldByAnother,
+            AccountAddRefused::AlreadyListed,
+            AccountAddRefused::AtLimit,
+            AccountAddRefused::Unreachable,
+        ]
+        .map(AccountAddRefused::label)
+        .to_vec();
+        assert_eq!(
+            labels,
+            [
+                "did_missing",
+                "held_by_another",
+                "already_listed",
+                "at_limit",
+                "unreachable"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_removed_import_counts_the_day_bucket_it_was_held_for() {
+        const DAY: u64 = 24 * 60 * 60;
+        let buckets: Vec<KpiEvent> = [0, DAY - 1, DAY, 14 * DAY - 1, 14 * DAY]
+            .map(import_removed_age_event)
+            .to_vec();
+        assert_eq!(
+            buckets,
+            [
+                KpiEvent::ImportRemovedAgeLt1d,
+                KpiEvent::ImportRemovedAgeLt1d,
+                KpiEvent::ImportRemovedAgeLt14d,
+                KpiEvent::ImportRemovedAgeLt14d,
+                KpiEvent::ImportRemovedAgeGe14d,
+            ]
+        );
+    }
+
+    #[test]
+    fn each_import_refusal_but_a_repeat_counts_its_kind() {
+        let over = crate::repo_scope::LimitRefusal {
+            limit: 30,
+            total: 31,
+            excess: 1,
+        };
+        let counted = [
+            (ImportRefusal::Shape, Some(KpiEvent::ImportRefusedShape)),
+            (
+                ImportRefusal::NotFound,
+                Some(KpiEvent::ImportRefusedNotFound),
+            ),
+            (
+                ImportRefusal::Unreachable,
+                Some(KpiEvent::ImportRefusedUnreachable),
+            ),
+            (
+                ImportRefusal::OwnedByListedAccount,
+                Some(KpiEvent::ImportRefusedOwned),
+            ),
+            (
+                ImportRefusal::OverLimit(over),
+                Some(KpiEvent::ImportRefusedOverLimit),
+            ),
+            (ImportRefusal::AlreadyImported, None),
+        ];
+        for (refusal, expected) in counted {
+            assert_eq!(import_refusal_event(refusal), expected, "{refusal:?}");
+        }
+    }
+
+    #[test]
+    fn a_refused_publish_is_named_by_its_reason() {
+        let labels = [
+            (SigningRefusal::NotOwnedByListedAccount, "not_owned"),
+            (SigningRefusal::OrgOwned, "org_owned"),
+            (SigningRefusal::RepoGone, "repo_gone"),
+            (
+                SigningRefusal::RepoRenamed {
+                    now: "o/new".into(),
+                },
+                "repo_renamed",
+            ),
+            (SigningRefusal::BioNoLongerHolds(7), "bio_failed"),
+            (SigningRefusal::Unfinished, "unreachable"),
+        ];
+        for (refusal, label) in labels {
+            assert_eq!(publish_refusal_label(&refusal), label);
+        }
+    }
+
+    #[test]
+    fn a_failed_or_unfinished_account_check_counts_and_a_passed_one_does_not() {
+        assert_eq!(account_check_event(AccountCheckOutcome::Passed), None);
+        assert_eq!(
+            account_check_event(AccountCheckOutcome::Failed),
+            Some(KpiEvent::ScanAccountFailed)
+        );
+        assert_eq!(
+            account_check_event(AccountCheckOutcome::NotReached),
+            Some(KpiEvent::ScanAccountUnfinished)
+        );
+    }
+
     fn event_name() -> impl Strategy<Value = String> {
         prop_oneof![
             proptest::sample::select(KpiEvent::ALL.to_vec()).prop_map(|e| e.name().to_string()),

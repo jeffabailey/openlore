@@ -853,6 +853,24 @@ mod tests {
         assert!(parse_listed_repos(&serde_json::json!({"message": "x"})).is_err());
     }
 
+    // bypass: a boundary example (an id of 0 is the one non-positive u64).
+    #[test]
+    fn a_zero_repo_or_owner_id_is_not_a_positive_id() {
+        let listed = parse_listed_repos(&serde_json::json!([
+            {"id": 0, "owner": {"id": 1}, "full_name": "o/zero-repo-id"},
+            {"id": 1, "owner": {"id": 0}, "full_name": "o/zero-owner-id"},
+            {"id": 1, "owner": {"id": 1}, "full_name": "o/ones"}
+        ]))
+        .unwrap();
+        let names: Vec<&str> = listed.iter().map(|r| r.repo.full_name.as_str()).collect();
+        assert_eq!(names, ["o/ones"]);
+        let read = parse_repo_read(&serde_json::json!({
+            "id": 0, "full_name": "o/r",
+            "owner": {"id": 1, "login": "o", "type": "User"}
+        }));
+        assert!(read.is_err(), "a repo body with id 0 is refused");
+    }
+
     proptest::proptest! {
         /// Universe: (now, seconds until expiry). The header GitHub sends
         /// reads back as the whole days left, and the warning fires exactly
