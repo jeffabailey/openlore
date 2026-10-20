@@ -1,8 +1,10 @@
-//! The signing refusal and its hand-off (owner-only-signing, ADR-086 §10):
-//! why nothing was signed and who can sign instead, rendered from the pure
-//! [`AuthorityRefusal`] data. Wording pins: `tests/acceptance/support/authority.rs`.
+//! The signing refusal and its hand-off (owner-only-signing, ADR-086 §5/§10):
+//! why nothing was signed and who can sign instead — or the re-check that
+//! lets the signer sign — rendered from the pure [`AuthorityRefusal`] data.
+//! Wording pins: `tests/acceptance/support/authority.rs`.
 
-use claim_domain::authority::{AuthorityRefusal, Unattested, WhoCanSign};
+use chrono::{DateTime, Utc};
+use claim_domain::authority::{AuthorityRefusal, Unattested, WhoCanSign, SIGNING_WINDOW_DAYS};
 
 /// The fixed hand-off lead.
 pub const CAN_BE_SIGNED_BY: &str = "Can be signed by";
@@ -29,14 +31,35 @@ fn hand_off(can_sign: &WhoCanSign) -> String {
     }
 }
 
+/// Why the local check does not let the signer sign about `subject` now.
+fn recheck_reason(subject: &str, last_checked: Option<DateTime<Utc>>) -> String {
+    match last_checked {
+        Some(checked_at) => format!(
+            "authority was last checked {} for {subject}, more than {SIGNING_WINDOW_DAYS} days ago",
+            checked_at.format("%Y-%m-%d %H:%M UTC")
+        ),
+        None => format!("authority has not been checked here for {subject}"),
+    }
+}
+
 /// Render a refused signature: nothing was signed or published, why, and the
-/// hand-off.
+/// hand-off or the re-check command.
 pub fn render_signing_refused(refusal: &AuthorityRefusal) -> String {
-    format!(
-        "Not signed: {}. Nothing was signed or published.\n{}\n",
-        refusal_reason(&refusal.subject, refusal.reason),
-        hand_off(&refusal.can_sign)
-    )
+    let (why, next) = match refusal {
+        AuthorityRefusal::Unattested {
+            subject,
+            reason,
+            can_sign,
+        } => (refusal_reason(subject, *reason), hand_off(can_sign)),
+        AuthorityRefusal::Recheck {
+            subject,
+            last_checked,
+        } => (
+            recheck_reason(subject, *last_checked),
+            format!("Re-check it with `openlore authority verify --subject {subject}`, then sign again."),
+        ),
+    };
+    format!("Not signed: {why}. Nothing was signed or published.\n{next}\n")
 }
 
 #[cfg(test)]
@@ -51,7 +74,7 @@ mod tests {
             Unattested::LinkNotVerified,
             Unattested::LoginNotCurrent,
         ] {
-            let text = render_signing_refused(&AuthorityRefusal {
+            let text = render_signing_refused(&AuthorityRefusal::Unattested {
                 subject: "github:rachelk".to_string(),
                 reason,
                 can_sign: WhoCanSign::OwnerAfterLinking {

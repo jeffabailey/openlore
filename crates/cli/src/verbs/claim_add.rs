@@ -123,9 +123,10 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
     };
     match requirement(claim) {
         Requirement::Person(person) => {
-            let links = wiring.signer_linked_accounts(wiring.clock.now_utc())?;
+            let now = wiring.clock.now_utc();
+            let links = wiring.signer_linked_accounts(now)?;
             if let Err(refusal) =
-                may_sign_from_checks(&wiring.identity.author_did().0, &person, &links)
+                may_sign_from_checks(&wiring.identity.author_did().0, &person, &links, now)
             {
                 eprint!("{}", render_signing_refused(&refusal));
                 return Ok(ClaimAddOutcome {

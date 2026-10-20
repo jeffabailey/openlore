@@ -409,7 +409,9 @@ fn a_hand_authored_adherence_is_already_signed_and_never_superseded() {
 #[test]
 fn with_two_current_inferred_claims_the_latest_is_the_one_superseded() {
     // GIVEN two inferred-shape claims for the pair, at T1 and T2. Owner-only
-    // signing (ADR-086): Maria owns the BurntSushi account, linked at T1.
+    // signing (ADR-086): Maria owns the BurntSushi account, linked at T1 and
+    // re-checked at T2 and T3, so each signature rests on a check at most 7
+    // days old (A-6).
     let world = LinkWorld::with(&[BURNTSUSHI_GH]);
     given_i_linked(&world, BURNTSUSHI_GH, Some(T1));
     let env = &world.env;
@@ -429,6 +431,7 @@ fn with_two_current_inferred_claims_the_latest_is_the_one_superseded() {
         &evidence,
         Some(T1),
     );
+    given_i_verified(&world, Some(T2));
     let latest = given_i_signed(
         env,
         "github:BurntSushi",
@@ -439,6 +442,7 @@ fn with_two_current_inferred_claims_the_latest_is_the_one_superseded() {
         Some(T2),
     );
     given_i_signed_repo_claim(env, "rust-lang/regex", MEMORY_SAFETY, 0.60, None);
+    given_i_verified(&world, Some(T3));
     let files_before = claim_files(env);
 
     // WHEN Maria signs the STRONGER candidate.

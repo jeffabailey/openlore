@@ -253,7 +253,6 @@ fn jeff_can_always_dispute_or_withdraw_whatever_authority_he_holds() {
 ///     | 20 September 09:00      | nothing is signed (a check dated after now counts as missing); same command  |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing PS-4: pending DELIVER"]
 fn with_the_network_off_jeff_signs_about_himself_only_from_a_check_at_most_7_days_old() {
     let own = Subject::Person(JEFF_GH);
     let command = verify_command(own);

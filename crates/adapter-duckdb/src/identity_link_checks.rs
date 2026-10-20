@@ -293,6 +293,7 @@ fn evidence_of(link: &IdentityLink, latest: &[LinkCheck]) -> LinkedAccountEviden
             .map(|check| LatestLinkCheck {
                 login_seen: check.login_seen.clone(),
                 verdict: check.verdict,
+                checked_at: check.checked_at,
             }),
     }
 }
@@ -418,7 +419,8 @@ mod tests {
             own.latest_check,
             Some(LatestLinkCheck {
                 login_seen: "jeff-b".to_string(),
-                verdict: CheckVerdict::Verified
+                verdict: CheckVerdict::Verified,
+                checked_at: Utc.with_ymd_and_hms(2026, 10, 2, 9, 0, 0).unwrap(),
             })
         );
         assert_eq!(own.linked_login, "jeffbailey");

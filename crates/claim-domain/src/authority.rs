@@ -15,7 +15,11 @@
 //! [`may_sign_from_checks`] mints the SAME [`SigningPermit`] or returns the
 //! hand-off data of an [`AuthorityRefusal`].
 //!
-//! PURE: no clock, no store, no network.
+//! PURE: no clock, no store, no network — `now` arrives as data.
+
+use std::cmp::Reverse;
+
+use chrono::{DateTime, Utc};
 
 use crate::identity_link::{bio_verdict, link_predicate, BioVerdict, CheckVerdict};
 use crate::references::ReferenceStance;
@@ -344,6 +348,8 @@ pub struct LatestLinkCheck {
     /// The login GitHub reported on that check (a rename shows here).
     pub login_seen: String,
     pub verdict: CheckVerdict,
+    /// When this reader made the check.
+    pub checked_at: DateTime<Utc>,
 }
 
 /// Why the signer holds no person authority (ADR-087 §1).
@@ -361,52 +367,70 @@ pub enum Unattested {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PersonAuthority {
     /// The signer owns the account: a verified link whose latest check saw
-    /// the subject login.
+    /// the subject login, made at `checked_at`.
     Attested {
         github_id: u64,
+        checked_at: DateTime<Utc>,
     },
+    /// The signer's link to the account has no check here yet.
+    NotChecked,
     Unattested(Unattested),
 }
 
 /// Does the signer own the account `person` names? Only when one of `links`
 /// has a latest check that is verified AND saw the subject login (letter case
 /// aside, as GitHub compares logins). Every verified link counts, so a
-/// contested account still attests each verified DID (UC-2).
-pub fn classify_person(person: &PersonSubject, links: &[LinkedAccountEvidence]) -> PersonAuthority {
+/// contested account still attests each verified DID (UC-2); of several, the
+/// most recently checked is the one the signer stands on. A check dated
+/// after `now` counts as missing.
+pub fn classify_person(
+    person: &PersonSubject,
+    links: &[LinkedAccountEvidence],
+    now: DateTime<Utc>,
+) -> PersonAuthority {
     links
         .iter()
-        .filter_map(|link| link_standing(person.login(), link))
+        .filter_map(|link| link_standing(person.login(), link, now))
         .min_by_key(standing_rank)
         .unwrap_or(PersonAuthority::Unattested(Unattested::NoLink))
 }
 
 /// What one link says about `login`; `None` when it names another account.
-fn link_standing(login: &str, link: &LinkedAccountEvidence) -> Option<PersonAuthority> {
+fn link_standing(
+    login: &str,
+    link: &LinkedAccountEvidence,
+    now: DateTime<Utc>,
+) -> Option<PersonAuthority> {
     let names_login = |other: &str| other.eq_ignore_ascii_case(login);
-    match &link.latest_check {
+    let current_check = link
+        .latest_check
+        .as_ref()
+        .filter(|check| check.checked_at <= now);
+    match current_check {
         Some(check) if names_login(&check.login_seen) => Some(match check.verdict {
             CheckVerdict::Verified => PersonAuthority::Attested {
                 github_id: link.github_id,
+                checked_at: check.checked_at,
             },
             _ => PersonAuthority::Unattested(Unattested::LinkNotVerified),
         }),
         Some(_) if names_login(&link.linked_login) => {
             Some(PersonAuthority::Unattested(Unattested::LoginNotCurrent))
         }
-        None if names_login(&link.linked_login) => {
-            Some(PersonAuthority::Unattested(Unattested::LinkNotVerified))
-        }
+        None if names_login(&link.linked_login) => Some(PersonAuthority::NotChecked),
         _ => None,
     }
 }
 
-/// The strongest standing wins: attested, then the reasons nearest to it.
-fn standing_rank(standing: &PersonAuthority) -> u8 {
+/// The strongest standing wins: attested (the most recent check first), then
+/// the reasons nearest to it.
+fn standing_rank(standing: &PersonAuthority) -> (u8, Reverse<Option<DateTime<Utc>>>) {
     match standing {
-        PersonAuthority::Attested { .. } => 0,
-        PersonAuthority::Unattested(Unattested::LinkNotVerified) => 1,
-        PersonAuthority::Unattested(Unattested::LoginNotCurrent) => 2,
-        PersonAuthority::Unattested(Unattested::NoLink) => 3,
+        PersonAuthority::Attested { checked_at, .. } => (0, Reverse(Some(*checked_at))),
+        PersonAuthority::NotChecked => (1, Reverse(None)),
+        PersonAuthority::Unattested(Unattested::LinkNotVerified) => (2, Reverse(None)),
+        PersonAuthority::Unattested(Unattested::LoginNotCurrent) => (3, Reverse(None)),
+        PersonAuthority::Unattested(Unattested::NoLink) => (4, Reverse(None)),
     }
 }
 
@@ -417,37 +441,72 @@ pub enum WhoCanSign {
     OwnerAfterLinking { login: String },
 }
 
-/// Why no permit was minted from local checks, with who can sign instead.
+/// The signing window (A-6, DWD-OOS-14): the signer signs from a local check
+/// at most this many days old — inclusive, at minute granularity.
+pub const SIGNING_WINDOW_DAYS: i64 = 7;
+
+/// Why no permit was minted from local checks (`subject`: as signed).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuthorityRefusal {
-    /// The subject as signed.
-    pub subject: String,
-    pub reason: Unattested,
-    pub can_sign: WhoCanSign,
+pub enum AuthorityRefusal {
+    /// The signer holds no authority over the subject: why, and who can sign
+    /// instead.
+    Unattested {
+        subject: String,
+        reason: Unattested,
+        can_sign: WhoCanSign,
+    },
+    /// The authority rests on no local check within the signing window: the
+    /// signer re-checks it (`openlore authority verify`) before signing.
+    /// `last_checked`: the check that is too old (`None`: never checked, or
+    /// only dated in the future).
+    Recheck {
+        subject: String,
+        last_checked: Option<DateTime<Utc>>,
+    },
 }
 
-/// The CLI gate (ADR-086 §4): may `signer` sign an assertion about `person`,
-/// judged from this reader's local checks of the signer's `links`? Mints the
-/// same [`SigningPermit`] as [`may_sign`]; refuses with the hand-off data.
+/// The CLI gate (ADR-086 §4-5): may `signer` sign an assertion about
+/// `person` at `now`, judged from this reader's local checks of the signer's
+/// `links`? Mints the same [`SigningPermit`] as [`may_sign`]; refuses with
+/// the hand-off data, or asks for a re-check.
 pub fn may_sign_from_checks(
     signer: &str,
     person: &PersonSubject,
     links: &[LinkedAccountEvidence],
+    now: DateTime<Utc>,
 ) -> Result<SigningPermit, AuthorityRefusal> {
-    match classify_person(person, links) {
-        PersonAuthority::Attested { github_id } => Ok(SigningPermit {
+    let subject = person.uri().to_string();
+    match classify_person(person, links, now) {
+        PersonAuthority::Attested {
+            github_id,
+            checked_at,
+        } if within_signing_window(checked_at, now) => Ok(SigningPermit {
             signer: signer.to_string(),
-            subject: person.uri().to_string(),
+            subject,
             basis: PermitBasis::Owner(github_id),
         }),
-        PersonAuthority::Unattested(reason) => Err(AuthorityRefusal {
-            subject: person.uri().to_string(),
+        PersonAuthority::Attested { checked_at, .. } => Err(AuthorityRefusal::Recheck {
+            subject,
+            last_checked: Some(checked_at),
+        }),
+        PersonAuthority::NotChecked => Err(AuthorityRefusal::Recheck {
+            subject,
+            last_checked: None,
+        }),
+        PersonAuthority::Unattested(reason) => Err(AuthorityRefusal::Unattested {
+            subject,
             reason,
             can_sign: WhoCanSign::OwnerAfterLinking {
                 login: person.login().to_string(),
             },
         }),
     }
+}
+
+/// A check made at `checked_at` (not after `now`) is at most
+/// [`SIGNING_WINDOW_DAYS`] old, counted in whole minutes.
+fn within_signing_window(checked_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    (now - checked_at).num_minutes() <= SIGNING_WINDOW_DAYS * 24 * 60
 }
 
 #[cfg(test)]
@@ -536,9 +595,15 @@ mod tests {
 #[cfg(test)]
 mod gate_from_checks_tests {
     use super::*;
+    use chrono::{Duration, TimeZone};
     use proptest::prelude::*;
 
     const JEFF: &str = "did:plc:jeff";
+    const WINDOW_MINUTES: i64 = SIGNING_WINDOW_DAYS * 24 * 60;
+
+    fn now() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 10, 8, 9, 0, 0).unwrap()
+    }
 
     fn assertion_about(subject: &str) -> ClaimShape<'_> {
         ClaimShape {
@@ -555,10 +620,11 @@ mod gate_from_checks_tests {
         }
     }
 
-    fn link(
+    fn checked(
         github_id: u64,
         linked: &str,
         check: Option<(&str, CheckVerdict)>,
+        checked_at: DateTime<Utc>,
     ) -> LinkedAccountEvidence {
         LinkedAccountEvidence {
             github_id,
@@ -566,8 +632,17 @@ mod gate_from_checks_tests {
             latest_check: check.map(|(login_seen, verdict)| LatestLinkCheck {
                 login_seen: login_seen.to_string(),
                 verdict,
+                checked_at,
             }),
         }
+    }
+
+    fn link(
+        github_id: u64,
+        linked: &str,
+        check: Option<(&str, CheckVerdict)>,
+    ) -> LinkedAccountEvidence {
+        checked(github_id, linked, check, now())
     }
 
     fn verdict() -> impl Strategy<Value = CheckVerdict> {
@@ -579,35 +654,55 @@ mod gate_from_checks_tests {
             .prop_map(str::to_string)
     }
 
+    /// The age of a check in minutes, heavy on the window's edges (negative:
+    /// dated in the future).
+    fn age_minutes() -> impl Strategy<Value = i64> {
+        prop_oneof![
+            Just(0_i64),
+            Just(WINDOW_MINUTES),
+            Just(WINDOW_MINUTES + 1),
+            Just(-1_i64),
+            -60_i64..=20_000,
+        ]
+    }
+
     fn evidence() -> impl Strategy<Value = LinkedAccountEvidence> {
-        (1u64..4, login(), proptest::option::of((login(), verdict()))).prop_map(
-            |(github_id, linked_login, check)| LinkedAccountEvidence {
+        (
+            1u64..4,
+            login(),
+            proptest::option::of((login(), verdict(), age_minutes())),
+        )
+            .prop_map(|(github_id, linked_login, check)| LinkedAccountEvidence {
                 github_id,
                 linked_login,
-                latest_check: check.map(|(login_seen, verdict)| LatestLinkCheck {
+                latest_check: check.map(|(login_seen, verdict, age)| LatestLinkCheck {
                     login_seen,
                     verdict,
+                    checked_at: now() - Duration::minutes(age),
                 }),
-            },
-        )
+            })
+    }
+
+    /// The link's latest check as of `now()`: one dated in the future is missing.
+    fn current_check(link: &LinkedAccountEvidence) -> Option<&LatestLinkCheck> {
+        link.latest_check
+            .as_ref()
+            .filter(|check| check.checked_at <= now())
     }
 
     /// ADR-087 §1 stated over the evidence, independently of the gate: the
-    /// reason a refusal about `login` gives. A link whose latest check saw the
-    /// login unverified, or that was never checked under its linked login, is
-    /// not verified; a link checked since under another login names a login
-    /// that is no longer current; no link naming the login is no link at all.
+    /// reason a refusal about `login` gives when no link attests it. A link
+    /// whose current check saw the login unverified is not verified; a link
+    /// checked since under another login names a login that is no longer
+    /// current; no link naming the login is no link at all.
     fn adr_087_reason(login: &str, links: &[LinkedAccountEvidence]) -> Unattested {
         let same = |other: &str| other.eq_ignore_ascii_case(login);
-        let not_verified = links.iter().any(|l| match &l.latest_check {
-            Some(check) => same(&check.login_seen) && check.verdict != CheckVerdict::Verified,
-            None => same(&l.linked_login),
+        let not_verified = links.iter().any(|l| {
+            current_check(l)
+                .is_some_and(|c| same(&c.login_seen) && c.verdict != CheckVerdict::Verified)
         });
         let renamed_since = links.iter().any(|l| {
-            same(&l.linked_login)
-                && l.latest_check
-                    .as_ref()
-                    .is_some_and(|c| !same(&c.login_seen))
+            same(&l.linked_login) && current_check(l).is_some_and(|c| !same(&c.login_seen))
         });
         if not_verified {
             Unattested::LinkNotVerified
@@ -621,39 +716,55 @@ mod gate_from_checks_tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(256))]
 
-        /// A permit exists iff some link's LATEST check is verified and saw
-        /// the subject login; its basis is that account. A refusal names the
-        /// subject, says the ADR-087 §1 reason and hands off to the subject
-        /// login's owner — never to the signer.
+        /// A permit exists iff some link's current check (not dated after
+        /// now) is verified, saw the subject login and is at most 7 days old;
+        /// its basis is that account. An owner whose checks are all older
+        /// asks for a re-check naming the latest; a link never checked (or
+        /// checked only in the future) asks for one with no date; otherwise
+        /// the refusal names the subject, says the ADR-087 §1 reason and
+        /// hands off to the subject login's owner — never to the signer.
         #[test]
-        fn a_permit_needs_a_verified_latest_check_that_saw_the_subject_login(
+        fn a_permit_needs_a_verified_current_check_within_the_window(
             subject_login in login(),
             links in proptest::collection::vec(evidence(), 0..4),
         ) {
             let subject = format!("github:{subject_login}");
-            let owners: Vec<u64> = links
+            let same = |other: &str| other.eq_ignore_ascii_case(&subject_login);
+            let owners: Vec<(u64, DateTime<Utc>)> = links
                 .iter()
-                .filter(|l| l.latest_check.as_ref().is_some_and(|c| {
-                    c.verdict == CheckVerdict::Verified
-                        && c.login_seen.eq_ignore_ascii_case(&subject_login)
-                }))
-                .map(|l| l.github_id)
+                .filter_map(|l| current_check(l).map(|c| (l.github_id, c)))
+                .filter(|(_, c)| c.verdict == CheckVerdict::Verified && same(&c.login_seen))
+                .map(|(id, c)| (id, c.checked_at))
                 .collect();
-            match may_sign_from_checks(JEFF, &person(&subject), &links) {
+            let fresh: Vec<u64> = owners
+                .iter()
+                .filter(|(_, at)| (now() - *at).num_minutes() <= WINDOW_MINUTES)
+                .map(|(id, _)| *id)
+                .collect();
+            let never_checked = links
+                .iter()
+                .any(|l| current_check(l).is_none() && same(&l.linked_login));
+            match may_sign_from_checks(JEFF, &person(&subject), &links, now()) {
                 Ok(permit) => {
                     let PermitBasis::Owner(id) = permit.basis();
-                    prop_assert!(owners.contains(&id), "{links:?}");
+                    prop_assert!(fresh.contains(&id), "{links:?}");
                     prop_assert_eq!(permit.subject(), subject.as_str());
                     prop_assert_eq!(permit.signer(), JEFF);
                 }
                 Err(refusal) => {
-                    prop_assert!(owners.is_empty(), "{links:?}");
-                    prop_assert_eq!(refusal.reason, adr_087_reason(&subject_login, &links));
-                    prop_assert_eq!(refusal.subject, subject);
-                    prop_assert_eq!(
-                        refusal.can_sign,
-                        WhoCanSign::OwnerAfterLinking { login: subject_login }
-                    );
+                    prop_assert!(fresh.is_empty(), "{links:?}");
+                    let expected = if let Some(latest) = owners.iter().map(|(_, at)| *at).max() {
+                        AuthorityRefusal::Recheck { subject, last_checked: Some(latest) }
+                    } else if never_checked {
+                        AuthorityRefusal::Recheck { subject, last_checked: None }
+                    } else {
+                        AuthorityRefusal::Unattested {
+                            subject,
+                            reason: adr_087_reason(&subject_login, &links),
+                            can_sign: WhoCanSign::OwnerAfterLinking { login: subject_login },
+                        }
+                    };
+                    prop_assert_eq!(refusal, expected, "{:?}", links);
                 }
             }
         }
@@ -697,10 +808,6 @@ mod gate_from_checks_tests {
                 Unattested::LinkNotVerified,
             ),
             (
-                vec![link(1, "jeffbailey", None)],
-                Unattested::LinkNotVerified,
-            ),
-            (
                 vec![link(
                     1,
                     "jeffbailey",
@@ -710,8 +817,48 @@ mod gate_from_checks_tests {
             ),
         ];
         for (links, reason) in cases {
-            let refused = may_sign_from_checks(JEFF, &jeff, &links).unwrap_err();
-            assert_eq!(refused.reason, reason, "{links:?}");
+            let refused = may_sign_from_checks(JEFF, &jeff, &links, now()).unwrap_err();
+            let AuthorityRefusal::Unattested { reason: got, .. } = refused else {
+                panic!("{links:?} is unattested, got {refused:?}");
+            };
+            assert_eq!(got, reason, "{links:?}");
+        }
+    }
+
+    // bypass: the window's edges at minute granularity (A-6, DWD-OOS-14).
+    #[test]
+    fn the_window_holds_seven_days_to_the_minute_and_nothing_dated_after_now() {
+        let jeff = person("github:jeffbailey");
+        let window = Duration::minutes(WINDOW_MINUTES);
+        let cases = [
+            (Duration::zero(), true),
+            (window, true),
+            (window + Duration::seconds(59), true),
+            (window + Duration::minutes(1), false),
+            (Duration::seconds(-30), false),
+            (Duration::minutes(-1), false),
+        ];
+        for (age, permitted) in cases {
+            let checked_at = now() - age;
+            let links = [checked(
+                1,
+                "jeffbailey",
+                Some(("jeffbailey", CheckVerdict::Verified)),
+                checked_at,
+            )];
+            let got = may_sign_from_checks(JEFF, &jeff, &links, now());
+            let expected = match (permitted, checked_at <= now()) {
+                (true, _) => Ok(PermitBasis::Owner(1)),
+                (false, true) => Err(AuthorityRefusal::Recheck {
+                    subject: "github:jeffbailey".to_string(),
+                    last_checked: Some(checked_at),
+                }),
+                (false, false) => Err(AuthorityRefusal::Recheck {
+                    subject: "github:jeffbailey".to_string(),
+                    last_checked: None,
+                }),
+            };
+            assert_eq!(got.map(|p| p.basis()), expected, "age {age}");
         }
     }
 
@@ -723,7 +870,7 @@ mod gate_from_checks_tests {
             "jeffbailey",
             Some(("jeff-b", CheckVerdict::Verified)),
         )];
-        let permit = may_sign_from_checks(JEFF, &person("github:jeff-b"), &renamed);
+        let permit = may_sign_from_checks(JEFF, &person("github:jeff-b"), &renamed, now());
         assert_eq!(permit.map(|p| p.basis()), Ok(PermitBasis::Owner(7)));
     }
 

@@ -245,8 +245,65 @@ fn sut_classify(_claim: &ClaimView, _evidence: &EvidenceView) -> AuthorityView {
 
 /// The CLI gate from local checks (ADR-086 §4-5). NOT the shipped review-app
 /// `may_sign` (ADR-089 §2, same-request reads) — see U-OOS-2.
-fn sut_may_sign(_claim: &ClaimView, _evidence: &EvidenceView, _window_minutes: i64) -> PermitView {
-    todo!("RED: bind to the claim_domain::authority gate over local checks (slice 1)")
+fn sut_may_sign(claim: &ClaimView, evidence: &EvidenceView, _window_minutes: i64) -> PermitView {
+    use claim_domain::authority::{
+        may_sign_from_checks, requirement, AuthorityRefusal, ClaimShape, LatestLinkCheck,
+        LinkedAccountEvidence, Requirement,
+    };
+    use claim_domain::identity_link::CheckVerdict;
+    use claim_domain::ReferenceType;
+    let now = Utc.with_ymd_and_hms(2026, 10, 8, 9, 0, 0).unwrap();
+    // The DuckDB read port's join: the author's links, each with its latest check.
+    let links: Vec<LinkedAccountEvidence> = evidence
+        .links
+        .iter()
+        .filter(|link| link.did == claim.author)
+        .map(|link| LinkedAccountEvidence {
+            github_id: link.github_id,
+            linked_login: link.linked_login.clone(),
+            latest_check: evidence
+                .checks
+                .iter()
+                .find(|c| c.did == link.did && c.github_id == link.github_id)
+                .map(|c| LatestLinkCheck {
+                    login_seen: c.login_seen.clone(),
+                    verdict: if c.verified {
+                        CheckVerdict::Verified
+                    } else {
+                        CheckVerdict::DidMissing
+                    },
+                    checked_at: now - chrono::Duration::minutes(c.age_minutes),
+                }),
+        })
+        .collect();
+    let reference_types: Vec<ReferenceType> = claim
+        .references
+        .iter()
+        .map(|r| match r {
+            RefView::Retracts => ReferenceType::Retracts,
+            RefView::Counters => ReferenceType::Counters,
+            RefView::Supersedes => ReferenceType::Supersedes,
+            RefView::Corrects => ReferenceType::Corrects,
+        })
+        .collect();
+    let shape = ClaimShape {
+        subject: &claim.subject,
+        predicate: &claim.predicate,
+        reference_types: &reference_types,
+    };
+    let person = match requirement(shape) {
+        Requirement::Person(person) => person,
+        Requirement::Exempt => return PermitView::Permit,
+        Requirement::Malformed => return PermitView::Refused { next_command: None },
+        Requirement::Repo { .. } => todo!("RED: bind the repo-tier gate (slice 2)"),
+    };
+    match may_sign_from_checks(&claim.author, &person, &links, now) {
+        Ok(_) => PermitView::Permit,
+        Err(AuthorityRefusal::Recheck { subject, .. }) => PermitView::Refused {
+            next_command: Some(format!("openlore authority verify --subject {subject}")),
+        },
+        Err(AuthorityRefusal::Unattested { .. }) => PermitView::Refused { next_command: None },
+    }
 }
 
 fn sut_score_attested(_feed: &[FeedRow]) -> scoring::WeightedView {
@@ -891,7 +948,6 @@ proptest! {
 /// [`GateRow`] G3 / G4 / G8 (future-dated = missing).
 /// `@s-oos-3 @contract-shape:pure-function`
 #[test]
-#[ignore = "DISTILL owner-only-signing CORE-OOS-4x: bind sut_may_sign (DELIVER slice 1)"]
 fn the_signing_window_includes_seven_days_and_excludes_the_minute_after() {
     let claim = ClaimView {
         author: AUTHORS[0].to_string(),
