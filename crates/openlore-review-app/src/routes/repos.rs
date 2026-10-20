@@ -78,6 +78,8 @@ pub(crate) async fn save_choice(app: &App, request: &PageRequest) -> Reply {
     let Some(listing) = listings.listed(account_id) else {
         return repos_page(app, &session, &csrf_token, None, &listings);
     };
+    // Ticks and limit are judged on listings read before the lock (N5): safe, as the store
+    // re-checks the account under the scope, and the scan and every publish re-read GitHub.
     let notice = match app.scope_locks.hold(owner_did).await {
         Err(ScopeBusy) => Some(ReposNotice::ScopeBusy),
         Ok(scope_guard) => {

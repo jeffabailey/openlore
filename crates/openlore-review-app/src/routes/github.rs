@@ -365,6 +365,8 @@ fn move_owned_imports(app: &App, owner_did: &str, github_user_id: u64, listings:
     if owned.is_empty() {
         return;
     }
+    // Moves are decided on listings read before the lock (N5): safe, as the next scan plans
+    // from a fresh listing and every publish re-reads the repo's owner (ADR-089 §2).
     let mut scope = Scope {
         accounts: owner_scope(app, owner_did, listings),
         imports,
