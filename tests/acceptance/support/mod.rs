@@ -64,6 +64,11 @@ pub mod identity_links;
 // viewer_linked_identity_invariants.
 pub mod viewer_identities;
 
+// owner-only-signing (DISTILL 2026-10-20): the subject-authority step
+// vocabulary shared by owner_only_signing / owner_only_signing_repos /
+// owner_only_signing_readers.
+pub mod authority;
+
 /// The GitHub request budget of a scrape, shared by every driving port (the
 /// CLI and the viewer), so a port cannot drift from it: a person target
 /// (`user`) reads its public profile once and nothing else; a repo target

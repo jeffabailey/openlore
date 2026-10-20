@@ -140,6 +140,14 @@ name = "review_app_repos_and_accounts_fixture"
 path = "../../tests/acceptance/review_app_repos_and_accounts_fixture.rs"
 harness = true
 
+# owner-only-signing (DISTILL 2026-10-20): the slice-4 remainder — the share
+# draft quotes only claims whose authority still holds (UC-21). `#[ignore]`d
+# pending DELIVER; the rest of slice 4 shipped with review-app-repos-and-accounts.
+[[test]]
+name = "owner_only_signing_review_app"
+path = "../../tests/acceptance/owner_only_signing_review_app.rs"
+harness = true
+
 # Review R3 (crafter-owned): GitHub requests per page action.
 [[test]]
 name = "page_github_requests"

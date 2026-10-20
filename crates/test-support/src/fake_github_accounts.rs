@@ -263,6 +263,103 @@ impl ProfileFlaw {
     }
 }
 
+/// The repo's authority file `.github/openlore-authority` as GitHub's contents
+/// API serves it on the DEFAULT branch (ADR-087 §3). Format: UTF-8 text, one
+/// DID per line, `#` starts a comment, at most 4 KiB; every other shape is
+/// `file_invalid` and grants nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthorityFile {
+    /// A regular file with exactly this text (base64, as GitHub encodes it).
+    Lists(String),
+    /// The path is a symlink (contents API `type: "symlink"`).
+    Symlink,
+    /// The path is a git submodule (`type: "submodule"`).
+    Submodule,
+    /// The path is a directory (the contents API answers an array).
+    Directory,
+    /// A regular file holding this text, padded with comment lines past 4 KiB.
+    Oversize(String),
+    /// A regular file holding this text followed by bytes that are not UTF-8.
+    NotUtf8(String),
+    /// The file exists only on a non-default branch: the default-branch read
+    /// is a 404 (ADR-087 lie catalogue: "ignored").
+    OnlyOnAnotherBranch(String),
+}
+
+impl AuthorityFile {
+    /// The fixed path every authority read asks for.
+    pub const PATH: &'static str = ".github/openlore-authority";
+
+    fn served(&self) -> (serde_json::Value, u16) {
+        use base64::Engine as _;
+        let file = |bytes: Vec<u8>| {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            // GitHub wraps the base64 body at 60 characters.
+            let wrapped = encoded
+                .as_bytes()
+                .chunks(60)
+                .map(|c| String::from_utf8_lossy(c).into_owned())
+                .collect::<Vec<_>>()
+                .join("\n");
+            serde_json::json!({
+                "type": "file",
+                "encoding": "base64",
+                "size": bytes.len(),
+                "name": "openlore-authority",
+                "path": Self::PATH,
+                "content": wrapped,
+            })
+        };
+        match self {
+            AuthorityFile::Lists(text) => (file(text.as_bytes().to_vec()), 200),
+            AuthorityFile::Oversize(text) => {
+                let mut padded = text.clone();
+                while padded.len() <= 4 * 1024 {
+                    padded.push_str("# padding line to push the file past four kibibytes\n");
+                }
+                (file(padded.into_bytes()), 200)
+            }
+            AuthorityFile::NotUtf8(text) => {
+                let mut bytes = text.as_bytes().to_vec();
+                bytes.extend_from_slice(&[0xff, 0xfe, 0x0a]);
+                (file(bytes), 200)
+            }
+            AuthorityFile::Symlink => (
+                serde_json::json!({
+                    "type": "symlink",
+                    "target": "../OWNERS",
+                    "size": 9,
+                    "name": "openlore-authority",
+                    "path": Self::PATH,
+                }),
+                200,
+            ),
+            AuthorityFile::Submodule => (
+                serde_json::json!({
+                    "type": "submodule",
+                    "submodule_git_url": "https://github.com/someone/authority.git",
+                    "size": 0,
+                    "name": "openlore-authority",
+                    "path": Self::PATH,
+                }),
+                200,
+            ),
+            AuthorityFile::Directory => (
+                serde_json::json!([{
+                    "type": "file",
+                    "name": "dids",
+                    "path": format!("{}/dids", Self::PATH),
+                    "size": 20,
+                }]),
+                200,
+            ),
+            AuthorityFile::OnlyOnAnotherBranch(_) => {
+                (serde_json::json!({"message": "Not Found"}), 404)
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct GhState {
     accounts: Mutex<BTreeMap<String, GithubAccount>>,
@@ -298,6 +395,15 @@ struct GhState {
     /// milliseconds): GitHub slow on one account's listing, so a request
     /// that lists it stays in flight while another request lands.
     slow_listings: Mutex<BTreeMap<String, u64>>,
+    /// owner-only-signing: authority files by repo (`owner/name` lowercase,
+    /// keyed by the repo's CURRENT path, so a transfer or rename keeps it).
+    authority_files: Mutex<BTreeMap<String, AuthorityFile>>,
+    /// owner-only-signing: repos whose root read answers a `301` to another
+    /// host (`owner/name` lowercase).
+    cross_host_repos: Mutex<std::collections::BTreeSet<String>>,
+    /// owner-only-signing: authority-file reads answer `403` rate-limited
+    /// (the budget runs out after the harvest, before the authority read).
+    authority_reads_rate_limited: AtomicBool,
 }
 
 impl GhState {
@@ -490,6 +596,51 @@ impl FakeGithubAccounts {
             .lock()
             .unwrap()
             .insert(format!("{login}/{old}").to_ascii_lowercase(), new_path);
+    }
+
+    /// owner-only-signing: the repo's default branch now holds (or, with
+    /// `None`, no longer holds) the authority file. Follows the repo across a
+    /// later transfer or rename (keyed by its path at the time of the read).
+    pub fn set_authority_file(&self, owner: &str, name: &str, file: Option<AuthorityFile>) {
+        let key = format!("{owner}/{name}").to_ascii_lowercase();
+        let mut files = self.state.authority_files.lock().unwrap();
+        match file {
+            Some(file) => {
+                files.insert(key, file);
+            }
+            None => {
+                files.remove(&key);
+            }
+        }
+    }
+
+    /// owner-only-signing: `GET /repos/{owner}/{name}` answers a `301` to
+    /// another host (ADR-087 §4: the adapter must refuse it).
+    pub fn redirect_repo_to_another_host(&self, owner: &str, name: &str) {
+        self.state
+            .cross_host_repos
+            .lock()
+            .unwrap()
+            .insert(format!("{owner}/{name}").to_ascii_lowercase());
+    }
+
+    /// owner-only-signing: GitHub's budget runs out after a scrape's harvest
+    /// and before its authority read — every authority-file read answers
+    /// `403` rate-limited (resetting in an hour) until called with `false`.
+    pub fn exhaust_budget_at_authority_reads(&self, exhausted: bool) {
+        self.state
+            .authority_reads_rate_limited
+            .store(exhausted, Ordering::SeqCst);
+    }
+
+    /// Number of authority-file reads of `full_name` (`owner/name`, any case).
+    pub fn authority_file_reads_of(&self, full_name: &str) -> usize {
+        let wanted = format!("/repos/{full_name}/contents/{}", AuthorityFile::PATH)
+            .to_ascii_lowercase();
+        self.requests()
+            .iter()
+            .filter(|r| r.path.to_ascii_lowercase() == wanted)
+            .count()
     }
 
     /// Profile reads of `login` (by login or by numeric id) answer `503` while
@@ -964,6 +1115,24 @@ fn route(state: &GhState, req: HttpRequest) -> HttpResponse {
             ),
             None => not_found(),
         },
+        ["repos", owner, name]
+            if state
+                .cross_host_repos
+                .lock()
+                .unwrap()
+                .contains(&format!("{owner}/{name}").to_ascii_lowercase()) =>
+        {
+            let mut moved = headers.clone();
+            moved.push((
+                "location",
+                format!("http://elsewhere.invalid/repos/{owner}/{name}"),
+            ));
+            json_with_headers(
+                301,
+                &serde_json::json!({"message": "Moved Permanently"}),
+                &moved,
+            )
+        }
         ["repos", owner, name, rest @ ..] => {
             let found = accounts
                 .get(&owner.to_ascii_lowercase())
@@ -1000,6 +1169,31 @@ fn route(state: &GhState, req: HttpRequest) -> HttpResponse {
                     None => not_found(),
                 };
             };
+            if rest.join("/") == format!("contents/{}", AuthorityFile::PATH)
+                && state.authority_reads_rate_limited.load(Ordering::SeqCst)
+            {
+                let reset = now_secs() + 3_600;
+                return json_with_headers(
+                    403,
+                    &serde_json::json!({
+                        "message": "API rate limit exceeded",
+                        "documentation_url": "https://docs.github.com/rest/overview/rate-limits"
+                    }),
+                    &[
+                        ("x-ratelimit-limit", "60".to_string()),
+                        ("x-ratelimit-remaining", "0".to_string()),
+                        ("x-ratelimit-reset", reset.to_string()),
+                    ],
+                );
+            }
+            if rest.join("/") == format!("contents/{}", AuthorityFile::PATH) {
+                let key = format!("{}/{}", account.login, repo.name).to_ascii_lowercase();
+                let (body, status) = match state.authority_files.lock().unwrap().get(&key) {
+                    Some(file) => file.served(),
+                    None => (serde_json::json!({"message": "Not Found"}), 404),
+                };
+                return json_with_headers(status, &body, &headers);
+            }
             let (body, status) = repo_endpoint(account, repo, rest);
             json_with_headers(status, &body, &headers)
         }
@@ -1398,6 +1592,50 @@ mod tests {
         gh.rename_repo("tidal-labs", "tidepool", "tidepool-2");
         assert_eq!(gh.repo_id_of("tidal-labs", "tidepool-2"), Some(id));
         assert_eq!(get(&gh, "/repos/tidal-labs/tidepool").0, 301);
+    }
+
+    #[test]
+    fn the_authority_file_is_served_per_shape_and_a_cross_host_repo_redirects() {
+        let gh = FakeGithubAccounts::start(vec![priya()]);
+        let path = "/repos/priyaraman/tidepool/contents/.github/openlore-authority";
+        assert_eq!(get(&gh, path).0, 404, "absent by default");
+        gh.set_authority_file(
+            "priyaraman",
+            "tidepool",
+            Some(AuthorityFile::Lists("did:plc:a\n# note\n".into())),
+        );
+        let (status, body) = get(&gh, path);
+        assert_eq!(status, 200);
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["type"], "file");
+        assert_eq!(body["encoding"], "base64");
+        assert_eq!(body["size"], 17);
+        for (file, kind) in [
+            (AuthorityFile::Symlink, "symlink"),
+            (AuthorityFile::Submodule, "submodule"),
+        ] {
+            gh.set_authority_file("priyaraman", "tidepool", Some(file));
+            let body: serde_json::Value = serde_json::from_str(&get(&gh, path).1).unwrap();
+            assert_eq!(body["type"], kind);
+        }
+        gh.set_authority_file("priyaraman", "tidepool", Some(AuthorityFile::Directory));
+        assert!(get(&gh, path).1.starts_with('['));
+        gh.set_authority_file(
+            "priyaraman",
+            "tidepool",
+            Some(AuthorityFile::Oversize("did:plc:a\n".into())),
+        );
+        let body: serde_json::Value = serde_json::from_str(&get(&gh, path).1).unwrap();
+        assert!(body["size"].as_u64().unwrap() > 4096);
+        gh.set_authority_file(
+            "priyaraman",
+            "tidepool",
+            Some(AuthorityFile::OnlyOnAnotherBranch("did:plc:a\n".into())),
+        );
+        assert_eq!(get(&gh, path).0, 404);
+        assert_eq!(gh.authority_file_reads_of("priyaraman/tidepool"), 7);
+        gh.redirect_repo_to_another_host("priyaraman", "tidepool");
+        assert_eq!(get(&gh, "/repos/priyaraman/tidepool").0, 301);
     }
 
     #[test]

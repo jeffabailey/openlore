@@ -1536,3 +1536,34 @@ harness = true
 name = "viewer_linked_identity_invariants"
 path = "../../tests/acceptance/viewer_linked_identity_invariants.rs"
 harness = true
+
+# owner-only-signing (DISTILL 2026-10-20; ADR-086/087). Layer-3/4 subprocess
+# suites drive the REAL `openlore` binary (`claim add/counter/retract/publish`,
+# `infer people [--sign]`, `scrape github|person [--sign]`, `authority verify`,
+# `candidates list`, `graph query [--weighted] [--include-unattested]`,
+# `search`, the viewer) against `FakeGithubAccounts` (+ the ADR-087
+# repo-authority lie catalogue `AuthorityFile`), `FakePds`, `PeerPds`;
+# shared vocabulary `tests/acceptance/support/authority.rs`.
+# `owner_only_signing_core` holds the layer-2 proptest contracts of the pure
+# `claim_domain::authority` derivations (RED `sut_*` bindings) and the
+# KPI-OOS-2 weight invariant. Every scenario is `#[ignore]`d; DELIVER enables
+# WS-OOS-1 (in `owner_only_signing`) first, then the rest one at a time.
+[[test]]
+name = "owner_only_signing"
+path = "../../tests/acceptance/owner_only_signing.rs"
+harness = true
+
+[[test]]
+name = "owner_only_signing_repos"
+path = "../../tests/acceptance/owner_only_signing_repos.rs"
+harness = true
+
+[[test]]
+name = "owner_only_signing_readers"
+path = "../../tests/acceptance/owner_only_signing_readers.rs"
+harness = true
+
+[[test]]
+name = "owner_only_signing_core"
+path = "../../tests/acceptance/owner_only_signing_core.rs"
+harness = true

@@ -143,7 +143,8 @@ pub mod refusing_port;
 pub use refusing_port::{refusing_address, RefusingPort};
 pub mod fake_github_accounts;
 pub use fake_github_accounts::{
-    FakeGithubAccounts, GithubAccount, GithubRepo, GithubRequest, OldLogin, ProfileFlaw, RepoFacts,
+    AuthorityFile, FakeGithubAccounts, GithubAccount, GithubRepo, GithubRequest, OldLogin,
+    ProfileFlaw, RepoFacts,
 };
 
 pub mod fake_instance;
