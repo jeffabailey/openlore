@@ -931,7 +931,6 @@ fn publishing_a_stored_claim_later_asks_for_authority_only_if_it_was_never_publi
 ///   And the second read is identical to the first
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-12: pending DELIVER"]
 fn opening_a_store_made_before_owner_only_signing_keeps_everything_in_it() {
     let world = LinkWorld::with_frozen_pre_v7_store(&[JEFF_GH]);
     let rows_before = prior_rows(&world.env);
@@ -983,7 +982,6 @@ fn opening_a_store_made_before_owner_only_signing_keeps_everything_in_it() {
 ///     | signs "jeffbailey adheres to memory-safety" on 8 October 09:01 | nothing is signed; he is told to re-check authority, with the command     |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-12b: pending DELIVER (slice 2, v8)"]
 fn jeffs_identity_link_checks_carry_over_when_his_store_gains_owner_only_signing() {
     let own = Subject::Person(JEFF_GH);
 

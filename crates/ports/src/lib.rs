@@ -146,6 +146,14 @@ pub use identity_link_check::{
     LinkCheck, LinkLineageReadPort,
 };
 
+// owner-only-signing (ADR-087 §5): this reader's local, insert-only repo
+// authority observations, split into read and write ports.
+mod repo_authority_check;
+pub use repo_authority_check::{
+    AuthorityFile, FoundRepo, RepoAuthorityCheck, RepoAuthorityCheckError,
+    RepoAuthorityCheckReadPort, RepoAuthorityCheckWritePort, RepoObservation, RepoSubjectKey,
+};
+
 // github-did-identity-link slice 4 (D-VL-3): the one lineage read of active
 // links over those read ports, shared by `identity list`, the person views and
 // the viewer.

@@ -12,9 +12,10 @@
 //! - The probe refuses to open a DB whose `schema_version` is HIGHER
 //!   than `LATEST_VERSION` (the binary is older than the file).
 //! - Later slices add follow-on, self-gated migrations beside this runner
-//!   (`schema_v3` .. `schema_v7`); v6 is ADR-071's additive
+//!   (`schema_v3` .. `schema_v8`); v6 is ADR-071's additive
 //!   `peer_claims.provenance` column (`app-signed` | `self-attested`); v7 is
-//!   ADR-085's insert-only `identity_link_checks` table.
+//!   ADR-085's insert-only `identity_link_checks` table; v8 is ADR-087's
+//!   insert-only `repo_authority_checks` table.
 //!
 //! ## Functional discipline
 //!

@@ -36,7 +36,8 @@ use ports::{
     ClockPort, ContributionLinkPort, GithubPort, IdentityLinkCheckPurgePort,
     IdentityLinkCheckReadPort, IdentityLinkCheckWritePort, IdentityPort, IndexQueryPort,
     InstanceReadPort, LinkCandidateReadPort, LinkLineageReadPort, PdsPort, PeerStoragePort,
-    ProbeOutcome, ProbeRefused, PublishPort, StoragePort, StoreReadPort,
+    ProbeOutcome, ProbeRefused, PublishPort, RepoAuthorityCheckReadPort, StoragePort,
+    StoreReadPort,
 };
 
 use crate::paths::OpenLorePaths;
@@ -68,6 +69,11 @@ pub struct Wiring {
     /// `identity forget` alone (check-arch
     /// `identity_link_purge_only_in_forget_verb`).
     pub identity_link_check_purge: Box<dyn IdentityLinkCheckPurgePort>,
+    /// owner-only-signing (ADR-087 §5): the READ side of this reader's local,
+    /// insert-only repo authority observations, sharing the one DuckDB
+    /// connection. Its live probe refuses startup when the store cannot keep
+    /// two observations of one repo.
+    pub repo_authority_checks: Box<dyn RepoAuthorityCheckReadPort>,
     /// The stored claims carrying the identity-link predicate — candidates the
     /// pure projection decides on (Q-RM-5). Read-only.
     pub link_candidates: Box<dyn LinkCandidateReadPort>,
@@ -148,6 +154,8 @@ impl Wiring {
             Box::new(storage.identity_link_check_adapter());
         let identity_link_check_purge: Box<dyn IdentityLinkCheckPurgePort> =
             Box::new(storage.identity_link_purge_adapter());
+        let repo_authority_checks: Box<dyn RepoAuthorityCheckReadPort> =
+            Box::new(storage.repo_authority_check_adapter());
         let link_candidates: Box<dyn LinkCandidateReadPort> =
             Box::new(storage.identity_link_check_adapter());
         let link_lineage: Box<dyn LinkLineageReadPort> = Box::new(storage.link_lineage_adapter());
@@ -211,6 +219,7 @@ impl Wiring {
             identity_link_checks,
             identity_link_check_writes,
             identity_link_check_purge,
+            repo_authority_checks,
             link_candidates,
             link_lineage,
             store_read,
@@ -234,6 +243,9 @@ impl Wiring {
         // ADR-085 Earned Trust: LIVE two-checks sentinel (rolled back) — a
         // store that cannot keep a link's check history refuses startup.
         check_probe("identity_link_checks", self.identity_link_checks.probe())?;
+        // ADR-087 Earned Trust: LIVE two-observations sentinel (rolled back) —
+        // a store that cannot keep a repo's observation history refuses startup.
+        check_probe("repo_authority_checks", self.repo_authority_checks.probe())?;
         // Slice-03 peer-storage probe entry. The adapter binding exists
         // (`self.peer_storage`) and the gauntlet has its slot, but the
         // `DuckDbPeerStorageAdapter::probe()` body is still a RED scaffold

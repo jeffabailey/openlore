@@ -58,12 +58,14 @@ mod identity_link_purge;
 mod link_lineage;
 mod peer_storage;
 mod probe;
+mod repo_authority_checks;
 mod schema;
 mod schema_v3;
 mod schema_v4;
 mod schema_v5;
 mod schema_v6;
 mod schema_v7;
+mod schema_v8;
 mod store_read;
 
 pub use contribution_links::DuckDbContributionLinkAdapter;
@@ -71,6 +73,7 @@ pub use identity_link_checks::{linked_account_evidence, DuckDbIdentityLinkCheckA
 pub use identity_link_purge::DuckDbIdentityLinkPurgeAdapter;
 pub use link_lineage::DuckDbLinkLineageAdapter;
 pub use peer_storage::DuckDbPeerStorageAdapter;
+pub use repo_authority_checks::DuckDbRepoAuthorityCheckAdapter;
 pub use store_read::DuckDbStoreReadAdapter;
 
 /// Embedded-DuckDB `StoragePort` adapter.
@@ -131,6 +134,9 @@ impl DuckDbStorageAdapter {
         // github-did-identity-link migration v7 (ADR-085 §7): the insert-only
         // `identity_link_checks` table. Idempotent forward-only.
         schema_v7::run_migration(&mut conn)?;
+        // owner-only-signing migration v8 (ADR-087 §5): the insert-only
+        // `repo_authority_checks` table. Idempotent forward-only.
+        schema_v8::run_migration(&mut conn)?;
         drop(conn);
 
         // Colocate `claims/` next to the DB file. data-models.md
@@ -223,6 +229,12 @@ impl DuckDbStorageAdapter {
     /// it may hold.
     pub fn identity_link_check_adapter(&self) -> DuckDbIdentityLinkCheckAdapter {
         DuckDbIdentityLinkCheckAdapter::from_shared(self.conn.clone())
+    }
+
+    /// The insert-only repo authority observation history (ADR-087 §5) over
+    /// the SAME connection handle. Opens no second handle; v8 ran at `open`.
+    pub fn repo_authority_check_adapter(&self) -> DuckDbRepoAuthorityCheckAdapter {
+        DuckDbRepoAuthorityCheckAdapter::from_shared(self.conn.clone())
     }
 
     /// The `identity forget` purge of one DID's checks, over the SAME

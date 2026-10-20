@@ -1722,6 +1722,76 @@ pub fn scan_identity_link_checks_insert_only(workspace_root: &Path) -> anyhow::R
     Ok(findings)
 }
 
+// -----------------------------------------------------------------------------
+// Repo authority check rules (owner-only-signing, ADR-087 §5)
+// -----------------------------------------------------------------------------
+//
+// * `repo_authority_checks_insert_only`: no production SQL anywhere updates,
+//   deletes or truncates `repo_authority_checks` — an observation is recorded
+//   once and "latest" is a read. Unlike `identity_link_checks` there is no
+//   purge exception. Checked per literal and per file, as above.
+
+/// The insert-only repo observation table.
+const REPO_AUTHORITY_CHECKS_TABLE: &str = "repo_authority_checks";
+
+/// Pure rule: `Some(excerpt)` iff one SQL literal names
+/// `repo_authority_checks` together with an `UPDATE` (an upsert's `DO UPDATE`
+/// included), `DELETE` or `TRUNCATE`.
+pub fn classify_repo_authority_checks_literal(literal: &str) -> Option<String> {
+    (contains_word(literal, REPO_AUTHORITY_CHECKS_TABLE) && holds_rewriting_keyword(literal))
+        .then(|| excerpt_of(literal))
+}
+
+/// Pure rule over one file's production literals: `Some(excerpt)` iff some
+/// literal names `repo_authority_checks` and some literal holds a rewriting
+/// keyword (SQL split across literals). The excerpt is the first rewriting
+/// literal.
+pub fn classify_repo_authority_checks_source(literals: &[String]) -> Option<String> {
+    let names_the_table = literals
+        .iter()
+        .any(|literal| contains_word(literal, REPO_AUTHORITY_CHECKS_TABLE));
+    let rewriting = literals
+        .iter()
+        .find(|literal| holds_rewriting_keyword(literal));
+    names_the_table
+        .then_some(rewriting)
+        .flatten()
+        .map(|literal| excerpt_of(literal))
+}
+
+/// Effect shell for `repo_authority_checks_insert_only`: every production SQL
+/// literal under `crates/*/src`, no exception.
+pub fn scan_repo_authority_checks_insert_only(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for path in rust_sources_under(&workspace_root.join("crates")) {
+        if !path.components().any(|c| c.as_os_str() == "src") {
+            continue;
+        }
+        let literals = production_literals(&path)?.literals;
+        let per_literal: Vec<String> = literals
+            .iter()
+            .filter_map(|literal| classify_repo_authority_checks_literal(literal))
+            .collect();
+        let excerpts = if per_literal.is_empty() {
+            classify_repo_authority_checks_source(&literals)
+                .into_iter()
+                .collect()
+        } else {
+            per_literal
+        };
+        findings.extend(excerpts.into_iter().map(|excerpt| {
+            format!(
+                "{}: SQL updates, deletes or truncates `repo_authority_checks`, which is \
+                 insert-only (repo_authority_checks_insert_only, ADR-087 §5): {excerpt}",
+                path.display()
+            )
+        }));
+    }
+    Ok(findings)
+}
+
 /// The `identity list` verb module and what it may not name.
 const IDENTITY_LIST_SOURCE: &str = "crates/cli/src/verbs/identity_list.rs";
 const IDENTITY_LIST_FORBIDDEN_TOKENS: &[&str] = &[
@@ -3566,6 +3636,7 @@ pub fn run() -> anyhow::Result<i32> {
     let index_purge_findings = scan_index_purge_only_in_pass_runner(&workspace_root)?;
     let search_event_findings = scan_indexer_search_events_carry_no_query(&workspace_root)?;
     let identity_link_checks_findings = scan_identity_link_checks_insert_only(&workspace_root)?;
+    let repo_authority_checks_findings = scan_repo_authority_checks_insert_only(&workspace_root)?;
     let identity_link_reader_findings =
         scan_identity_link_readers_hold_no_write_handle(&workspace_root)?;
     let identity_link_compose_findings =
@@ -3600,6 +3671,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(index_purge_findings);
     rendered.extend(search_event_findings);
     rendered.extend(identity_link_checks_findings);
+    rendered.extend(repo_authority_checks_findings);
     rendered.extend(identity_link_reader_findings);
     rendered.extend(identity_link_compose_findings);
     rendered.extend(identity_link_purge_findings);

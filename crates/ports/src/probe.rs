@@ -147,6 +147,12 @@ pub enum ProbeRefusalReason {
     /// back as latest, or the table is unusable.
     StorageIdentityLinkCheckHistoryUnreliable,
 
+    // -------- owner-only-signing additions (ADR-087 Earned Trust) --------
+    /// The `repo_authority_checks` sentinel did not keep two observations of
+    /// one repo, did not read the later one back as latest, or the table is
+    /// unusable.
+    StorageRepoAuthorityCheckHistoryUnreliable,
+
     // -------- bluesky-claim-review-app additions (ADR-073/074) --------
     /// The private store was written by a newer app (schema_version ahead).
     ReviewStoreSchemaMismatch,
