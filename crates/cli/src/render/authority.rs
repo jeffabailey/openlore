@@ -86,6 +86,14 @@ pub fn render_nothing_to_recheck() -> String {
     format!("{NOTHING_TO_RECHECK}; GitHub was not asked.\n")
 }
 
+/// `authority verify` could not ask GitHub about one repo (rate limit,
+/// outage, spent budget, rejected token, refused redirect): nothing was
+/// recorded for it. `reason` is a `GithubError` rendering, which never
+/// carries the token (US-SCR-004).
+pub fn render_github_could_not_be_asked(subject: &str, reason: &str) -> String {
+    format!("GitHub could not be asked about {subject} ({reason}); nothing was recorded for it")
+}
+
 /// One re-checked claim: who wrote it, about what, and its label now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelledClaim {

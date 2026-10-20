@@ -345,3 +345,100 @@ async fn a_shape_error_or_a_rate_limit_is_no_observation() {
         "{observed:?}"
     );
 }
+
+/// The `authority_file` case with its file reply moved: the file path now
+/// answers 301 to `location`, and `hops` serve the paths it leads to.
+fn file_redirected_to(location: &str, hops: Vec<RecordedReply>) -> RecordedCase {
+    let mut case = recorded("authority_file");
+    let file = case.file_reply().clone();
+    *case.file_reply() = RecordedReply {
+        status: 301,
+        headers: vec![("location".to_string(), location.to_string())],
+        body: serde_json::json!({"message": "Moved Permanently"}),
+        ..file
+    };
+    case.replies.extend(hops);
+    case
+}
+
+/// The recorded authority-file reply, served at `path`.
+fn file_reply_at(path: &str) -> RecordedReply {
+    RecordedReply {
+        path: path.to_string(),
+        ..recorded("authority_file").file_reply().clone()
+    }
+}
+
+fn listed_maintainers() -> AuthorityFile {
+    AuthorityFile::Present(vec![
+        "did:plc:openloreexamplemaintainer01".to_string(),
+        "did:web:maintainer.example.com".to_string(),
+    ])
+}
+
+#[tokio::test]
+async fn one_same_host_redirect_on_the_authority_file_is_followed() {
+    let moved = "/repositories/1062897/contents/.github/openlore-authority";
+    let case = file_redirected_to(
+        &format!("{RECORDED_HOST}{moved}"),
+        vec![file_reply_at(moved)],
+    );
+
+    let (observed, asked) = observe(case).await;
+
+    assert_eq!(observed, Ok(found(GITIGNORE, listed_maintainers())));
+    assert_eq!(
+        asked.len(),
+        3,
+        "the repo, its file, the file where it moved"
+    );
+    assert_eq!(asked.last().map(String::as_str), Some(moved));
+}
+
+#[tokio::test]
+async fn a_redirect_of_the_authority_file_to_another_host_is_no_observation() {
+    let file_path = recorded("authority_file").file_reply().path.clone();
+    let elsewhere = FakeGithub::serve(vec![file_reply_at(&file_path)]);
+    let case = file_redirected_to(&format!("{}{file_path}", elsewhere.base), Vec::new());
+
+    let (observed, asked) = observe(case).await;
+
+    assert!(
+        matches!(observed, Err(GithubError::ApiShape(_))),
+        "{observed:?}"
+    );
+    assert_eq!(asked.len(), 2, "the repo and its file, nothing more");
+    assert!(
+        elsewhere.asked().is_empty(),
+        "the other host is never asked: {:?}",
+        elsewhere.asked()
+    );
+}
+
+#[tokio::test]
+async fn a_second_redirect_of_the_authority_file_is_not_followed() {
+    let (once, twice) = ("/moved-once", "/moved-twice");
+    let case = file_redirected_to(
+        &format!("{RECORDED_HOST}{once}"),
+        vec![
+            RecordedReply {
+                path: once.to_string(),
+                status: 301,
+                headers: vec![("location".to_string(), format!("{RECORDED_HOST}{twice}"))],
+                body: serde_json::json!({"message": "Moved Permanently"}),
+            },
+            file_reply_at(twice),
+        ],
+    );
+
+    let (observed, asked) = observe(case).await;
+
+    assert!(
+        matches!(observed, Err(GithubError::ApiShape(_))),
+        "{observed:?}"
+    );
+    assert!(
+        !asked.iter().any(|path| path == twice),
+        "the second redirect is refused: {asked:?}"
+    );
+}

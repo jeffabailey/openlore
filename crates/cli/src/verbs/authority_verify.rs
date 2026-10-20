@@ -19,11 +19,14 @@ use claim_domain::authority::{
 use claim_domain::identity_link::{IdentityLink, RecheckScope};
 use claim_domain::ReferenceType;
 use ports::{
-    AuthorityFile, GithubError, PageRequest, RepoAuthorityCheck, RepoAuthorityCheckReadPort,
+    AuthorityFile, PageRequest, RepoAuthorityCheck, RepoAuthorityCheckReadPort,
     RepoAuthorityCheckWritePort, RepoObservation, RepoSubjectKey, StoreReadPort, StoredLinkLineage,
 };
 
-use crate::render::{render_authority_labels, render_nothing_to_recheck, LabelledClaim};
+use crate::render::{
+    render_authority_labels, render_github_could_not_be_asked, render_nothing_to_recheck,
+    LabelledClaim,
+};
 use crate::verbs::bare_did;
 use crate::verbs::identity_reads::{links_in_scope, LinkToRecheck};
 use crate::verbs::identity_verify::{recheck_and_record, IdentityVerifyHandles};
@@ -232,17 +235,13 @@ fn observe_repos(
                 observation,
                 checked_at: now,
             })?,
-            Err(err) => unreadable.push(github_could_not_answer(&subject_key, &err)),
+            Err(err) => unreadable.push(render_github_could_not_be_asked(
+                subject_key.as_str(),
+                &err.to_string(),
+            )),
         }
     }
     Ok(unreadable)
-}
-
-fn github_could_not_answer(subject_key: &RepoSubjectKey, err: &GithubError) -> String {
-    format!(
-        "GitHub could not be asked about {}: {err}; nothing was recorded for it",
-        subject_key.as_str()
-    )
 }
 
 /// This reader's latest observation of each repo subject the claims name,

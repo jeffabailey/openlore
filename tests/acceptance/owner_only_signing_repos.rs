@@ -397,7 +397,6 @@ fn rechecking_authority_labels_each_peers_repo_claims_and_records_one_observatio
 ///     | GitHub sends him to another site when he asks about anvil |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-5: pending DELIVER"]
 fn when_github_cannot_answer_rechecking_records_nothing_and_changes_nothing() {
     let rows: [TroubleRow; 3] = [
         ("rate limited", |w| {
@@ -1221,7 +1220,6 @@ fn signing_from_an_import_rechecks_jeffs_own_link_first() {
 ///     | he has a token that GitHub no longer accepts                            |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-16: pending DELIVER (slice 2; ruling R4)"]
 fn when_githubs_budget_is_gone_rechecking_says_so_records_nothing_and_never_shows_his_token() {
     let anvil = Subject::Repo(ANVIL);
     for budget in [
