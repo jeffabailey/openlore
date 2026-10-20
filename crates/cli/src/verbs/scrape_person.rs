@@ -15,7 +15,10 @@
 //!    (`scrape_repo_into_store`): signals, candidates, contributors recorded
 //!    as unsigned links. A rate-limit refusal stops the loop; any other
 //!    per-repo refusal skips that repo;
-//! 5. the person view (`person_view`) over the now-larger store, whose
+//! 5. WITH `--sign`: refresh the signer's OWN link to the person's account
+//!    (one fresh read; GitHub unable to answer records nothing, and the gate
+//!    falls back to the latest local check — OOS-D7, ruling R3);
+//! 6. the person view (`person_view`) over the now-larger store, whose
 //!    `--sign` signs PERSON candidates — repo candidates are signed with
 //!    `scrape github <repo> --sign N`, which each repo summary names.
 //!
@@ -26,6 +29,7 @@
 use std::io::Write;
 
 use anyhow::{bail, Result};
+use claim_domain::bare_did;
 use ports::GithubError;
 use scraper_domain::{
     normalize_target, person_repo_count_for, select_person_repos, DEFAULT_CONTRIBUTOR_COUNT,
@@ -36,6 +40,7 @@ use crate::render::{
     render_public_data_banner, render_unauthenticated_budget_note, AuthReport,
 };
 use crate::verbs::claim_publish::build_tokio_runtime;
+use crate::verbs::identity_verify::refresh_signers_own_link;
 use crate::verbs::scrape_github::{
     person_view, scrape_repo_into_store, ContributorsOutcome, RepoTarget,
 };
@@ -119,6 +124,17 @@ pub fn run(wiring: &Wiring, args: &ScrapePersonArgs) -> Result<ScrapePersonOutco
         }
     }
 
+    if args.sign.is_some() {
+        // OOS-D7 / R3: signing from an import first refreshes the signer's
+        // own link to this account; when GitHub cannot answer, nothing is
+        // recorded and the gate decides on the latest local check.
+        refresh_signers_own_link(
+            &wiring.link_recheck_handles(),
+            bare_did(&wiring.identity.author_did().0),
+            &profile.login,
+            wiring.clock.now_utc(),
+        )?;
+    }
     let outcome = person_view(wiring, &profile.login, args.sign.as_deref(), String::new())?;
     Ok(ScrapePersonOutcome {
         exit_code: outcome.exit_code,

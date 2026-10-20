@@ -310,7 +310,6 @@ fn with_the_network_off_jeff_signs_about_himself_only_from_a_check_at_most_7_day
 ///     | GitHub says it is too busy to answer            | 8 October 09:01 | nothing is signed; he is told to re-check authority, with the command to run   |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing PS-9: pending DELIVER (slice 1; ruling R3)"]
 fn when_github_cannot_answer_as_jeff_signs_from_an_import_his_latest_check_decides() {
     let own = Subject::Person(JEFF_GH);
     let rows: [(ProfileTrouble, &str, Option<Refusal>); 3] = [

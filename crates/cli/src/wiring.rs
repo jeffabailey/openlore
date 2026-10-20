@@ -306,6 +306,20 @@ impl Wiring {
             .context("reading the signer's identity link checks")
     }
 
+    /// The narrow handles that re-check identity links on a fresh GitHub
+    /// read and append the checks: `identity verify`, and the sign-time
+    /// refresh of the signer's own link a `scrape person --sign` runs
+    /// (OOS-D7) — the only signing path holding the check-write handle.
+    pub fn link_recheck_handles(&self) -> crate::verbs::identity_verify::IdentityVerifyHandles<'_> {
+        crate::verbs::identity_verify::IdentityVerifyHandles {
+            checks: self.identity_link_checks.as_ref(),
+            check_writes: self.identity_link_check_writes.as_ref(),
+            claims: self.link_candidates.as_ref(),
+            lineage: self.link_lineage.as_ref(),
+            github: self.github.as_ref(),
+        }
+    }
+
     pub fn check_initialized_state(&self) -> Result<(), ProbeRefusal> {
         let identity_path = self.paths.identity_toml();
         if identity_path.exists() {
