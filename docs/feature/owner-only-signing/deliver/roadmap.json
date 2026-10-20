@@ -2,31 +2,31 @@
   "roadmap": {
     "project_id": "owner-only-signing",
     "created_at": "2026-10-20T00:00:00Z",
-    "total_steps": 24,
-    "scope": "Slice 1 (phase 01): pure claim_domain::authority person rules and a CLI gate entry from local checks (U-OOS-3), gating claim add and the shared sign batch for github:<login> subjects; dispute and withdrawal stay open. Slice 2 (phase 02): v8 repo_authority_checks, read_repo_authority with its recorded-fixture contract test (U-OOS-8), authority verify, a behaviour-neutral sign_permitted refactor, then repo subjects gated in claim add, scrape --sign and claim publish. Slice 3 (phase 03): score_attested, labels, --include-unattested, viewer and search. Slice 4 (phase 04): the review-app share draft only (SA-1). Slice 5 (phase 05): imported candidates kept locally and listed offline."
+    "total_steps": 25,
+    "scope": "Slice 1 (phase 01): pure claim_domain::authority person rules and a CLI gate entry from local checks (U-OOS-3), gating claim add and the shared sign batch for github:<login> subjects; dispute and withdrawal stay open. Slice 2 (phase 02): v8 repo_authority_checks, read_repo_authority with its recorded-fixture contract test (U-OOS-8), authority verify, a behaviour-neutral sign_permitted refactor, behaviour-neutral shipped-suite migrations, then repo subjects gated in claim add, scrape --sign and claim publish. Slice 3 (phase 03): score_attested, labels, --include-unattested, viewer and search. Slice 4 (phase 04): the review-app share draft only (SA-1). Slice 5 (phase 05): imported candidates kept locally and listed offline."
   },
-  "total_steps": 24,
+  "total_steps": 25,
   "conventions": {
-    "paradigm": "ADR-007 functional Rust. kind, requirement, classify, the CLI gate entry, hand-off data, labels and score_attested are pure (claim-domain, scoring, scraper-domain, viewer-domain, review-domain). Verbs, the viewer and adapters do I/O only. ADTs over flags (Kind, Requirement, Authority, Unattested reason, PermitBasis, SigningRefusal). No enum arm or function exists only for tests: each lands in the step whose production code first constructs or calls it (ruling M4). Crafter: nw-functional-software-crafter.",
+    "paradigm": "ADR-007 functional Rust. kind, requirement, classify, the CLI gate entry, hand-off data, labels and score_attested are pure (claim-domain, scoring, scraper-domain, viewer-domain, review-domain). Verbs, the viewer and adapters do I/O only. ADTs over flags (Kind, Requirement, Authority, Unattested reason, PermitBasis, SigningRefusal). No enum arm or function exists only for tests: each lands in the step whose production code first constructs or calls it (ruling M4). ONE explicit exception (ruling F6): GithubPort::read_repo_authority is called only by its contract test in 02-02 and gains its production caller, the authority verify verb, in the very next step 02-03. Crafter: nw-functional-software-crafter.",
     "test_paradigm": "Acceptance: example-based subprocess runs of the REAL openlore binary over the real DuckDB store, fakes only for GitHub, PDSes and the network index (DISTILL walking-skeleton strategy). Pure core: proptest (256 cases) against the CORE-OOS oracles plus crafter-owned proptests in claim-domain / scoring with state-delta (tests/common/state_delta.rs) over a declared universe; single-example unit tests only with a `// bypass:` reason. Adapters: real DuckDB and recorded GitHub fixtures, never mocked. CLI and HTTP scenarios stay single-example (wiring, not invariants).",
-    "scenario_fns": "`<test target>::<fn>`. CLI targets (crates/cli): owner_only_signing (slice 1), owner_only_signing_repos (slices 2 and 5), owner_only_signing_readers (slice 3), owner_only_signing_core (CORE-OOS properties). Review app target (crates/openlore-review-app): owner_only_signing_review_app (SA-1). Target names stay stable (ruling L4). Each step lists every fn it activates, RED driver first. Every #[ignore] fn of the five targets maps to exactly one step; the ACTIVE guards PS-3, PS-7 and IC-5 are named in the steps whose code they protect. regenerate_the_frozen_v7_store_fixture is a fixture regenerator, not a step, and stays ignored. 02-02's driver is a crafter-owned adapter contract test created in that step (U-OOS-8 has no acceptance scenario).",
+    "scenario_fns": "`<test target>::<fn>`. CLI targets (crates/cli): owner_only_signing (slice 1), owner_only_signing_repos (slices 2 and 5), owner_only_signing_readers (slice 3), owner_only_signing_core (CORE-OOS properties). Review app target (crates/openlore-review-app): owner_only_signing_review_app (SA-1). Target names stay stable (ruling L4). Each step lists every fn it activates, RED driver first. Every #[ignore] fn of the five targets maps to exactly one step; the ACTIVE guards PS-3, PS-7 and IC-5 are named in the steps whose code they protect. regenerate_the_frozen_v7_store_fixture is a fixture regenerator, not a step, and stays ignored. Steps with no DISTILL activation (02-02 contract test, 02-05 refactor, 02-06 migrations) name their test_file / scenario_name as the test that guards them and leave scenario_fns empty.",
     "rider_classes": "Each step names one RED driver. Other activations are a secondary driver (new behaviour, RED on activation: un-ignore, see it RED, make it green within the step) or a guard (expected green on activation or already active: record a mutation RED per mutation_red_on_pass).",
-    "core_binding_red": "A step binding a CORE-OOS property first lands the production function as a signature stub with a todo!() body, then points the sut_* binding at it, so un-ignoring gives a panic RED, never a compile error (DWD-OOS-10). CORE-OOS-3 and CORE-OOS-4 generate repo rows (Owner, RepoListed), so they stay #[ignore] until the step that first constructs those values in production (02-03 and 02-06, ruling M4); person-tier rows are covered earlier by crafter-owned proptests in claim-domain. A property may move unchanged in name and assertions into crates/claim-domain/tests or crates/scoring/tests.",
-    "test_edit_allow_list": "(1) Removing the #[ignore] of a named scenario fn. (2) Replacing a named sut_* todo!() body in owner_only_signing_core.rs with ONE real call plus view mapping. (3) U-OOS-12: one added row in PS-2 (01-03, ruling M6) and one in RA-4 (02-03), built only from existing support/authority.rs vocabulary. (4) Wording pins in support/authority.rs, one-line edits only (DWD-OOS-3). (5) Shipped-suite migration per conventions.shipped_suite_migration and each step's shipped_migrations. (6) U-OOS-9 request-log exclusion in crates/test-support/src/fake_github_accounts.rs. Forbidden otherwise: assertions, oracles, strategies, universe slots, guardrails and test names of the owner_only_signing* targets. A missing vocabulary step stops the step and goes to nw-acceptance-designer. Crafter-owned tests in their own crates (adapter-duckdb, adapter-github contract tests, claim-domain, scoring, xtask synthetic violations) may be added.",
-    "shipped_suite_migration": "DISTILL wave-decisions lists the shipped acceptance files the behaviour change breaks. Each is listed in files_to_modify AND in shipped_migrations (file -> allowed change) of the step that introduces the breaking behaviour, so every step ends with the whole cli and review-app suites green. Change types: SEEDED-GIVEN (a Given seeded with authority through support/authority.rs steps, e.g. the_repo_holds_authority_file + given_jeff_verified_authority_of, or a seeded link), NON-GITHUB-SUBJECT (only where the test does not depend on the github: scheme), HELPER-ABSORBED (the shared seeding helper is migrated, the caller file needs no edit unless its own Given signs directly), EXPECTATION (only the DISTILL-named flips: score expectations, IR-16b, CORE-6 re-point, a refused cross-person signature), ONLY-IF-CHANGED (edited only if its outcome actually changes). RED protocol: at RED the crafter runs the full `cargo nextest run -p cli` (and `-p openlore-review-app` where the step touches it); every failing shipped file not in shipped_migrations is added to the commit message with its change type, or stops the step if no allowed change fits.",
-    "transitional_risks": "Orchestrator rulings (accepted: the work stays on the oos-deliver branch until every step is done). T1: Required(Repo) assertions are not gated in phase 01 (no observation store before 02-01). From 02-05 every sign goes through sign_permitted; repo subjects get their permit from a named transitional entry inside claim_domain::authority (permit_ungated_repo_t1, crafter's name), called only by the CLI repo branches. 02-06 stops claim add calling it, 02-07 closes T1 for claim add (WS-1..WS-10 migrated), and 02-08 deletes the entry when scrape --sign gates repo candidates: T1 fully closed. T2: unpublished person-subject claims stay publishable without a permit until 02-10 (claim publish gate).",
-    "gate_order": "Two entries mint the shared SigningPermit, both inside claim_domain::authority: ADR-089's may_sign (same-request reads), kept byte-for-byte and still the only entry the review app calls; and the CLI entry from local checks (may_sign_from_checks, crafter's name), first built in 01-01 for person subjects, given its 7-day window in 01-04, and its RepoListed basis in 02-06 where a repo-listed permit is first minted. sign_permitted (02-05) and publish_signed_claim(&SigningPermit) (02-10) consume permits; neither mints one.",
-    "sign_sites": "Six IdentityPort::sign call sites: claim_add, claim_counter, claim_retract, sign_batch, philosophy_add, identity_link. Five route through sign_permitted in 02-05; identity_link (an identity link is a weightless kind) gets an exempt permit; philosophy_add (philosophy records, not claims) is the only allowlisted site. Six publish_signed_claim callers: claim_publish, claim_add, claim_counter, claim_retract, sign_batch, identity_link, all changed in 02-10.",
+    "core_binding_red": "A step binding a CORE-OOS property first lands the production function as a signature stub with a todo!() body, then points the sut_* binding at it, so un-ignoring gives a panic RED, never a compile error (DWD-OOS-10). CORE-OOS-3 and CORE-OOS-4 generate repo rows, so they stay #[ignore] until the step that first constructs those values in production (ruling M4, named in F7): the classify tier Authority::Attested(RepoListed) / Attested(Owner) for repos is first constructed by the authority verify verb in 02-03 (CORE-OOS-3 activates there); PermitBasis::RepoListed is first constructed by the CLI entry may_sign_from_checks in the RA-10 step 02-07 (CORE-OOS-4 activates there). Person-tier rows are covered earlier by crafter-owned proptests in claim-domain. A property may move unchanged in name and assertions into crates/claim-domain/tests or crates/scoring/tests.",
+    "test_edit_allow_list": "(1) Removing the #[ignore] of a named scenario fn. (2) Replacing a named sut_* todo!() body in owner_only_signing_core.rs with ONE real call plus view mapping. (3) U-OOS-12: one added row in PS-2 (01-03, ruling M6) and one in RA-4 (02-03), built only from existing support/authority.rs vocabulary. (4) Wording pins in support/authority.rs, one-line edits only (DWD-OOS-3). (5) Shipped-suite migration per conventions.shipped_suite_migration and each step's shipped_migrations. (6) U-OOS-9 request-log exclusion in crates/test-support/src/fake_github_accounts.rs. Forbidden otherwise: assertions, oracles, strategies, universe slots, guardrails and test names of the owner_only_signing* targets. A missing vocabulary step stops the step and goes to nw-acceptance-designer. Crafter-owned tests in their own crates (adapter-duckdb, adapter-github contract tests, claim-domain, scoring, cli unit tests, review-app unit tests, xtask synthetic violations) may be added.",
+    "shipped_suite_migration": "DISTILL wave-decisions lists the shipped acceptance files the behaviour change breaks. Each is listed in files_to_modify AND in shipped_migrations (file -> allowed change) of the step that migrates it, so every step ends with the whole cli and review-app suites green. Repo-subject Givens migrate in the behaviour-neutral step 02-06, BEFORE the repo gate turns on in 02-07 (ruling F4). Change types: SEEDED-GIVEN (a Given seeded with authority through support/authority.rs steps, e.g. the_repo_holds_authority_file + given_jeff_verified_authority_of, or a seeded link), NON-GITHUB-SUBJECT (only where the test does not depend on the github: scheme), HELPER-ABSORBED (the shared seeding helper is migrated, the caller file needs no edit unless its own Given signs directly), EXPECTATION (only the DISTILL-named flips: score expectations, IR-16b, CORE-6 re-point, a refused cross-person signature), ONLY-IF-CHANGED (edited only if its outcome actually changes). RED protocol: at RED the crafter runs the full `cargo nextest run -p cli` (and `-p openlore-review-app` where the step touches it), records the failing set in the execution log, and lists every failing shipped file not yet in the step's shipped_migrations there (with its change type) before the step ends; no allowed change fits = the step stops.",
+    "transitional_risks": "Orchestrator rulings (accepted: the work stays on the oos-deliver branch until every step is done). T1: Required(Repo) assertions are not gated in phase 01 (no observation store before 02-01). From 02-05 every sign goes through sign_permitted; repo-subject permits come from the named transitional entry permit_ungated_repo_t1 (basis PermitBasis::UngatedT1) inside claim_domain::authority. T1 callers per step (ruling L5): 01-01..02-04 none (repo subjects sign through the old inline path); 02-05 claim_add and sign_batch; 02-06 claim_add and sign_batch (unchanged; migrations only); 02-07 sign_batch only (claim add switches to may_sign_from_checks); 02-08 sign_batch only; 02-09 none: entry, arm and its xtask rule are deleted, T1 closed. claim_counter, claim_retract and identity_link NEVER call it: they mint exempt permits from 02-05 (ruling F1). Enforced by xtask t1_entry_only_from_sign_batch (02-05..02-08). T2: unpublished person-subject claims stay publishable without a permit until 02-11 (claim publish gate), closed by the crafter-owned RED test named there (ruling F3).",
+    "gate_order": "Every way to mint the shared SigningPermit, all inside claim_domain::authority (ruling F2): (1) may_sign — ADR-089, shipped before this feature, same-request reads, basis PermitBasis::Owner, kept byte-for-byte, the only entry the review app calls, never deleted. (2) may_sign_from_checks (crafter may rename) — introduced 01-01 (person, basis PermitBasis::Owner), 7-day window 01-04, basis PermitBasis::RepoListed first constructed 02-07; kept. (3) exempt_permit (crafter may rename) — introduced 02-05 with the NEW arm PermitBasis::Exempt, first constructed there for counters, retractions, identity links and non-github: subjects; later used by claim publish to re-publish an already-published claim (02-11); kept. (4) permit_ungated_repo_t1 — introduced 02-05 with the NEW arm PermitBasis::UngatedT1, deleted with that arm in 02-09. sign_permitted (02-05) and publish_signed_claim(&SigningPermit) (02-11) consume permits; neither mints one.",
+    "sign_sites": "Six IdentityPort::sign call sites: claim_add, claim_counter, claim_retract, sign_batch, philosophy_add, identity_link. Five route through sign_permitted in 02-05; claim_counter, claim_retract and identity_link use exempt_permit; claim_add and sign_batch use may_sign_from_checks (person), exempt_permit (exempt) or the T1 entry (repo); philosophy_add (philosophy records, not claims) is the only allowlisted site. Six publish_signed_claim callers: claim_publish, claim_add, claim_counter, claim_retract, sign_batch, identity_link, all changed in 02-11.",
     "migrations": "v8 = repo_authority_checks only, in 02-01 (forward-only, idempotent, insert-only, live probe). imported_candidates is v9 in 05-01: v8 can reach users' stores before slice 5 and stores are forward-only (DESIGN and DISTILL wrote 'v8 imported_candidates'; RA-12/RA-12b guardrails count only v7 and v8). Never regenerate the frozen v7 fixture after 02-01.",
-    "arch_rules_note": "Each step's arch_rules field names the xtask rules it adds or amends; each ships a synthetic-violation test in xtask and must keep `cargo xtask check-arch` green on the real tree. Criteria state outcomes only (ruling L3).",
+    "arch_rules_note": "Each step's arch_rules field names the xtask rules it adds, amends or deletes, plus structural checks moved out of criteria (ruling L2); each rule ships a synthetic-violation test in xtask and must keep `cargo xtask check-arch` green on the real tree. Criteria state user-visible or unit-property outcomes only (ruling L3).",
     "test_runs": "Feature targets: `cargo nextest run -p cli --test owner_only_signing --test owner_only_signing_repos --test owner_only_signing_readers --test owner_only_signing_core` and `cargo nextest run -p openlore-review-app --test owner_only_signing_review_app`. Every step's green list ends with cargo test for each touched crate, `cargo test -p xtask`, `cargo xtask check-arch`, `cargo nextest run -p cli` and `cargo nextest run -p openlore-review-app` (ruling H1). Scoped crates only, never the workspace.",
-    "done_per_step": "A step is done when its scenario fns are un-ignored and green, the active guards (PS-3, PS-7, IC-5) pass, and every command in its green list passes.",
+    "done_per_step": "A step is done when its scenario fns are un-ignored and green, the active guards (PS-3, PS-7, IC-5) pass, every arch_rules entry holds, and every command in its green list passes.",
     "mutation_red_on_pass": "A guard green on activation gets a recorded mutation RED: break the named rule in production code, run the guard and show it fails, revert. Rule, failing scenario and revert go in the commit message and the execution log RED phase.",
     "wording": "Labels, refusal fragments, hand-off lines, footers and usage messages are DISTILL pins in tests/acceptance/support/authority.rs (DWD-OOS-3); DELIVER may change a pin only by a one-line edit there.",
     "exit_codes": "A refused signature exits non-zero; candidates are still listed (DWD-OOS-4). Usage mistakes exit 2 (RD-11).",
     "forge_build_time": "Forge 6 (DISTILL R6): 01-01 measures the acceptance build of the five new targets once and records it in the execution log and step notes. No consolidation of owner_only_signing_core in this roadmap (ruling L4); an over-budget result is reported to the orchestrator.",
     "deferred_rulings": "H5 / U-OOS-10: the refusal tally is NOT built (a counter with no production caller is dead code). Deferred: the CLI has no telemetry channel; the review app's existing publish.refused.* counters cover the review app.",
-    "upstream_ids": "U-OOS-2 -> 02-07. U-OOS-3 -> 01-01, 01-04, 02-06. U-OOS-8 -> 02-02 (before any repo signing step). U-OOS-9 -> 02-08 and 04-01. U-OOS-10 -> deferred (deferred_rulings). U-OOS-12 -> 01-03 (PS-2 row) and 02-03 (RA-4 --mine row)."
+    "upstream_ids": "U-OOS-2 -> 02-06 (WS-1..WS-10 migrated before the gate). U-OOS-3 -> 01-01, 01-04, 02-07. U-OOS-8 -> 02-02 (before any repo signing step). U-OOS-9 -> 02-09 and 04-01. U-OOS-10 -> deferred (deferred_rulings). U-OOS-12 -> 01-03 (PS-2 row) and 02-03 (RA-4 --mine row)."
   },
   "phases": [
     {
@@ -36,11 +36,10 @@
         {
           "id": "01-01",
           "name": "Walking skeleton: claim add signs only about Jeff's own account",
-          "description": "Thinnest WS-OOS-1 thread: authority gains the person arm of requirement, person classify over the latest v7 link check and the CLI gate entry from local checks (U-OOS-3) returning the shared SigningPermit. claim add refuses an unattested github:<login> assertion with the hand-off and a non-zero exit.",
+          "description": "Thinnest WS-OOS-1 thread: authority gains the person arm of requirement, person classify over the latest v7 link check and the CLI gate entry may_sign_from_checks (U-OOS-3) returning the shared SigningPermit. claim add refuses an unattested github:<login> assertion with the hand-off and a non-zero exit.",
           "criteria": [
             "WS-OOS-1: linked as jeffbailey, Jeff signs and publishes about jeffbailey; about rachelk nothing is signed or published, exit non-zero, naming rachelk and her link command.",
-            "ADR-089 may_sign's signature and body and its unit tests are unchanged; review_app_repos_and_accounts_several and review_app_publish_permit_alone still pass.",
-            "Person authority evidence can be built only by adapter-duckdb, adapter-github or test-support code."
+            "ADR-089 may_sign's signature and body and its unit tests are unchanged; review_app_repos_and_accounts_several and review_app_publish_permit_alone still pass."
           ],
           "test_file": "tests/acceptance/owner_only_signing.rs",
           "scenario_name": "only_jeff_can_sign_what_is_said_about_jeffs_github_account",
@@ -53,7 +52,7 @@
             "evidence-rule synthetic violation"
           ],
           "arch_rules": [
-            "authority_evidence_only_from_adapters (amended: the CLI person evidence type; synthetic-violation test, ruling M3)"
+            "authority_evidence_only_from_adapters (amended: person authority evidence built only by adapter-duckdb, adapter-github or test-support; synthetic-violation test, ruling M3)"
           ],
           "shipped_migrations": {},
           "green": [
@@ -65,7 +64,7 @@
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "RED driver: WS-OOS-1 (enable FIRST, DWD-OOS-2). Thin only: the Person arm of requirement, person classify (link verified for the subject's id and login = latest login_seen), the CLI entry returning Ok(SigningPermit { basis: Owner(id) }) or a refusal; the window comes in 01-04, RepoListed in 02-06. claim add holds the identity-link check READ port only; refusal rendered by a new render/authority.rs from pure hand-off data (wording pins DWD-OOS-3). T1 (conventions.transitional_risks): repo subjects not gated yet. Forge 6: measure the acceptance build of the five new targets once and record it in the execution log; no consolidation. RED protocol: run the full cli suite at RED (shipped_suite_migration). TEST PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "RED driver: WS-OOS-1 (enable FIRST, DWD-OOS-2). Thin only: the Person arm of requirement, person classify (link verified for the subject's id and login = latest login_seen), may_sign_from_checks returning Ok(SigningPermit { basis: Owner(id) }) or a refusal; the window comes in 01-04. claim add consults the gate for Person subjects only; Exempt and Repo subjects keep today's path until 02-05 (T1). claim add holds the identity-link check READ port only; refusal rendered by a new render/authority.rs from pure hand-off data (wording pins DWD-OOS-3). Forge 6: measure the acceptance build of the five new targets once and record it in the execution log; no consolidation. RED protocol (ruling F8): run the full `cargo nextest run -p cli` at RED, record the failing set in the execution log, and list every failing shipped file in this step's shipped_migrations (with change type) before the step ends. TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 6,
           "depends_on": [],
           "files_to_modify": [
@@ -114,7 +113,7 @@
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "RED driver: CORE-OOS-1 (stub kind with todo!() first, core_binding_red). Secondary driver: CORE-OOS-2 (stub requirement first). Guard: PS-3 (active; mutation: gate counters). Kind precedence for a claim with both retracts and counters is unspecified (U-OOS-5): any non-weight kind is acceptable. Reuse claim-domain references.rs reference types. TEST PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "RED driver: CORE-OOS-1 (stub kind with todo!() first, core_binding_red). Secondary driver: CORE-OOS-2 (stub requirement first). Guard: PS-3 (active; mutation: gate counters). Kind precedence for a claim with both retracts and counters is unspecified (U-OOS-5): any non-weight kind is acceptable. Reuse claim-domain references.rs reference types. A malformed github: subject is refused by claim add (fail closed). TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 4,
           "depends_on": [
             "01-01"
@@ -179,7 +178,7 @@
         {
           "id": "01-04",
           "name": "CLI gate from local checks honours the seven-day window",
-          "description": "The CLI entry gets one 7-day constant: inclusive at minute granularity, a future-dated check counted missing, refusals naming openlore authority verify. Person rows only; CORE-OOS-4 (which generates repo rows) stays ignored until 02-06.",
+          "description": "may_sign_from_checks gets one 7-day constant: inclusive at minute granularity, a future-dated check counted missing, refusals naming openlore authority verify. Person rows only; CORE-OOS-4 (which generates repo rows) stays ignored until 02-07.",
           "criteria": [
             "CORE-OOS-4x permits checks 0 and 7 days old and refuses 7 days plus 1 minute and a future-dated check, naming the re-check command.",
             "PS-4 offline: signed at 3 and 8 October 09:00; refused at 8 October 09:01 and for a future-dated check; GitHub not asked."
@@ -204,7 +203,7 @@
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "RED driver: CORE-OOS-4x (bind sut_may_sign to the CLI entry; RED comes from the missing window). Secondary driver: PS-4 rows 3-4. Window per DWD-OOS-14 (one constant, A-6). The clock reaches the gate as data from the shell. TEST PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "RED driver: CORE-OOS-4x (bind sut_may_sign to may_sign_from_checks; RED comes from the missing window). Secondary driver: PS-4 rows 3-4. Window per DWD-OOS-14 (one constant, A-6). The clock reaches the gate as data from the shell. TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 4,
           "depends_on": [
             "01-03"
@@ -222,7 +221,7 @@
         {
           "id": "01-05",
           "name": "Inferred people: sign only own adherence, show who can sign",
-          "description": "The shared sign batch (infer people --sign, scrape person --sign) gates person candidates through the CLI entry; refused candidates stay listed with the hand-off. infer people prints a can-sign line per candidate from pure scraper-domain data. Shipped person-signing suites migrate here.",
+          "description": "The shared sign batch (infer people --sign, scrape person --sign) gates person candidates through may_sign_from_checks; refused candidates stay listed with the hand-off. infer people prints a can-sign line per candidate from pure scraper-domain data. Shipped person-signing suites migrate here.",
           "criteria": [
             "PS-5: Jeff signs the jeffbailey adherence and it reaches his repo; the BurntSushi candidate is refused, naming BurntSushi and the link command.",
             "PS-6: the inferred list says 'You can sign' for jeffbailey and gives BurntSushi's hand-off; listing changes nothing in store or published repo.",
@@ -254,7 +253,7 @@
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "RED driver: PS-5. Secondary driver: PS-6 (the can-sign line is new). infer people without --sign holds read ports only (unbounded-preservation). Person subjects only (T1 open for repo candidates). RED protocol: full cli suite at RED; extra failing shipped files go in the commit message. TEST PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "RED driver: PS-5. Secondary driver: PS-6 (the can-sign line is new). infer people without --sign holds read ports only (unbounded-preservation). Person subjects only (T1: repo candidates keep today's path). RED protocol: full cli suite at RED; extra failing shipped files go in the execution log and shipped_migrations. TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 6,
           "depends_on": [
             "01-04"
@@ -408,7 +407,7 @@
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "RED driver: the crafter-owned contract test, created in this step (U-OOS-8 has no acceptance scenario; conventions.scenario_fns). Untracked when repo signing starts = blocker, so it lands before 02-03. base64 becomes a direct adapter-github dependency (already in Cargo.lock). Record fixture PROVENANCE. The redirect policy reuses read_repo's (at most one same-host redirect). No caller yet beyond the test: the verb arrives in 02-03 (next step). TEST PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "RED driver: the crafter-owned contract test, created in this step (U-OOS-8 has no acceptance scenario; conventions.scenario_fns). Untracked when repo signing starts = blocker, so it lands before 02-03. RULING F6 (conventions.paradigm): read_repo_authority is test-only for this one step; its production caller, authority verify, arrives in 02-03. base64 becomes a direct adapter-github dependency (already in Cargo.lock). Record fixture PROVENANCE. The redirect policy reuses read_repo's (at most one same-host redirect). TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 5,
           "depends_on": [
             "02-01"
@@ -435,7 +434,7 @@
         {
           "id": "02-03",
           "name": "authority verify labels peer repo claims from public data",
-          "description": "NEW openlore authority verify [--subject] [--mine]: records one observation per repo subject and the link checks it needs, then prints each local github: claim's label; never signs. classify gains the repo tiers (Owner, RepoListed), first constructed here, so CORE-OOS-3 activates.",
+          "description": "NEW openlore authority verify [--subject] [--mine]: records one observation per repo subject and the link checks it needs, then prints each local github: claim's label; never signs. classify gains the repo tiers Authority::Attested(Owner | RepoListed), first constructed here, so CORE-OOS-3 activates.",
           "criteria": [
             "RA-4: anvil's claim reads repo-listed and tidepool's third-party; GitHub asked once per repo and once per authority file; nothing published.",
             "RA-4's added --mine row re-checks only Jeff's own claims; RA-14 asks GitHub nothing and says there is nothing to re-check.",
@@ -465,7 +464,7 @@
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "RED driver: RA-4. Secondary drivers: RA-14 (nothing-to-re-check message), CORE-OOS-3 (stub the repo branches of classify with todo!() first; ruling M4: the repo tiers land where authority verify first labels with them). The reader label set lives in claim_domain::authority (one spelling everywhere). authority verify reuses the identity verify link-check path; capability per the DESIGN table. 404 records repo_not_found (RA-15's Given in 02-07). U-OOS-12: add the --mine row to RA-4. TEST PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "RED driver: RA-4. Secondary drivers: RA-14 (nothing-to-re-check message), CORE-OOS-3 (stub the repo branches of classify with todo!() first; ruling M4/F7: the classify tier RepoListed is first constructed here by authority verify). Closes the F6 exception: read_repo_authority now has its production caller. The reader label set lives in claim_domain::authority (one spelling everywhere). authority verify reuses the identity verify link-check path; capability per the DESIGN table. 404 records repo_not_found (RA-15's Given in 02-08). U-OOS-12: add the --mine row to RA-4. TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 7,
           "depends_on": [
             "02-02"
@@ -535,7 +534,7 @@
         {
           "id": "02-05",
           "name": "Every sign site goes through sign_permitted, behaviour unchanged",
-          "description": "Refactor (H4a): NEW sign_permitted(&SigningPermit) replaces IdentityPort::sign in claim_add, claim_counter, claim_retract, sign_batch and identity_link (exempt permit: an identity link is weightless). philosophy_add stays allowlisted. Repo subjects get their permit from the T1 transitional entry. No user-visible change.",
+          "description": "Refactor (H4a): NEW sign_permitted(&SigningPermit) replaces IdentityPort::sign at five sites. claim_counter, claim_retract and identity_link mint exempt permits (NEW exempt_permit, PermitBasis::Exempt); claim_add and sign_batch get repo permits from permit_ungated_repo_t1 (T1). philosophy_add stays allowlisted. No user-visible change.",
           "criteria": [
             "Disputing, withdrawing and signing about jeffbailey behave exactly as before (PS-3, PS-7), and every shipped cli suite stays green unedited.",
             "Linking an identity still signs and publishes the link record as today.",
@@ -544,13 +543,18 @@
           "test_file": "tests/acceptance/owner_only_signing.rs",
           "scenario_name": "jeff_can_always_dispute_or_withdraw_whatever_authority_he_holds",
           "scenario_fns": [],
+          "guards": [
+            "PS-3 jeff_can_always_dispute_or_withdraw_whatever_authority_he_holds — recorded mutation RED: route claim_counter through may_sign_from_checks instead of exempt_permit, see PS-3 fail, revert",
+            "PS-7 jeff_still_signs_about_his_account_when_its_bio_also_names_another_identity — recorded mutation RED: make sign_permitted refuse a permit whose basis is Owner of a contested id, see PS-7 fail, revert"
+          ],
           "n_scenarios": [
             "PS-3 (guard, already active)",
             "PS-7 (guard, already active)",
             "sign_permitted subject-match property"
           ],
           "arch_rules": [
-            "sign_only_with_permit (new: IdentityPort::sign only inside sign_permitted, philosophy_add.rs allowlisted; synthetic violation test)"
+            "sign_only_with_permit (new: IdentityPort::sign only inside sign_permitted, philosophy_add.rs allowlisted; synthetic violation test)",
+            "t1_entry_only_from_sign_batch (new, ruling F1: permit_ungated_repo_t1 callable only from claim_add.rs and sign_batch.rs in this step; synthetic violation test calling it from claim_counter.rs)"
           ],
           "shipped_migrations": {},
           "green": [
@@ -561,7 +565,7 @@
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "No new RED scenario (refactor). Guards with recorded mutation RED: PS-3 (mutation: give counters a gated permit), PS-7 (mutation: refuse a contested id). The synthetic-violation test of sign_only_with_permit is the step's first failing test. T1: repo subjects get a permit from the named transitional entry inside claim_domain::authority (conventions.transitional_risks); it is the only way an unchecked repo permit exists and is deleted in 02-08. scenario_fns is empty: PS-3/PS-7 are active already. TEST PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "No new RED scenario (refactor). The first failing tests are the synthetic-violation tests of the two new rules. Guards: see the guards field (ruling L3). F1: claim_counter, claim_retract and identity_link never call the T1 entry; they call exempt_permit, whose arm PermitBasis::Exempt is first constructed here (ruling F2). claim_add uses may_sign_from_checks (person), exempt_permit (exempt) or the T1 entry (repo); sign_batch likewise. If an exhaustive match on PermitBasis exists in review-domain or the review app, add the arms without behaviour change. TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 5,
           "depends_on": [
             "02-04"
@@ -574,39 +578,36 @@
             "crates/cli/src/verbs/identity_link.rs",
             "crates/cli/src/verbs/mod.rs",
             "crates/claim-domain/src/authority.rs",
+            "crates/review-domain/src/plans.rs",
             "crates/cli/src/wiring.rs",
             "xtask/src/check_arch.rs"
           ],
           "files_to_create": [
             "crates/cli/src/verbs/sign_permitted.rs"
           ],
-          "mutation_note": "Kill: a sign site bypassing sign_permitted (rule test); a counter needing authority; a permit for another subject accepted."
+          "mutation_note": "Kill: a sign site bypassing sign_permitted (rule test); a counter needing authority; a permit for another subject accepted; the T1 entry called from claim_counter (rule test)."
         },
         {
           "id": "02-06",
-          "name": "claim add gates repo claims from fresh local checks",
-          "description": "H4b: claim add stops using the T1 entry and gets repo permits from the CLI entry over the latest observation and link check, offline; PermitBasis gains RepoListed, first minted here, so CORE-OOS-4 activates. Shared seeding helpers and the claim-add callers DISTILL lists migrate here.",
+          "name": "Shipped suites seed repo authority before the gate, behaviour unchanged",
+          "description": "Ruling F4: migration only, no production change. Shared seeding helpers, the DISTILL category-1 claim-add callers and WS-1..WS-10 (U-OOS-2) gain seeded repo authority or a non-github: subject, so they stay green both under the T1 entry now and under the 02-07 gate.",
           "criteria": [
-            "RA-10 offline: owner and repo-listed checks sign on 3 and 8 October 09:00; refused when the older check passes 7 days or tidepool was never observed.",
-            "CORE-OOS-4 passes: the CLI entry permits exactly the permitted rows of gate table G1-G8.",
-            "may_sign's signature, body and ADR-089 unit tests are untouched by the new arm; the review-app publish suites pass.",
-            "Every DISTILL category-1 claim-add caller is green, each migrated file listed with its change type in the commit."
+            "Every category-1 claim-add caller and WS-1..WS-10 stays green, each migrated file listed with its change type in the commit.",
+            "Each migrated Given would also pass with the repo gate on: its seeded checks are attested and at most 7 days older than the test clock.",
+            "One I-9 offline walking-skeleton test keeps a non-github: subject (U-OOS-2)."
           ],
-          "test_file": "tests/acceptance/owner_only_signing_repos.rs",
-          "scenario_name": "with_the_network_off_jeff_signs_a_repo_claim_only_from_fresh_checks",
-          "scenario_fns": [
-            "owner_only_signing_repos::with_the_network_off_jeff_signs_a_repo_claim_only_from_fresh_checks",
-            "owner_only_signing_core::the_gate_permits_only_exempt_or_freshly_attested_claims"
-          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_sign_writes_atomic_local_file_with_no_network_call",
+          "scenario_fns": [],
           "n_scenarios": [
-            "RA-10 (6 rows)",
-            "CORE-OOS-4",
-            "shipped claim-add migrations"
+            "shipped claim-add migrations",
+            "WS-1..WS-10 migration (U-OOS-2)"
           ],
           "arch_rules": [],
           "shipped_migrations": {
             "tests/acceptance/support/mod.rs": "SEEDED-GIVEN in seed_own_plus_peer_graph, seed_own_claims_via_cli, seed_own_claim_with_evidence, seed_claim_with_counter, seed_claim_two_counters_distinct_authors, seed_one_signed_local_claim, seed_own_claim_for_search, seed_local_claim_about (or NON-GITHUB-SUBJECT where the scheme is irrelevant)",
             "tests/acceptance/support/people.rs": "SEEDED-GIVEN in given_i_signed / given_i_signed_repo_claim",
+            "tests/acceptance/walking_skeleton.rs": "NON-GITHUB-SUBJECT for the I-9 offline test; SEEDED-GIVEN (repo-listed check) or NON-GITHUB-SUBJECT for the rest, keeping KPI-5 / I-9 meaning",
             "tests/acceptance/appview_search.rs": "HELPER-ABSORBED",
             "tests/acceptance/claim_compose_advisory.rs": "HELPER-ABSORBED or SEEDED-GIVEN",
             "tests/acceptance/counter_claim.rs": "HELPER-ABSORBED",
@@ -644,29 +645,21 @@
             "tests/acceptance/viewer_store.rs": "HELPER-ABSORBED"
           },
           "green": [
-            "cargo nextest run -p cli --test owner_only_signing_repos --test owner_only_signing --test owner_only_signing_core",
-            "cargo test -p claim-domain",
-            "cargo test -p review-domain",
+            "cargo nextest run -p cli --test walking_skeleton --test owner_only_signing --test owner_only_signing_repos",
             "cargo test -p xtask",
             "cargo xtask check-arch",
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "RED driver: RA-10. Secondary driver: CORE-OOS-4 (ruling M4: RepoListed basis lands with its first production mint). Largest migration: start from the shared helpers so HELPER-ABSORBED callers need no edit; a caller whose own Given signs directly gets SEEDED-GIVEN. Seeded checks must stay within 7 days of each test's clock. If an exhaustive match on PermitBasis exists in review-domain or the review app, add the arm without behaviour change. RED protocol: full cli suite at RED; extra failures go in the commit message. The scrape sign batch still uses the T1 entry until 02-08. TEST PARADIGM: conventions.test_paradigm.",
-          "estimate_hours": 12,
+          "implementation_notes": "Behaviour-neutral (ruling F4): no file under crates/ changes; the repo gate stays off and every suite stays green under the T1 entry. The gate test of each migration is 02-07: anything it still breaks there is added to 02-07's commit with its change type. Start from the shared helpers so HELPER-ABSORBED callers need no edit. WS-1..WS-10 migrate here (moved from the old RA-15/RA-8 step) because the gate turns on in 02-07. U-OOS-2: the brief's I-9 row should name the replacement test; DESIGN owns that text, so report the name, do not edit the brief. T1 callers unchanged: claim_add and sign_batch. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 10,
           "depends_on": [
             "02-05"
           ],
           "files_to_modify": [
-            "tests/acceptance/owner_only_signing_repos.rs",
-            "tests/acceptance/owner_only_signing_core.rs",
-            "crates/claim-domain/src/authority.rs",
-            "crates/review-domain/src/plans.rs",
-            "crates/cli/src/verbs/claim_add.rs",
-            "crates/cli/src/wiring.rs",
-            "crates/cli/src/render/authority.rs",
             "tests/acceptance/support/mod.rs",
             "tests/acceptance/support/people.rs",
+            "tests/acceptance/walking_skeleton.rs",
             "tests/acceptance/appview_search.rs",
             "tests/acceptance/claim_compose_advisory.rs",
             "tests/acceptance/counter_claim.rs",
@@ -704,16 +697,66 @@
             "tests/acceptance/viewer_store.rs"
           ],
           "files_to_create": [],
-          "mutation_note": "Kill: the younger instead of the older check; a RepoListed permit without a listing; claim add still calling the T1 entry; a stale observation accepted."
+          "mutation_note": "Not applicable (test-only migration); its effectiveness is proven in 02-07 when the gate turns on with these suites green."
         },
         {
           "id": "02-07",
-          "name": "Renamed and missing repos refused; walking skeleton migrated",
-          "description": "H4c: claim add refuses a repo GitHub does not have (RepoNotFound) and a repo GitHub now serves under another name (RepoRenamed, from full_name_seen). WS-1..WS-10 move off github:rust-lang/rust or seed a fresh repo-listed check (U-OOS-2). Closes T1 for claim add.",
+          "name": "claim add gates repo claims from fresh local checks",
+          "description": "The RA-10 gate (H4b): claim add stops calling the T1 entry and gets repo permits from may_sign_from_checks over the latest observation and link check, offline. PermitBasis::RepoListed is first constructed here, so CORE-OOS-4 activates. The T1 rule's allowed set shrinks to sign_batch.",
+          "criteria": [
+            "RA-10 offline: owner and repo-listed checks sign on 3 and 8 October 09:00; refused when the older check passes 7 days or tidepool was never observed.",
+            "CORE-OOS-4 passes: may_sign_from_checks permits exactly the permitted rows of gate table G1-G8.",
+            "may_sign's signature, body and ADR-089 unit tests are untouched by the new arm; the review-app publish suites pass.",
+            "The suites migrated in 02-06 stay green with the gate on."
+          ],
+          "test_file": "tests/acceptance/owner_only_signing_repos.rs",
+          "scenario_name": "with_the_network_off_jeff_signs_a_repo_claim_only_from_fresh_checks",
+          "scenario_fns": [
+            "owner_only_signing_repos::with_the_network_off_jeff_signs_a_repo_claim_only_from_fresh_checks",
+            "owner_only_signing_core::the_gate_permits_only_exempt_or_freshly_attested_claims"
+          ],
+          "n_scenarios": [
+            "RA-10 (6 rows)",
+            "CORE-OOS-4"
+          ],
+          "arch_rules": [
+            "t1_entry_only_from_sign_batch (amended: allowed set shrinks to sign_batch.rs; synthetic violation calling it from claim_add.rs)"
+          ],
+          "shipped_migrations": {},
+          "green": [
+            "cargo nextest run -p cli --test owner_only_signing_repos --test owner_only_signing --test owner_only_signing_core --test walking_skeleton",
+            "cargo test -p claim-domain",
+            "cargo test -p review-domain",
+            "cargo test -p xtask",
+            "cargo xtask check-arch",
+            "cargo nextest run -p cli",
+            "cargo nextest run -p openlore-review-app"
+          ],
+          "implementation_notes": "RED driver: RA-10. Secondary driver: CORE-OOS-4 (ruling M4/F7: PermitBasis::RepoListed is first constructed here by may_sign_from_checks). T1 callers after this step: sign_batch only. Any shipped failure 02-06 missed goes into this step's shipped_migrations and the commit message (RED protocol). If an exhaustive match on PermitBasis exists in review-domain or the review app, add the arm without behaviour change. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-06"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/owner_only_signing_repos.rs",
+            "tests/acceptance/owner_only_signing_core.rs",
+            "crates/claim-domain/src/authority.rs",
+            "crates/review-domain/src/plans.rs",
+            "crates/cli/src/verbs/claim_add.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/cli/src/render/authority.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: the younger instead of the older check; a RepoListed permit without a listing; claim add still calling the T1 entry (rule test); a stale observation accepted."
+        },
+        {
+          "id": "02-08",
+          "name": "Renamed and missing repos are refused at signing",
+          "description": "H4c: claim add refuses a repo GitHub does not have (RepoNotFound) and a repo GitHub now serves under another name (RepoRenamed, from full_name_seen). T1 is closed for claim add.",
           "criteria": [
             "RA-15 refuses acme-tools/vanished as not found on GitHub; nothing signed.",
-            "RA-8 signs tidepool-rs and refuses tidepool, naming the name GitHub serves now.",
-            "WS-1..WS-10 pass on a seeded repo-listed check or a non-github: subject, and one I-9 offline test keeps a non-github: subject."
+            "RA-8 signs tidepool-rs and refuses tidepool, naming the name GitHub serves now."
           ],
           "test_file": "tests/acceptance/owner_only_signing_repos.rs",
           "scenario_name": "a_repo_github_does_not_have_is_recorded_as_not_found_and_cannot_be_signed",
@@ -723,29 +766,25 @@
           ],
           "n_scenarios": [
             "RA-15",
-            "RA-8 (2 rows)",
-            "WS-1..WS-10 migration (U-OOS-2)"
+            "RA-8 (2 rows)"
           ],
           "arch_rules": [],
-          "shipped_migrations": {
-            "tests/acceptance/walking_skeleton.rs": "NON-GITHUB-SUBJECT for the I-9 offline test; SEEDED-GIVEN (repo-listed check) or NON-GITHUB-SUBJECT for the rest, keeping KPI-5 / I-9 meaning"
-          },
+          "shipped_migrations": {},
           "green": [
-            "cargo nextest run -p cli --test owner_only_signing_repos --test walking_skeleton",
+            "cargo nextest run -p cli --test owner_only_signing_repos",
             "cargo test -p claim-domain",
             "cargo test -p xtask",
             "cargo xtask check-arch",
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "RED driver: RA-15. Secondary driver: RA-8 (RepoRenamed from the observation's full_name_seen; reuse the shipped SigningRefusal::RepoRenamed). U-OOS-2: the brief's I-9 row should name the replacement test; DESIGN owns that text, so report the name, do not edit the brief. T1 closed for claim add; the scrape sign batch closes it in 02-08. TEST PARADIGM: conventions.test_paradigm.",
-          "estimate_hours": 5,
+          "implementation_notes": "RED driver: RA-15. Secondary driver: RA-8 (RepoRenamed from the observation's full_name_seen; reuse the shipped SigningRefusal::RepoRenamed). WS-1..WS-10 already migrated in 02-06 (ruling F4). T1 callers: sign_batch only. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
           "depends_on": [
-            "02-06"
+            "02-07"
           ],
           "files_to_modify": [
             "tests/acceptance/owner_only_signing_repos.rs",
-            "tests/acceptance/walking_skeleton.rs",
             "crates/claim-domain/src/authority.rs",
             "crates/cli/src/verbs/claim_add.rs",
             "crates/cli/src/render/authority.rs"
@@ -754,15 +793,14 @@
           "mutation_note": "Kill: a renamed repo signed under its old name; letter case alone treated as a rename; a repo_not_found observation permitting."
         },
         {
-          "id": "02-08",
+          "id": "02-09",
           "name": "Scrape --sign records an observation and gates each candidate",
           "description": "scrape github <owner/repo> and scrape person record one observation per scraped repo (+2 GETs), refresh the signer's own link with --sign (01-06 path), then gate each selected candidate; refused ones stay listed with the hand-off. Budget exhaustion falls back to the latest check. Deletes the T1 entry.",
           "criteria": [
             "RA-1: Jeff imports tidepool and signs candidate 1; it is published, reads owner, and the authority file was read once.",
             "RA-2: anvil and kelp candidates are listed but refused, each naming the reason, who can sign and the command they would run.",
             "RA-13 checks Jeff's profile before signing: bio holds signs, bio gone refuses, GitHub failing within 7 days signs on the 1 October check.",
-            "RA-6: budget gone before the authority read still lists candidates; never checked refuses with retry-after and the re-check command; 1 October checks sign.",
-            "No unchecked repo permit can be minted any more: the T1 transitional entry no longer exists."
+            "RA-6: budget gone before the authority read still lists candidates; never checked refuses with retry-after and the re-check command; 1 October checks sign."
           ],
           "test_file": "tests/acceptance/owner_only_signing_repos.rs",
           "scenario_name": "jeff_imports_his_own_repo_and_signs_what_it_shows",
@@ -778,7 +816,10 @@
             "RA-13 (5 rows)",
             "RA-6 (2 rows)"
           ],
-          "arch_rules": [],
+          "arch_rules": [
+            "t1_entry_only_from_sign_batch (DELETED together with permit_ungated_repo_t1 and PermitBasis::UngatedT1)",
+            "T1 absence gate: the name permit_ungated_repo_t1 appears nowhere under crates/ or xtask/ (grep gate in green)"
+          ],
           "shipped_migrations": {
             "tests/acceptance/scrape_sign.rs": "SEEDED-GIVEN (link or authority file for the signed repo) or EXPECTATION (a non-owner signature now refused)",
             "tests/acceptance/scrape_github.rs": "SEEDED-GIVEN; U-OOS-9 exclusion if a request count included the authority read",
@@ -792,15 +833,16 @@
             "cargo test -p scraper-domain",
             "cargo test -p claim-domain",
             "cargo test -p openlore-test-support",
+            "! grep -rn permit_ungated_repo_t1 crates xtask",
             "cargo test -p xtask",
             "cargo xtask check-arch",
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "RED driver: RA-1. Secondary drivers: RA-2 rows 1-2 (repo hand-off), RA-6 (retry-after refusal), RA-13 rows 1-2 and 4. Guard rows: RA-13 rows 3 and 5 reuse the 01-06 fallback (mutation: skip the refresh). The harvest's own /repos body is not reused (ADR-087 §6). U-OOS-9 also checked for the review-app RRA oracles (they share the fake). T1 fully closed (conventions.transitional_risks). TEST PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "RED driver: RA-1. Secondary drivers: RA-2 rows 1-2 (repo hand-off), RA-6 (retry-after refusal), RA-13 rows 1-2 and 4. Guard rows: RA-13 rows 3 and 5 reuse the 01-06 fallback (mutation: skip the refresh). sign_batch switches from the T1 entry to may_sign_from_checks; then the entry, PermitBasis::UngatedT1 and the t1 rule are deleted: T1 fully closed. claim_counter.rs and claim_retract.rs are not touched (they hold exempt permits since 02-05); list them only if they change. The harvest's own /repos body is not reused (ADR-087 §6). U-OOS-9 also checked for the review-app RRA oracles (they share the fake). TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 9,
           "depends_on": [
-            "02-07"
+            "02-08"
           ],
           "files_to_modify": [
             "tests/acceptance/owner_only_signing_repos.rs",
@@ -812,6 +854,7 @@
             "crates/scraper-domain/src/lib.rs",
             "crates/claim-domain/src/authority.rs",
             "crates/cli/src/wiring.rs",
+            "xtask/src/check_arch.rs",
             "crates/test-support/src/fake_github_accounts.rs",
             "tests/acceptance/scrape_sign.rs",
             "tests/acceptance/scrape_github.rs",
@@ -823,7 +866,7 @@
           "mutation_note": "Kill: an observation recorded before the read succeeded; a refused candidate dropped; the own-link refresh skipped; a stale fallback check accepted."
         },
         {
-          "id": "02-09",
+          "id": "02-10",
           "name": "Organization repos sign only through an exact authority-file listing",
           "description": "RepoListed end to end: the adapter decodes the contents body (type file, base64, at most 4 KiB, UTF-8) into Absent, Present(dids) or Invalid; exact DID tokens, # comments, the ADR-076 matcher. Every observation reads the file, so a listing never depends on who observed last.",
           "criteria": [
@@ -855,7 +898,7 @@
           "implementation_notes": "RED driver: RA-3 (one code path: decode then classify; rows are the ADR-087 lie catalogue). Guard: RA-9 (mutation: read the file only when the observer is not the owner). Reuse the hoisted DID-token matcher from identity_link.rs. The contract test gains the decode cases as crafter-owned rows. TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 5,
           "depends_on": [
-            "02-08"
+            "02-09"
           ],
           "files_to_modify": [
             "tests/acceptance/owner_only_signing_repos.rs",
@@ -869,14 +912,14 @@
           "mutation_note": "Kill: case-insensitive DID match; prefix match; `<` for `<=` at 4 KiB; a symlink followed; a commented line counted."
         },
         {
-          "id": "02-10",
+          "id": "02-11",
           "name": "claim publish needs a permit for never-published claims",
-          "description": "publish_signed_claim takes &SigningPermit at all six callers. claim publish <cid> mints one through the CLI entry when published_at IS NULL; an already-published claim re-publishes idempotently with an exempt permit. Closes T2. A transfer shows as third-party on re-check; nothing is retracted.",
+          "description": "publish_signed_claim takes &SigningPermit at all six callers. claim publish <cid> mints one through may_sign_from_checks when published_at IS NULL; an already-published claim re-publishes idempotently with an exempt permit. Closes T2. A transfer shows as third-party on re-check; nothing is retracted.",
           "criteria": [
             "RA-11a: Jeff's pre-feature unpublished claim about BurntSushi/ripgrep is never published, online or offline, and the refusal names the re-check command.",
             "RA-11b: never published publishes on fresh checks; after a transfer and re-check it is refused; already published re-publishes idempotently, repo unchanged.",
             "RA-7: after the transfer Jeff's claim reads third-party; nothing is retracted, deleted, re-signed or published.",
-            "An unpublished person claim without fresh authority is no longer publishable (T2 closed)."
+            "An unpublished claim about someone else's github:<login> is refused by claim publish (crafter test closing T2)."
           ],
           "test_file": "tests/acceptance/owner_only_signing_repos.rs",
           "scenario_name": "a_claim_jeff_signed_about_someone_elses_repo_before_owner_only_signing_is_never_published",
@@ -885,10 +928,14 @@
             "owner_only_signing_repos::publishing_a_stored_claim_later_asks_for_authority_only_if_it_was_never_published",
             "owner_only_signing_repos::after_jeff_transfers_his_repo_his_earlier_claim_reads_third_party_and_nothing_is_withdrawn"
           ],
+          "crafter_tests": [
+            "crates/cli/src/verbs/claim_publish.rs #[cfg(test)] an_unpublished_person_claim_about_someone_elses_login_is_refused — RED first: a stored, never-published github:rachelk claim by Jeff (no link to rachelk) is refused with no PDS write; closes T2 (ruling F3)"
+          ],
           "n_scenarios": [
             "RA-11a (2 rows)",
             "RA-11b (3 rows)",
-            "RA-7 (guard)"
+            "RA-7 (guard)",
+            "T2 person-publish crafter test"
           ],
           "arch_rules": [
             "sign_only_with_permit (amended: publish_signed_claim requires &SigningPermit at every caller)"
@@ -902,16 +949,17 @@
           },
           "green": [
             "cargo nextest run -p cli --test owner_only_signing_repos --test owner_only_signing",
+            "cargo test -p cli --lib claim_publish",
             "cargo test -p claim-domain",
             "cargo test -p xtask",
             "cargo xtask check-arch",
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "RED driver: RA-11a. Secondary driver: RA-11b row 2 (refusal after transfer). Guard: RA-7 (mutation: authority verify retracting a claim that lost authority). claim add, counter, retract, the batch and identity_link pass the permit they already hold; check tables are only read on publish. T2 (conventions.transitional_risks) closes here. Phase 02 closure: every RA scenario and CORE-OOS-3/4 active. TEST PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "RED driver: RA-11a. Secondary drivers: RA-11b row 2 (refusal after transfer) and the T2 crafter test (crafter_tests, ruling F3). Guard: RA-7 (mutation: authority verify retracting a claim that lost authority). Counter and retract already hold exempt permits since 02-05 (ruling F1); claim add, the batch and identity_link pass the permit they already hold; check tables are only read on publish. Phase 02 closure: every RA scenario and CORE-OOS-3/4 active; T1 and T2 closed. TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 6,
           "depends_on": [
-            "02-09"
+            "02-10"
           ],
           "files_to_modify": [
             "tests/acceptance/owner_only_signing_repos.rs",
@@ -931,7 +979,7 @@
             "tests/acceptance/cross_instance_pull.rs"
           ],
           "files_to_create": [],
-          "mutation_note": "Kill: published_at ignored (re-publish refused or never-published allowed); an exempt permit for a never-published assertion; a publish without a permit compiling."
+          "mutation_note": "Kill: published_at ignored (re-publish refused or never-published allowed); an exempt permit for a never-published assertion; a person claim about someone else published."
         }
       ]
     },
@@ -967,6 +1015,7 @@
             "tests/acceptance/viewer_contributor_scoring.rs": "SEEDED-GIVEN or EXPECTATION (weight)",
             "tests/acceptance/viewer_contributor_scoring_invariants.rs": "SEEDED-GIVEN or EXPECTATION (weight)",
             "tests/acceptance/viewer_counter_aware_counts.rs": "SEEDED-GIVEN or EXPECTATION (counters no longer weighted)",
+            "tests/acceptance/viewer_counter_aware_counts_invariants.rs": "SEEDED-GIVEN or EXPECTATION (counters no longer weighted)",
             "tests/acceptance/viewer_peer_counter_aware_counts.rs": "SEEDED-GIVEN or EXPECTATION (weight)",
             "tests/acceptance/viewer_counter_flags_score_surface.rs": "SEEDED-GIVEN or EXPECTATION (weight)",
             "tests/acceptance/viewer_counter_flags_score_surface_invariants.rs": "SEEDED-GIVEN or EXPECTATION (weight)",
@@ -991,7 +1040,7 @@
           "implementation_notes": "RED driver: CORE-OOS-5 (stub score_attested with todo!() first; the oracle uses the REAL scoring::score). Secondary driver: RD-4 (row 1 confirms A-13 today). Readers hold check READ ports only. Prefer seeding authority in a Given over changing an expected weight. Anti-merging SQL rule unchanged. RED protocol: full cli suite at RED. TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 10,
           "depends_on": [
-            "02-10"
+            "02-11"
           ],
           "files_to_modify": [
             "tests/acceptance/owner_only_signing_core.rs",
@@ -1008,6 +1057,7 @@
             "tests/acceptance/viewer_contributor_scoring.rs",
             "tests/acceptance/viewer_contributor_scoring_invariants.rs",
             "tests/acceptance/viewer_counter_aware_counts.rs",
+            "tests/acceptance/viewer_counter_aware_counts_invariants.rs",
             "tests/acceptance/viewer_peer_counter_aware_counts.rs",
             "tests/acceptance/viewer_counter_flags_score_surface.rs",
             "tests/acceptance/viewer_counter_flags_score_surface_invariants.rs",
@@ -1219,7 +1269,7 @@
           "description": "P-OOS-2: the share preview re-reads Priya's bio and each quoted repo's owner in the request, as publish does, and quotes a claim only when ADR-089 may_sign permits it; others are listed 'not counted: authority not proven'. Nothing is posted before confirm.",
           "criteria": [
             "SA-1: after kelp's transfer the draft names test-driven, not dependency-pinning, lists kelp's claim 'not counted: authority not proven', and nothing is posted.",
-            "When GitHub cannot answer for a quoted repo, that claim is listed as not counted rather than quoted.",
+            "When GitHub cannot answer for a quoted repo, that claim is listed as not counted rather than quoted (crafter test).",
             "Shipped share and RRA request-count suites stay green; the U-OOS-9 exclusion is applied only if the share path reads the authority file."
           ],
           "test_file": "tests/acceptance/owner_only_signing_review_app.rs",
@@ -1227,8 +1277,12 @@
           "scenario_fns": [
             "owner_only_signing_review_app::priyas_share_post_names_only_claims_about_repos_she_still_owns"
           ],
+          "crafter_tests": [
+            "crates/openlore-review-app/src/routes/share.rs #[cfg(test)] share_preview_lists_a_claim_as_not_counted_when_github_cannot_answer — Unfinished repo or bio read: the claim is listed 'not counted: authority not proven', never quoted, nothing posted"
+          ],
           "n_scenarios": [
-            "SA-1"
+            "SA-1",
+            "GitHub-unavailable share crafter test"
           ],
           "arch_rules": [],
           "shipped_migrations": {
@@ -1237,12 +1291,14 @@
           "green": [
             "cargo nextest run -p openlore-review-app --test owner_only_signing_review_app --test review_app_consent_and_share",
             "cargo test -p review-domain",
+            "cargo test -p openlore-test-support",
+            "cargo test -p openlore-review-app --lib share",
             "cargo test -p xtask",
             "cargo xtask check-arch",
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "RED driver: SA-1. The share preview uses read_repo + the owner's profile through ADR-089 may_sign only (owner tier; org repos are not reachable in the app in v1), once per distinct repo, inside the per-DID budget. Pure quoting rule in review-domain share.rs over permits; the route does the reads. U-OOS-10: no new counter (conventions.deferred_rulings). RED protocol: full review-app suite at RED. TEST PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "RED driver: SA-1. Secondary driver: the GitHub-unavailable crafter test (crafter_tests, ruling L1). The share preview uses read_repo + the owner's profile through ADR-089 may_sign only (owner tier; org repos are not reachable in the app in v1), once per distinct repo, inside the per-DID budget. Pure quoting rule in review-domain share.rs over permits; the route does the reads. U-OOS-10: no new counter (conventions.deferred_rulings). RED protocol: full review-app suite at RED. TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 5,
           "depends_on": [
             "03-05"
@@ -1299,10 +1355,10 @@
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "RED driver: IC-1. Secondary drivers: IC-3 (empty message), IC-2 (record on import). Guard: IC-5 (already active; mutation: feed imported rows to infer people). v9, not v8: see conventions.migrations. Split read/write ports as for repo checks; candidates list holds the read port only. No signing column; signing still re-derives through the gate. TEST PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "RED driver: IC-1. Secondary drivers: IC-3 (empty message), IC-2 (record on import). Guard: IC-5 (already active; mutation: feed imported rows to infer people). v9, not v8: see conventions.migrations. Split read/write ports as for repo checks; candidates list holds the read port only. No signing column; signing still re-derives through the gate. Depends on 03-05 (ruling L4): IC-2's weighted-view Then needs score_attested; independent of 04-01. TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 7,
           "depends_on": [
-            "04-01"
+            "03-05"
           ],
           "files_to_modify": [
             "tests/acceptance/owner_only_signing_repos.rs",
@@ -1352,10 +1408,11 @@
             "cargo nextest run -p cli",
             "cargo nextest run -p openlore-review-app"
           ],
-          "implementation_notes": "RED driver: IC-4. Tie-break on equal imported_at by max import_id, mirroring the check tables. TEST PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "RED driver: IC-4. Tie-break on equal imported_at by max import_id, mirroring the check tables. Runs after 04-01 and 05-01 so the closure criterion covers SA-1. TEST PARADIGM: conventions.test_paradigm.",
           "estimate_hours": 2,
           "depends_on": [
-            "05-01"
+            "05-01",
+            "04-01"
           ],
           "files_to_modify": [
             "tests/acceptance/owner_only_signing_repos.rs",
@@ -1405,26 +1462,21 @@
   },
   "validation": {
     "status": "pending",
-    "note": "Revision 1: 24 steps (6 + 10 + 5 + 1 + 2) covering 50 owner_only_signing test fns (44 example scenarios + 6 CORE-OOS properties), each activated in exactly one step; active guards PS-3, PS-7, IC-5 named as guards; 02-02 driven by a crafter-owned contract test; fixture regenerator excluded.",
-    "review_iteration_1_applied": {
-      "H1": "Every green list ends with cargo test per touched crate, cargo test -p xtask, cargo xtask check-arch, cargo nextest run -p cli, cargo nextest run -p openlore-review-app.",
-      "H2": "Each DISTILL-listed shipped file appears in files_to_modify and shipped_migrations (file -> change type) of the step that breaks it; RED protocol in conventions.shipped_suite_migration.",
-      "H3": "Six sign sites and six publish_signed_claim callers named (conventions.sign_sites); identity_link routed through sign_permitted with an exempt permit in 02-05; claim_counter, claim_retract, identity_link added to 02-10.",
-      "H4": "Old 02-04 split into 02-05 (behaviour-neutral sign_permitted refactor + sign_only_with_permit, PS-3/PS-7 guards), 02-06 (RA-10 repo gate + helper migrations), 02-07 (RA-15, RA-8, WS-1..10).",
-      "H5": "Refusal tally removed; deferred (conventions.deferred_rulings).",
-      "M1": "Old 02-02 split into 02-02 (read_repo_authority + U-OOS-8 contract test) and 02-03 (authority verify, RA-4 + --mine, RA-14, reader-handle rule).",
-      "M2": "01-03 = PS-2 (+ supersedes row), PS-8, PS-7 guard; person rows by crafter proptests.",
-      "M3": "authority_evidence_only_from_adapters amended in 01-01 with its synthetic-violation test.",
-      "M4": "Repo tiers and CORE-OOS-3 activate in 02-03; PermitBasis::RepoListed and CORE-OOS-4 in 02-06.",
-      "M5": "T2 recorded (conventions.transitional_risks), closed in 02-10.",
-      "M6": "Supersedes row in PS-2 in 01-03; fallback text removed.",
-      "L1": "RD-5 is a secondary driver in 03-02.",
-      "L2": "gate_order reworded.",
-      "L3": "xtask rules moved to arch_rules; criteria state outcomes.",
-      "L4": "Target names stable; no consolidation.",
-      "L5": "review_app_consent_and_share.rs marked ONLY-IF-CHANGED.",
-      "L6": "Build-time measurement moved to 01-01 notes and the execution log.",
-      "NOTE_ADR089": "01-01 and 02-06 criteria: may_sign signature, body and ADR-089 unit tests unchanged."
+    "note": "Revision 2: 25 steps (6 + 11 + 5 + 1 + 2) covering 50 owner_only_signing test fns (44 example scenarios + 6 CORE-OOS properties), each activated in exactly one step; active guards PS-3, PS-7, IC-5 named as guards; 02-02, 02-05, 02-06 have no DISTILL activation by design; fixture regenerator excluded.",
+    "review_iteration_2_applied": {
+      "F1": "02-05: claim_counter, claim_retract, identity_link mint exempt permits and never call the T1 entry; T1 callers = claim_add (02-05..02-06) + sign_batch (02-05..02-08); xtask t1_entry_only_from_sign_batch added in 02-05, shrunk to sign_batch in 02-07 (the RA-10 step, old 02-06), deleted with the entry in 02-09 (old 02-08) with a grep absence gate in green; claim_counter/claim_retract not listed in 02-09; 02-11 notes say counter/retract already hold exempt permits.",
+      "F2": "conventions.gate_order lists may_sign (shipped), may_sign_from_checks (01-01, kept), exempt_permit + PermitBasis::Exempt (02-05, kept), permit_ungated_repo_t1 + PermitBasis::UngatedT1 (02-05 to 02-09).",
+      "F3": "02-11 crafter_tests: claim_publish.rs an_unpublished_person_claim_about_someone_elses_login_is_refused, closes T2.",
+      "F4": "Old 02-06 split into 02-06 (behaviour-neutral helper/caller migrations incl. WS-1..WS-10, gate off) and 02-07 (RA-10 gate + CORE-OOS-4 + PermitBasis::RepoListed); later steps renumbered (old 02-07..02-10 -> 02-08..02-11). WS-1..WS-10 moved into 02-06 because the gate now turns on in 02-07, before the RA-15/RA-8 step.",
+      "F5": "viewer_counter_aware_counts_invariants.rs added to 03-01 files and shipped_migrations.",
+      "F6": "conventions.paradigm records the one-step exception: read_repo_authority test-only in 02-02, closed by authority verify in 02-03.",
+      "F7": "conventions.core_binding_red names Authority::Attested(RepoListed) (classify tier, authority verify, 02-03) and PermitBasis::RepoListed (may_sign_from_checks, RA-10 step 02-07).",
+      "F8": "01-01 notes: record the failing set of the full cli RED run and list every failing shipped file in shipped_migrations before the step ends.",
+      "L1": "04-01 green has cargo test -p openlore-test-support; crafter test share_preview_lists_a_claim_as_not_counted_when_github_cannot_answer named.",
+      "L2": "Structural criteria moved to arch_rules (01-01 evidence rule; 02-09 T1 absence).",
+      "L3": "02-05 has a guards field (PS-3, PS-7 with recorded mutation RED).",
+      "L4": "05-01 depends_on 03-05.",
+      "L5": "conventions.transitional_risks names the T1 callers per step."
     },
     "by": "nw-solution-architect (Morgan)",
     "date": "2026-10-20"
