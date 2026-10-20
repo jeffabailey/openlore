@@ -1,7 +1,7 @@
 # Slice 01 — Only Jeff signs about Jeff's GitHub account (walking skeleton)
 
 > Stories: S-OOS-1, S-OOS-2, S-OOS-3 (person checks) · Persona: P-001 (Jeff)
-> Jobs: J-001, J-003 (J-003b) · Infrastructure-only: **no**
+> Jobs: J-011, J-001, J-003 (J-003b) · Infrastructure-only: **no**
 > Depends on: github-did-identity-link slice 1 (identity link + v7 link checks) · Estimate: ~3 days
 > Derived from DESIGN slice 1 (`design/wave-decisions.md`); no DISCUSS interviews.
 

@@ -1,7 +1,7 @@
 # Slice 02 — Only a repo's owner or listed maintainers sign about it; anyone imports
 
 > Stories: S-OOS-4, S-OOS-5, S-OOS-6, S-OOS-3 (repo checks) · Persona: P-001 (Jeff)
-> Jobs: J-004 (J-004c), J-003 (J-003a), J-001 · Infrastructure-only: **no**
+> Jobs: J-011, J-004 (J-004c), J-003 (J-003a), J-001 · Infrastructure-only: **no**
 > Depends on: slice 01, GDL slice 1 (owner tier only; the repo-listed tier works without a link)
 > Estimate: ~5 days (three stories; split by story if needed)
 > Derived from DESIGN slice 2; no DISCUSS interviews.
