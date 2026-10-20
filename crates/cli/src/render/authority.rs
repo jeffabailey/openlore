@@ -23,7 +23,7 @@ fn refusal_reason(subject: &str, reason: Unattested) -> String {
 }
 
 /// Who can sign instead, and the command that gets them there.
-fn hand_off(can_sign: &WhoCanSign) -> String {
+pub(crate) fn hand_off(can_sign: &WhoCanSign) -> String {
     match can_sign {
         WhoCanSign::OwnerAfterLinking { login } => {
             format!("{CAN_BE_SIGNED_BY} {login}, after `openlore identity link github {login}`.")

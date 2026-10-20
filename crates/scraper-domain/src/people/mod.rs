@@ -32,8 +32,9 @@ pub use inference::{infer_person_candidates, repo_subjects_to_read};
 pub use overlap::{possible_renames, shared_contributors, SharedContributor};
 pub use provenance::{encode_provenance, parse_provenance, CitedClaim};
 pub use report::{
-    infer_people_report, new_inferred_candidate_count, AlreadySigned, CandidateStatus,
-    InferenceFilter, InferenceReport, NumberedCandidate, OwnClaim,
+    candidate_signers, infer_people_report, new_inferred_candidate_count, AlreadySigned,
+    CandidateSigner, CandidateStatus, InferenceFilter, InferenceReport, NumberedCandidate,
+    OwnClaim,
 };
 pub use selection::{
     contributor_count_for, is_bot, select_contributors, ContributorCountError,

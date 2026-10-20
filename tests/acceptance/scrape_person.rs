@@ -33,6 +33,8 @@ fn given_burntsushi_person_picture(
     now: Option<&str>,
     sign_at: Option<&str>,
 ) -> String {
+    // Maria owns the BurntSushi account: only its owner signs the inference (UC-9).
+    given_i_own_github_account(env, "BurntSushi", BURNTSUSHI_ID, sign_at);
     for repo in ["BurntSushi/ripgrep", "rust-lang/regex", "BurntSushi/jiff"] {
         given_repo_scraped(env, repo, burntsushi_only(), now);
     }
@@ -122,6 +124,9 @@ fn signing_from_the_person_view_is_the_same_as_signing_from_infer_people() {
     let via_infer = TestEnv::initialized();
     given_burntsushi_person_picture(&via_scrape, Some(T1), Some(T1));
     given_burntsushi_person_picture(&via_infer, Some(T1), Some(T1));
+    // AND Maria re-checked her BurntSushi link in each store at T2 (UC-9).
+    given_i_rechecked_my_github_account(&via_scrape, "BurntSushi", BURNTSUSHI_ID, Some(T2));
+    given_i_rechecked_my_github_account(&via_infer, "BurntSushi", BURNTSUSHI_ID, Some(T2));
     let before_scrape = claim_files(&via_scrape);
     let before_infer = claim_files(&via_infer);
 

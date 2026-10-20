@@ -29,6 +29,8 @@ use claim_domain::ReferenceType;
 /// ripgrep memory-safety and then SIGNED the inference from that ONE repo
 /// (claim `p7`). Returns `(p7, ripgrep_claim)`.
 fn given_i_signed_the_inference_from_ripgrep_alone(env: &TestEnv) -> (String, String) {
+    // Maria owns the BurntSushi account: only its owner signs the inference (UC-9).
+    given_i_own_github_account(env, "BurntSushi", BURNTSUSHI_ID, None);
     given_repo_scraped(env, "BurntSushi/ripgrep", burntsushi_only(), None);
     given_repo_scraped(env, "rust-lang/regex", burntsushi_only(), None);
     let ripgrep_claim =
@@ -47,6 +49,8 @@ fn given_i_signed_the_inference_from_ripgrep_alone(env: &TestEnv) -> (String, St
 /// GIVEN (chained): the canonical two-repo store (Maria ripgrep + Rachel
 /// regex) and Maria signed the inference citing BOTH (claim `p9`).
 fn given_i_signed_the_inference_citing_rachel(env: &TestEnv) -> (String, SubscribedPeer) {
+    // Maria owns the BurntSushi account: only its owner signs the inference (UC-9).
+    given_i_own_github_account(env, "BurntSushi", BURNTSUSHI_ID, None);
     let (_, rachel) = given_burntsushi_builds_two_signed_memory_safe_repos(env);
     let before = claim_files(env);
     let signed = infer_people_with(env, &["--sign", "1"], &sign_stdin("", false), None);

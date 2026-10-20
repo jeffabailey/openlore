@@ -411,7 +411,6 @@ fn store_where_jeff_and_burntsushi_build_memory_safe_repos() -> LinkWorld {
 ///   And his earlier adherence about BurntSushi reads as before
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing PS-5: pending DELIVER"]
 fn jeff_signs_an_inferred_adherence_only_about_himself() {
     let rows: [(Account, Option<Refusal>); 2] =
         [(JEFF_GH, None), (BURNTSUSHI_GH, Some(Refusal::NoLink))];
@@ -513,7 +512,6 @@ fn store_where_jeff_signed_burntsushis_inference_then_withdrew_the_link() -> (Li
 ///   And nothing in his store or published repo changed
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing PS-6: pending DELIVER"]
 fn jeffs_inferred_people_say_who_can_sign_each_candidate_and_listing_writes_nothing() {
     let world = store_where_jeff_and_burntsushi_build_memory_safe_repos();
     let seen = what_jeff_sees(&world, Subject::Person(JEFF_GH));

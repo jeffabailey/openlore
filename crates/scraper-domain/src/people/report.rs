@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use claim_domain::authority::WhoCanSign;
 use claim_domain::{
     is_self_retracted, is_superseded_by_author, ClaimLineage, ClaimReference, ReferenceType,
 };
@@ -171,6 +172,54 @@ fn place_candidate(
             (still_signed_lines, Some(numbered))
         }
     }
+}
+
+/// Who may sign a numbered candidate (ADR-086 §10, UC-9): the signer, when
+/// it is about a GitHub account they own; anyone else's inferred adherence
+/// is a candidate only, signed by that account's owner after linking it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CandidateSigner {
+    /// The signer owns the account the candidate is about.
+    You,
+    /// Someone else: who can sign it instead.
+    Other(WhoCanSign),
+}
+
+/// Who may sign each numbered candidate, keyed by its person subject.
+/// `owned_logins`: the GitHub logins the signer owns (compared
+/// case-insensitively, as GitHub compares logins).
+pub fn candidate_signers(
+    report: &InferenceReport,
+    owned_logins: &[String],
+) -> BTreeMap<String, CandidateSigner> {
+    report
+        .candidates
+        .iter()
+        .map(|numbered| numbered.candidate.person_subject())
+        .map(|person| (person.to_string(), candidate_signer(person, owned_logins)))
+        .collect()
+}
+
+/// Who may sign a candidate about `person_subject` (`github:<login>`).
+fn candidate_signer(person_subject: &str, owned_logins: &[String]) -> CandidateSigner {
+    let login = person_login(person_subject);
+    if owned_logins
+        .iter()
+        .any(|owned| owned.eq_ignore_ascii_case(login))
+    {
+        CandidateSigner::You
+    } else {
+        CandidateSigner::Other(WhoCanSign::OwnerAfterLinking {
+            login: login.to_string(),
+        })
+    }
+}
+
+/// The login of a `github:<login>` person subject.
+fn person_login(person_subject: &str) -> &str {
+    person_subject
+        .split_once(':')
+        .map_or(person_subject, |(_, login)| login)
 }
 
 /// DDD-14 change summary: how many numbered (unsigned) inferred candidates

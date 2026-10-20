@@ -23,13 +23,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, Result};
+use chrono::{DateTime, Utc};
+use claim_domain::authority::{
+    classify_person, requirement, ClaimShape, LinkedAccountEvidence, PersonAuthority, Requirement,
+};
 use claim_domain::identity_link::{links_of_person, ListedLink, PersonKey, RecheckScope};
 use claim_domain::{Cid, ClaimReference, ReferenceType};
 use ports::{read_listed_links, ContributionLink, LinkFilter, PageRequest, StoreReadError};
 use scraper_domain::{
-    encode_provenance, infer_people_report, possible_renames, repo_subjects_to_read,
-    CandidateStatus, InferenceFilter, InferenceReport, NumberedCandidate, OwnClaim, PersonSubject,
-    RepoClaim, ADHERES_TO_PHILOSOPHY,
+    candidate_signers, encode_provenance, infer_people_report, possible_renames,
+    repo_subjects_to_read, CandidateSigner, CandidateStatus, InferenceFilter, InferenceReport,
+    NumberedCandidate, OwnClaim, PersonSubject, RepoClaim, ADHERES_TO_PHILOSOPHY,
 };
 
 use crate::render::{render_linked_inference_report, render_person_derived_from, PersonLinkLines};
@@ -71,6 +75,7 @@ pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome
         .map(|numbered| numbered.candidate.person_subject())
         .collect();
     let identity_links = read_person_link_lines(wiring, people, &links)?;
+    let signers = read_candidate_signers(wiring, &report)?;
     let outcome = sign_batch::list_or_sign(
         wiring,
         &person_signables(&report),
@@ -79,12 +84,52 @@ pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome
             &report,
             &candidate_renames(&report, &links),
             &identity_links,
+            &signers,
         ),
     )?;
     Ok(InferPeopleOutcome {
         exit_code: outcome.exit_code,
         stdout: outcome.stdout,
     })
+}
+
+/// Who may sign each candidate (UC-9): the signer for the accounts their
+/// verified links own, judged from this reader's local checks only (read
+/// ports; nothing is checked, written or fetched); everyone else's owner.
+fn read_candidate_signers(
+    wiring: &Wiring,
+    report: &InferenceReport,
+) -> Result<BTreeMap<String, CandidateSigner>> {
+    let now = wiring.clock.now_utc();
+    let links = wiring.signer_linked_accounts(now)?;
+    let owned_logins: Vec<String> = report
+        .candidates
+        .iter()
+        .filter_map(|numbered| owned_login(numbered.candidate.person_subject(), &links, now))
+        .collect();
+    Ok(candidate_signers(report, &owned_logins))
+}
+
+/// The login `person_subject` names, when the signer owns that account (the
+/// claim-domain person rule, ADR-087 §1). Pure.
+fn owned_login(
+    person_subject: &str,
+    links: &[LinkedAccountEvidence],
+    now: DateTime<Utc>,
+) -> Option<String> {
+    let claim = ClaimShape {
+        subject: person_subject,
+        predicate: ADHERES_TO_PHILOSOPHY,
+        reference_types: &[],
+    };
+    match requirement(claim) {
+        Requirement::Person(person) => matches!(
+            classify_person(&person, links, now),
+            PersonAuthority::Attested { .. }
+        )
+        .then(|| person.login().to_string()),
+        _ => None,
+    }
 }
 
 /// The inference as the store holds it NOW, under `filter`: read the links,

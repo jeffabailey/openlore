@@ -12,11 +12,14 @@
 use std::io::Write;
 
 use anyhow::{anyhow, Result};
+use claim_domain::authority::{may_sign_from_checks, requirement, ClaimShape, Requirement};
 use claim_domain::{
-    canonicalize, compute_cid, reference_rules_validate, ClaimLookup, ClaimReference, SignedClaim,
+    canonicalize, compute_cid, reference_rules_validate, ClaimLookup, ClaimReference,
+    ReferenceType, SignedClaim,
 };
 
 use crate::io::prompt_line;
+use crate::render::render_signing_refused;
 use crate::verbs::claim_add::{build_unsigned_claim, render_compose_preview, ComposedClaim};
 use crate::verbs::claim_publish::{publish_signed_claim, render_publish_success};
 use crate::verbs::StorageClaimLookup;
@@ -104,6 +107,7 @@ pub fn sign_selected(
     let total_selected = selection.len();
     let mut signed_count = 0usize;
     let mut skipped_count = 0usize;
+    let mut refused_count = 0usize;
     for (index, candidate) in selection {
         // After each signed candidate, announce progress BEFORE the next
         // candidate's compose preview: "(1 of 3 signed)" precedes the next
@@ -122,16 +126,30 @@ pub fn sign_selected(
                 std::io::stdout().flush()?;
                 skipped_count += 1;
             }
+            SignOutcome::Refused => refused_count += 1,
         }
     }
 
     // Final batch summary — the signed-vs-skipped tally over the whole pass
     // (US-SCR-005 Ex 2). Always emitted for a `--sign` batch so the human has a
     // single closing line confirming what crossed the human-gate.
-    println!("\n{signed_count} signed, {skipped_count} skipped");
+    println!(
+        "\n{signed_count} signed, {skipped_count} skipped{}",
+        refused_tally(refused_count)
+    );
     std::io::stdout().flush()?;
 
-    Ok(0)
+    // A refused signature exits non-zero (DWD-OOS-4).
+    Ok(if refused_count == 0 { 0 } else { 1 })
+}
+
+/// The summary's refused part: nothing when no candidate was refused.
+fn refused_tally(refused_count: usize) -> String {
+    if refused_count == 0 {
+        String::new()
+    } else {
+        format!(", {refused_count} refused")
+    }
 }
 
 /// Whether one candidate's slice-01 compose-sign gesture resulted in a signed
@@ -143,6 +161,9 @@ pub fn sign_selected(
 enum SignOutcome {
     Signed,
     Skipped,
+    /// The signer holds no authority over the candidate's subject: nothing
+    /// was signed, written or published (owner-only signing, UC-9).
+    Refused,
 }
 
 /// Resolve the raw `--sign N[,N...]` selection to the candidates it names,
@@ -232,6 +253,14 @@ fn sign_candidate_via_slice01(
         .map(str::to_string)
         .collect();
     let confidence = prompt_confidence(&mut stdout, &mut stdin, candidate.confidence)?;
+
+    // Owner-only signing (UC-9 / A-8): a person candidate is signed only by
+    // the owner of the account it is about. The claim gated is the one the
+    // human composed (an edited subject or predicate included), before any
+    // preview, signature, write or publish.
+    if refuse_without_authority(wiring, &subject, &predicate, &candidate.references)? {
+        return Ok(SignOutcome::Refused);
+    }
 
     // Assemble the composed claim — SAME shape `claim add` builds. composed_at
     // from the clock port for testable determinism.
@@ -361,6 +390,36 @@ fn sign_candidate_via_slice01(
     // or not the human then published — declining publish, SS-6, is still a
     // signature). So this is a SIGNED outcome for the batch tally.
     Ok(SignOutcome::Signed)
+}
+
+/// Refuse (printing why and who can sign) when the claim needs person
+/// authority the signer lacks, judged from this reader's local checks — the
+/// SAME gate `claim add` runs. Repo and exempt subjects keep today's path
+/// until the repo tier lands (accepted transitional risk T1).
+fn refuse_without_authority(
+    wiring: &Wiring,
+    subject: &str,
+    predicate: &str,
+    references: &[ClaimReference],
+) -> Result<bool> {
+    let reference_types: Vec<ReferenceType> = references.iter().map(|r| r.ref_type).collect();
+    let claim = ClaimShape {
+        subject,
+        predicate,
+        reference_types: &reference_types,
+    };
+    let Requirement::Person(person) = requirement(claim) else {
+        return Ok(false);
+    };
+    let now = wiring.clock.now_utc();
+    let links = wiring.signer_linked_accounts(now)?;
+    match may_sign_from_checks(&wiring.identity.author_did().0, &person, &links, now) {
+        Ok(_) => Ok(false),
+        Err(refusal) => {
+            eprint!("{}", render_signing_refused(&refusal));
+            Ok(true)
+        }
+    }
 }
 
 /// Whether the sign-prompt answer is the SKIP gesture: the literal `skip` /

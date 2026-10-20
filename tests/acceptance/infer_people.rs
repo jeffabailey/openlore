@@ -275,6 +275,8 @@ fn a_superseded_repo_claim_is_replaced_by_its_successor_as_support() {
 fn an_already_signed_person_philosophy_is_not_proposed_again() {
     // GIVEN Maria already signed BurntSushi memory-safety from the inference.
     let env = TestEnv::initialized();
+    // AND Maria owns the BurntSushi account: only its owner signs an inferred adherence (UC-9).
+    given_i_own_github_account(&env, "BurntSushi", BURNTSUSHI_ID, None);
     given_burntsushi_builds_two_signed_memory_safe_repos(&env);
     let files_before = claim_files(&env);
     let signed = infer_people_with(&env, &["--sign", "1"], &sign_stdin("", false), None);

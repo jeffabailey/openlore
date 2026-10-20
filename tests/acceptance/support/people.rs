@@ -327,6 +327,72 @@ pub fn sign_stdin(confidence: &str, publish: bool) -> String {
 // Seeding signed claims through the real verbs
 // =============================================================================
 
+/// GIVEN (person-subject seeding, owner-only signing UC-9): I own the GitHub
+/// account `login` — its bio names my DID and I linked it
+/// (`identity link github <login> --yes`) at `now`, so this reader's check of
+/// the link is verified then. Only the owner signs an inferred adherence
+/// about an account.
+pub fn given_i_own_github_account(env: &TestEnv, login: &str, github_id: u64, now: Option<&str>) {
+    beside_my_github_account(
+        env,
+        login,
+        github_id,
+        &["link", "github", login, "--yes"],
+        now,
+    );
+}
+
+/// GIVEN (person-subject seeding): I re-checked my identity links
+/// (`identity verify`) at `now` while GitHub still served my account `login`
+/// with my DID in its bio — a fresh check to sign from.
+pub fn given_i_rechecked_my_github_account(
+    env: &TestEnv,
+    login: &str,
+    github_id: u64,
+    now: Option<&str>,
+) {
+    beside_my_github_account(env, login, github_id, &["verify"], now);
+}
+
+/// Run `identity <args>` at `now` while GitHub serves my account `login`
+/// (bio naming my DID); the run must succeed.
+fn beside_my_github_account(
+    env: &TestEnv,
+    login: &str,
+    github_id: u64,
+    args: &[&str],
+    now: Option<&str>,
+) {
+    let github = openlore_test_support::FakeGithubAccounts::start(vec![
+        openlore_test_support::GithubAccount::new(login, github_id),
+    ]);
+    github.set_bio(
+        login,
+        Some(&super::identity_links::bio_naming(
+            super::identity_links::MY_DID,
+        )),
+    );
+    let mut full = vec!["identity"];
+    full.extend_from_slice(args);
+    let outcome = openlore_with(
+        env,
+        &full,
+        Invocation {
+            github_base: Some(github.base_url()),
+            now,
+            ..Invocation::default()
+        },
+    );
+    assert_eq!(
+        outcome.status,
+        0,
+        "precondition: `identity {}` beside my GitHub account {login};\n{}\n{}",
+        args.join(" "),
+        outcome.stdout,
+        outcome.stderr
+    );
+}
+
 /// The bare DID (fragment stripped) — the form `claim publish` mints into
 /// at-uris and ADR-064 evidence (Q-CPI-D3 pin).
 pub fn bare(did: &str) -> String {

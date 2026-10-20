@@ -8,12 +8,16 @@ use chrono::{DateTime, Utc};
 use claim_domain::identity_link::ListedLink;
 use ports::ContributionLink;
 
+use super::authority::hand_off;
 use super::common::plural_suffix;
 use super::identity::render_linked_identities;
 use scraper_domain::{
-    confidence_arithmetic, AlreadySigned, CandidateStatus, InferenceReport, NumberedCandidate,
-    PersonCandidate, WeakenedClaim, WeakenedSupport,
+    confidence_arithmetic, AlreadySigned, CandidateSigner, CandidateStatus, InferenceReport,
+    NumberedCandidate, PersonCandidate, WeakenedClaim, WeakenedSupport,
 };
+
+/// The per-candidate line for a candidate the signer may sign (UC-9).
+pub const YOU_CAN_SIGN: &str = "You can sign this candidate.";
 
 /// The whole `infer people` output: the candidate list (or the empty-result
 /// line), the pairs I already signed (unnumbered, with my claim's CID —
@@ -59,21 +63,34 @@ pub fn render_flagged_inference_report(
     report: &InferenceReport,
     renames: &BTreeMap<String, Vec<String>>,
 ) -> String {
-    render_linked_inference_report(report, renames, &PersonLinkLines::default())
+    render_linked_inference_report(
+        report,
+        renames,
+        &PersonLinkLines::default(),
+        &BTreeMap::new(),
+    )
 }
 
 /// [`render_flagged_inference_report`] with each candidate's published
 /// identity links (as this reader last checked them) under its block
-/// (ADR-085 §6): the same lines `identity list` shows.
+/// (ADR-085 §6): the same lines `identity list` shows. Each candidate in
+/// `signers` also says who can sign it (UC-9, ADR-086 §10).
 pub fn render_linked_inference_report(
     report: &InferenceReport,
     renames: &BTreeMap<String, Vec<String>>,
     links: &PersonLinkLines,
+    signers: &BTreeMap<String, CandidateSigner>,
 ) -> String {
     let mut out = if report.candidates.is_empty() && !report.already_signed.is_empty() {
         "No new inferred candidates (every inference here is already signed).\n".to_string()
     } else {
-        render_person_candidates(&report.candidates, &report.weakened, renames, links)
+        render_person_candidates(
+            &report.candidates,
+            &report.weakened,
+            renames,
+            links,
+            signers,
+        )
     };
     for already in &report.already_signed {
         out.push_str(&render_already_signed(already));
@@ -108,6 +125,7 @@ pub fn render_person_candidates(
     weakened: &[WeakenedClaim],
     renames: &BTreeMap<String, Vec<String>>,
     links: &PersonLinkLines,
+    signers: &BTreeMap<String, CandidateSigner>,
 ) -> String {
     if candidates.is_empty() {
         return "No inferred candidates (no signed repo claims about recorded contributors).\n"
@@ -119,6 +137,7 @@ pub fn render_person_candidates(
     for (index, candidate) in candidates.iter().enumerate() {
         out.push_str(&render_person_candidate(index + 1, candidate, weakened));
         let person = candidate.candidate.person_subject();
+        out.push_str(&render_candidate_signer(signers.get(person)));
         let others = renames.get(person);
         out.push_str(&render_candidate_renames(
             others.map_or(&[][..], Vec::as_slice),
@@ -176,6 +195,15 @@ fn render_person_candidate(
         )
     ));
     block
+}
+
+/// Who can sign one candidate, as an indented line; nothing when unknown.
+fn render_candidate_signer(signer: Option<&CandidateSigner>) -> String {
+    match signer {
+        Some(CandidateSigner::You) => format!("{CANDIDATE_INDENT}{YOU_CAN_SIGN}\n"),
+        Some(CandidateSigner::Other(who)) => format!("{CANDIDATE_INDENT}{}\n", hand_off(who)),
+        None => String::new(),
+    }
 }
 
 fn status_label(status: &CandidateStatus) -> &'static str {

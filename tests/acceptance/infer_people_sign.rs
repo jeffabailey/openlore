@@ -47,6 +47,8 @@ use support::*;
 fn maria_signs_an_evidence_backed_adherence_for_the_person_who_builds_her_signed_repos() {
     // GIVEN Maria scraped two repos whose #1 contributor is BurntSushi …
     let env = TestEnv::initialized();
+    // AND Maria owns the BurntSushi account: only its owner signs an inferred adherence (UC-9).
+    given_i_own_github_account(&env, "BurntSushi", BURNTSUSHI_ID, None);
     given_repo_scraped(&env, "BurntSushi/ripgrep", ripgrep_contributors(), None);
     given_repo_scraped(&env, "rust-lang/regex", regex_contributors(), None);
     // … AND signed memory-safety for both repos.
@@ -136,6 +138,8 @@ fn signing_an_inference_keeps_each_supporting_claims_own_author_and_re_verifies(
     // GIVEN BurntSushi builds ripgrep (Maria signed memory-safety 0.55) and
     // regex (subscribed peer Rachel signed memory-safety 0.60).
     let env = TestEnv::initialized();
+    // AND Maria owns the BurntSushi account: only its owner signs an inferred adherence (UC-9).
+    given_i_own_github_account(&env, "BurntSushi", BURNTSUSHI_ID, None);
     let (mine, rachel) = given_burntsushi_builds_two_signed_memory_safe_repos(&env);
     let files_before = claim_files(&env);
 
@@ -271,6 +275,8 @@ fn selecting_a_candidate_that_does_not_exist_is_rejected_before_composing() {
 fn the_candidate_signed_is_the_one_listed_under_that_number() {
     // GIVEN several candidates exist and Maria has listed them.
     let env = TestEnv::initialized();
+    // AND Maria owns the BurntSushi account: only its owner signs an inferred adherence (UC-9).
+    given_i_own_github_account(&env, "BurntSushi", BURNTSUSHI_ID, None);
     given_burntsushi_builds_two_signed_memory_safe_repos(&env);
     given_i_signed_repo_claim(&env, "rust-lang/regex", SEMANTIC_VERSIONING, 0.50, None);
     let listed = infer_people(&env, &[]);
@@ -310,6 +316,8 @@ fn the_candidate_signed_is_the_one_listed_under_that_number() {
 fn sign_numbers_candidates_within_the_same_person_filter_as_the_list() {
     // GIVEN BurntSushi AND dtolnay each have one candidate.
     let env = TestEnv::initialized();
+    // … and Maria is dtolnay: only the owner signs an inferred adherence (UC-9).
+    given_i_own_github_account(&env, "dtolnay", DTOLNAY_ID, None);
     given_burntsushi_builds_two_signed_memory_safe_repos(&env);
     given_repo_scraped(&env, "dtolnay/serde", serde_contributors(), None);
     given_i_signed_repo_claim(&env, "dtolnay/serde", DEPENDENCY_PINNING, 0.50, None);
@@ -341,6 +349,8 @@ fn sign_numbers_candidates_within_the_same_person_filter_as_the_list() {
 fn an_out_of_range_confidence_is_refused_and_re_asked_before_signing() {
     // GIVEN one inferred candidate.
     let env = TestEnv::initialized();
+    // AND Maria owns the BurntSushi account: only its owner signs an inferred adherence (UC-9).
+    given_i_own_github_account(&env, "BurntSushi", BURNTSUSHI_ID, None);
     given_burntsushi_builds_two_signed_memory_safe_repos(&env);
     let files_before = claim_files(&env);
 
@@ -367,6 +377,8 @@ fn an_out_of_range_confidence_is_refused_and_re_asked_before_signing() {
 fn accepting_the_proposed_confidence_signs_the_speculative_value_unchanged() {
     // GIVEN BurntSushi's candidate is proposed at 0.20.
     let env = TestEnv::initialized();
+    // AND Maria owns the BurntSushi account: only its owner signs an inferred adherence (UC-9).
+    given_i_own_github_account(&env, "BurntSushi", BURNTSUSHI_ID, None);
     given_burntsushi_builds_two_signed_memory_safe_repos(&env);
     let files_before = claim_files(&env);
 
@@ -389,6 +401,8 @@ fn accepting_the_proposed_confidence_signs_the_speculative_value_unchanged() {
 fn signing_two_candidates_in_one_pass_produces_one_claim_each() {
     // GIVEN two candidates for BurntSushi.
     let env = TestEnv::initialized();
+    // AND Maria owns the BurntSushi account: only its owner signs an inferred adherence (UC-9).
+    given_i_own_github_account(&env, "BurntSushi", BURNTSUSHI_ID, None);
     given_burntsushi_builds_two_signed_memory_safe_repos(&env);
     given_i_signed_repo_claim(&env, "rust-lang/regex", SEMANTIC_VERSIONING, 0.50, None);
     let files_before = claim_files(&env);
