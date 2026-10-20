@@ -1461,7 +1461,7 @@
     ]
   },
   "validation": {
-    "status": "pending",
+    "status": "approved",
     "note": "Revision 2: 25 steps (6 + 11 + 5 + 1 + 2) covering 50 owner_only_signing test fns (44 example scenarios + 6 CORE-OOS properties), each activated in exactly one step; active guards PS-3, PS-7, IC-5 named as guards; 02-02, 02-05, 02-06 have no DISTILL activation by design; fixture regenerator excluded.",
     "review_iteration_2_applied": {
       "F1": "02-05: claim_counter, claim_retract, identity_link mint exempt permits and never call the T1 entry; T1 callers = claim_add (02-05..02-06) + sign_batch (02-05..02-08); xtask t1_entry_only_from_sign_batch added in 02-05, shrunk to sign_batch in 02-07 (the RA-10 step, old 02-06), deleted with the entry in 02-09 (old 02-08) with a grep absence gate in green; claim_counter/claim_retract not listed in 02-09; 02-11 notes say counter/retract already hold exempt permits.",
@@ -1479,6 +1479,7 @@
       "L5": "conventions.transitional_risks names the T1 callers per step."
     },
     "by": "nw-solution-architect (Morgan)",
-    "date": "2026-10-20"
+    "date": "2026-10-20",
+    "approved_by": "orchestrator 2026-10-20: review iterations 1-2 (nw-software-crafter-reviewer) findings all applied in revision 2 (92263a1) and spot-verified; no third review (gate max 2)"
   }
 }
