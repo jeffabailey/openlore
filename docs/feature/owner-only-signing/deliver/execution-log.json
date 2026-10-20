@@ -253,6 +253,41 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-10-20T19:56:43Z"
+    },
+    {
+      "sid": "02-07",
+      "p": "RED",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-10-20T20:00:34Z"
+    },
+    {
+      "sid": "02-07",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "FAIL",
+      "t": "2026-10-20T20:28:32Z"
+    },
+    {
+      "sid": "02-07",
+      "p": "COMMIT",
+      "s": "SKIPPED",
+      "d": "BLOCKED_BY_DEPENDENCY: RA-10 row 5 needs scrape github to record a repo observation (step 02-09)",
+      "t": "2026-10-20T20:28:32Z"
+    },
+    {
+      "sid": "02-07",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-10-20T20:42:52Z"
+    },
+    {
+      "sid": "02-07",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-10-20T20:43:02Z"
     }
   ]
 }
