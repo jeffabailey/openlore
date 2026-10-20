@@ -1,14 +1,14 @@
 # OpenLore — Resume Context
 
 ## Current Task
-github-did-identity-link slices 1–3 delivered and archived (`docs/evolution/github-did-identity-link-slice-{1,2,3}-evolution.md`); all slice-3 follow-ups (NF-1, F-6, U-20, U-47/49/50, PS-10..12, policy rename) pushed, CI green, review app live at 4c429cf (sha256:85f2d221…). Nothing local or undeployed.
+review-app-repos-and-accounts (choose repos, import any public repo unsigned, up to 3 GitHub accounts) and identity-link viewer slice 4 delivered and archived (`docs/evolution/review-app-repos-and-accounts-evolution.md`, `github-did-identity-link-slice-4-evolution.md`); pushed at 85560a6, CI green, review app live (sha256:af7f7040…, store v2).
 
 ## Key Decisions
-- Review app reads every AT Protocol host (owner PDS, handle resolver, PLC, did:web) through the SSRF guard via `atproto_address_policy`; unguarded constructors are deleted, not kept.
-- A failed write says "may have been saved" for a 5xx or lost answer (`FailedWrite::MayHaveStored`), "not published" only for a 4xx/unreachable/session error.
-- Push only when told, over SSH (`git push git@github.com:jeffabailey/openlore.git HEAD:main`); deploy with `deploy/ops.sh review-app deploy <40-hex sha>`. Classifier blocks stopping apps/editing SSM: hand those to the user.
+- Anyone can import a public repo and get private unsigned suggestions; publishing needs a SigningPermit from a same-request owner + bio read (ADR-089). Admin-of-org repos (R4) deferred: needs GitHub OAuth.
+- GitHub page reads: 200/h per DID, 1000/h app-wide; scans keep the rest of the 5000/h token.
+- Push only when told, over SSH (`git push git@github.com:jeffabailey/openlore.git HEAD:main`); deploy with `deploy/ops.sh review-app deploy <40-hex sha>`.
 
 ## Next Steps
-- Optional identity-link slice: the viewer's linked-identity line (design/wave-decisions.md l.212); ask the user before starting.
-- Still open from before (verify first): release tofu-aws-pds 4451296 (`swappiness`), set `swappiness = 10` in openlore's prod root; go-live step 17 (announce) is the user's.
-- Backlog in memory `openlore-follow-up-backlog.md`: `scan.refused` event, SPIKE-6 (bring-your-own PDS), htmx 4 for local viewer, TRUSTED_PROXIES, serde-saphyr.
+- Slice-4 viewer design is still PROPOSED (docs/feature/github-did-identity-link/design); user to confirm its defaults.
+- Repos follow-ups (evolution doc "Deferred"): acceptance gaps #214, #424; @security test for the cross-origin guard; drop old `github_links` table.
+- Backlog in memory `openlore-follow-up-backlog.md`: `scan.refused`, SPIKE-6, htmx 4, TRUSTED_PROXIES, serde-saphyr; tofu-aws-pds swappiness release.
