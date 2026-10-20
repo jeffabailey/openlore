@@ -345,8 +345,9 @@ fn sut_classify(claim: &ClaimView, evidence: &EvidenceView) -> AuthorityView {
 /// `may_sign` (ADR-089 §2, same-request reads) — see U-OOS-2.
 fn sut_may_sign(claim: &ClaimView, evidence: &EvidenceView, _window_minutes: i64) -> PermitView {
     use claim_domain::authority::{
-        may_sign_from_checks, requirement, AuthorityRefusal, ClaimShape, LatestLinkCheck,
-        LinkedAccountEvidence, Requirement,
+        may_sign_from_checks, may_sign_repo_from_checks, requirement, AuthorityFileSeen,
+        AuthorityRefusal, ClaimShape, LatestLinkCheck, LatestRepoObservation,
+        LinkedAccountEvidence, RepoFinding, RepoOwnerKind, Requirement,
     };
     use claim_domain::identity_link::CheckVerdict;
     use claim_domain::ReferenceType;
@@ -389,13 +390,44 @@ fn sut_may_sign(claim: &ClaimView, evidence: &EvidenceView, _window_minutes: i64
         predicate: &claim.predicate,
         reference_types: &reference_types,
     };
-    let person = match requirement(shape) {
-        Requirement::Person(person) => person,
+    let at = |age_minutes: i64| now - chrono::Duration::minutes(age_minutes);
+    // The repo read port: this reader's latest observation of the repo.
+    let repo = evidence.repo.as_ref().map(|observed| match observed {
+        RepoObsView::Found {
+            owner_id,
+            organization,
+            file,
+            age_minutes,
+        } => LatestRepoObservation {
+            finding: RepoFinding::Found {
+                owner_id: *owner_id,
+                owner_kind: if *organization {
+                    RepoOwnerKind::Organization
+                } else {
+                    RepoOwnerKind::User
+                },
+                authority_file: match file {
+                    FileView::Absent => AuthorityFileSeen::Absent,
+                    FileView::Present(dids) => AuthorityFileSeen::Present(dids.clone()),
+                    FileView::Invalid => AuthorityFileSeen::Invalid,
+                },
+            },
+            checked_at: at(*age_minutes),
+        },
+        RepoObsView::NotFound { age_minutes } => LatestRepoObservation {
+            finding: RepoFinding::NotFound,
+            checked_at: at(*age_minutes),
+        },
+    });
+    let decided = match requirement(shape) {
+        Requirement::Person(person) => may_sign_from_checks(&claim.author, &person, &links, now),
+        Requirement::Repo { .. } => {
+            may_sign_repo_from_checks(&claim.author, &claim.subject, &links, repo.as_ref(), now)
+        }
         Requirement::Exempt => return PermitView::Permit,
         Requirement::Malformed => return PermitView::Refused { next_command: None },
-        Requirement::Repo { .. } => todo!("RED: bind the repo-tier gate (slice 2)"),
     };
-    match may_sign_from_checks(&claim.author, &person, &links, now) {
+    match decided {
         Ok(_) => PermitView::Permit,
         Err(AuthorityRefusal::Recheck { subject, .. }) => PermitView::Refused {
             next_command: Some(format!("openlore authority verify --subject {subject}")),
@@ -1010,7 +1042,6 @@ proptest! {
     /// anchored by CORE-OOS-4x.
     /// `@property @s-oos-1 @s-oos-3 @contract-shape:pure-function`
     #[test]
-    #[ignore = "DISTILL owner-only-signing CORE-OOS-4: bind sut_may_sign (DELIVER slice 1)"]
     fn the_gate_permits_only_exempt_or_freshly_attested_claims(
         claim in arb_claim(),
         evidence in arb_evidence(true),

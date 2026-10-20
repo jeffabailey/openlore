@@ -325,6 +325,24 @@ impl Wiring {
             .context("reading the signer's identity link checks")
     }
 
+    /// The repo-tier evidence of a repo subject (owner-only-signing, ADR-087
+    /// §2-5): this reader's latest observation of the repo not dated after
+    /// `now` (`None`: never observed here). Read port only — GitHub is not
+    /// asked and nothing is recorded.
+    pub fn latest_repo_observation(
+        &self,
+        subject: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<claim_domain::authority::LatestRepoObservation>> {
+        let latest = self
+            .repo_authority_checks
+            .latest(&[ports::RepoSubjectKey::of(subject)], now)
+            .context("reading the repo's latest authority observation")?;
+        Ok(latest.into_iter().next().map(|check| {
+            crate::verbs::authority_verify::latest_observation(check.observation, check.checked_at)
+        }))
+    }
+
     /// The narrow handles that re-check identity links on a fresh GitHub
     /// read and append the checks: `identity verify`, and the sign-time
     /// refresh of the signer's own link a `scrape person --sign` runs

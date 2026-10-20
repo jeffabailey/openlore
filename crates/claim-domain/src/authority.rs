@@ -77,10 +77,13 @@ pub enum PermitBasis {
     /// A repo assertion signed ungated until the repo tier lands (accepted
     /// transitional risk T1, ruling F1).
     UngatedT1,
+    /// The repo's authority file lists the signer's DID (ADR-087 §3).
+    RepoListed,
 }
 
 /// The signer may publish a claim about `subject`. Minted only in this
-/// module ([`may_sign`], [`may_sign_from_checks`], [`exempt_permit`],
+/// module ([`may_sign`], [`may_sign_from_checks`],
+/// [`may_sign_repo_from_checks`], [`exempt_permit`],
 /// [`permit_ungated_repo_t1`]); never serialized, never stored.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SigningPermit {
@@ -487,6 +490,11 @@ fn standing_rank(standing: &PersonAuthority) -> (u8, Reverse<Option<DateTime<Utc
 pub enum WhoCanSign {
     /// The account's owner, after linking it to their identity.
     OwnerAfterLinking { login: String },
+    /// A user-owned repo's owner, after linking the account, or a DID the
+    /// repo's authority file lists.
+    RepoOwnerOrListed { login: String },
+    /// A DID an organization repo's authority file lists.
+    ListedInAuthorityFile,
 }
 
 /// The signing window (A-6, DWD-OOS-14): the signer signs from a local check
@@ -548,6 +556,139 @@ pub fn may_sign_from_checks(
                 login: person.login().to_string(),
             },
         }),
+    }
+}
+
+/// The repo tier of the CLI gate (ADR-086 §5, ADR-087 §2-3): may `signer`
+/// sign an assertion about the repo `subject` at `now`, judged from this
+/// reader's latest observation of the repo (`None`: never observed here) and
+/// the signer's `links`? Permits when that observation attests the signer —
+/// the authority file lists the signer's DID exactly (RepoListed), or a user
+/// owns the repo and the signer holds a verified link to that account
+/// (Owner) — and every check the tier rests on is within the signing window:
+/// the OLDER of the observation and the link check decides an Owner permit.
+/// An observation dated after `now` counts as missing.
+pub fn may_sign_repo_from_checks(
+    signer: &str,
+    subject: &str,
+    links: &[LinkedAccountEvidence],
+    repo: Option<&LatestRepoObservation>,
+    now: DateTime<Utc>,
+) -> Result<SigningPermit, AuthorityRefusal> {
+    let recheck = |last_checked| AuthorityRefusal::Recheck {
+        subject: subject.to_string(),
+        last_checked,
+    };
+    let Some(observed) = repo.filter(|observed| observed.checked_at <= now) else {
+        return Err(recheck(None));
+    };
+    let evidence = AuthorityEvidence {
+        author: crate::bare_did(signer),
+        author_links: links,
+        repo: Some(observed),
+    };
+    match repo_standings(&evidence, observed, now)
+        .into_iter()
+        .max_by_key(|standing| standing.oldest_check)
+    {
+        Some(standing) if within_signing_window(standing.oldest_check, now) => {
+            Ok(permit(signer, subject, standing.basis))
+        }
+        Some(standing) => Err(recheck(Some(standing.oldest_check))),
+        None => Err(repo_refusal(
+            subject,
+            observed,
+            repo_authority(&evidence, now),
+        )),
+    }
+}
+
+/// One attested repo tier and the oldest check it rests on.
+struct RepoStanding {
+    basis: PermitBasis,
+    oldest_check: DateTime<Utc>,
+}
+
+/// Every attested tier the latest observation gives the author: RepoListed
+/// rests on the observation alone; Owner on the observation and the verified
+/// link check to the owning user's account.
+fn repo_standings(
+    evidence: &AuthorityEvidence<'_>,
+    observed: &LatestRepoObservation,
+    now: DateTime<Utc>,
+) -> Vec<RepoStanding> {
+    let RepoFinding::Found {
+        owner_id,
+        owner_kind,
+        authority_file,
+    } = &observed.finding
+    else {
+        return Vec::new();
+    };
+    let listed = lists_author(authority_file, evidence.author).then_some(RepoStanding {
+        basis: PermitBasis::RepoListed,
+        oldest_check: observed.checked_at,
+    });
+    let owned = (*owner_kind == RepoOwnerKind::User)
+        .then(|| verified_check_of(evidence.author_links, *owner_id, now))
+        .flatten()
+        .map(|link_checked_at| RepoStanding {
+            basis: PermitBasis::Owner(*owner_id),
+            oldest_check: link_checked_at.min(observed.checked_at),
+        });
+    listed.into_iter().chain(owned).collect()
+}
+
+/// The most recent verified current check of a link to the account `github_id`.
+fn verified_check_of(
+    links: &[LinkedAccountEvidence],
+    github_id: u64,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    links
+        .iter()
+        .filter(|link| link.github_id == github_id)
+        .filter_map(|link| current_check(link, now))
+        .filter(|check| check.verdict == CheckVerdict::Verified)
+        .map(|check| check.checked_at)
+        .max()
+}
+
+/// The refusal when the latest observation attests nothing: why, and who
+/// can sign instead; a link to the owner never checked here asks for a
+/// re-check (fail closed).
+fn repo_refusal(
+    subject: &str,
+    observed: &LatestRepoObservation,
+    authority: Authority,
+) -> AuthorityRefusal {
+    match authority {
+        Authority::Unattested(reason) => AuthorityRefusal::Unattested {
+            subject: subject.to_string(),
+            reason,
+            can_sign: repo_can_sign(subject, &observed.finding),
+        },
+        Authority::NotChecked | Authority::Attested(_) => AuthorityRefusal::Recheck {
+            subject: subject.to_string(),
+            last_checked: None,
+        },
+    }
+}
+
+/// Who can sign about a repo: a DID its authority file lists, and — unless
+/// an organization owns it — its owner after linking the account.
+fn repo_can_sign(subject: &str, finding: &RepoFinding) -> WhoCanSign {
+    match finding {
+        RepoFinding::Found {
+            owner_kind: RepoOwnerKind::Organization,
+            ..
+        } => WhoCanSign::ListedInAuthorityFile,
+        _ => WhoCanSign::RepoOwnerOrListed {
+            login: github_path(subject)
+                .and_then(|path| path.split('/').next())
+                .unwrap_or_default()
+                .to_string(),
+        },
     }
 }
 

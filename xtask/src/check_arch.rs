@@ -2771,7 +2771,8 @@ pub fn scan_signing_permit_not_serializable(workspace_root: &Path) -> anyhow::Re
 //   subject; philosophy records (not claims) are allowlisted. The crates that
 //   implement the signing primitive itself are out of scope.
 // * `t1_entry_only_from_sign_batch`: the transitional ungated repo entry
-//   (accepted risk T1) is reached only from `claim_add` and `sign_batch`.
+//   (accepted risk T1) is reached only from `sign_batch` (`claim add` gates
+//   repo claims from local checks since 02-07).
 
 /// The one module whose `sign_permitted` may sign.
 const SIGN_PERMITTED_SOURCE: &str = "crates/cli/src/verbs/sign_permitted.rs";
@@ -2904,12 +2905,9 @@ const T1_ENTRY: &str = "permit_ungated_repo_t1";
 /// Where the T1 entry is defined (and unit-tested).
 const T1_ENTRY_SOURCE: &str = "crates/claim-domain/src/authority.rs";
 
-/// The verbs that may reach the T1 entry in this step (narrowed to
-/// `sign_batch` in 02-07, deleted in 02-09).
-const T1_ENTRY_CALLERS: &[&str] = &[
-    "crates/cli/src/verbs/claim_add.rs",
-    "crates/cli/src/verbs/sign_batch.rs",
-];
+/// The verbs that may reach the T1 entry (narrowed to `sign_batch` in
+/// 02-07, deleted in 02-09).
+const T1_ENTRY_CALLERS: &[&str] = &["crates/cli/src/verbs/sign_batch.rs"];
 
 /// Production expressions naming the T1 entry (a call or a fn reference).
 #[derive(Default)]

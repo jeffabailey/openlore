@@ -8,8 +8,8 @@
 //! evidence rule. Step 02-05: `sign_only_with_permit` — an `IdentityPort`
 //! sign outside `sign_permitted` is a finding (philosophy records allowlisted);
 //! `t1_entry_only_from_sign_batch` — the transitional T1 entry called from any
-//! verb but `claim_add` and `sign_batch` is a finding; the real tree passes
-//! both.
+//! verb but `sign_batch` is a finding (`claim_add` too since 02-07); the real
+//! tree passes both.
 
 use std::path::{Path, PathBuf};
 
@@ -248,34 +248,33 @@ fn sign_repo_claim(signer: &str, claim: ClaimShape<'_>) -> Option<SigningPermit>
 fn later() { let entry = permit_ungated_repo_t1; }";
 
 #[test]
-fn the_t1_entry_called_from_claim_counter_is_a_finding_but_claim_add_and_sign_batch_may_call_it() {
-    let findings =
-        classify_t1_entry_callers("crates/cli/src/verbs/claim_counter.rs", CALLS_THE_T1_ENTRY);
-    assert_eq!(
-        findings.len(),
-        2,
-        "the call and the reference: {findings:?}"
-    );
-    assert!(
-        findings
-            .iter()
-            .all(|f| f.contains("t1_entry_only_from_sign_batch") && f.contains("claim_counter.rs")),
-        "{findings:?}"
-    );
-
-    for allowed in [
-        "crates/cli/src/verbs/claim_add.rs",
-        "crates/cli/src/verbs/sign_batch.rs",
+fn the_t1_entry_called_from_claim_add_or_claim_counter_is_a_finding_but_sign_batch_may_call_it() {
+    for (rel_path, file) in [
+        ("crates/cli/src/verbs/claim_add.rs", "claim_add.rs"),
+        ("crates/cli/src/verbs/claim_counter.rs", "claim_counter.rs"),
     ] {
+        let findings = classify_t1_entry_callers(rel_path, CALLS_THE_T1_ENTRY);
+        assert_eq!(
+            findings.len(),
+            2,
+            "the call and the reference: {findings:?}"
+        );
         assert!(
-            classify_t1_entry_callers(allowed, CALLS_THE_T1_ENTRY).is_empty(),
-            "{allowed}"
+            findings
+                .iter()
+                .all(|f| f.contains("t1_entry_only_from_sign_batch") && f.contains(file)),
+            "{findings:?}"
         );
     }
+
+    assert!(
+        classify_t1_entry_callers("crates/cli/src/verbs/sign_batch.rs", CALLS_THE_T1_ENTRY)
+            .is_empty()
+    );
 }
 
 #[test]
-fn the_real_tree_calls_the_t1_entry_only_from_claim_add_and_sign_batch() {
+fn the_real_tree_calls_the_t1_entry_only_from_sign_batch() {
     let findings = scan_t1_entry_only_from_sign_batch(&root()).expect("scan");
     assert!(findings.is_empty(), "{findings:#?}");
 }

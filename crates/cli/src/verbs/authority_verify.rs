@@ -90,7 +90,8 @@ pub fn run(
     now: DateTime<Utc>,
 ) -> Result<AuthorityVerifyReport> {
     let claims = github_claims_in_scope(handles, args)?;
-    if claims.is_empty() {
+    let named_repo = args.subject.as_deref().and_then(repo_named);
+    if claims.is_empty() && named_repo.is_none() {
         return Ok(AuthorityVerifyReport {
             stdout: render_nothing_to_recheck(),
             unreadable: Vec::new(),
@@ -100,7 +101,12 @@ pub fn run(
         .enable_io()
         .enable_time()
         .build()?;
-    let unreadable = observe_repos(handles, &runtime, &claims, now)?;
+    let unreadable = observe_repos(
+        handles,
+        &runtime,
+        repos_to_observe(&claims, named_repo),
+        now,
+    )?;
     let repos = latest_repo_observations(handles.repo_checks, &claims, now)?;
     recheck_needed_links(handles, &runtime, &claims, &repos, now)?;
     let labelled = label_claims(handles, &claims, &repos, now)?;
@@ -108,6 +114,45 @@ pub fn run(
         stdout: render_authority_labels(&labelled),
         unreadable,
     })
+}
+
+/// A repo GitHub is asked about: its subject key, owner and name.
+type RepoToObserve = (RepoSubjectKey, String, String);
+
+/// The repo a `--subject github:<owner>/<repo>` names, whether or not a
+/// stored claim names it yet: the first claim about a repo is signed only
+/// after its authority was checked (U-OOS-D12).
+fn repo_named(subject: &str) -> Option<RepoToObserve> {
+    let as_an_assertion = ClaimShape {
+        subject,
+        predicate: "",
+        reference_types: &[],
+    };
+    match requirement(as_an_assertion) {
+        Requirement::Repo { owner, name } => Some((RepoSubjectKey::of(subject), owner, name)),
+        _ => None,
+    }
+}
+
+/// Each distinct repo subject (case-folded) the claims name, plus the one
+/// `--subject` names.
+fn repos_to_observe(
+    claims: &[GithubClaim],
+    named_repo: Option<RepoToObserve>,
+) -> BTreeMap<RepoSubjectKey, (String, String)> {
+    claims
+        .iter()
+        .filter_map(|claim| match &claim.required {
+            Requirement::Repo { owner, name } => Some((
+                RepoSubjectKey::of(&claim.subject),
+                owner.clone(),
+                name.clone(),
+            )),
+            _ => None,
+        })
+        .chain(named_repo)
+        .map(|(key, owner, name)| (key, (owner, name)))
+        .collect()
 }
 
 // -----------------------------------------------------------------------------
@@ -208,28 +253,17 @@ fn whole_table(rows: usize) -> PageRequest {
 // Repo observations: one look at each repo and its authority file
 // -----------------------------------------------------------------------------
 
-/// Observe each distinct repo subject once (case-folded) and record what
-/// GitHub answered; a repo GitHub cannot answer for records nothing and is
-/// reported instead.
+/// Observe each repo once and record what GitHub answered; a repo GitHub
+/// cannot answer for records nothing and is reported instead.
 fn observe_repos(
     handles: &AuthorityVerifyHandles<'_>,
     runtime: &tokio::runtime::Runtime,
-    claims: &[GithubClaim],
+    repos: BTreeMap<RepoSubjectKey, (String, String)>,
     now: DateTime<Utc>,
 ) -> Result<Vec<String>> {
-    let repos: BTreeMap<RepoSubjectKey, (&str, &str)> = claims
-        .iter()
-        .filter_map(|claim| match &claim.required {
-            Requirement::Repo { owner, name } => Some((
-                RepoSubjectKey::of(&claim.subject),
-                (owner.as_str(), name.as_str()),
-            )),
-            _ => None,
-        })
-        .collect();
     let mut unreadable = Vec::new();
     for (subject_key, (owner, name)) in repos {
-        match runtime.block_on(handles.links.github.read_repo_authority(owner, name)) {
+        match runtime.block_on(handles.links.github.read_repo_authority(&owner, &name)) {
             Ok(observation) => handles.repo_check_writes.record(&RepoAuthorityCheck {
                 subject_key,
                 observation,
@@ -269,7 +303,8 @@ fn latest_repo_observations(
         .collect())
 }
 
-fn latest_observation(
+/// One stored repo observation, decoded for the pure gate and classifier.
+pub(crate) fn latest_observation(
     observation: RepoObservation,
     checked_at: DateTime<Utc>,
 ) -> LatestRepoObservation {

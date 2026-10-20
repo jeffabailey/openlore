@@ -44,6 +44,13 @@ pub(crate) fn hand_off(can_sign: &WhoCanSign) -> String {
         WhoCanSign::OwnerAfterLinking { login } => {
             format!("{CAN_BE_SIGNED_BY} {login}, after `openlore identity link github {login}`.")
         }
+        WhoCanSign::RepoOwnerOrListed { login } => format!(
+            "{CAN_BE_SIGNED_BY} {login}, after `openlore identity link github {login}`, or by a \
+             DID listed in the repo's {AUTHORITY_FILE}."
+        ),
+        WhoCanSign::ListedInAuthorityFile => {
+            format!("{CAN_BE_SIGNED_BY} a DID listed in the repo's {AUTHORITY_FILE}.")
+        }
     }
 }
 

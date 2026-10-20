@@ -711,7 +711,7 @@ fn a_repo_github_does_not_have_is_recorded_as_not_found_and_cannot_be_signed() {
 ///     | Jeff linked "jeffbailey" but tidepool was never observed                                  | jeffbailey/tidepool | 3 October 09:00 | refused: authority has not been checked             |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-10: pending DELIVER"]
+#[ignore = "DISTILL owner-only-signing RA-10: activated in 02-09 — row 5's Given needs scrape github to record a repo observation (U-OOS-D14)"]
 fn with_the_network_off_jeff_signs_a_repo_claim_only_from_fresh_checks() {
     fn anvil_lists_jeff(w: &LinkWorld) {
         the_repo_holds_authority_file(w, ANVIL, listing(&[MY_DID]));

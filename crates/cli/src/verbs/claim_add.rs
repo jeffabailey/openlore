@@ -36,8 +36,8 @@ use anyhow::{anyhow, Context, Result};
 use claim_domain::{ClaimReference, ConfidenceBucket, Did, ReferenceType, UnsignedClaim};
 
 use claim_domain::authority::{
-    exempt_permit, may_sign_from_checks, permit_ungated_repo_t1, requirement, ClaimShape,
-    Requirement,
+    exempt_permit, may_sign_from_checks, may_sign_repo_from_checks, requirement, AuthorityRefusal,
+    ClaimShape, Requirement, SigningPermit,
 };
 use claim_domain::identity_link::is_reserved_predicate;
 use lexicon::ObjectAdvisory;
@@ -113,11 +113,12 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
     // Owner-only signing (ADR-086/087): every claim asks what authority it
     // needs, and is signed only under the permit that answer mints. An
     // assertion about a person's GitHub account is signed only by its owner,
-    // judged from this reader's local checks; a `github:` subject that names
-    // no account or repo is never signed (fail closed). A refusal happens
-    // before any prompt or side effect: nothing is signed, written or
-    // published. Repo subjects keep today's ungated path until the repo tier
-    // lands (accepted transitional risk T1).
+    // judged from this reader's local checks; an assertion about a repo by
+    // its owner or a DID its authority file lists, judged from the latest
+    // local observation of the repo and link check — offline, GitHub is not
+    // asked (C-OOS-9). A `github:` subject that names no account or repo is
+    // never signed (fail closed). A refusal happens before any prompt or side
+    // effect: nothing is signed, written or published.
     let signer = wiring.identity.author_did().0.clone();
     let claim = ClaimShape {
         subject: &args.subject,
@@ -128,29 +129,31 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
         Requirement::Person(person) => {
             let now = wiring.clock.now_utc();
             let links = wiring.signer_linked_accounts(now)?;
-            match may_sign_from_checks(&signer, &person, &links, now) {
-                Ok(permit) => Some(permit),
-                Err(refusal) => {
-                    eprint!("{}", render_signing_refused(&refusal));
-                    return Ok(ClaimAddOutcome {
-                        exit_code: 1,
-                        stdout: String::new(),
-                    });
-                }
-            }
+            let decided = may_sign_from_checks(&signer, &person, &links, now);
+            let Some(permit) = permitted_or_refused(decided) else {
+                return Ok(refused());
+            };
+            Some(permit)
+        }
+        Requirement::Repo { .. } => {
+            let now = wiring.clock.now_utc();
+            let links = wiring.signer_linked_accounts(now)?;
+            let repo = wiring.latest_repo_observation(&args.subject, now)?;
+            let decided =
+                may_sign_repo_from_checks(&signer, &args.subject, &links, repo.as_ref(), now);
+            let Some(permit) = permitted_or_refused(decided) else {
+                return Ok(refused());
+            };
+            Some(permit)
         }
         Requirement::Malformed => {
             eprintln!(
                 "Not signed: {} names no GitHub account (github:<login>) or repo (github:<owner>/<repo>).",
                 args.subject
             );
-            return Ok(ClaimAddOutcome {
-                exit_code: 1,
-                stdout: String::new(),
-            });
+            return Ok(refused());
         }
         Requirement::Exempt => exempt_permit(&signer, claim),
-        Requirement::Repo { .. } => permit_ungated_repo_t1(&signer, claim),
     }
     .ok_or_else(|| anyhow!("no signing permit for {}", args.subject))?;
 
@@ -299,6 +302,23 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
         exit_code: 0,
         stdout: String::new(),
     })
+}
+
+/// The permit the gate minted, or `None` once its refusal is shown on stderr.
+fn permitted_or_refused(
+    decided: std::result::Result<SigningPermit, AuthorityRefusal>,
+) -> Option<SigningPermit> {
+    decided
+        .map_err(|refusal| eprint!("{}", render_signing_refused(&refusal)))
+        .ok()
+}
+
+/// A refused signature: nothing signed, written or published; exit 1.
+fn refused() -> ClaimAddOutcome {
+    ClaimAddOutcome {
+        exit_code: 1,
+        stdout: String::new(),
+    }
 }
 
 /// Lift a `ComposedClaim` (CLI-flag shape) into a `claim_domain::UnsignedClaim`
