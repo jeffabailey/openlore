@@ -2309,9 +2309,10 @@ pub fn scan_identity_link_compose_only_via_proven_link(
 // * `authority_evidence_only_from_adapters`: `RepoFacts` and
 //   `GithubAccountProfile` (the evidence `may_sign` decides from) and the
 //   person-tier evidence `LinkedAccountEvidence` / `LatestLinkCheck` (what
-//   `may_sign_from_checks` decides from, owner-only-signing ADR-087 §1) are
-//   built only by the GitHub and DuckDB adapters and test support (one
-//   allowlist, ADR-086).
+//   `may_sign_from_checks` decides from, owner-only-signing ADR-087 §1) and
+//   the repo-tier observation `FoundRepo` / `RepoObservation::Found(..)`
+//   (ADR-087 §4) are built only by the GitHub and DuckDB adapters and test
+//   support (one allowlist, ADR-086).
 // * `signing_permit_not_serializable`: no serde on `SigningPermit`.
 
 /// The constructors that build a `PublishPlan`.
@@ -2492,12 +2493,15 @@ const AUTHORITY_EVIDENCE_CRATES: &[&str] = &[
     "crates/test-support/",
 ];
 
-/// The evidence types `may_sign` and `may_sign_from_checks` decide from.
+/// The evidence types `may_sign` and `may_sign_from_checks` decide from,
+/// person and repo tiers.
 const AUTHORITY_EVIDENCE_TYPES: &[&str] = &[
     "RepoFacts",
     "GithubAccountProfile",
     "LinkedAccountEvidence",
     "LatestLinkCheck",
+    "FoundRepo",
+    "RepoObservation",
 ];
 
 #[derive(Default)]

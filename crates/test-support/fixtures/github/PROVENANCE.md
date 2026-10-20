@@ -69,3 +69,51 @@ Read by `crates/adapter-github/tests/github_repo_contract.rs` through the
 production `GithubAdapter::read_repo` (facts for a user's and an org's repo;
 one same-host redirect followed for a rename and a transfer; 404 not found;
 403 a rate limit; a redirect off the host or a second redirect refused).
+
+## Repo authority observations (U-OOS-8, ADR-087 §4 `read_repo_authority`)
+
+Five single-case fixtures, one per ADR-087 Earned-Trust row, each holding the
+production request and GitHub's replies in the order production asks for
+them: the repo read (`GET /repos/{owner}/{name}`, with any same-host
+redirect), then ALWAYS one `GET /repos/{full_name}/contents/.github/openlore-authority`
+(no `ref`: the default branch), against the `full_name` the final repo body
+names. Repo replies and the 404 file replies were recorded live
+2026-10-20T17:27:09Z–17:27:10Z the same way (unauthenticated `GET`,
+`Accept: application/vnd.github+json`), bodies verbatim. No public repo
+carries `.github/openlore-authority` yet, so the two 200 file replies are
+**hand-shaped, not recorded** (flag `hand_shaped: true` on the reply).
+
+| Fixture | Repo read | Authority-file read |
+|---|---|---|
+| `repo_owner_user.json` | https://api.github.com/repos/octocat/Hello-World — 200, owner `type: User` (recorded) | 404 (recorded) |
+| `repo_owner_org.json` | https://api.github.com/repos/github/gitignore — 200, owner `type: Organization` (recorded) | 404 (recorded) |
+| `repo_renamed_redirect.json` | https://api.github.com/repos/rust-lang/rustup.rs — 301 to https://api.github.com/repositories/43192623, then 200 `rust-lang/rustup` (recorded) | `/repos/rust-lang/rustup/contents/…` — 404 (recorded) |
+| `authority_file.json` | github/gitignore — 200 (the recorded org body) | 200 `type: file` (**hand-shaped**) |
+| `authority_file_symlink.json` | octocat/Hello-World — 200 (the recorded user body) | 200 `type: symlink` (**hand-shaped**) |
+
+How the two file replies were shaped:
+
+- `authority_file.json`: the field set, order and encoding of a live contents
+  reply for a regular file (https://api.github.com/repos/github/gitignore/contents/README.md,
+  recorded 2026-10-20T17:27:10Z: `type: file`, `encoding: base64`, `size`,
+  `content` base64 wrapped at 60 characters with a trailing newline, `sha`,
+  `url`/`html_url`/`git_url`/`download_url`, `_links`), with the name, path,
+  links and content replaced by a made-up authority file (a comment line, two
+  example DIDs — no real person's — a blank line and an inline comment). `sha`
+  is the real git blob id of that content.
+- `authority_file_symlink.json`: GitHub's documented reply for a symlink
+  whose target is not a regular file in the repo ("Get repository content",
+  REST docs 2022-11-28: `type: symlink`, `target`, `size`, no `content`); a
+  symlink to a file inside the repo is served as that file instead, which the
+  API cannot tell apart and the adapter reads as a file.
+
+Read by `crates/adapter-github/tests/github_authority_contract.rs` through
+the production `GithubAdapter::read_repo_authority`: owner id, owner type,
+`full_name`, `id` and the file's `type`, `encoding`, `size` and `content`
+decode; every found repo is read exactly twice; a 404 repo
+(`repo_read_cases.json` `missing_404`) is `RepoNotFound` with no file read; a
+submodule, directory, over-4-KiB or non-UTF-8 file (variations of
+`authority_file.json`) grants nothing; a shape error or a rate limit
+(`rate_limited_403`) is an error, never an observation. It runs in the
+workspace `cargo nextest run` of CI (`.github/workflows/ci.yml`), the GitHub
+contract gate the other `*_contract` tests share.

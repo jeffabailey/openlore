@@ -590,6 +590,18 @@ pub trait GithubPort: Send + Sync {
     /// 404 (missing or private, one meaning) is [`GithubError::NotFound`].
     async fn read_repo(&self, owner: &str, name: &str) -> Result<RepoFacts, GithubError>;
 
+    /// One repo authority observation (ADR-087 §4): [`read_repo`](Self::read_repo)
+    /// plus ALWAYS one `GET /repos/{full_name}/contents/.github/openlore-authority`
+    /// on the default branch, so the observation never depends on who asked
+    /// (H-2). A repo GitHub does not serve is [`RepoObservation::RepoNotFound`]
+    /// and no file is read; a rate limit, outage or shape error on either read
+    /// is an error, so the caller records nothing.
+    async fn read_repo_authority(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Result<RepoObservation, GithubError>;
+
     /// The rate budget GitHub reported on the most recent response, if any
     /// (ADR-076 §2: a scan reads it before each repo).
     fn last_rate_budget(&self) -> Option<RateBudget> {

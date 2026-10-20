@@ -428,6 +428,72 @@ pub fn parse_repo_read(body: &serde_json::Value) -> Result<ports::RepoFacts, Str
     })
 }
 
+/// Where a repo lists the DIDs that may sign about it (ADR-087 §3), read on
+/// the default branch.
+pub const AUTHORITY_FILE_PATH: &str = ".github/openlore-authority";
+
+/// Reshape a 2xx `GET /repos/{o}/{r}/contents/.github/openlore-authority`
+/// body into the file's state (ADR-087 §3-§4). A directory (an array), a
+/// symlink, a submodule or any other non-`file` entry, a file over 4 KiB and
+/// a file that is not UTF-8 are [`ports::AuthorityFile::Invalid`]: they grant
+/// nothing. A body without the contents API's `type`, `size`, `encoding` or
+/// `content` is refused, never guessed. PURE.
+pub fn parse_authority_file(body: &serde_json::Value) -> Result<ports::AuthorityFile, String> {
+    if body.is_array() {
+        return Ok(ports::AuthorityFile::Invalid);
+    }
+    match body.get("type").and_then(serde_json::Value::as_str) {
+        Some("file") => decode_authority_file(body),
+        Some(_) => Ok(ports::AuthorityFile::Invalid),
+        None => Err("the contents body has no `type`".to_string()),
+    }
+}
+
+/// The listed DIDs of a contents `file` entry.
+fn decode_authority_file(body: &serde_json::Value) -> Result<ports::AuthorityFile, String> {
+    use base64::Engine as _;
+    use ports::claim_domain::authority::{authority_file_dids, AUTHORITY_FILE_MAX_BYTES};
+
+    let size = body
+        .get("size")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or("the authority file has no `size`")?;
+    if usize::try_from(size).map_or(true, |size| size > AUTHORITY_FILE_MAX_BYTES) {
+        return Ok(ports::AuthorityFile::Invalid);
+    }
+    let encoding = body.get("encoding").and_then(serde_json::Value::as_str);
+    if encoding != Some("base64") {
+        return Err(format!("the authority file's `encoding` is {encoding:?}"));
+    }
+    let content: String = body
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("the authority file has no `content`")?
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    let file = base64::engine::general_purpose::STANDARD
+        .decode(content)
+        .map_err(|e| format!("the authority file's `content` is not base64: {e}"))?;
+    Ok(authority_file_dids(&file)
+        .map_or(ports::AuthorityFile::Invalid, ports::AuthorityFile::Present))
+}
+
+/// The observation of a repo GitHub served, with its authority file
+/// (ADR-087 §4). PURE.
+pub fn observed_repo(
+    facts: ports::RepoFacts,
+    authority_file: ports::AuthorityFile,
+) -> ports::RepoObservation {
+    ports::RepoObservation::Found(ports::FoundRepo {
+        repo_id: facts.repo_id,
+        full_name_seen: facts.full_name,
+        owner_id: facts.owner_id,
+        owner_type: facts.owner_kind,
+        authority_file,
+    })
+}
+
 /// A positive numeric `id`.
 fn positive_id(body: &serde_json::Value) -> Option<u64> {
     body.get("id")

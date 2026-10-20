@@ -43,8 +43,9 @@
 
 use async_trait::async_trait;
 use ports::{
-    AccountRepoListing, GithubAccountProfile, GithubError, GithubPort, ListingExtent, OwnedRepo,
-    PersonProfile, ProbeOutcome, RateBudget, RawContributor, RepoFacts, Signal, TargetKind,
+    AccountRepoListing, AuthorityFile, GithubAccountProfile, GithubError, GithubPort,
+    ListingExtent, OwnedRepo, PersonProfile, ProbeOutcome, RateBudget, RawContributor, RepoFacts,
+    RepoObservation, Signal, TargetKind,
 };
 
 pub mod client;
@@ -470,6 +471,22 @@ impl GithubPort for GithubAdapter {
         client::parse_repo_read(&body).map_err(GithubError::ApiShape)
     }
 
+    /// [`read_repo`](GithubPort::read_repo), then ALWAYS the authority file
+    /// of the repo GitHub named (after any redirect), whatever the owner.
+    async fn read_repo_authority(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Result<RepoObservation, GithubError> {
+        let facts = match self.read_repo(owner, name).await {
+            Ok(facts) => facts,
+            Err(gone) if gone.is_gone() => return Ok(RepoObservation::RepoNotFound),
+            Err(unavailable) => return Err(unavailable),
+        };
+        let authority_file = self.read_authority_file(&facts.full_name).await?;
+        Ok(client::observed_repo(facts, authority_file))
+    }
+
     fn last_rate_budget(&self) -> Option<RateBudget> {
         self.last_rate_budget.lock().ok().and_then(|slot| *slot)
     }
@@ -504,6 +521,28 @@ impl GithubAdapter {
                 None
             }
         }
+    }
+
+    /// `GET {base}/repos/{full_name}/contents/.github/openlore-authority`,
+    /// no `ref`: the default branch only. 404 is
+    /// [`AuthorityFile::Absent`]; any other refusal is classified as
+    /// [`Self::get_public`] does, never read as absent.
+    async fn read_authority_file(&self, full_name: &str) -> Result<AuthorityFile, GithubError> {
+        let url = format!(
+            "{}/repos/{full_name}/contents/{}",
+            self.api_base,
+            client::AUTHORITY_FILE_PATH
+        );
+        let response = self.send_get(&url).await?;
+        let status = response.status();
+        if status.is_success() {
+            let body = json_body(response).await?;
+            return client::parse_authority_file(&body).map_err(GithubError::ApiShape);
+        }
+        if status.as_u16() == 404 {
+            return Ok(AuthorityFile::Absent);
+        }
+        Err(classify_refusal(response, full_name).await)
     }
 
     /// One public GET of an account profile, strictly reshaped

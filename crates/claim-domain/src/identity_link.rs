@@ -51,7 +51,7 @@ fn is_trailing_punctuation(c: char) -> bool {
 }
 
 /// `did:<lowercase method>:<non-empty rest>`.
-fn is_did_shaped(token: &str) -> bool {
+pub(crate) fn is_did_shaped(token: &str) -> bool {
     let mut parts = token.splitn(3, ':');
     let scheme = parts.next();
     let method = parts.next().unwrap_or_default();

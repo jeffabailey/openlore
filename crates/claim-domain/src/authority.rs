@@ -21,7 +21,7 @@ use std::cmp::Reverse;
 
 use chrono::{DateTime, Utc};
 
-use crate::identity_link::{bio_verdict, link_predicate, BioVerdict, CheckVerdict};
+use crate::identity_link::{bio_verdict, is_did_shaped, link_predicate, BioVerdict, CheckVerdict};
 use crate::references::ReferenceStance;
 use crate::ReferenceType;
 
@@ -194,6 +194,41 @@ fn still_named(subject: &str, repo: RepoRead<'_>) -> Result<(), SigningRefusal> 
         }
         _ => Ok(()),
     }
+}
+
+// -----------------------------------------------------------------------------
+// The in-repo authority file (owner-only-signing, ADR-087 §3)
+// -----------------------------------------------------------------------------
+
+/// The largest authority file that grants anything (ADR-087 §3: ≤ 4 KiB).
+pub const AUTHORITY_FILE_MAX_BYTES: usize = 4 * 1024;
+
+/// The DIDs a repo's `.github/openlore-authority` lists, in file order: UTF-8
+/// text, one DID per line, `#` starts a comment. A line that is not exactly
+/// one DID lists nothing. `None` when the file is over
+/// [`AUTHORITY_FILE_MAX_BYTES`] or not UTF-8: such a file grants nothing.
+pub fn authority_file_dids(file: &[u8]) -> Option<Vec<String>> {
+    if file.len() > AUTHORITY_FILE_MAX_BYTES {
+        return None;
+    }
+    let text = std::str::from_utf8(file).ok()?;
+    Some(
+        text.lines()
+            .map(without_comment)
+            .filter(|line| is_one_did(line))
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+/// A single DID-shaped token, nothing around it.
+fn is_one_did(line: &str) -> bool {
+    !line.contains(char::is_whitespace) && is_did_shaped(line)
+}
+
+/// A line up to its `#` comment, trimmed.
+fn without_comment(line: &str) -> &str {
+    line.split('#').next().unwrap_or_default().trim()
 }
 
 // -----------------------------------------------------------------------------
@@ -884,5 +919,40 @@ mod gate_from_checks_tests {
                 name: "tidepool".to_string()
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod authority_file_tests {
+    use super::*;
+
+    #[test]
+    fn an_authority_file_lists_one_did_per_line_and_skips_comments_and_other_lines() {
+        let file = "# who may sign\ndid:plc:jeff\n\n  did:web:example.com  # release\nnot a did\ndid:plc:a did:plc:b\n";
+
+        assert_eq!(
+            authority_file_dids(file.as_bytes()),
+            Some(vec![
+                "did:plc:jeff".to_string(),
+                "did:web:example.com".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn a_file_over_four_kibibytes_or_not_utf8_lists_nothing_at_all() {
+        let at_limit = format!(
+            "did:plc:jeff\n{}",
+            "#".repeat(AUTHORITY_FILE_MAX_BYTES - 13)
+        );
+        assert_eq!(at_limit.len(), AUTHORITY_FILE_MAX_BYTES);
+        assert_eq!(
+            authority_file_dids(at_limit.as_bytes()),
+            Some(vec!["did:plc:jeff".to_string()])
+        );
+
+        let over_limit = format!("{at_limit}#");
+        assert_eq!(authority_file_dids(over_limit.as_bytes()), None);
+        assert_eq!(authority_file_dids(b"did:plc:jeff\n\xff\xfe"), None);
     }
 }

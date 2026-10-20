@@ -3,7 +3,9 @@
 //! that builds it is a finding; the adapters and test support may build it;
 //! the real tree passes. Step 02-01: `repo_authority_checks_insert_only` —
 //! any production SQL that updates or deletes a repo observation is a finding;
-//! inserts and reads are not; the real tree passes.
+//! inserts and reads are not; the real tree passes. Step 02-02: the repo
+//! observation (`FoundRepo`, `RepoObservation::Found`) is held by the same
+//! evidence rule.
 
 use std::path::{Path, PathBuf};
 
@@ -50,6 +52,43 @@ fn person_evidence_built_in_cli_code_is_a_finding_but_adapters_may_build_it() {
     ] {
         assert!(
             classify_authority_evidence(allowed, FABRICATED_PERSON_EVIDENCE).is_empty(),
+            "{allowed}"
+        );
+    }
+}
+
+const FABRICATED_REPO_OBSERVATION: &str = "
+fn remembered(row: &Row) -> RepoObservation {
+    let repo = ports::FoundRepo {
+        repo_id: row.repo_id,
+        full_name_seen: row.full_name.clone(),
+        owner_id: row.owner_id,
+        owner_type: RepoOwnerKind::User,
+        authority_file: AuthorityFile::Present(vec![row.did.clone()]),
+    };
+    ports::RepoObservation::Found(repo)
+}";
+
+#[test]
+fn a_repo_observation_built_in_cli_code_is_a_finding_but_adapters_may_build_it() {
+    let findings = classify_authority_evidence(
+        "crates/cli/src/verbs/authority_verify.rs",
+        FABRICATED_REPO_OBSERVATION,
+    );
+    assert_eq!(findings.len(), 2, "{findings:?}");
+    assert!(findings[0].contains("FoundRepo"), "{findings:?}");
+    assert!(
+        findings[1].contains("RepoObservation::Found"),
+        "{findings:?}"
+    );
+
+    for allowed in [
+        "crates/adapter-github/src/client.rs",
+        "crates/adapter-duckdb/src/repo_authority_checks.rs",
+        "crates/test-support/src/lib.rs",
+    ] {
+        assert!(
+            classify_authority_evidence(allowed, FABRICATED_REPO_OBSERVATION).is_empty(),
             "{allowed}"
         );
     }
