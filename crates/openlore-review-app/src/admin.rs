@@ -10,7 +10,7 @@ use review_domain::kpi::{parse_day, sum_counters, utc_day};
 
 use crate::http::{plain, App};
 use crate::limiter::unix_now_secs;
-use crate::routes::settings::forget;
+use crate::routes::settings::{forget, ForgetFailure};
 
 /// The operator routes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,7 +70,12 @@ async fn purge(app: &App, body: &[u8]) -> Response<Full<Bytes>> {
     }
     match forget(app, did).await {
         Ok(outcome) => text(StatusCode::OK, outcome.as_str()),
-        Err(_) => text(
+        Err(ForgetFailure::ScopeBusy) => text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "grant revoked; data not yet purged (another change of this DID held its scope); \
+             send the purge again",
+        ),
+        Err(ForgetFailure::Store) => text(
             StatusCode::SERVICE_UNAVAILABLE,
             "purge failed; nothing was removed",
         ),

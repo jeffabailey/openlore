@@ -60,3 +60,39 @@ pub fn forget_me_failed_page() -> String {
         },
     )
 }
+
+/// What happened when forget me revoked her permission but another change
+/// of her repos or accounts still held her scope (re-review N8).
+pub const FORGET_ME_NOT_PURGED_MESSAGE: &str = "Your permission for OpenLore review is revoked \
+     at your Bluesky server, so it can no longer write to your repo. Your suggestions, declines \
+     and GitHub links are not deleted yet: another change to your repos or accounts was still \
+     being saved. Please press \"Disconnect and forget me\" again to finish.";
+
+/// Forget me revoked her permission but purged nothing yet (her scope was
+/// busy): says exactly that, and offers the retry.
+pub fn forget_me_not_purged_page() -> String {
+    page(
+        "Not finished",
+        html! {
+            h1 { "We could not finish forgetting you" }
+            p role="alert" { (FORGET_ME_NOT_PURGED_MESSAGE) }
+            p { a href="/settings/forget" { (FORGET_ME_LABEL) } }
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Re-review N8: the busy-scope page says the permission is revoked,
+    /// the data is not yet deleted, and offers forget me again.
+    #[test]
+    fn a_busy_forget_me_says_what_was_revoked_and_what_is_left() {
+        let html = forget_me_not_purged_page();
+        assert!(html.contains("is revoked"));
+        assert!(html.contains("not deleted yet"));
+        assert!(html.contains(r#"href="/settings/forget""#));
+        assert!(!html.contains("nothing was purged"));
+    }
+}
