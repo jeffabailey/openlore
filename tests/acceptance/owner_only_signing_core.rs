@@ -198,11 +198,7 @@ fn sut_classify(_claim: &ClaimView, _evidence: &EvidenceView) -> AuthorityView {
 
 /// The CLI gate from local checks (ADR-086 §4-5). NOT the shipped review-app
 /// `may_sign` (ADR-089 §2, same-request reads) — see U-OOS-2.
-fn sut_may_sign(
-    _claim: &ClaimView,
-    _evidence: &EvidenceView,
-    _window_minutes: i64,
-) -> PermitView {
+fn sut_may_sign(_claim: &ClaimView, _evidence: &EvidenceView, _window_minutes: i64) -> PermitView {
     todo!("RED: bind to the claim_domain::authority gate over local checks (slice 1)")
 }
 
@@ -415,7 +411,10 @@ impl GateRow {
     fn permits(self) -> bool {
         matches!(
             self,
-            GateRow::G1Exempt | GateRow::G3PersonFresh | GateRow::G5ListedFresh | GateRow::G6OwnerFresh
+            GateRow::G1Exempt
+                | GateRow::G3PersonFresh
+                | GateRow::G5ListedFresh
+                | GateRow::G6OwnerFresh
         )
     }
 }
@@ -434,9 +433,14 @@ fn oracle_gate_row(claim: &ClaimView, ev: &EvidenceView) -> GateRow {
                 return GateRow::G8Unattested;
             }
             let fresh = e.owner_ids.iter().any(|id| {
-                latest_check(ev, &claim.author, *id).is_some_and(|c| c.verified && is_fresh(c.age_minutes))
+                latest_check(ev, &claim.author, *id)
+                    .is_some_and(|c| c.verified && is_fresh(c.age_minutes))
             });
-            if fresh { GateRow::G3PersonFresh } else { GateRow::G4PersonStale }
+            if fresh {
+                GateRow::G3PersonFresh
+            } else {
+                GateRow::G4PersonStale
+            }
         }
         Some(RequirementView::Repo { .. }) => {
             let e = oracle_repo(&claim.author, ev);
@@ -452,10 +456,15 @@ fn oracle_gate_row(claim: &ClaimView, ev: &EvidenceView) -> GateRow {
             }
             let owner_fresh = is_fresh(repo_age)
                 && e.owner_ids.iter().any(|id| {
-                    latest_check(ev, &claim.author, *id)
-                        .is_some_and(|c| is_fresh(c.age_minutes) && is_fresh(c.age_minutes.max(repo_age)))
+                    latest_check(ev, &claim.author, *id).is_some_and(|c| {
+                        is_fresh(c.age_minutes) && is_fresh(c.age_minutes.max(repo_age))
+                    })
                 });
-            if owner_fresh { GateRow::G6OwnerFresh } else { GateRow::G7RepoStale }
+            if owner_fresh {
+                GateRow::G6OwnerFresh
+            } else {
+                GateRow::G7RepoStale
+            }
         }
     }
 }
@@ -464,7 +473,11 @@ fn oracle_gate_row(claim: &ClaimView, ev: &EvidenceView) -> GateRow {
 // Generators
 // =============================================================================
 
-const AUTHORS: [&str; 3] = ["did:plc:test-jeff", "did:plc:rachel-test", "did:plc:tobias-test"];
+const AUTHORS: [&str; 3] = [
+    "did:plc:test-jeff",
+    "did:plc:rachel-test",
+    "did:plc:tobias-test",
+];
 
 fn arb_did_token(author: &'static str) -> impl Strategy<Value = String> {
     // The exact DID and its lies (ADR-087 lie catalogue): uppercase, prefix
@@ -593,13 +606,15 @@ fn arb_evidence(window_heavy: bool) -> impl Strategy<Value = EvidenceView> {
         any::<bool>(),
         arb_age(window_heavy),
     )
-        .prop_map(|(did, github_id, login, verified, age_minutes)| LinkCheckView {
-            did: did.to_string(),
-            github_id,
-            login_seen: login.to_string(),
-            verified,
-            age_minutes,
-        });
+        .prop_map(
+            |(did, github_id, login, verified, age_minutes)| LinkCheckView {
+                did: did.to_string(),
+                github_id,
+                login_seen: login.to_string(),
+                verified,
+                age_minutes,
+            },
+        );
     let file = prop_oneof![
         Just(FileView::Absent),
         Just(FileView::Invalid),
@@ -721,8 +736,7 @@ fn eligible(feed: &[FeedRow]) -> Vec<AttributedClaim> {
                 predicate: r.claim.predicate.clone(),
                 references: r.references.clone(),
             };
-            !oracle_is_non_weight(&view)
-                && (github_rest(&r.claim.subject).is_none() || r.attested)
+            !oracle_is_non_weight(&view) && (github_rest(&r.claim.subject).is_none() || r.attested)
         })
         .map(|r| r.claim.clone())
         .collect()

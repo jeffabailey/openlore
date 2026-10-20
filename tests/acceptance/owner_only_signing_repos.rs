@@ -157,7 +157,14 @@ fn jeff_imports_anything_public_but_signing_what_he_cannot_attest_is_refused_wit
             "[{row}] the candidates are still listed;\n{}",
             outcome.stdout
         );
-        assert_signing_refused(&outcome, subject, reason, Some(who), command.as_deref(), row);
+        assert_signing_refused(
+            &outcome,
+            subject,
+            reason,
+            Some(who),
+            command.as_deref(),
+            row,
+        );
         assert_nothing_signed_or_published(row, &seen, &world, subject);
         guardrail_nothing_signed(row, &before, &world.env);
     }
@@ -209,12 +216,36 @@ fn an_organization_repo_is_signed_only_by_a_did_its_authority_file_lists_exactly
             AuthorityFile::Lists(format!("# {MY_DID}\n")),
             Some(Refusal::OrgOwnedNotListed),
         ),
-        ("symlink", AuthorityFile::Symlink, Some(Refusal::FileInvalid)),
-        ("submodule", AuthorityFile::Submodule, Some(Refusal::FileInvalid)),
-        ("directory", AuthorityFile::Directory, Some(Refusal::FileInvalid)),
-        ("exactly 4 KiB", listing_of_exactly(4 * 1024, &[MY_DID]), None),
-        ("oversize", AuthorityFile::Oversize(mine.clone()), Some(Refusal::FileInvalid)),
-        ("not utf-8", AuthorityFile::NotUtf8(mine.clone()), Some(Refusal::FileInvalid)),
+        (
+            "symlink",
+            AuthorityFile::Symlink,
+            Some(Refusal::FileInvalid),
+        ),
+        (
+            "submodule",
+            AuthorityFile::Submodule,
+            Some(Refusal::FileInvalid),
+        ),
+        (
+            "directory",
+            AuthorityFile::Directory,
+            Some(Refusal::FileInvalid),
+        ),
+        (
+            "exactly 4 KiB",
+            listing_of_exactly(4 * 1024, &[MY_DID]),
+            None,
+        ),
+        (
+            "oversize",
+            AuthorityFile::Oversize(mine.clone()),
+            Some(Refusal::FileInvalid),
+        ),
+        (
+            "not utf-8",
+            AuthorityFile::NotUtf8(mine.clone()),
+            Some(Refusal::FileInvalid),
+        ),
         (
             "other branch",
             AuthorityFile::OnlyOnAnotherBranch(mine),
@@ -233,7 +264,14 @@ fn an_organization_repo_is_signed_only_by_a_did_its_authority_file_lists_exactly
         match refusal {
             None => assert_signed_and_published(&world, &outcome, anvil),
             Some(reason) => {
-                assert_signing_refused(&outcome, anvil, reason, Some(CanSign::ListedDid), None, row);
+                assert_signing_refused(
+                    &outcome,
+                    anvil,
+                    reason,
+                    Some(CanSign::ListedDid),
+                    None,
+                    row,
+                );
                 assert_nothing_signed_or_published(row, &seen, &world, anvil);
                 guardrail_nothing_signed(row, &before, &world.env);
             }
@@ -274,14 +312,42 @@ fn rechecking_authority_labels_each_peers_repo_claims_and_records_one_observatio
 
     let verified = when_jeff_verifies_authority(&world, &[], Some(CHECK_PLUS_2_DAYS));
 
-    assert_eq!(verified.status, 0, "{}\n{}", verified.stdout, verified.stderr);
-    assert_labelled(&verified, RACHEL_DID, Subject::Repo(ANVIL), Authority::RepoListed);
-    assert_labelled(&verified, RACHEL_DID, Subject::Repo(TIDEPOOL), Authority::ThirdParty);
+    assert_eq!(
+        verified.status, 0,
+        "{}\n{}",
+        verified.stdout, verified.stderr
+    );
+    assert_labelled(
+        &verified,
+        RACHEL_DID,
+        Subject::Repo(ANVIL),
+        Authority::RepoListed,
+    );
+    assert_labelled(
+        &verified,
+        RACHEL_DID,
+        Subject::Repo(TIDEPOOL),
+        Authority::ThirdParty,
+    );
     for repo in [ANVIL, TIDEPOOL] {
-        assert_eq!(world.github.repo_facts_reads_of(&repo.full()), 1, "{}", repo.full());
-        assert_eq!(world.github.authority_file_reads_of(&repo.full()), 1, "{}", repo.full());
+        assert_eq!(
+            world.github.repo_facts_reads_of(&repo.full()),
+            1,
+            "{}",
+            repo.full()
+        );
+        assert_eq!(
+            world.github.authority_file_reads_of(&repo.full()),
+            1,
+            "{}",
+            repo.full()
+        );
     }
-    assert_eq!(world.env.pds.records().len(), published_before, "nothing published (C-OOS-4)");
+    assert_eq!(
+        world.env.pds.records().len(),
+        published_before,
+        "nothing published (C-OOS-4)"
+    );
     // SECONDARY guardrail: exactly one observation of each repo, nothing else.
     guardrail_store_delta(
         &before,
@@ -317,11 +383,14 @@ fn rechecking_authority_labels_each_peers_repo_claims_and_records_one_observatio
 #[test]
 #[ignore = "DISTILL owner-only-signing RA-5: pending DELIVER"]
 fn when_github_cannot_answer_rechecking_records_nothing_and_changes_nothing() {
-    let rows: [(&str, fn(&LinkWorld)); 3] = [
-        ("rate limited", |w| github_has(w, GithubTrouble::RateLimitedAnonymously)),
+    let rows: [TroubleRow; 3] = [
+        ("rate limited", |w| {
+            github_has(w, GithubTrouble::RateLimitedAnonymously)
+        }),
         ("unreachable", |w| github_has(w, GithubTrouble::Unreachable)),
         ("another host", |w| {
-            w.github.redirect_repo_to_another_host(ANVIL.owner, ANVIL.name)
+            w.github
+                .redirect_repo_to_another_host(ANVIL.owner, ANVIL.name)
         }),
     ];
     let anvil = Subject::Repo(ANVIL);
@@ -362,10 +431,15 @@ fn when_github_cannot_answer_rechecking_records_nothing_and_changes_nothing() {
 /// ```
 #[test]
 #[ignore = "DISTILL owner-only-signing RA-6: pending DELIVER"]
-fn when_githubs_budget_runs_out_mid_import_the_candidates_are_listed_and_his_latest_check_decides() {
+fn when_githubs_budget_runs_out_mid_import_the_candidates_are_listed_and_his_latest_check_decides()
+{
     let tidepool = Subject::Repo(TIDEPOOL);
     for checked_before in [false, true] {
-        let row = if checked_before { "checked 1 October" } else { "never checked" };
+        let row = if checked_before {
+            "checked 1 October"
+        } else {
+            "never checked"
+        };
         let world = authority_world();
         given_jeff_linked_his_account(&world);
         if checked_before {
@@ -378,7 +452,11 @@ fn when_githubs_budget_runs_out_mid_import_the_candidates_are_listed_and_his_lat
 
         let outcome = when_jeff_imports_and_signs(&world, TIDEPOOL, CHECK_PLUS_2_DAYS);
 
-        assert!(numbered_count(&outcome.stdout) >= 1, "[{row}] candidates listed;\n{}", outcome.stdout);
+        assert!(
+            numbered_count(&outcome.stdout) >= 1,
+            "[{row}] candidates listed;\n{}",
+            outcome.stdout
+        );
         if checked_before {
             assert_signed_and_published(&world, &outcome, tidepool);
         } else {
@@ -390,7 +468,14 @@ fn when_githubs_budget_runs_out_mid_import_the_candidates_are_listed_and_his_lat
                 Some(RETRY_AFTER),
                 row,
             );
-            assert_refused(&outcome, tidepool, Refusal::GithubUnfinished, None, Some(&verify_command(tidepool)), row);
+            assert_refused(
+                &outcome,
+                tidepool,
+                Refusal::GithubUnfinished,
+                None,
+                Some(&verify_command(tidepool)),
+                row,
+            );
             assert_nothing_signed_or_published(row, &seen, &world, tidepool);
             guardrail_nothing_signed(row, &before, &world.env);
         }
@@ -427,7 +512,11 @@ fn after_jeff_transfers_his_repo_his_earlier_claim_reads_third_party_and_nothing
 
     let verified = when_jeff_verifies_authority(&world, &[], Some(CHECK_PLUS_7_DAYS));
 
-    assert_eq!(verified.status, 0, "{}\n{}", verified.stdout, verified.stderr);
+    assert_eq!(
+        verified.status, 0,
+        "{}\n{}",
+        verified.stdout, verified.stderr
+    );
     assert_labelled(&verified, MY_DID, tidepool, Authority::ThirdParty);
     assert_nothing_signed_or_published("transfer", &seen, &world, tidepool);
     guardrail_nothing_signed("transfer", &before, &world.env);
@@ -449,10 +538,8 @@ fn after_jeff_transfers_his_repo_his_earlier_claim_reads_third_party_and_nothing
 #[test]
 #[ignore = "DISTILL owner-only-signing RA-8: pending DELIVER"]
 fn after_jeff_renames_his_repo_he_signs_only_under_the_name_github_serves_now() {
-    let rows: [(RepoRef, Option<Refusal>); 2] = [
-        (TIDEPOOL_RENAMED, None),
-        (TIDEPOOL, Some(Refusal::Renamed)),
-    ];
+    let rows: [(RepoRef, Option<Refusal>); 2] =
+        [(TIDEPOOL_RENAMED, None), (TIDEPOOL, Some(Refusal::Renamed))];
     for (repo, refusal) in rows {
         let world = authority_world();
         given_jeff_linked_his_account(&world);
@@ -502,8 +589,17 @@ fn a_listed_identity_stays_listed_whoever_observed_the_repo_last() {
 
     let verified = when_jeff_verifies_authority(&world, &[], Some(CHECK_PLUS_7_DAYS));
 
-    assert_eq!(verified.status, 0, "{}\n{}", verified.stdout, verified.stderr);
-    assert_labelled(&verified, RACHEL_DID, Subject::Repo(ANVIL), Authority::RepoListed);
+    assert_eq!(
+        verified.status, 0,
+        "{}\n{}",
+        verified.stdout, verified.stderr
+    );
+    assert_labelled(
+        &verified,
+        RACHEL_DID,
+        Subject::Repo(ANVIL),
+        Authority::RepoListed,
+    );
 }
 
 /// RA-14 (C4b: re-check with nothing to re-check)
@@ -525,14 +621,23 @@ fn with_no_github_claims_in_his_store_rechecking_authority_asks_github_nothing()
 
     let verified = when_jeff_verifies_authority(&world, &[], Some(LINKED_AT));
 
-    assert_eq!(verified.status, 0, "{}\n{}", verified.stdout, verified.stderr);
+    assert_eq!(
+        verified.status, 0,
+        "{}\n{}",
+        verified.stdout, verified.stderr
+    );
     assert!(
         verified.stdout.contains(NOTHING_TO_RECHECK),
         "says `{NOTHING_TO_RECHECK}`;\n{}",
         verified.stdout
     );
     assert_github_not_asked(&world, asked_before, "nothing to re-check");
-    assert_jeff_sees_no_change("nothing to re-check", &seen, &world, Subject::Repo(TIDEPOOL));
+    assert_jeff_sees_no_change(
+        "nothing to re-check",
+        &seen,
+        &world,
+        Subject::Repo(TIDEPOOL),
+    );
     guardrail_store_unchanged("nothing to re-check", &before, &world.env);
 }
 
@@ -556,7 +661,14 @@ fn a_repo_github_does_not_have_is_recorded_as_not_found_and_cannot_be_signed() {
 
     let outcome = when_jeff_signs_offline(&world, vanished, CHECK_PLUS_2_DAYS);
 
-    assert_signing_refused(&outcome, vanished, Refusal::RepoNotFound, None, None, "vanished");
+    assert_signing_refused(
+        &outcome,
+        vanished,
+        Refusal::RepoNotFound,
+        None,
+        None,
+        "vanished",
+    );
     assert_jeff_sees_no_change("vanished", &seen, &world, vanished);
     guardrail_store_unchanged("vanished", &before, &world.env);
 }
@@ -591,7 +703,7 @@ fn with_the_network_off_jeff_signs_a_repo_claim_only_from_fresh_checks() {
         the_repo_holds_authority_file(w, ANVIL, listing(&[MY_DID]));
         given_jeff_verified_authority_of(w, Subject::Repo(ANVIL), LINKED_AT);
     }
-    let rows: [(&str, fn(&LinkWorld), RepoRef, &str, Option<Refusal>); 6] = [
+    let rows: [WindowRow; 6] = [
         (
             "owner, fresh",
             |w| {
@@ -602,8 +714,20 @@ fn with_the_network_off_jeff_signs_a_repo_claim_only_from_fresh_checks() {
             CHECK_PLUS_2_DAYS,
             None,
         ),
-        ("listed, fresh", anvil_lists_jeff, ANVIL, CHECK_PLUS_2_DAYS, None),
-        ("listed, exactly 7 days", anvil_lists_jeff, ANVIL, CHECK_PLUS_7_DAYS, None),
+        (
+            "listed, fresh",
+            anvil_lists_jeff,
+            ANVIL,
+            CHECK_PLUS_2_DAYS,
+            None,
+        ),
+        (
+            "listed, exactly 7 days",
+            anvil_lists_jeff,
+            ANVIL,
+            CHECK_PLUS_7_DAYS,
+            None,
+        ),
         (
             "listed, 7 days and a minute",
             anvil_lists_jeff,
@@ -766,9 +890,15 @@ fn publishing_a_stored_claim_later_asks_for_authority_only_if_it_was_never_publi
         match history {
             History::Unpublished => {
                 assert_eq!(outcome.status, 0, "{}\n{}", outcome.stdout, outcome.stderr);
-                assert_eq!(published_after.len(), published_before.len() + 1, "published");
+                assert_eq!(
+                    published_after.len(),
+                    published_before.len() + 1,
+                    "published"
+                );
                 assert!(
-                    published_after.iter().any(|(_, v)| v["subject"] == tidepool.uri().as_str()),
+                    published_after
+                        .iter()
+                        .any(|(_, v)| v["subject"] == tidepool.uri().as_str()),
                     "the claim about tidepool reached Jeff's published repo"
                 );
             }
@@ -818,7 +948,10 @@ fn opening_a_store_made_before_owner_only_signing_keeps_everything_in_it() {
             out.stdout
         );
     }
-    assert_eq!(second.stdout, first.stdout, "opening it again changes nothing");
+    assert_eq!(
+        second.stdout, first.stdout,
+        "opening it again changes nothing"
+    );
     // SECONDARY guardrails: each upgrade recorded once; prior rows untouched.
     let versions = schema_versions(&world.env);
     for v in [7, 8] {
@@ -828,7 +961,11 @@ fn opening_a_store_made_before_owner_only_signing_keeps_everything_in_it() {
             "guardrail: v{v} recorded once: {versions:?}"
         );
     }
-    assert_eq!(prior_rows(&world.env), rows_before, "guardrail: prior rows unchanged");
+    assert_eq!(
+        prior_rows(&world.env),
+        rows_before,
+        "guardrail: prior rows unchanged"
+    );
 }
 
 /// RA-12b (upgrade from the frozen v7 store; review Forge 1, ruling R5)
@@ -871,7 +1008,11 @@ fn jeffs_identity_link_checks_carry_over_when_his_store_gains_owner_only_signing
         let after = what_jeff_sees(&world, own);
         match refusal {
             None => {
-                assert_eq!(outcome.status, 0, "[{now}] {}\n{}", outcome.stdout, outcome.stderr);
+                assert_eq!(
+                    outcome.status, 0,
+                    "[{now}] {}\n{}",
+                    outcome.stdout, outcome.stderr
+                );
                 assert!(
                     !rows_about(&after.claims_about, MY_DID, &own.uri()).is_empty(),
                     "[{now}] his claim about jeffbailey is listed;\n{}",
@@ -879,7 +1020,14 @@ fn jeffs_identity_link_checks_carry_over_when_his_store_gains_owner_only_signing
                 );
             }
             Some(reason) => {
-                assert_signing_refused(&outcome, own, reason, None, Some(&verify_command(own)), now);
+                assert_signing_refused(
+                    &outcome,
+                    own,
+                    reason,
+                    None,
+                    Some(&verify_command(own)),
+                    now,
+                );
                 assert!(
                     rows_about(&after.claims_about, MY_DID, &own.uri()).is_empty(),
                     "[{now}] nothing signed;\n{}",
@@ -887,10 +1035,16 @@ fn jeffs_identity_link_checks_carry_over_when_his_store_gains_owner_only_signing
                 );
             }
         }
-        assert!(after.published.is_empty(), "[{now}] nothing published offline");
+        assert!(
+            after.published.is_empty(),
+            "[{now}] nothing published offline"
+        );
         // SECONDARY guardrail: v8 recorded once on top of the frozen v7 head.
         assert_eq!(
-            schema_versions(&world.env).iter().filter(|v| **v == 8).count(),
+            schema_versions(&world.env)
+                .iter()
+                .filter(|v| **v == 8)
+                .count(),
             1,
             "[{now}] guardrail: v8 recorded once"
         );
@@ -926,10 +1080,16 @@ fn regenerate_the_frozen_v7_store_fixture() {
     assert_eq!(schema_versions(&rebuilt.env), schema_versions(&world.env));
     assert_eq!(link_checks(&rebuilt.env), link_checks(&world.env));
     let reread = when_i_list(&rebuilt, Some(V7_LISTED_AT));
-    assert_eq!(reread.stdout, golden.stdout, "the rebuilt store lists the same");
+    assert_eq!(
+        reread.stdout, golden.stdout,
+        "the rebuilt store lists the same"
+    );
     // A new check after the rebuild must not collide with the frozen ones.
     given_i_verified(&rebuilt, Some(CHECK_PLUS_2_DAYS));
-    assert_eq!(link_checks(&rebuilt.env).len(), link_checks(&world.env).len() + 1);
+    assert_eq!(
+        link_checks(&rebuilt.env).len(),
+        link_checks(&world.env).len() + 1
+    );
 }
 
 /// RA-13 (table over Jeff's own link at signing time; ruling R3 adds the
@@ -963,10 +1123,26 @@ fn signing_from_an_import_rechecks_jeffs_own_link_first() {
     let tidepool = Subject::Repo(TIDEPOOL);
     let rows: [(Github, &str, Option<Refusal>); 5] = [
         (Github::BioHolds, CHECK_PLUS_20_DAYS, None),
-        (Github::BioDropped, CHECK_PLUS_20_DAYS, Some(Refusal::LinkNotVerified)),
-        (Github::Fails(ProfileTrouble::TooBusy), CHECK_PLUS_2_DAYS, None),
-        (Github::Fails(ProfileTrouble::Unreachable), CHECK_PLUS_2_DAYS, None),
-        (Github::Fails(ProfileTrouble::TooBusy), CHECK_PLUS_20_DAYS, Some(Refusal::CheckTooOld)),
+        (
+            Github::BioDropped,
+            CHECK_PLUS_20_DAYS,
+            Some(Refusal::LinkNotVerified),
+        ),
+        (
+            Github::Fails(ProfileTrouble::TooBusy),
+            CHECK_PLUS_2_DAYS,
+            None,
+        ),
+        (
+            Github::Fails(ProfileTrouble::Unreachable),
+            CHECK_PLUS_2_DAYS,
+            None,
+        ),
+        (
+            Github::Fails(ProfileTrouble::TooBusy),
+            CHECK_PLUS_20_DAYS,
+            Some(Refusal::CheckTooOld),
+        ),
     ];
     for (github, now, refusal) in rows {
         let row = format!("{github:?} at {now}");
@@ -977,7 +1153,9 @@ fn signing_from_an_import_rechecks_jeffs_own_link_first() {
             Github::BioDropped => bio_drops_the_did(&world, JEFF_GH),
             // `scrape github` reads no profile of its own: the first profile
             // read is the sign-time refresh.
-            Github::Fails(trouble) => github_stops_answering_jeffs_profile_after(&world, 0, trouble),
+            Github::Fails(trouble) => {
+                github_stops_answering_jeffs_profile_after(&world, 0, trouble)
+            }
         }
         let seen = what_jeff_sees(&world, tidepool);
         let asked_before = world.github_paths().len();
@@ -989,8 +1167,7 @@ fn signing_from_an_import_rechecks_jeffs_own_link_first() {
             world
                 .github_paths_since(asked_before)
                 .iter()
-                .any(|p| p.eq_ignore_ascii_case(&JEFF_GH.login_path())
-                    || p == &JEFF_GH.id_path()),
+                .any(|p| p.eq_ignore_ascii_case(&JEFF_GH.login_path()) || p == &JEFF_GH.id_path()),
             "[{row}] Jeff's own link was re-checked"
         );
         match refusal {
@@ -1088,7 +1265,8 @@ fn jeff_reviews_what_he_imported_offline_one_repo_at_a_time() {
 
     assert_eq!(listed.status, 0, "{}\n{}", listed.stdout, listed.stderr);
     assert!(
-        listed.stdout.contains(&ANVIL.subject()) && listed.stdout.contains(short_name(DEPENDENCY_PINNING)),
+        listed.stdout.contains(&ANVIL.subject())
+            && listed.stdout.contains(short_name(DEPENDENCY_PINNING)),
         "anvil's candidate is listed;\n{}",
         listed.stdout
     );
@@ -1117,9 +1295,13 @@ fn importing_a_repo_keeps_its_candidates_locally_and_nowhere_else() {
     let anvil = Subject::Repo(ANVIL);
     let mut world = authority_world();
     the_repo_holds_authority_file(&world, ANVIL, listing(&[RACHEL_DID]));
-    given_rachel_published(&mut world, vec![peer_claim_about_object(anvil, DEPENDENCY_PINNING)]);
+    given_rachel_published(
+        &mut world,
+        vec![peer_claim_about_object(anvil, DEPENDENCY_PINNING)],
+    );
     given_jeff_verified_authority(&world, LINKED_AT);
-    let weighted_before = when_jeff_reads_philosophy(&world, DEPENDENCY_PINNING, &["--weighted"], Some(LINKED_AT));
+    let weighted_before =
+        when_jeff_reads_philosophy(&world, DEPENDENCY_PINNING, &["--weighted"], Some(LINKED_AT));
     assert!(
         !weighted_rows_about(&weighted_before.stdout, anvil).is_empty(),
         "precondition: anvil is weighted;\n{}",
@@ -1131,7 +1313,11 @@ fn importing_a_repo_keeps_its_candidates_locally_and_nowhere_else() {
 
     let imported = when_jeff_imports(&world, ANVIL, Some(LINKED_AT));
 
-    assert_eq!(imported.status, 0, "{}\n{}", imported.stdout, imported.stderr);
+    assert_eq!(
+        imported.status, 0,
+        "{}\n{}",
+        imported.stdout, imported.stderr
+    );
     let listed = when_jeff_lists_imported_candidates(&world, &["--subject", &ANVIL.subject()]);
     assert!(
         listed.status == 0
@@ -1142,7 +1328,8 @@ fn importing_a_repo_keeps_its_candidates_locally_and_nowhere_else() {
         listed.stderr
     );
     assert_nothing_signed_or_published("import", &seen, &world, anvil);
-    let weighted_after = when_jeff_reads_philosophy(&world, DEPENDENCY_PINNING, &["--weighted"], Some(LINKED_AT));
+    let weighted_after =
+        when_jeff_reads_philosophy(&world, DEPENDENCY_PINNING, &["--weighted"], Some(LINKED_AT));
     assert_eq!(
         weighted_rows(&weighted_after.stdout),
         weighted_rows(&weighted_before.stdout),
@@ -1233,7 +1420,12 @@ fn imported_candidates_never_feed_jeffs_inferred_people() {
     let anvil = Subject::Repo(ANVIL);
     let mut world = authority_world();
     given_rachel_published(&mut world, vec![peer_claim_about(anvil)]);
-    given_repo_scraped(&world.env, &ANVIL.full(), jeff_and_burntsushi_contribute(), None);
+    given_repo_scraped(
+        &world.env,
+        &ANVIL.full(),
+        jeff_and_burntsushi_contribute(),
+        None,
+    );
     given_jeff_imported(&world, ANVIL, LINKED_AT);
 
     let listed = when_jeff_lists_inferred_people(&world);
@@ -1251,3 +1443,15 @@ fn imported_candidates_never_feed_jeffs_inferred_people() {
         listed.stdout
     );
 }
+
+/// One RA-10 row: label, Given, repo, sign time, expected refusal (None = signed).
+type WindowRow = (
+    &'static str,
+    fn(&LinkWorld),
+    RepoRef,
+    &'static str,
+    Option<Refusal>,
+);
+
+/// One RA-5 row: label, the GitHub trouble Given.
+type TroubleRow = (&'static str, fn(&LinkWorld));

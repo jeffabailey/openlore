@@ -662,8 +662,8 @@ impl FakeGithubAccounts {
 
     /// Number of authority-file reads of `full_name` (`owner/name`, any case).
     pub fn authority_file_reads_of(&self, full_name: &str) -> usize {
-        let wanted = format!("/repos/{full_name}/contents/{}", AuthorityFile::PATH)
-            .to_ascii_lowercase();
+        let wanted =
+            format!("/repos/{full_name}/contents/{}", AuthorityFile::PATH).to_ascii_lowercase();
         self.requests()
             .iter()
             .filter(|r| r.path.to_ascii_lowercase() == wanted)
@@ -1708,7 +1708,11 @@ mod tests {
     fn a_profile_stops_answering_after_the_reads_it_serves() {
         let gh = FakeGithubAccounts::start(vec![priya(), GithubAccount::new("other", 9)]);
         gh.rate_limit_profile_after("priyaraman", 1);
-        assert_eq!(get(&gh, "/users/priyaraman").0, 200, "the first read is served");
+        assert_eq!(
+            get(&gh, "/users/priyaraman").0,
+            200,
+            "the first read is served"
+        );
         assert_eq!(get(&gh, "/users/priyaraman").0, 403);
         assert_eq!(get(&gh, "/user/4210001").0, 403, "by id too");
         assert_eq!(get(&gh, "/users/other").0, 200, "per account");

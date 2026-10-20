@@ -45,7 +45,11 @@ fn priyas_share_post_names_only_claims_about_repos_she_still_owns() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
     given_scanned(&world, &mut browser);
-    given_published_one(&world, &mut browser, TIDEPOOL.embodies(Philosophy::TestDriven));
+    given_published_one(
+        &world,
+        &mut browser,
+        TIDEPOOL.embodies(Philosophy::TestDriven),
+    );
     given_published_one(
         &world,
         &mut browser,
@@ -71,5 +75,8 @@ fn priyas_share_post_names_only_claims_about_repos_she_still_owns() {
         page.contains(NOT_COUNTED_LINE) && page.contains(&KELP.full()),
         "kelp's claim is listed as not counted:\n{page}"
     );
-    assert!(posts_in_pds(&world, Persona::Priya).is_empty(), "nothing posted");
+    assert!(
+        posts_in_pds(&world, Persona::Priya).is_empty(),
+        "nothing posted"
+    );
 }

@@ -122,7 +122,7 @@ fn only_jeff_can_sign_what_is_said_about_jeffs_github_account() {
 #[test]
 #[ignore = "DISTILL owner-only-signing PS-2: pending DELIVER"]
 fn a_person_claim_jeff_cannot_attest_is_refused_says_why_and_who_can_sign() {
-    let rows: [(&str, fn(&LinkWorld), Account, Refusal); 3] = [
+    let rows: [RefusalRow; 3] = [
         ("no link", |_| {}, JEFF_GH, Refusal::NoLink),
         (
             "proof gone",
@@ -193,7 +193,11 @@ fn jeff_can_always_dispute_or_withdraw_whatever_authority_he_holds() {
 
     let disputed = when_jeff_counters(&world, &rachels[0], CHECK_PLUS_2_DAYS);
 
-    assert_eq!(disputed.status, 0, "[counter] {}\n{}", disputed.stdout, disputed.stderr);
+    assert_eq!(
+        disputed.status, 0,
+        "[counter] {}\n{}",
+        disputed.stdout, disputed.stderr
+    );
     assert_published_marking(
         &world,
         published_before,
@@ -214,8 +218,19 @@ fn jeff_can_always_dispute_or_withdraw_whatever_authority_he_holds() {
 
     let withdrawn = when_jeff_retracts(&world, &own, CHECK_PLUS_9_DAYS);
 
-    assert_eq!(withdrawn.status, 0, "[retract] {}\n{}", withdrawn.stdout, withdrawn.stderr);
-    assert_published_marking(&world, published_before, "retracts", &own, own_account, "retract");
+    assert_eq!(
+        withdrawn.status, 0,
+        "[retract] {}\n{}",
+        withdrawn.stdout, withdrawn.stderr
+    );
+    assert_published_marking(
+        &world,
+        published_before,
+        "retracts",
+        &own,
+        own_account,
+        "retract",
+    );
 }
 
 // =============================================================================
@@ -303,7 +318,11 @@ fn when_github_cannot_answer_as_jeff_signs_from_an_import_his_latest_check_decid
     let rows: [(ProfileTrouble, &str, Option<Refusal>); 3] = [
         (ProfileTrouble::TooBusy, CHECK_PLUS_2_DAYS, None),
         (ProfileTrouble::Unreachable, CHECK_PLUS_2_DAYS, None),
-        (ProfileTrouble::TooBusy, CHECK_PLUS_7_DAYS_1_MIN, Some(Refusal::CheckTooOld)),
+        (
+            ProfileTrouble::TooBusy,
+            CHECK_PLUS_7_DAYS_1_MIN,
+            Some(Refusal::CheckTooOld),
+        ),
     ];
     for (trouble, now, refusal) in rows {
         let row = format!("{trouble:?} at {now}");
@@ -317,7 +336,14 @@ fn when_github_cannot_answer_as_jeff_signs_from_an_import_his_latest_check_decid
         match refusal {
             None => assert_signed_and_published(&world, &outcome, own),
             Some(reason) => {
-                assert_signing_refused(&outcome, own, reason, None, Some(&verify_command(own)), &row);
+                assert_signing_refused(
+                    &outcome,
+                    own,
+                    reason,
+                    None,
+                    Some(&verify_command(own)),
+                    &row,
+                );
                 assert_nothing_signed_or_published(&row, &seen, &world, own);
                 guardrail_nothing_signed(&row, &before, &world.env);
             }
@@ -345,7 +371,12 @@ fn store_where_jeff_and_burntsushi_build_memory_safe_repos() -> LinkWorld {
         RepoRef::new("rust-lang", "regex"),
     ];
     for repo in repos {
-        given_repo_scraped(&world.env, &repo.full(), jeff_and_burntsushi_contribute(), None);
+        given_repo_scraped(
+            &world.env,
+            &repo.full(),
+            jeff_and_burntsushi_contribute(),
+            None,
+        );
     }
     given_rachel_published(
         &mut world,
@@ -374,10 +405,8 @@ fn store_where_jeff_and_burntsushi_build_memory_safe_repos() -> LinkWorld {
 #[test]
 #[ignore = "DISTILL owner-only-signing PS-5: pending DELIVER"]
 fn jeff_signs_an_inferred_adherence_only_about_himself() {
-    let rows: [(Account, Option<Refusal>); 2] = [
-        (JEFF_GH, None),
-        (BURNTSUSHI_GH, Some(Refusal::NoLink)),
-    ];
+    let rows: [(Account, Option<Refusal>); 2] =
+        [(JEFF_GH, None), (BURNTSUSHI_GH, Some(Refusal::NoLink))];
     for (person, refusal) in rows {
         let world = store_where_jeff_and_burntsushi_build_memory_safe_repos();
         let subject = Subject::Person(person);
@@ -456,7 +485,11 @@ fn jeffs_inferred_people_say_who_can_sign_each_candidate_and_listing_writes_noth
 fn jeff_still_signs_about_his_account_when_its_bio_also_names_another_identity() {
     let mut world = authority_world();
     given_jeff_linked_his_account(&world);
-    given_peer_published(&mut world, Peer::Rachel, vec![link_spec(RACHEL_DID, JEFF_GH)]);
+    given_peer_published(
+        &mut world,
+        Peer::Rachel,
+        vec![link_spec(RACHEL_DID, JEFF_GH)],
+    );
     bio_names_both(&world, JEFF_GH, MY_DID, RACHEL_DID);
     given_i_verified(&world, Some(LINKED_AT));
     let own = Subject::Person(JEFF_GH);
@@ -488,7 +521,12 @@ fn after_jeff_renames_his_github_account_he_signs_only_under_the_new_login() {
     for (login, refusal) in rows {
         let world = authority_world();
         given_jeff_linked_his_account(&world);
-        i_renamed_my_account(&world, JEFF_GH, JEFF_RENAMED, openlore_test_support::OldLogin::NotFound);
+        i_renamed_my_account(
+            &world,
+            JEFF_GH,
+            JEFF_RENAMED,
+            openlore_test_support::OldLogin::NotFound,
+        );
         given_i_verified(&world, Some(LINKED_AT));
         let subject = Subject::Person(login);
         let seen = what_jeff_sees(&world, subject);
@@ -506,3 +544,6 @@ fn after_jeff_renames_his_github_account_he_signs_only_under_the_new_login() {
         }
     }
 }
+
+/// One PS-2 refusal row: label, Given, subject account, expected refusal.
+type RefusalRow = (&'static str, fn(&LinkWorld), Account, Refusal);

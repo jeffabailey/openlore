@@ -83,9 +83,24 @@ fn every_claim_about_a_repo_is_shown_with_whose_word_it_is() {
 
     assert_eq!(read.status, 0, "{}\n{}", read.stdout, read.stderr);
     assert_labelled(&read, MY_DID, Subject::Repo(TIDEPOOL), Authority::Owner);
-    assert_labelled(&read, RACHEL_DID, Subject::Repo(ANVIL), Authority::RepoListed);
-    assert_labelled(&read, RACHEL_DID, Subject::Repo(TIDEPOOL), Authority::ThirdParty);
-    assert_labelled(&read, RACHEL_DID, Subject::Repo(KELP), Authority::NotChecked);
+    assert_labelled(
+        &read,
+        RACHEL_DID,
+        Subject::Repo(ANVIL),
+        Authority::RepoListed,
+    );
+    assert_labelled(
+        &read,
+        RACHEL_DID,
+        Subject::Repo(TIDEPOOL),
+        Authority::ThirdParty,
+    );
+    assert_labelled(
+        &read,
+        RACHEL_DID,
+        Subject::Repo(KELP),
+        Authority::NotChecked,
+    );
 }
 
 // =============================================================================
@@ -115,7 +130,11 @@ fn the_weighted_view_counts_only_attested_claims_and_says_what_it_left_out() {
         Some(CHECK_PLUS_2_DAYS),
     );
 
-    assert_eq!(weighted.status, 0, "{}\n{}", weighted.stdout, weighted.stderr);
+    assert_eq!(
+        weighted.status, 0,
+        "{}\n{}",
+        weighted.stdout, weighted.stderr
+    );
     assert!(!weighted_rows_about(&weighted.stdout, Subject::Repo(TIDEPOOL)).is_empty());
     assert!(!weighted_rows_about(&weighted.stdout, Subject::Repo(ANVIL)).is_empty());
     assert!(
@@ -125,7 +144,9 @@ fn the_weighted_view_counts_only_attested_claims_and_says_what_it_left_out() {
     );
     assert!(
         weighted.stdout.contains(&format!("Contribution: {MY_DID}"))
-            && !weighted.stdout.contains(&format!("Contribution: {RACHEL_DID}")),
+            && !weighted
+                .stdout
+                .contains(&format!("Contribution: {RACHEL_DID}")),
         "tidepool's weight is Jeff's claim alone (the --explain breakdown);\n{}",
         weighted.stdout
     );
@@ -156,7 +177,12 @@ fn the_weighted_view_counts_only_attested_claims_and_says_what_it_left_out() {
 #[ignore = "DISTILL owner-only-signing RD-3: pending DELIVER"]
 fn jeff_can_see_the_claims_left_out_per_author_without_changing_the_weight() {
     let world = labelled_store();
-    let plain = when_jeff_reads_philosophy(&world, MEMORY_SAFETY, &["--weighted"], Some(CHECK_PLUS_2_DAYS));
+    let plain = when_jeff_reads_philosophy(
+        &world,
+        MEMORY_SAFETY,
+        &["--weighted"],
+        Some(CHECK_PLUS_2_DAYS),
+    );
 
     let with_unattested = when_jeff_reads_philosophy(
         &world,
@@ -173,14 +199,25 @@ fn jeff_can_see_the_claims_left_out_per_author_without_changing_the_weight() {
     let (weight, section) = with_unattested
         .stdout
         .split_once(UNATTESTED_SECTION)
-        .unwrap_or_else(|| panic!("a `{UNATTESTED_SECTION}` section;\n{}", with_unattested.stdout));
+        .unwrap_or_else(|| {
+            panic!(
+                "a `{UNATTESTED_SECTION}` section;\n{}",
+                with_unattested.stdout
+            )
+        });
     assert_eq!(
         weighted_rows(weight),
         weighted_rows(&plain.stdout),
         "the weighted rows are unchanged"
     );
-    assert!(!rows_about(section, RACHEL_DID, &TIDEPOOL.subject()).is_empty(), "{section}");
-    assert!(!rows_about(section, RACHEL_DID, &KELP.subject()).is_empty(), "{section}");
+    assert!(
+        !rows_about(section, RACHEL_DID, &TIDEPOOL.subject()).is_empty(),
+        "{section}"
+    );
+    assert!(
+        !rows_about(section, RACHEL_DID, &KELP.subject()).is_empty(),
+        "{section}"
+    );
     assert!(
         rows_about(section, RACHEL_DID, &ANVIL.subject()).is_empty(),
         "an attested claim is not in the unattested section;\n{section}"
@@ -223,7 +260,8 @@ fn nothing_but_an_attested_claim_moves_the_weight() {
         the_repo_holds_authority_file(&world, ANVIL, listing(&[MY_DID]));
         given_jeff_verified_authority_of(&world, anvil, LINKED_AT);
         let jeffs = given_jeff_signed_and_published(&world, anvil, LINKED_AT);
-        let noted = when_jeff_reads_philosophy(&world, MEMORY_SAFETY, &["--weighted"], Some(LINKED_AT));
+        let noted =
+            when_jeff_reads_philosophy(&world, MEMORY_SAFETY, &["--weighted"], Some(LINKED_AT));
         assert!(
             !weighted_rows_about(&noted.stdout, anvil).is_empty(),
             "[{row}] precondition: Jeff's attested claim weighs anvil;\n{}",
@@ -268,9 +306,18 @@ fn nothing_but_an_attested_claim_moves_the_weight() {
         }
         given_jeff_verified_authority(&world, CHECK_PLUS_2_DAYS);
 
-        let after = when_jeff_reads_philosophy(&world, MEMORY_SAFETY, &["--weighted"], Some(CHECK_PLUS_2_DAYS));
+        let after = when_jeff_reads_philosophy(
+            &world,
+            MEMORY_SAFETY,
+            &["--weighted"],
+            Some(CHECK_PLUS_2_DAYS),
+        );
 
-        assert_eq!(after.status, 0, "[{row}] {}\n{}", after.stdout, after.stderr);
+        assert_eq!(
+            after.status, 0,
+            "[{row}] {}\n{}",
+            after.stdout, after.stderr
+        );
         assert_eq!(
             weighted_rows(&after.stdout),
             weighted_rows(&noted.stdout),
@@ -306,12 +353,17 @@ fn a_claim_marked_as_a_dispute_is_shown_as_a_dispute() {
 
     assert_eq!(read.status, 0, "{}\n{}", read.stdout, read.stderr);
     assert!(
-        read.stdout.contains(&format!("counters {jeffs} by {MY_DID}")),
+        read.stdout
+            .contains(&format!("counters {jeffs} by {MY_DID}")),
         "shown as a dispute;\n{}",
         read.stdout
     );
     let rachels = rows_about(&read.stdout, RACHEL_DID, &anvil.uri()).join("\n");
-    for label in [Authority::Owner, Authority::RepoListed, Authority::ThirdParty] {
+    for label in [
+        Authority::Owner,
+        Authority::RepoListed,
+        Authority::ThirdParty,
+    ] {
         assert!(
             !rachels.contains(label.label()),
             "a dispute carries no `{}` label:\n{rachels}",
@@ -343,7 +395,10 @@ fn jeffs_viewer_weighs_and_labels_claims_exactly_as_his_terminal_does() {
     let project = viewer.get(&format!("/project?subject={}", TIDEPOOL.subject()));
 
     let rachel_scored = scored_pairings(&rachel_page.body);
-    assert!(rachel_scored.iter().any(|p| p.contains(&ANVIL.subject())), "{rachel_scored:#?}");
+    assert!(
+        rachel_scored.iter().any(|p| p.contains(&ANVIL.subject())),
+        "{rachel_scored:#?}"
+    );
     assert!(
         rachel_scored
             .iter()
@@ -354,7 +409,12 @@ fn jeffs_viewer_weighs_and_labels_claims_exactly_as_his_terminal_does() {
     assert!(!weighted_rows_about(&terminal.stdout, Subject::Repo(ANVIL)).is_empty());
     assert!(weighted_rows_about(&terminal.stdout, Subject::Repo(KELP)).is_empty());
     for label in [Authority::Owner, Authority::ThirdParty] {
-        assert!(project.body.contains(label.label()), "`{}`:\n{}", label.label(), project.body);
+        assert!(
+            project.body.contains(label.label()),
+            "`{}`:\n{}",
+            label.label(),
+            project.body
+        );
     }
 }
 
@@ -381,7 +441,13 @@ fn network_search_labels_every_github_claim_using_jeffs_own_check_when_he_has_on
     let regex = Subject::Repo(REGEX);
     let anvil = Subject::Repo(ANVIL);
     let rows: [(&str, &str, Subject, bool, &str); 2] = [
-        ("no local check", openlore_test_support::SVEN_DID, regex, false, NOT_CHECKED_HERE),
+        (
+            "no local check",
+            openlore_test_support::SVEN_DID,
+            regex,
+            false,
+            NOT_CHECKED_HERE,
+        ),
         (
             "local check",
             openlore_test_support::PRIYA_DID,
@@ -396,12 +462,17 @@ fn network_search_labels_every_github_claim_using_jeffs_own_check_when_he_has_on
             the_repo_holds_authority_file(&world, ANVIL, listing(&[author]));
             given_jeff_verified_authority_of(&world, subject, LINKED_AT);
         }
-        let indexer = seed_network_index_from_specs(&world.env, vec![index_claim_about(author, subject)]);
+        let indexer =
+            seed_network_index_from_specs(&world.env, vec![index_claim_about(author, subject)]);
         let uri = subject.uri();
 
         let found = run_openlore_search(&world.env, &["search", "--subject", &uri], &indexer);
 
-        assert_eq!(found.status, 0, "[{row}] {}\n{}", found.stdout, found.stderr);
+        assert_eq!(
+            found.status, 0,
+            "[{row}] {}\n{}",
+            found.stdout, found.stderr
+        );
         let lines = rows_about(&found.stdout, author, &uri);
         assert!(
             lines.iter().any(|l| l.contains(label)),
@@ -434,7 +505,12 @@ fn claims_made_before_owner_only_signing_are_judged_by_the_same_rule() {
 
     assert_eq!(read.status, 0, "{}\n{}", read.stdout, read.stderr);
     assert_labelled(&read, MY_DID, Subject::Repo(RIPGREP), Authority::ThirdParty);
-    assert_labelled(&read, RACHEL_DID, Subject::Repo(REGEX), Authority::ThirdParty);
+    assert_labelled(
+        &read,
+        RACHEL_DID,
+        Subject::Repo(REGEX),
+        Authority::ThirdParty,
+    );
 }
 
 /// RD-9
@@ -455,7 +531,12 @@ fn inferred_people_show_the_authority_of_each_repo_claim_they_rest_on() {
     the_repo_holds_authority_file(&world, ANVIL, listing(&[RACHEL_DID]));
     given_rachel_published(&mut world, vec![peer_claim_about(anvil)]);
     given_jeff_verified_authority(&world, LINKED_AT);
-    given_repo_scraped(&world.env, &ANVIL.full(), jeff_and_burntsushi_contribute(), None);
+    given_repo_scraped(
+        &world.env,
+        &ANVIL.full(),
+        jeff_and_burntsushi_contribute(),
+        None,
+    );
     let seen = what_jeff_sees(&world, anvil);
     let before = capture_authority_universe(&world.env);
 
@@ -491,15 +572,29 @@ fn after_jeff_renames_his_account_his_claim_about_the_old_login_reads_third_part
     let world = authority_world();
     given_jeff_linked_his_account(&world);
     given_jeff_signed_and_published(&world, Subject::Person(JEFF_GH), CHECK_PLUS_2_DAYS);
-    i_renamed_my_account(&world, JEFF_GH, JEFF_RENAMED, openlore_test_support::OldLogin::NotFound);
+    i_renamed_my_account(
+        &world,
+        JEFF_GH,
+        JEFF_RENAMED,
+        openlore_test_support::OldLogin::NotFound,
+    );
     given_i_verified(&world, Some(CHECK_PLUS_7_DAYS));
     let pds_before = world.env.pds.records().len();
 
     let read = when_jeff_reads_philosophy(&world, MEMORY_SAFETY, &[], Some(CHECK_PLUS_7_DAYS));
 
     assert_eq!(read.status, 0, "{}\n{}", read.stdout, read.stderr);
-    assert_labelled(&read, MY_DID, Subject::Person(JEFF_GH), Authority::ThirdParty);
-    assert_eq!(world.env.pds.records().len(), pds_before, "nothing withdrawn");
+    assert_labelled(
+        &read,
+        MY_DID,
+        Subject::Person(JEFF_GH),
+        Authority::ThirdParty,
+    );
+    assert_eq!(
+        world.env.pds.records().len(),
+        pds_before,
+        "nothing withdrawn"
+    );
 }
 
 // =============================================================================
@@ -527,7 +622,11 @@ fn asking_for_unattested_claims_without_the_weighted_view_is_a_usage_mistake() {
         Some(CHECK_PLUS_2_DAYS),
     );
 
-    assert_eq!(read.status, 2, "a usage mistake exits 2;\n{}\n{}", read.stdout, read.stderr);
+    assert_eq!(
+        read.status, 2,
+        "a usage mistake exits 2;\n{}\n{}",
+        read.stdout, read.stderr
+    );
     assert!(
         format!("{}\n{}", read.stdout, read.stderr).contains(INCLUDE_UNATTESTED_NEEDS_WEIGHTED),
         "says `{INCLUDE_UNATTESTED_NEEDS_WEIGHTED}`;\n{}\n{}",
