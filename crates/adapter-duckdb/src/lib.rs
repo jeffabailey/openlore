@@ -67,7 +67,7 @@ mod schema_v7;
 mod store_read;
 
 pub use contribution_links::DuckDbContributionLinkAdapter;
-pub use identity_link_checks::DuckDbIdentityLinkCheckAdapter;
+pub use identity_link_checks::{linked_account_evidence, DuckDbIdentityLinkCheckAdapter};
 pub use identity_link_purge::DuckDbIdentityLinkPurgeAdapter;
 pub use link_lineage::DuckDbLinkLineageAdapter;
 pub use peer_storage::DuckDbPeerStorageAdapter;

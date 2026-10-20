@@ -65,6 +65,7 @@ pub(crate) use ports::{
 };
 
 // ---- verb-output render modules (split from the former 3117-line monolith) ----
+mod authority;
 mod claim;
 mod common;
 mod contributor;
@@ -88,6 +89,7 @@ mod traversal;
 // heavily-coupled `tests` submodule to reach them via `use super::*`. `common`
 // holds only pub(crate) helpers (no external API), so it re-exports at
 // pub(crate).
+pub use authority::*;
 pub use claim::*;
 pub(crate) use common::*;
 pub use contributor::*;

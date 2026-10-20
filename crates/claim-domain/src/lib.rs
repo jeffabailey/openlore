@@ -22,8 +22,9 @@ use serde::{Deserialize, Serialize};
 // Submodules (step 02-03: canonical CBOR + CID computation;
 //             step 03-01: Ed25519 sign + verify primitives)
 // -----------------------------------------------------------------------------
-// review-app-repos-and-accounts (ADR-089, owner tier of ADR-086 §4): the
-// one gate that mints a `SigningPermit`.
+// review-app-repos-and-accounts (ADR-089, owner tier of ADR-086 §4) and
+// owner-only-signing (ADR-086/087, the CLI gate over local checks): the one
+// module that mints a `SigningPermit`.
 pub mod authority;
 mod canonicalize;
 mod cid;

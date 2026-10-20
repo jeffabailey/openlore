@@ -8,9 +8,16 @@
 //! stored status. Freshness of the inputs is the caller's duty, held by
 //! `xtask check-arch` (`authority_evidence_only_from_adapters`).
 //!
+//! The CLI decides from this reader's LOCAL checks instead (ADR-086/087,
+//! owner-only-signing): [`requirement`] says which tier a subject needs,
+//! [`classify_person`] judges the person tier over the signer's identity links
+//! and their latest checks ([`LinkedAccountEvidence`]), and
+//! [`may_sign_from_checks`] mints the SAME [`SigningPermit`] or returns the
+//! hand-off data of an [`AuthorityRefusal`].
+//!
 //! PURE: no clock, no store, no network.
 
-use crate::identity_link::{bio_verdict, BioVerdict};
+use crate::identity_link::{bio_verdict, BioVerdict, CheckVerdict};
 
 /// Who owns a repo, as GitHub's `owner.type` says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,6 +190,187 @@ fn still_named(subject: &str, repo: RepoRead<'_>) -> Result<(), SigningRefusal> 
     }
 }
 
+// -----------------------------------------------------------------------------
+// The CLI gate over local checks (owner-only-signing, ADR-086 §1-5, ADR-087 §1)
+// -----------------------------------------------------------------------------
+
+/// The tier of authority an assertion about `subject` needs (ADR-086 §1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Requirement {
+    /// Not a `github:` subject: anyone may sign.
+    Exempt,
+    /// `github:<login>`: only the account's owner may sign.
+    Person(PersonSubject),
+    /// `github:<owner>/<repo>`: the repo's owner or a DID its authority file lists.
+    Repo { owner: String, name: String },
+}
+
+/// A `github:<login>` subject. Built only by [`requirement`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersonSubject {
+    uri: String,
+    login: String,
+}
+
+impl PersonSubject {
+    /// The subject as signed (`github:<login>`).
+    pub fn uri(&self) -> &str {
+        &self.uri
+    }
+
+    /// The GitHub login the subject names.
+    pub fn login(&self) -> &str {
+        &self.login
+    }
+}
+
+/// Which authority an assertion about `subject` needs. The `github` scheme is
+/// matched without letter case; any `github:` subject is Required, never
+/// Exempt — a malformed one fails closed.
+pub fn requirement(subject: &str) -> Requirement {
+    match subject.split_once(':') {
+        Some((scheme, path)) if scheme.eq_ignore_ascii_case("github") => match path.split_once('/')
+        {
+            Some((owner, name)) => Requirement::Repo {
+                owner: owner.to_string(),
+                name: name.to_string(),
+            },
+            None => Requirement::Person(PersonSubject {
+                uri: subject.to_string(),
+                login: path.to_string(),
+            }),
+        },
+        _ => Requirement::Exempt,
+    }
+}
+
+/// One of the signer's active identity links (ADR-084) with this reader's
+/// latest check of it — the evidence the person tier decides from. A plain
+/// port value: only adapters and test support build one
+/// (`authority_evidence_only_from_adapters`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedAccountEvidence {
+    /// The linked account's stable numeric GitHub id.
+    pub github_id: u64,
+    /// The login the link was signed under.
+    pub linked_login: String,
+    /// This reader's latest check of the link not dated in the future
+    /// (`None`: never checked here).
+    pub latest_check: Option<LatestLinkCheck>,
+}
+
+/// This reader's latest check of one identity link (store v7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LatestLinkCheck {
+    /// The login GitHub reported on that check (a rename shows here).
+    pub login_seen: String,
+    pub verdict: CheckVerdict,
+}
+
+/// Why the signer holds no person authority (ADR-087 §1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unattested {
+    /// None of the signer's links names the account.
+    NoLink,
+    /// The signer's link to the account is not verified by its latest check.
+    LinkNotVerified,
+    /// The subject login is no longer the login of the signer's linked account.
+    LoginNotCurrent,
+}
+
+/// The person tier, judged over the signer's links.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersonAuthority {
+    /// The signer owns the account: a verified link whose latest check saw
+    /// the subject login.
+    Attested {
+        github_id: u64,
+    },
+    Unattested(Unattested),
+}
+
+/// Does the signer own the account `person` names? Only when one of `links`
+/// has a latest check that is verified AND saw the subject login (letter case
+/// aside, as GitHub compares logins). Every verified link counts, so a
+/// contested account still attests each verified DID (UC-2).
+pub fn classify_person(person: &PersonSubject, links: &[LinkedAccountEvidence]) -> PersonAuthority {
+    links
+        .iter()
+        .filter_map(|link| link_standing(person.login(), link))
+        .min_by_key(standing_rank)
+        .unwrap_or(PersonAuthority::Unattested(Unattested::NoLink))
+}
+
+/// What one link says about `login`; `None` when it names another account.
+fn link_standing(login: &str, link: &LinkedAccountEvidence) -> Option<PersonAuthority> {
+    let names_login = |other: &str| other.eq_ignore_ascii_case(login);
+    match &link.latest_check {
+        Some(check) if names_login(&check.login_seen) => Some(match check.verdict {
+            CheckVerdict::Verified => PersonAuthority::Attested {
+                github_id: link.github_id,
+            },
+            _ => PersonAuthority::Unattested(Unattested::LinkNotVerified),
+        }),
+        Some(_) if names_login(&link.linked_login) => {
+            Some(PersonAuthority::Unattested(Unattested::LoginNotCurrent))
+        }
+        None if names_login(&link.linked_login) => {
+            Some(PersonAuthority::Unattested(Unattested::LinkNotVerified))
+        }
+        _ => None,
+    }
+}
+
+/// The strongest standing wins: attested, then the reasons nearest to it.
+fn standing_rank(standing: &PersonAuthority) -> u8 {
+    match standing {
+        PersonAuthority::Attested { .. } => 0,
+        PersonAuthority::Unattested(Unattested::LinkNotVerified) => 1,
+        PersonAuthority::Unattested(Unattested::LoginNotCurrent) => 2,
+        PersonAuthority::Unattested(Unattested::NoLink) => 3,
+    }
+}
+
+/// Who the hand-off names as able to sign (ADR-086 §10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WhoCanSign {
+    /// The account's owner, after linking it to their identity.
+    OwnerAfterLinking { login: String },
+}
+
+/// Why no permit was minted from local checks, with who can sign instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorityRefusal {
+    /// The subject as signed.
+    pub subject: String,
+    pub reason: Unattested,
+    pub can_sign: WhoCanSign,
+}
+
+/// The CLI gate (ADR-086 §4): may `signer` sign an assertion about `person`,
+/// judged from this reader's local checks of the signer's `links`? Mints the
+/// same [`SigningPermit`] as [`may_sign`]; refuses with the hand-off data.
+pub fn may_sign_from_checks(
+    signer: &str,
+    person: &PersonSubject,
+    links: &[LinkedAccountEvidence],
+) -> Result<SigningPermit, AuthorityRefusal> {
+    match classify_person(person, links) {
+        PersonAuthority::Attested { github_id } => Ok(SigningPermit {
+            signer: signer.to_string(),
+            subject: person.uri().to_string(),
+            basis: PermitBasis::Owner(github_id),
+        }),
+        PersonAuthority::Unattested(reason) => Err(AuthorityRefusal {
+            subject: person.uri().to_string(),
+            reason,
+            can_sign: WhoCanSign::OwnerAfterLinking {
+                login: person.login().to_string(),
+            },
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +451,175 @@ mod tests {
                 refusal
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod gate_from_checks_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    const JEFF: &str = "did:plc:jeff";
+
+    fn person(subject: &str) -> PersonSubject {
+        match requirement(subject) {
+            Requirement::Person(person) => person,
+            other => panic!("{subject} is a person subject, got {other:?}"),
+        }
+    }
+
+    fn link(
+        github_id: u64,
+        linked: &str,
+        check: Option<(&str, CheckVerdict)>,
+    ) -> LinkedAccountEvidence {
+        LinkedAccountEvidence {
+            github_id,
+            linked_login: linked.to_string(),
+            latest_check: check.map(|(login_seen, verdict)| LatestLinkCheck {
+                login_seen: login_seen.to_string(),
+                verdict,
+            }),
+        }
+    }
+
+    fn verdict() -> impl Strategy<Value = CheckVerdict> {
+        proptest::sample::select(CheckVerdict::ALL.to_vec())
+    }
+
+    fn login() -> impl Strategy<Value = String> {
+        proptest::sample::select(vec!["jeffbailey", "JeffBailey", "jeff-b", "rachelk"])
+            .prop_map(str::to_string)
+    }
+
+    fn evidence() -> impl Strategy<Value = LinkedAccountEvidence> {
+        (1u64..4, login(), proptest::option::of((login(), verdict()))).prop_map(
+            |(github_id, linked_login, check)| LinkedAccountEvidence {
+                github_id,
+                linked_login,
+                latest_check: check.map(|(login_seen, verdict)| LatestLinkCheck {
+                    login_seen,
+                    verdict,
+                }),
+            },
+        )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// A permit exists iff some link's LATEST check is verified and saw
+        /// the subject login; its basis is that account. A refusal names the
+        /// subject and hands off to the subject login's owner.
+        #[test]
+        fn a_permit_needs_a_verified_latest_check_that_saw_the_subject_login(
+            subject_login in login(),
+            links in proptest::collection::vec(evidence(), 0..4),
+        ) {
+            let subject = format!("github:{subject_login}");
+            let owners: Vec<u64> = links
+                .iter()
+                .filter(|l| l.latest_check.as_ref().is_some_and(|c| {
+                    c.verdict == CheckVerdict::Verified
+                        && c.login_seen.eq_ignore_ascii_case(&subject_login)
+                }))
+                .map(|l| l.github_id)
+                .collect();
+            match may_sign_from_checks(JEFF, &person(&subject), &links) {
+                Ok(permit) => {
+                    let PermitBasis::Owner(id) = permit.basis();
+                    prop_assert!(owners.contains(&id), "{links:?}");
+                    prop_assert_eq!(permit.subject(), subject.as_str());
+                    prop_assert_eq!(permit.signer(), JEFF);
+                }
+                Err(refusal) => {
+                    prop_assert!(owners.is_empty(), "{links:?}");
+                    prop_assert_eq!(refusal.subject, subject);
+                    prop_assert_eq!(
+                        refusal.can_sign,
+                        WhoCanSign::OwnerAfterLinking { login: subject_login }
+                    );
+                }
+            }
+        }
+
+        /// Any `github:` subject (scheme in any letter case) needs authority;
+        /// any other subject is exempt.
+        #[test]
+        fn only_non_github_subjects_are_exempt(
+            scheme in proptest::sample::select(vec!["github", "GitHub", "GITHUB", "https", "did", "npm"]),
+            path in "[a-zA-Z0-9/_-]{0,12}",
+        ) {
+            let required = requirement(&format!("{scheme}:{path}"));
+            prop_assert_eq!(
+                required == Requirement::Exempt,
+                !scheme.eq_ignore_ascii_case("github")
+            );
+        }
+    }
+
+    // bypass: one named example per refusal reason (closed set of three).
+    #[test]
+    fn each_refusal_says_why() {
+        let jeff = person("github:jeffbailey");
+        let cases = [
+            (vec![], Unattested::NoLink),
+            (
+                vec![link(
+                    1,
+                    "rachelk",
+                    Some(("rachelk", CheckVerdict::Verified)),
+                )],
+                Unattested::NoLink,
+            ),
+            (
+                vec![link(
+                    1,
+                    "jeffbailey",
+                    Some(("jeffbailey", CheckVerdict::DidMissing)),
+                )],
+                Unattested::LinkNotVerified,
+            ),
+            (
+                vec![link(1, "jeffbailey", None)],
+                Unattested::LinkNotVerified,
+            ),
+            (
+                vec![link(
+                    1,
+                    "jeffbailey",
+                    Some(("jeff-b", CheckVerdict::Verified)),
+                )],
+                Unattested::LoginNotCurrent,
+            ),
+        ];
+        for (links, reason) in cases {
+            let refused = may_sign_from_checks(JEFF, &jeff, &links).unwrap_err();
+            assert_eq!(refused.reason, reason, "{links:?}");
+        }
+    }
+
+    // bypass: the renamed account signs only under its new login (G-2).
+    #[test]
+    fn a_renamed_account_signs_under_the_login_its_latest_check_saw() {
+        let renamed = [link(
+            7,
+            "jeffbailey",
+            Some(("jeff-b", CheckVerdict::Verified)),
+        )];
+        let permit = may_sign_from_checks(JEFF, &person("github:jeff-b"), &renamed);
+        assert_eq!(permit.map(|p| p.basis()), Ok(PermitBasis::Owner(7)));
+    }
+
+    // bypass: a repo subject names its owner and name.
+    #[test]
+    fn a_repo_subject_requires_repo_authority() {
+        assert_eq!(
+            requirement("github:jeffbailey/tidepool"),
+            Requirement::Repo {
+                owner: "jeffbailey".to_string(),
+                name: "tidepool".to_string()
+            }
+        );
     }
 }

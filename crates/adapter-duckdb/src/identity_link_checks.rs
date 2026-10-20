@@ -13,7 +13,8 @@
 use crate::conn::{ConnGuard, SharedConn};
 
 use chrono::{DateTime, TimeZone, Utc};
-use claim_domain::identity_link::CheckVerdict;
+use claim_domain::authority::{LatestLinkCheck, LinkedAccountEvidence};
+use claim_domain::identity_link::{CheckVerdict, IdentityLink};
 use claim_domain::{bare_did, Cid, ClaimReference, Did, Provenance};
 use duckdb::Connection;
 use ports::{
@@ -260,6 +261,43 @@ impl LinkCandidateReadPort for DuckDbIdentityLinkCheckAdapter {
 }
 
 // -----------------------------------------------------------------------------
+// Person authority evidence (owner-only-signing, ADR-087 §1)
+// -----------------------------------------------------------------------------
+
+/// The person-tier evidence for the signer's active `links`: each with this
+/// reader's latest check of it not dated after `now`, read through the check
+/// READ port. Decoded from the store here, so a caller never builds it
+/// (`authority_evidence_only_from_adapters`).
+pub fn linked_account_evidence(
+    checks: &dyn IdentityLinkCheckReadPort,
+    signer_did: &str,
+    links: &[IdentityLink],
+    now: DateTime<Utc>,
+) -> Result<Vec<LinkedAccountEvidence>, IdentityLinkCheckError> {
+    let latest = checks.latest_checks(&CheckFilter::Subject(signer_did.to_string()), now)?;
+    Ok(links
+        .iter()
+        .filter(|link| link.did == signer_did)
+        .map(|link| evidence_of(link, &latest))
+        .collect())
+}
+
+/// One link joined to its latest check (by DID and account id).
+fn evidence_of(link: &IdentityLink, latest: &[LinkCheck]) -> LinkedAccountEvidence {
+    LinkedAccountEvidence {
+        github_id: link.user_id,
+        linked_login: link.login.clone(),
+        latest_check: latest
+            .iter()
+            .find(|check| check.subject_did == link.did && check.github_user_id == link.user_id)
+            .map(|check| LatestLinkCheck {
+                login_seen: check.login_seen.clone(),
+                verdict: check.verdict,
+            }),
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Live probe — two checks of one sentinel link, always rolled back
 // -----------------------------------------------------------------------------
 
@@ -350,6 +388,51 @@ fn refuse(detail: String) -> ProbeOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn jeffs_link(did: &str, user_id: u64) -> IdentityLink {
+        IdentityLink {
+            did: did.to_string(),
+            login: "jeffbailey".to_string(),
+            user_id,
+        }
+    }
+
+    // bypass: a join over a closed handful of links (one per mismatch kind).
+    #[test]
+    fn each_link_meets_only_its_own_latest_check() {
+        let renamed = LinkCheck {
+            subject_did: "did:plc:jeff".to_string(),
+            github_user_id: 1,
+            login_seen: "jeff-b".to_string(),
+            verdict: CheckVerdict::Verified,
+            checked_at: Utc.with_ymd_and_hms(2026, 10, 2, 9, 0, 0).unwrap(),
+        };
+        let another_did = LinkCheck {
+            subject_did: "did:plc:rachel".to_string(),
+            github_user_id: 2,
+            ..renamed.clone()
+        };
+        let latest = [another_did, renamed];
+        let own = evidence_of(&jeffs_link("did:plc:jeff", 1), &latest);
+        assert_eq!(
+            own.latest_check,
+            Some(LatestLinkCheck {
+                login_seen: "jeff-b".to_string(),
+                verdict: CheckVerdict::Verified
+            })
+        );
+        assert_eq!(own.linked_login, "jeffbailey");
+        for unchecked in [
+            jeffs_link("did:plc:jeff", 2),
+            jeffs_link("did:plc:tobias", 1),
+        ] {
+            assert_eq!(
+                evidence_of(&unchecked, &latest).latest_check,
+                None,
+                "{unchecked:?}"
+            );
+        }
+    }
 
     #[test]
     fn the_sentinel_verdict_refuses_an_overwrite_or_a_wrong_latest() {

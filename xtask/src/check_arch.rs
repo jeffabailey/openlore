@@ -2237,9 +2237,11 @@ pub fn scan_identity_link_compose_only_via_proven_link(
 //   called only with a permit; `create_claim_record` is called only from the
 //   executor.
 // * `authority_evidence_only_from_adapters`: `RepoFacts` and
-//   `GithubAccountProfile` (the evidence `may_sign` decides from) are built
-//   only by the GitHub and DuckDB adapters and test support (shared allowlist
-//   with owner-only-signing, ADR-086).
+//   `GithubAccountProfile` (the evidence `may_sign` decides from) and the
+//   person-tier evidence `LinkedAccountEvidence` / `LatestLinkCheck` (what
+//   `may_sign_from_checks` decides from, owner-only-signing ADR-087 §1) are
+//   built only by the GitHub and DuckDB adapters and test support (one
+//   allowlist, ADR-086).
 // * `signing_permit_not_serializable`: no serde on `SigningPermit`.
 
 /// The constructors that build a `PublishPlan`.
@@ -2420,8 +2422,13 @@ const AUTHORITY_EVIDENCE_CRATES: &[&str] = &[
     "crates/test-support/",
 ];
 
-/// The evidence types `may_sign` decides from.
-const AUTHORITY_EVIDENCE_TYPES: &[&str] = &["RepoFacts", "GithubAccountProfile"];
+/// The evidence types `may_sign` and `may_sign_from_checks` decide from.
+const AUTHORITY_EVIDENCE_TYPES: &[&str] = &[
+    "RepoFacts",
+    "GithubAccountProfile",
+    "LinkedAccountEvidence",
+    "LatestLinkCheck",
+];
 
 #[derive(Default)]
 struct EvidenceCollector {

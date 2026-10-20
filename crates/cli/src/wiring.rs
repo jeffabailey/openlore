@@ -290,6 +290,22 @@ impl Wiring {
     /// `health.startup.refused` event payload so observability layers
     /// can route on it; the human-readable stderr line names the exact
     /// command to run.
+    /// The person-tier evidence of the signer (owner-only-signing, ADR-087
+    /// §1): the signer's active identity links, each with this reader's
+    /// latest check not dated after `now`. Read ports only — nothing is
+    /// checked, written or refreshed; the evidence is built by adapter-duckdb.
+    pub fn signer_linked_accounts(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<claim_domain::authority::LinkedAccountEvidence>> {
+        let signer = claim_domain::bare_did(&self.identity.author_did().0).to_string();
+        let links = ports::StoredLinkLineage::read(&*self.link_candidates, &*self.link_lineage)
+            .context("reading the signer's identity links")?
+            .active_links();
+        adapter_duckdb::linked_account_evidence(&*self.identity_link_checks, &signer, &links, now)
+            .context("reading the signer's identity link checks")
+    }
+
     pub fn check_initialized_state(&self) -> Result<(), ProbeRefusal> {
         let identity_path = self.paths.identity_toml();
         if identity_path.exists() {

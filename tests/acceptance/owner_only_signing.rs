@@ -70,7 +70,6 @@ use support::*;
 /// Demo value (stakeholder litmus): "OpenLore will sign what I say about
 /// myself, and tells me who to ask when I try to speak for someone else."
 #[test]
-#[ignore = "DISTILL owner-only-signing WS-OOS-1: pending DELIVER (enable FIRST)"]
 fn only_jeff_can_sign_what_is_said_about_jeffs_github_account() {
     // Row 1 — his own account: signed and published (the permit path).
     let world = authority_world();

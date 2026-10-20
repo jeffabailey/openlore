@@ -17,6 +17,8 @@
 mod support;
 
 #[allow(unused_imports)]
+use support::identity_links::*;
+#[allow(unused_imports)]
 use support::people::*;
 #[allow(unused_imports)]
 use support::*;
@@ -368,11 +370,14 @@ fn newly_recorded_people_alone_can_create_new_inferences() {
 #[test]
 fn a_hand_authored_adherence_is_already_signed_and_never_superseded() {
     // GIVEN Maria hand-signed BurntSushi memory-safety citing a blog post, and
-    // two signed repos now support it.
-    let env = TestEnv::initialized();
-    given_burntsushi_builds_two_signed_memory_safe_repos(&env);
+    // two signed repos now support it. Owner-only signing (ADR-086): she owns
+    // the BurntSushi account, linked to her identity.
+    let world = LinkWorld::with(&[BURNTSUSHI_GH]);
+    given_i_linked(&world, BURNTSUSHI_GH, None);
+    let env = &world.env;
+    given_burntsushi_builds_two_signed_memory_safe_repos(env);
     let hand = given_i_signed(
-        &env,
+        env,
         "github:BurntSushi",
         ADHERES,
         MEMORY_SAFETY,
@@ -382,7 +387,7 @@ fn a_hand_authored_adherence_is_already_signed_and_never_superseded() {
     );
 
     // WHEN she runs infer people.
-    let out = infer_people(&env, &[]);
+    let out = infer_people(env, &[]);
 
     // THEN nothing is numbered, the hand claim is "already signed", no STRONGER.
     assert_eq!(out.status, 0, "{}\n{}", out.stdout, out.stderr);
@@ -403,17 +408,20 @@ fn a_hand_authored_adherence_is_already_signed_and_never_superseded() {
 /// @us-cpi-004 @driving_port @real-io @q-cpi-d4 @edge
 #[test]
 fn with_two_current_inferred_claims_the_latest_is_the_one_superseded() {
-    // GIVEN two inferred-shape claims for the pair, at T1 and T2.
-    let env = TestEnv::initialized();
-    given_repo_scraped(&env, "BurntSushi/ripgrep", burntsushi_only(), None);
-    given_repo_scraped(&env, "rust-lang/regex", burntsushi_only(), None);
-    let rg = given_i_signed_repo_claim(&env, "BurntSushi/ripgrep", MEMORY_SAFETY, 0.55, None);
+    // GIVEN two inferred-shape claims for the pair, at T1 and T2. Owner-only
+    // signing (ADR-086): Maria owns the BurntSushi account, linked at T1.
+    let world = LinkWorld::with(&[BURNTSUSHI_GH]);
+    given_i_linked(&world, BURNTSUSHI_GH, Some(T1));
+    let env = &world.env;
+    given_repo_scraped(env, "BurntSushi/ripgrep", burntsushi_only(), None);
+    given_repo_scraped(env, "rust-lang/regex", burntsushi_only(), None);
+    let rg = given_i_signed_repo_claim(env, "BurntSushi/ripgrep", MEMORY_SAFETY, 0.55, None);
     let evidence = vec![
-        at_uri(&my_did(&env), &rg),
+        at_uri(&my_did(env), &rg),
         commits_url("BurntSushi/ripgrep", "BurntSushi"),
     ];
     let _older = given_i_signed(
-        &env,
+        env,
         "github:BurntSushi",
         ADHERES,
         MEMORY_SAFETY,
@@ -422,7 +430,7 @@ fn with_two_current_inferred_claims_the_latest_is_the_one_superseded() {
         Some(T1),
     );
     let latest = given_i_signed(
-        &env,
+        env,
         "github:BurntSushi",
         ADHERES,
         MEMORY_SAFETY,
@@ -430,18 +438,16 @@ fn with_two_current_inferred_claims_the_latest_is_the_one_superseded() {
         &evidence,
         Some(T2),
     );
-    given_i_signed_repo_claim(&env, "rust-lang/regex", MEMORY_SAFETY, 0.60, None);
-    let files_before = claim_files(&env);
+    given_i_signed_repo_claim(env, "rust-lang/regex", MEMORY_SAFETY, 0.60, None);
+    let files_before = claim_files(env);
 
     // WHEN Maria signs the STRONGER candidate.
-    let signed = infer_people_with(&env, &["--sign", "1"], &sign_stdin("", false), Some(T3));
+    let signed = infer_people_with(env, &["--sign", "1"], &sign_stdin("", false), Some(T3));
 
     // THEN it supersedes the T2 claim.
     assert_eq!(signed.status, 0, "{}\n{}", signed.stdout, signed.stderr);
-    let cid = new_claim_cids(&files_before, &env)
-        .pop()
-        .expect("successor");
-    let refs = read_signed(&env, &cid).unsigned.references;
+    let cid = new_claim_cids(&files_before, env).pop().expect("successor");
+    let refs = read_signed(env, &cid).unsigned.references;
     assert_eq!(refs.len(), 1);
     assert_eq!(refs[0].ref_type, ReferenceType::Supersedes);
     assert_eq!(refs[0].cid.0, latest);

@@ -38,11 +38,12 @@ use claim_domain::{
     UnsignedClaim,
 };
 
+use claim_domain::authority::{may_sign_from_checks, requirement, Requirement};
 use claim_domain::identity_link::is_reserved_predicate;
 use lexicon::ObjectAdvisory;
 
 use crate::io::prompt_line;
-use crate::render::render_reserved_predicate_refused;
+use crate::render::{render_reserved_predicate_refused, render_signing_refused};
 use crate::wiring::Wiring;
 
 /// Argument struct for the `claim add` verb (mirrors the clap subcommand).
@@ -106,6 +107,23 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
             "--confidence must be in [0.0, 1.0]; got {}",
             args.confidence
         ));
+    }
+
+    // Owner-only signing (ADR-086/087): an assertion about a person's GitHub
+    // account is signed only by its owner, judged from this reader's local
+    // checks. A refusal happens before any prompt or side effect: nothing is
+    // signed, written or published. Exempt and repo subjects keep today's
+    // path until the repo tier lands (accepted transitional risk T1).
+    if let Requirement::Person(person) = requirement(&args.subject) {
+        let links = wiring.signer_linked_accounts(wiring.clock.now_utc())?;
+        if let Err(refusal) = may_sign_from_checks(&wiring.identity.author_did().0, &person, &links)
+        {
+            eprint!("{}", render_signing_refused(&refusal));
+            return Ok(ClaimAddOutcome {
+                exit_code: 1,
+                stdout: String::new(),
+            });
+        }
     }
 
     // Step 2: assemble the composed claim. composed_at comes from the

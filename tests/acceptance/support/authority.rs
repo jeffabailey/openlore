@@ -283,12 +283,14 @@ pub const CHECK_PLUS_20_DAYS: &str = "2026-10-21T09:00:00Z";
 /// derives a dependency-pinning candidate (candidate 1).
 pub fn authority_world() -> LinkWorld {
     let world = LinkWorld::with(&[JEFF_GH, RACHEL_GH, TOBIAS_GH]);
-    world
-        .github
-        .put_repo(JEFF_GH.login, GithubRepo::owned(TIDEPOOL.name).with_cargo_lock());
-    world
-        .github
-        .put_repo(RACHEL_GH.login, GithubRepo::owned(KELP.name).with_cargo_lock());
+    world.github.put_repo(
+        JEFF_GH.login,
+        GithubRepo::owned(TIDEPOOL.name).with_cargo_lock(),
+    );
+    world.github.put_repo(
+        RACHEL_GH.login,
+        GithubRepo::owned(KELP.name).with_cargo_lock(),
+    );
     world.github.register(
         GithubAccount::new(ACME.login, ACME.id)
             .organization()
@@ -305,7 +307,9 @@ pub fn given_jeff_linked_his_account(world: &LinkWorld) -> String {
 
 /// GIVEN (outside OpenLore): `repo`'s default branch holds `file`.
 pub fn the_repo_holds_authority_file(world: &LinkWorld, repo: RepoRef, file: AuthorityFile) {
-    world.github.set_authority_file(repo.owner, repo.name, Some(file));
+    world
+        .github
+        .set_authority_file(repo.owner, repo.name, Some(file));
 }
 
 /// An authority file that lists exactly these DIDs, one per line, with a
@@ -486,7 +490,11 @@ fn run(world: &LinkWorld, args: &[String], inv: Invocation<'_>) -> CliOutcome {
 /// with `claim add`, at `now`. GitHub is wired only to observe that signing
 /// asks it nothing (C-OOS-9).
 pub fn when_jeff_signs(world: &LinkWorld, subject: Subject, now: Option<&str>) -> CliOutcome {
-    run(world, &claim_add_args(subject), on_github(world, sign_then(true), now))
+    run(
+        world,
+        &claim_add_args(subject),
+        on_github(world, sign_then(true), now),
+    )
 }
 
 /// WHEN: Jeff signs a claim about `subject` with the network disabled (no
@@ -511,7 +519,8 @@ pub fn given_jeff_signed_unpublished(world: &LinkWorld, subject: Subject, now: &
         on_github(world, sign_then(false), Some(now)),
     );
     assert_eq!(
-        out.status, 0,
+        out.status,
+        0,
         "precondition: Jeff may sign about {};\n--- stdout ---\n{}\n--- stderr ---\n{}",
         subject.uri(),
         out.stdout,
@@ -525,7 +534,8 @@ pub fn given_jeff_signed_unpublished(world: &LinkWorld, subject: Subject, now: &
 pub fn given_jeff_signed_and_published(world: &LinkWorld, subject: Subject, now: &str) -> String {
     let out = when_jeff_signs(world, subject, Some(now));
     assert_eq!(
-        out.status, 0,
+        out.status,
+        0,
         "precondition: Jeff may sign and publish about {};\n--- stdout ---\n{}\n--- stderr ---\n{}",
         subject.uri(),
         out.stdout,
@@ -538,7 +548,13 @@ pub fn given_jeff_signed_and_published(world: &LinkWorld, subject: Subject, now:
 pub fn when_jeff_counters(world: &LinkWorld, cid: &str, now: &str) -> CliOutcome {
     openlore_with(
         &world.env,
-        &["claim", "counter", cid, "--reason", "the evidence does not show it"],
+        &[
+            "claim",
+            "counter",
+            cid,
+            "--reason",
+            "the evidence does not show it",
+        ],
         on_github(world, "\nY\n", Some(now)),
     )
 }
@@ -696,7 +712,8 @@ pub fn when_jeff_imports(world: &LinkWorld, repo: RepoRef, now: Option<&str>) ->
 pub fn given_jeff_imported(world: &LinkWorld, repo: RepoRef, now: &str) -> CliOutcome {
     let out = when_jeff_imports(world, repo, Some(now));
     assert_eq!(
-        out.status, 0,
+        out.status,
+        0,
         "precondition: `scrape github {}` must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
         repo.full(),
         out.stdout,
@@ -1095,6 +1112,7 @@ pub struct WhatJeffSees {
 
 /// Look at `subject` the way Jeff would (read-only verbs, offline).
 pub fn what_jeff_sees(world: &LinkWorld, subject: Subject) -> WhatJeffSees {
+    let _first_federated_query_orientation_shown_once = when_jeff_reads_subject(world, subject);
     let claims = when_jeff_reads_subject(world, subject);
     let identities = when_i_list(world, None);
     WhatJeffSees {
@@ -1122,14 +1140,20 @@ fn jeffs_entries(stdout: &str, subject: Subject) -> usize {
 /// THEN (PRIMARY): Jeff sees exactly what he saw before — no claim of his
 /// appeared, nothing reached his published repo, and no check he can see
 /// was recorded.
-pub fn assert_jeff_sees_no_change(row: &str, before: &WhatJeffSees, world: &LinkWorld, subject: Subject) {
+pub fn assert_jeff_sees_no_change(
+    row: &str,
+    before: &WhatJeffSees,
+    world: &LinkWorld,
+    subject: Subject,
+) {
     let after = what_jeff_sees(world, subject);
     assert_eq!(
         after.published, before.published,
         "[{row}] nothing reached Jeff's published repo"
     );
     assert_eq!(
-        after.claims_about, before.claims_about,
+        after.claims_about,
+        before.claims_about,
         "[{row}] every claim about {} reads as before (nothing signed)",
         subject.uri()
     );
@@ -1171,7 +1195,12 @@ pub fn assert_signed_and_kept_locally(
     world: &LinkWorld,
     subject: Subject,
 ) {
-    assert_eq!(outcome.status, 0, "[{row}] Jeff may sign;{}", context(outcome));
+    assert_eq!(
+        outcome.status,
+        0,
+        "[{row}] Jeff may sign;{}",
+        context(outcome)
+    );
     let after = what_jeff_sees(world, subject);
     assert_eq!(
         jeffs_entries(&after.claims_about, subject),
@@ -1205,9 +1234,9 @@ pub fn assert_published_marking(
     let (_, record) = bodies
         .iter()
         .find(|(_, v)| {
-            v["references"].as_array().is_some_and(|r| {
-                r.iter().any(|x| x["type"] == kind && x["cid"] == target)
-            })
+            v["references"]
+                .as_array()
+                .is_some_and(|r| r.iter().any(|x| x["type"] == kind && x["cid"] == target))
         })
         .unwrap_or_else(|| panic!("[{row}] a record that {kind} {target}: {bodies:?}"));
     assert_eq!(
@@ -1374,7 +1403,11 @@ pub fn guardrail_store_delta(
 /// no claim row, claim file or PDS record was added.
 pub fn guardrail_nothing_signed(row: &str, before: &HashMap<String, String>, env: &TestEnv) {
     let after = capture_authority_universe(env);
-    for slot in ["local.claims.row_count", "local.claim_files", "pds.records.len"] {
+    for slot in [
+        "local.claims.row_count",
+        "local.claim_files",
+        "pds.records.len",
+    ] {
         assert_eq!(
             before.get(slot),
             after.get(slot),
