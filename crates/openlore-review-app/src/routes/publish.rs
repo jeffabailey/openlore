@@ -2,8 +2,9 @@
 //! is taken from the owner's store exactly once, refused if its preview has
 //! expired (ADR-074), re-admitted as the owner's own self-attested record,
 //! executed, and the suggestion moves to published. A missing or forged
-//! anti-forgery token writes nothing. A failed write or a refused permit
-//! puts the plan back (same deadline), so Retry — or confirming again once
+//! anti-forgery token writes nothing. A failed write, a refused permit or a
+//! plan the permit does not restore puts the plan back (same deadline;
+//! re-review N7), so Retry — or confirming again once
 //! the cause is gone — publishes it exactly once (ADR-071: the record key
 //! is the content's CID, so a create that already landed is success).
 
@@ -52,12 +53,15 @@ pub(crate) async fn confirm_publish(app: &App, request: &PageRequest) -> Reply {
         Ok(permit) => permit,
         Err(refusal) => {
             put_back(app, &confirmed);
-            return checks.refused(&key.subject, refusal);
+            return checks.refused(&key.subject, refusal).await;
         }
     };
     match restore_plan(&permit, &confirmed.stored).ok() {
         Some(plan) => publish(app, &checks, &permit, &plan, &confirmed).await,
-        None => not_found(),
+        None => {
+            put_back(app, &confirmed);
+            not_found()
+        }
     }
 }
 
@@ -70,7 +74,7 @@ async fn publish(
 ) -> Reply {
     match write_plan(app, plan, confirmed).await {
         Ok(at_uri) => {
-            checks.proven(permit);
+            checks.proven(permit).await;
             Reply::page(StatusCode::OK, views::published_page(&at_uri))
         }
         Err(NotWritten { failure, kept }) => {
@@ -216,16 +220,17 @@ async fn confirm_one(
         Ok(permit) => permit,
         Err(refusal) => {
             put_back(app, confirmed);
-            checks.settle(&refusal);
+            checks.settle(&refusal).await;
             return PlanResult::Skipped;
         }
     };
     let Some(plan) = restore_plan(&permit, &confirmed.stored).ok() else {
+        put_back(app, confirmed);
         return PlanResult::Skipped;
     };
     match write_plan(app, &plan, confirmed).await {
         Ok(at_uri) => {
-            checks.proven(&permit);
+            checks.proven(&permit).await;
             PlanResult::Published(at_uri)
         }
         Err(NotWritten { failure, kept }) => PlanResult::Failed {

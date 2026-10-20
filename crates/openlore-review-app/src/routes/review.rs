@@ -255,7 +255,7 @@ pub(crate) async fn approve(app: &App, request: &PageRequest) -> Reply {
             let plan = publish_plan(&permit, &draft_of(suggestion), &composed_now());
             keep_and_preview(app, request, &session, plan)
         }
-        Err(refusal) => checks.refused(&subject, refusal),
+        Err(refusal) => checks.refused(&subject, refusal).await,
     }
 }
 
@@ -278,7 +278,7 @@ pub(crate) async fn approve_selected(app: &App, request: &PageRequest) -> Reply 
         let permit = match checks.permit(&suggestion.key.subject).await {
             Ok(permit) => permit,
             Err(refusal) => {
-                checks.settle(&refusal);
+                checks.settle(&refusal).await;
                 continue;
             }
         };
@@ -342,7 +342,7 @@ pub(crate) async fn preview_edit(app: &App, request: &PageRequest) -> Reply {
                     let plan = publish_edited_plan(&permit, &draft, &edit, &composed_now());
                     keep_and_preview(app, request, &session, plan)
                 }
-                Err(refusal) => checks.refused(&subject, refusal),
+                Err(refusal) => checks.refused(&subject, refusal).await,
             }
         }
         Err(invalid) => {
@@ -504,7 +504,7 @@ impl<'a> PublishChecks<'a> {
     /// in this request, held the DID, so an account stored as unverified is
     /// verified again under the login GitHub serves now (ADR-089 §2: the
     /// fresh read is the verification).
-    pub(crate) fn proven(&self, permit: &SigningPermit) {
+    pub(crate) async fn proven(&self, permit: &SigningPermit) {
         let PermitBasis::Owner(github_user_id) = permit.basis();
         let stored_unverified = self
             .accounts
@@ -513,32 +513,49 @@ impl<'a> PublishChecks<'a> {
         if let (true, Some(RepoAnswer::Found(facts))) =
             (stored_unverified, self.repos.get(permit.subject()))
         {
-            let _ = self.app.account_status.mark_account_verified(
-                self.owner_did,
-                github_user_id,
-                &facts.owner_login,
-            );
+            self.under_scope(|| {
+                let _ = self.app.account_status.mark_account_verified(
+                    self.owner_did,
+                    github_user_id,
+                    &facts.owner_login,
+                );
+            })
+            .await;
         }
     }
 
     /// A refusal's consequences, nothing written: counted, and a listed
     /// account whose bio no longer holds the DID is marked unverified (an
     /// unfinished check changes no status).
-    pub(crate) fn settle(&self, refusal: &SigningRefusal) {
+    pub(crate) async fn settle(&self, refusal: &SigningRefusal) {
         observe(self.app, LogEvent::PublishRefused(refusal.clone()));
         if let SigningRefusal::BioNoLongerHolds(github_user_id) = *refusal {
-            let _ = self.app.account_status.mark_account_unverified(
-                self.owner_did,
-                github_user_id,
-                BIO_NO_LONGER_HOLDS_VERDICT,
-            );
+            self.under_scope(|| {
+                let _ = self.app.account_status.mark_account_unverified(
+                    self.owner_did,
+                    github_user_id,
+                    BIO_NO_LONGER_HOLDS_VERDICT,
+                );
+            })
+            .await;
+        }
+    }
+
+    /// An account status write, made while the owner's scope is held so it
+    /// never interleaves with an account removal (re-review N6); the GitHub
+    /// reads came before. A scope still busy past its wait skips the write:
+    /// the next publish or scan reads GitHub again.
+    async fn under_scope(&self, write: impl FnOnce()) {
+        if let Ok(scope_guard) = self.app.scope_locks.hold(self.owner_did).await {
+            write();
+            drop(scope_guard);
         }
     }
 
     /// A publish refused for want of a permit, settled, and explained with
     /// its next step; a repo gone (missing or private) is not found.
-    pub(crate) fn refused(&self, subject: &str, refusal: SigningRefusal) -> Reply {
-        self.settle(&refusal);
+    pub(crate) async fn refused(&self, subject: &str, refusal: SigningRefusal) -> Reply {
+        self.settle(&refusal).await;
         match refusal {
             SigningRefusal::NotOwnedByListedAccount | SigningRefusal::OrgOwned
                 if self.imported(subject) =>
