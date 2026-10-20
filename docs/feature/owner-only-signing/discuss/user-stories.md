@@ -23,9 +23,9 @@
 >   `docs/feature/bluesky-claim-review-app/discuss/requirements.md`.
 > - **Prerequisite for every story**: github-did-identity-link (GDL) slice 1 (identity link and
 >   v7 link checks, ADR-084/085).
-> - **Job fit**: no job in `docs/product/jobs.yaml` is about the subject's consent ("only the
->   owner speaks for an account or repo"). Each story uses the closest existing job. See
->   "Proposed job (not added)" at the end.
+> - **Job fit**: stories about the subject's own authority trace to J-011 "Speak for my own
+>   accounts and repos" (added by the user on 2026-10-20). The others use the closest existing
+>   job. See "Job mapping summary" at the end.
 
 ## System Constraints (cross-cutting, apply to every story)
 
@@ -53,7 +53,7 @@ records and non-GitHub subjects are not gated.
 
 ## S-OOS-1: Only the owner of a GitHub account signs about it; others get the hand-off
 
-- **job_id**: J-001 (Author a signed philosophical claim)
+- **job_id**: J-011 (Speak for my own accounts and repos)
 - **Persona**: P-001 (Jeff), with peers Rachel and Tobias as subjects
 - **Slice**: 1 (walking skeleton) | **Estimate**: 2 days
 - **From**: A-1, A-2, OOS-D4, C-OOS-1, KPI-OOS-1
@@ -178,7 +178,7 @@ never adds weight (CORE-OOS-1, see S-OOS-7 RD-4).
 
 ## S-OOS-3: Signing works offline from a check ≤ 7 days old, never otherwise
 
-- **job_id**: J-001 (functional: "persist locally first; publishing is a separate step")
+- **job_id**: J-011 (Speak for my own accounts and repos; also serves J-001's local-first signing)
 - **Persona**: P-001 (Jeff, on a train with no network)
 - **Slice**: 1 (person checks) and 2 (repo checks) | **Estimate**: 1.5 days
 - **From**: OOS-D7, C-OOS-9, I-9 exception, A-6
@@ -241,7 +241,7 @@ was not found on GitHub (RA-15).
 
 ## S-OOS-4: Only the repo's owner or a DID its authority file lists signs about the repo; anyone imports
 
-- **job_id**: J-004 (sub-job J-004c, "the human always signs, the scraper never asserts")
+- **job_id**: J-011 (Speak for my own accounts and repos; import side stays J-004c)
 - **Persona**: P-001 (Jeff), importing his own repo, Rachel's repo and an org repo
 - **Slice**: 2 | **Estimate**: 3 days
 - **From**: A-3, A-12, OOS-D5, ADR-087 §2-3, KPI-OOS-4
@@ -310,7 +310,7 @@ longer names him (RA-13).
 
 ## S-OOS-5: Anyone re-checks authority from public data; failures change nothing
 
-- **job_id**: J-003 (sub-job J-003a, "see who is making the claim and weigh their authority myself")
+- **job_id**: J-011 (Speak for my own accounts and repos: re-checkable proof; also serves J-003a)
 - **Persona**: P-001 (Jeff, reading Rachel's pulled claims)
 - **Slice**: 2 | **Estimate**: 2 days
 - **From**: OOS-D6, ADR-087 §4-6, C-OOS-3, C-OOS-4
@@ -375,7 +375,7 @@ re-check and asks GitHub nothing (RA-14).
 
 ## S-OOS-6: A never-published claim publishes only with a permit
 
-- **job_id**: J-001 (functional: "publishing to ATProto is a separate, deferrable step")
+- **job_id**: J-011 (Speak for my own accounts and repos)
 - **Persona**: P-001 (Jeff, with a store from before this feature)
 - **Slice**: 2 | **Estimate**: 1.5 days
 - **From**: OOS-D8, ADR-086 §4, OOS-D3
@@ -624,22 +624,18 @@ and 3 October lists each candidate once (IC-4, pending U-OOS-6).
 
 | Story | job_id | Fit |
 |---|---|---|
-| S-OOS-1 | J-001 | Signing claims about yourself, so your signature means something |
+| S-OOS-1 | J-011 | Only the account's owner signs about it |
 | S-OOS-2 | J-003 (J-003b) | Counter-claims stay first-class |
-| S-OOS-3 | J-001 | Local-first signing, publishing deferrable |
-| S-OOS-4 | J-004 (J-004c) | Scraper candidates, human signs, now only the right human |
-| S-OOS-5 | J-003 (J-003a) | Weigh a peer's authority yourself |
-| S-OOS-6 | J-001 | Publishing as a separate, deferrable step |
+| S-OOS-3 | J-011 | The owner keeps signing offline, within a 7-day check |
+| S-OOS-4 | J-011 | Only the repo's owner or a listed maintainer signs; anyone imports (J-004c) |
+| S-OOS-5 | J-011 | Authority is re-checkable by any reader from public data (J-003a) |
+| S-OOS-6 | J-011 | No unpermitted claim leaves through `claim publish` |
 | S-OOS-7 | J-002 (J-002c) | Transparent weighting |
 | S-OOS-8 | J-009 (J-009f) | Opt-in share of the approved profile |
 | S-OOS-9 | J-004 (J-004b) | Candidates from harvested signals |
 
-## Proposed job (not added to jobs.yaml)
+## J-011 added (user, 2026-10-20)
 
-No existing job states the subject's side: "When someone publishes claims about my GitHub account
-or repo, I want only me (or maintainers I list) to be able to sign them, so a signed claim about
-my work is my word and everything else is clearly someone's opinion." J-004's anxiety mitigation
-("the contributor is the subject of a claim, not a controller of it") is the opposite of what this
-feature now does for signing. Proposal: add **J-011 Speak for my own accounts and repos** (or a
-sub-job of J-001) and revise the J-004 anxiety text. Until a human decides, the stories above keep
-the closest existing jobs.
+J-011 "Speak for my own accounts and repos" is now in `docs/product/jobs.yaml`, and the J-004
+anxiety text no longer says the contributor is only a subject, never a controller: anyone may
+import, but only the owner or a listed maintainer signs.

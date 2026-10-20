@@ -341,8 +341,11 @@ jobs:
         adherence profile, with the underlying claims auditable.
       anxiety: >
         "Will this become a surveillance tool / blacklist mechanism?" Mitigation:
-        only public signed claims are aggregated; the contributor is the subject
-        of a claim, not a controller of it; counter-claim and retraction first-class.
+        only public signed claims are aggregated; anyone may import public data and
+        see unsigned candidates about any account or repo, but only the account's
+        owner (or, for a repo, its owner or a maintainer-listed DID) may sign claims
+        about it (J-011, owner-only-signing 2026-10-20); everyone else's word is
+        labelled as an opinion; counter-claim and retraction stay first-class.
       habit: >
         Engineers already scroll someone's GitHub profile. Profile-as-philosophy
         view must layer onto that habit, not replace it.
@@ -501,8 +504,8 @@ jobs:
 
     social:
       - Find aligned developers and projects I would never have searched for by name.
-      - Make a discovery defensible: cite a specific signed claim by a named author,
-        not an aggregator's opinion.
+      - "Make a discovery defensible: cite a specific signed claim by a named author,
+        not an aggregator's opinion."
       - Lower the cold-start cost of a federated knowledge graph (you no longer need
         a pre-existing follow-list to get value).
 
@@ -696,7 +699,7 @@ jobs:
 
     success_signals:
       - A non-Rust user installs a verified `openlore` in one command and runs `--version` in <60s.
-      - `brew upgrade openlore` fetches the next release with zero manual formula maintenance.
+      - "`brew upgrade openlore` fetches the next release with zero manual formula maintenance."
       - Post-install there is no brew service / launchd / systemd unit and no update-check network call.
       - The formula installs ONLY `openlore`, never `openlore-indexer`.
 
@@ -802,8 +805,8 @@ jobs:
       - Push local claims to my own instance (`openlore publish push`); pushes are additive + idempotent.
       - Pull my instance's records back into local DuckDB (`openlore publish pull`); never silently
         overwrite a local claim — reconcile with attribution + CID checks.
-      - Guarantee round-trip integrity: a claim pushed to my instance and pulled back has an
-        IDENTICAL recomputed CID (canonicalization survives the CLI<->Worker boundary).
+      - "Guarantee round-trip integrity: a claim pushed to my instance and pulled back has an
+        IDENTICAL recomputed CID (canonicalization survives the CLI<->Worker boundary)."
       - Report sync state (what is local-only, instance-only, or in-sync).
 
     emotional:
@@ -958,6 +961,77 @@ jobs:
       verdict: later    # needs a population of J-009 self-attested claims first
     related_jobs: [J-005, J-009]
     # Mapped on the bluesky-claim-review-app story map as LATER (feed generator, labeler badges).
+
+
+  - id: J-011
+    name: Speak for my own accounts and repos
+    primary: false
+    job_story: >
+      When people publish claims about my GitHub account or the repos I own or maintain,
+      I want only me (or maintainers the repo lists) to be able to sign them, while anyone
+      may still import my public work and see unsigned candidates, so a signed claim about
+      my work is my word and everything else is clearly someone else's opinion.
+
+    context: >
+      Surfaced by owner-only-signing (DESIGN 2026-10-14; stories derived 2026-10-20, no
+      DISCUSS interviews). User requirement: anyone may import claims without owning the
+      account, but only the account's owner signs them; only a repo's owner or admin signs
+      claims about the repo. Authority is proven from public data any reader can re-check:
+      the person tier is the owner's published identity link (ADR-084) plus a live bio check;
+      the repo tier is the owner account, or a DID listed in `.github/openlore-authority`
+      (ADR-086/087).
+
+    functional:
+      - Sign claims about `github:<login>` only when that login is my linked, verified account.
+      - Sign claims about `github:<owner>/<repo>` only as its owner, or as a DID its authority file lists.
+      - Let anyone import public repos and people and see unsigned candidates, with a hand-off naming who can sign.
+      - Let any reader re-check authority from public GitHub data and label claims owner / repo-listed / third-party.
+      - Keep disputing (counter) and withdrawing (retract) open to everyone, whatever their authority.
+
+    emotional:
+      - Recognised: "a signed claim about my account is mine, not someone speaking for me."
+      - Safe: "outsiders can still hold opinions, but readers see them as opinions."
+      - Fair: "I can still be disputed, and I can always take back my own word."
+
+    social:
+      - Subjects speak for themselves (extends the J-009 social goal to CLI users and repos).
+      - Maintainers of org repos can delegate signing in public, in the repo itself.
+
+    four_forces:
+      push: >
+        Any DID can sign anything about any GitHub account or repo, so a third party's
+        claim looks as authoritative as the owner's, and weighted views count it the same.
+      pull: >
+        Signing is reserved for the owner (or listed maintainers); every reader can re-check
+        that from public data; weighted views count only attested claims.
+      anxiety: >
+        (a) "Does this stop people from disagreeing with me, or me with them?" Mitigation:
+            counters and retractions are never gated and never weighted (C-OOS-2/6).
+        (b) "Will claims already published about me be deleted?" Mitigation: nothing is
+            deleted or hidden; third-party claims are labelled (C-OOS-5).
+        (c) "Can a collaborator with push access list themselves?" Yes (residual risk R-1);
+            the label says `repo-listed`, not admin.
+        (d) "Can I still sign offline?" Yes, from an authority check at most 7 days old
+            (C-OOS-9, accepted I-9 exception).
+      habit: >
+        Developers already prove account ownership with a bio line (Keybase-style) and
+        control repo metadata through files in `.github/` guarded by CODEOWNERS.
+
+    opportunity_score:
+      importance: 8     # without it, signed claims about people and repos carry no owner meaning
+      satisfaction: 1   # no tool restricts who may sign about an account or repo
+      score: 15         # 8 + max(8 - 1, 0) = 15
+      verdict: underserved-primary-for-feature   # headline job for owner-only-signing
+
+    success_signals:
+      - "0 `github:` assertions signed or published by an OpenLore composer without a permit (KPI-OOS-1)."
+      - "Weights never move when counters or unattested claims are added (KPI-OOS-2)."
+      - "0 retractions or counters refused for authority (KPI-OOS-3)."
+      - ">= 1 repo-listed claim on an org repo and >= 1 owner claim, each confirmed by a second reader (KPI-OOS-4)."
+
+    related_jobs: [J-001, J-004, J-009]
+    # Source: owner-only-signing. See docs/feature/owner-only-signing/design/wave-decisions.md
+    # (OOS-D1..D15, C-OOS-1..9) and discuss/user-stories.md (S-OOS-1..9).
 
 
 # ---------------------------------------------------------------------------
@@ -1310,3 +1384,13 @@ changelog:
       Opportunity 15. J-010 ADDED as a LATER job (find like-minded developers inside Bluesky via
       feed generator / labeler), opportunity 10. Related: J-001, J-004b/c/e, J-007. Personas:
       P-003 Bluesky developer (Priya Raman). See docs/feature/bluesky-claim-review-app/discuss/.
+  - date: "2026-10-20"
+    feature: owner-only-signing
+    change: >
+      J-011 ADDED (user, 2026-10-20): speak for my own accounts and repos. Only the owner of
+      a GitHub account signs claims about it; only a repo's owner or a DID listed in its
+      `.github/openlore-authority` signs claims about the repo; anyone may import and see
+      unsigned candidates. Opportunity 15. J-004 anxiety mitigation revised: the old text
+      "the contributor is the subject of a claim, not a controller of it" no longer holds
+      for signing. Stories S-OOS-1/3/4/5/6 trace to J-011. See
+      docs/feature/owner-only-signing/discuss/user-stories.md.
