@@ -297,8 +297,10 @@ Shipped slice extensions:
   repo-listed / third-party / authority not checked` per `github:` assertion from local,
   insert-only checks; nothing on the wire changes and already-published claims are judged by the
   same rule. Establishes an accepted exception to I-9 (see the invariants table).
-  - **`crates/claim-domain` (PURE, EXTEND)**: new `authority` module — `requirement`, `classify`,
-    `may_sign` → private-constructor `SigningPermit`.
+  - **`crates/claim-domain` (PURE, EXTEND)**: `authority` module — `requirement`, `classify`,
+    `may_sign` → private-constructor `SigningPermit`. *2026-10-20 (U-OOS-3)*: the module and an
+    owner-tier `may_sign` from same-request reads shipped with ADR-089; the CLI adds a second entry
+    point from local checks and a `RepoListed` permit basis, minting only in this module.
   - **`crates/scoring` (PURE, EXTEND)**: `score_attested` (unbounded preservation; weights only
     assertions that are non-`github:` or attested; counters/retractions/links never weighted; the
     feed gains reference types; `--include-unattested` shown separately per author).
@@ -314,8 +316,11 @@ Shipped slice extensions:
     `claim publish`); labels in `graph query`, scrape/infer views, viewer, `search` ("authority
     not checked here"); offline signing from checks ≤ 7 days; `adapter-github` same-host redirect
     policy.
-  - **`crates/openlore-review-app` (EXTEND)**: publish re-checks bio + repo authority in the request
-    (extends `owner_can_publish`); share draft quotes attested claims only.
+  - **`crates/openlore-review-app` (EXTEND)**: share draft quotes attested claims only (meaning
+    proposed, U-OOS-4). The publish-time bio + repo re-check shipped with
+    review-app-repos-and-accounts (ADR-089); OOS-D13 is superseded.
+  - **Sign-time GitHub outage (OOS-D7 clarification, 2026-10-20)**: an online verb whose refresh
+    GitHub cannot answer records nothing and gates from the latest local check exactly as offline.
   - **`openlore-indexer`: UNCHANGED** (no GitHub capability).
   - **`xtask` (EXTEND)**: `sign_only_with_permit`, `authority_evidence_only_from_adapters`,
     `repo_authority_checks_insert_only`,
@@ -1065,7 +1070,7 @@ build-fail.
 | I-6 | The signed-claim payload MUST contain only the locked numeric `confidence` (`[0.0, 1.0]`); display buckets MUST NEVER be serialized | `tests/lexicon_conformance.rs` (DISTILL gate)  |
 | I-7 | The compose preview MUST contain the literal text "not as truth"        | `tests/walking_skeleton.rs::WS-1`              |
 | I-8 | The publish success message MUST mention the retract command            | `tests/walking_skeleton.rs::WS-8`              |
-| I-9 | Compose and sign MUST succeed with network disabled (KPI-5). *Accepted exception (ADR-086 §5, owner-only-signing, 2026-10-14): a `github:` assertion without a local authority check ≤ 7 days old is refused offline; signing itself never uses the network.* | `tests/walking_skeleton.rs::WS-10`             |
+| I-9 | Compose and sign MUST succeed with network disabled (KPI-5). *Accepted exception (ADR-086 §5, owner-only-signing, 2026-10-14): a `github:` assertion without a local authority check ≤ 7 days old is refused offline; signing itself never uses the network. WS-1..WS-10 sign `github:rust-lang/rust`, so they are affected (U-OOS-2, 2026-10-20): the slice-01 walking skeleton needs a fixture with authority (listed DID or own repo) or a non-`github:` subject — DELIVER decides, keeping this row's test on a non-`github:` subject; offline with a fresh check: owner-only-signing PS-4 / RA-10.* | `tests/walking_skeleton.rs::WS-10`             |
 | I-10 | Graph query output MUST match compose-preview field-for-field (KPI-4)   | `tests/walking_skeleton.rs::WS-12` + `tests/federation_roundtrip.rs` |
 | I-11 | Workspace dependencies MUST pass cargo-deny advisories, bans, sources, and licenses | `cargo deny check` (CI gate)                   |
 | I-12 | Every git commit on a roadmap step MUST carry a `Step-ID: NN-NN` trailer matching the roadmap | `des-verify-integrity` (Phase 6 gate)          |

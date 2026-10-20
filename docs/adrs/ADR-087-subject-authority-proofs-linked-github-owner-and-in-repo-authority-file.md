@@ -92,8 +92,10 @@ GitHub API options evaluated (concretely):
    so they hold link-check write for the signer's DID only.
    **Budget**: anonymous 60/hour ≈ 6 repos scraped with authority per hour (was ≈ 7 without);
    with `GITHUB_TOKEN` (5000/hour) the budget is not a constraint. When the budget runs out
-   mid-scrape, candidates already derived are still listed; repos without a fresh observation
-   refuse `--sign` with "rate-limited; retry after <reset>" and nothing is recorded for them. The
+   mid-scrape, candidates already derived are still listed and nothing is recorded for the
+   unobserved repos; the gate then falls back to the latest local check exactly as offline
+   (ADR-086 §5 clarification, 2026-10-20): permit iff `Attested` and ≤ 7 days old, else refuse
+   `--sign` with "rate-limited; retry after <reset>" and `openlore authority verify --subject <s>`. The
    authority reads report through the existing `AuthReport` / `last_rate_budget` channel.
    The review app performs its own reads inside the publish request (C-GDL-10 freshness) and stores
    nothing in the CLI store.

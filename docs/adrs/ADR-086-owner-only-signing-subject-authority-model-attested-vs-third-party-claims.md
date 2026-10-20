@@ -77,6 +77,11 @@ Facts that shape the decision:
      `SigningRefusal`. `Attested` values and `SigningPermit` have private fields: they are built
      only by `classify`/`may_sign`, from observation values decoded by the check-store and GitHub
      adapters (structural rule `authority_evidence_only_from_adapters`).
+     *Note 2026-10-20 (U-OOS-3)*: ADR-089 has since shipped `may_sign` with the owner tier and
+     same-request inputs (`signer, subject, listed_ids, RepoRead, OwnerBioRead`). The CLI gate
+     from local checks is a second entry point in the same module returning the same
+     `SigningPermit`, whose basis gains `RepoListed`; minting stays inside
+     `claim_domain::authority`.
    - A new shared CLI helper `sign_permitted(permit, …)` replaces the four inline claim `sign`
      calls; `philosophy_add.rs` keeps its own call (philosophy records; allowlisted by name).
    - The single publish path takes a permit: `publish_signed_claim(…, &SigningPermit)`. `claim
@@ -92,12 +97,19 @@ Facts that shape the decision:
    `github:` assertion with a missing or stale check is refused offline**, which narrows I-9 ("compose
    and sign MUST succeed with network disabled") to: *succeeds offline for every claim kind and
    subject except `github:` assertions without a fresh local authority check*. This is recorded as a
-   accepted exception in the brief's I-9 row; WS-10 (`tests/walking_skeleton.rs`) keeps its scope
-   because its subject is not a `github:` assertion — DISTILL must confirm the fixture and add an
-   offline-with-fresh-check AT. Online verbs (`scrape github … --sign`, `scrape person … --sign`,
+   accepted exception in the brief's I-9 row. *Corrected 2026-10-20 (DISTILL U-OOS-2)*: WS-1..WS-10
+   (`tests/acceptance/walking_skeleton.rs`) sign `github:rust-lang/rust`, a `github:` repo
+   assertion, so WS-10 **is** affected: the slice-01 walking skeleton needs a fixture with
+   authority (e.g. a listed DID, or the signer's own repo with a fresh check) or a non-`github:`
+   subject. DELIVER decides which, keeping an I-9 test on a non-`github:` subject; the
+   offline-with-fresh-check ATs are PS-4 / RA-10. Online verbs (`scrape github … --sign`, `scrape person … --sign`,
    review-app publish) refresh the check in the same invocation or request before gating; offline
    verbs (`claim add`, `infer people --sign`, `claim publish`) refuse with the command to run
-   (`openlore authority verify --subject <s>`).
+   (`openlore authority verify --subject <s>`). *Clarification 2026-10-20 (OOS-D7, within
+   option A)*: when an online CLI verb cannot get an answer from GitHub (rate limit, unreachable),
+   the refresh records nothing and the gate falls back to the latest local check exactly as
+   offline — permit iff `Attested` and ≤ 7 days old, else refuse naming
+   `openlore authority verify --subject <s>`.
 6. **Authority is current, not historical.** Readers evaluate authority now. A repo transferred
    away, a DID removed from the repo's authority file, or a link whose bio proof is gone makes the
    author's assertions `Unattested` on the next check. Nothing is retracted, superseded or deleted

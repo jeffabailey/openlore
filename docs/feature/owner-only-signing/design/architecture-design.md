@@ -44,7 +44,7 @@ C4Container
     Container(vd, "viewer-domain", "pure Rust", "EXTEND: authority label rendering")
     Container(rapp, "openlore-review-app (root 3)", "Rust, hyper", "EXTEND: publish-time authority check; link prompt")
     Container(idx, "openlore-indexer (root 2)", "Rust", "UNCHANGED")
-    Container(cd, "claim-domain", "pure Rust", "NEW module authority: requirement, classify, may_sign, SigningPermit; uses GDL identity_link")
+    Container(cd, "claim-domain", "pure Rust", "EXTEND module authority (owner tier shipped, ADR-089): requirement, classify, CLI may_sign entry from checks, RepoListed permit basis; uses GDL identity_link")
     Container(rd, "review-domain", "pure Rust", "EXTEND: PublishPlan takes a SigningPermit")
     Container(sd, "scraper-domain", "pure Rust", "EXTEND: hand-off line data on candidates")
     Container(sc, "scoring", "pure Rust", "EXTEND: score_attested")
@@ -94,7 +94,14 @@ L3 is not drawn: the new pure module has four public functions and two types (be
   only here),
   `Unattested(NoLink | LinkNotVerified | LoginNotCurrent | NotRepoOwner | OrgOwnedNotListed |
   NotListed | FileInvalid | RepoNotFound)`, `NotChecked`. Rules: ADR-087 §1-3.
-- `may_sign(draft, signer_did, evidence, now, window) → Result<SigningPermit, SigningRefusal>`:
+- **Shipped since (U-OOS-3, 2026-10-20)**: review-app-repos-and-accounts (ADR-089) already ships
+  `claim_domain::authority` with the owner tier only: `may_sign(signer, subject, listed_ids,
+  RepoRead, OwnerBioRead) → SigningPermit` from same-request reads. Its inputs differ from the CLI
+  gate below (local checks + clock). The CLI therefore needs a **second entry point** in the same
+  module (name DELIVER's, e.g. `may_sign_from_checks`) returning the **same** `SigningPermit`,
+  whose basis gains a `RepoListed` arm. Permits are still minted only inside
+  `claim_domain::authority`; ADR-089's entry point is not changed.
+- CLI gate `may_sign(draft, signer_did, evidence, now, window) → Result<SigningPermit, SigningRefusal>`:
   permit iff `requirement` is `Exempt`, or `classify` is `Attested` with `checked_at ≥ now − window` (default 7 days),
   where `checked_at` is the **older** of the checks used (link check and, for repos, the repo
   observation); a check dated in the future counts as missing.
@@ -105,24 +112,30 @@ L3 is not drawn: the new pure module has four public functions and two types (be
 
 ## Component boundaries
 
+Contract shape is exactly one of **pure-function** (return-only), **bounded-change** (universe +
+declared delta; everything else in the universe unchanged) or **unbounded-preservation** (universe
+the component must leave unchanged). "Local store" = `openlore.duckdb` (all tables) + the signed
+artifact directory.
+
 | Component | Path | Change | Responsibility | Contract shape (principle 12) |
 |---|---|---|---|---|
-| `authority` module | `crates/claim-domain/src/authority.rs` | NEW | Model above; `SigningPermit` private fields | Pure, return-only |
-| `sign_permitted` helper | NEW in `crates/cli/src/verbs/` (e.g. `sign_permitted.rs`), called from `claim_add.rs`, `claim_counter.rs`, `claim_retract.rs`, `sign_batch.rs` | NEW (replaces the four inline `IdentityPort::sign` calls; `philosophy_add.rs` keeps its own, allowlisted) | Sign only a `SigningPermit`; refusals render the hand-off | Shell; bounded change = {one signed artifact file + one `claims` row} per permit |
-| Single publish path | `crates/cli/src/verbs/claim_publish.rs` `publish_signed_claim` | EXTEND | Takes `&SigningPermit`; `claim publish <cid>` gets one from `may_sign` over the stored claim when `published_at IS NULL` (an already-published claim re-publishes idempotently with an exempt permit) | Shell; bounded change = {one PDS `createRecord` for that CID + `record_publication` on that row}; reads checks only |
-| `authority verify` verb | `crates/cli/src/verbs/authority_verify.rs` | NEW | Re-check authority for local `github:` claims (own + peers), recording identity-link and repo checks; never signs | Bounded change: inserts into `identity_link_checks`, `repo_authority_checks` only |
-| Scrape / infer views | `scrape_github.rs`, `scrape_person.rs`, `infer_people.rs`, `render/*` | EXTEND | Record one repo observation per scraped repo (scrape only); per-subject "can sign / can be signed by" line; gate `--sign` | Shell + pure render; bounded change (scrape) = existing contribution-link upserts + one insert into `repo_authority_checks` per scraped repo (+ GDL link-check refresh for `scrape github <user>`); `infer people` without `--sign` writes nothing |
-| Review-app share draft | `crates/review-domain/src/share.rs` | EXTEND | Quote only the owner's `Attested` claims; list others as "not counted: authority not proven" | Pure |
-| `graph query` / viewer | `graph_query.rs`, `adapter-http-viewer`, `viewer-domain` | EXTEND | Authority labels; `score_attested`; `--include-unattested` | Read-only (check read port only) |
-| `search` render | `crates/cli/src/verbs/search.rs` | EXTEND | "authority not checked here" on `github:` assertion rows; local label when a local check exists | Read-only |
-| Scorer + feed | `crates/scoring/src/score.rs`; `ports::AttributedClaim` + `adapter-duckdb/src/graph_query.rs` | EXTEND | `score_attested(feed, view)`; the feed gains each claim's reference types (from `claim_references` / `peer_claim_references`) so `kind` is computable | **Unbounded preservation**: ∀F, V: `score_attested(F, V) == score({c ∈ F │ kind(c) = Assertion ∧ (subject ∉ github: ∨ attested(c, V))})`; no row altered. Properties over `kind`/`classify` (not only this definition) |
-| `GithubPort::read_repo_authority` | `crates/ports/src/lib.rs`, `crates/adapter-github` | EXTEND | Exactly 2 GETs (`/repos` + contents, always); NEW redirect policy: ≤ 1 redirect, same host only (today `build_client()` follows any) | Read-only |
-| Repo authority ports | `crates/ports` | NEW | `RepoAuthorityCheckReadPort::latest(subjects)`, `RepoAuthorityCheckWritePort::record(observation)` (insert only) | Read: pure read. Write: bounded change = one insert |
-| v8 adapters | `crates/adapter-duckdb/src/{schema_v8,repo_authority_checks}.rs` | EXTEND | Forward-only idempotent migration; insert-only; latest via read query; live probe | Bounded change |
-| Review-app publish | `crates/openlore-review-app/src/routes/{publish,review}.rs` (extends `owner_can_publish`, which checks `link_verified` today), `executor.rs`, `review-domain/src/plans.rs` | EXTEND | Fresh bio read + `read_repo_authority` in the request; `PublishPlan` execution needs a permit; refusal page with hand-off. Org repos are not reachable here in v1 (scan = owned repos) | Plan-value; preview writes nothing |
-| `xtask check-arch` | `xtask/src/check_arch.rs` | EXTEND | `sign_only_with_permit` (`IdentityPort::sign` only in `sign_permitted` + allowlisted `philosophy_add.rs`; `publish_signed_claim` / `PublishPlan` execution take a permit), `authority_evidence_only_from_adapters` (observation/evidence constructors only in `adapter-duckdb`, `adapter-github`, `test-support`), `repo_authority_checks_insert_only`, `authority_readers_hold_no_write_handle`, `scoring_callers_use_score_attested` | — |
-| Imported candidates (slice 5) | `adapter-duckdb` `imported_candidates`, `crates/cli/src/verbs/candidates.rs` | NEW (optional) | Insert-only local record of imported candidates; offline list | Write: bounded change = inserts on import; never read by scoring/inference (structural rule `imported_candidates_not_in_scoring_or_inference`) |
-| `FakeGithub` + fixtures | `crates/test-support` | EXTEND | Repo owner/redirect/contents fixtures + lie catalogue (ADR-087) | Test-only |
+| `authority` module | `crates/claim-domain/src/authority.rs` | EXTEND (owner tier + `may_sign` shipped by ADR-089, U-OOS-3) | Model above; second `may_sign` entry from local checks; `RepoListed` basis on the shared `SigningPermit` (private fields, minted only here) | pure-function |
+| `sign_permitted` helper | NEW in `crates/cli/src/verbs/` (e.g. `sign_permitted.rs`), called from `claim_add.rs`, `claim_counter.rs`, `claim_retract.rs`, `sign_batch.rs` | NEW (replaces the four inline `IdentityPort::sign` calls; `philosophy_add.rs` keeps its own, allowlisted) | Sign only a `SigningPermit`; refusals render the hand-off | bounded-change: universe = local store; delta = {one signed artifact file + one `claims` row} per permit; a refusal has an empty delta |
+| Single publish path | `crates/cli/src/verbs/claim_publish.rs` `publish_signed_claim` | EXTEND | Takes `&SigningPermit`; `claim publish <cid>` gets one from `may_sign` over the stored claim when `published_at IS NULL` (an already-published claim re-publishes idempotently with an exempt permit) | bounded-change: universe = local store + the signer's PDS repo; delta = {one PDS `createRecord` for that CID + `record_publication` on that row}; check tables read only |
+| `authority verify` verb | `crates/cli/src/verbs/authority_verify.rs` | NEW | Re-check authority for local `github:` claims (own + peers), recording identity-link and repo checks; never signs | bounded-change: universe = local store; delta = inserts into `identity_link_checks`, `repo_authority_checks` only (none when GitHub cannot answer) |
+| Scrape / infer views | `scrape_github.rs`, `scrape_person.rs`, `infer_people.rs`, `render/*` | EXTEND | Record one repo observation per scraped repo (scrape only); per-subject "can sign / can be signed by" line (rendered by pure helpers); gate `--sign` | bounded-change: universe = local store + the signer's PDS repo; delta (scrape) = existing contribution-link upserts + one insert into `repo_authority_checks` per scraped repo (+ GDL link-check refresh for `scrape github <user>`, + the signer's own link check and the `sign_permitted` / publish deltas with `--sign`); delta (`infer people` without `--sign`) = empty |
+| Review-app share draft | `crates/review-domain/src/share.rs` | EXTEND | Quote only the owner's `Attested` claims; list others as "not counted: authority not proven" | pure-function |
+| `graph query` / viewer | `graph_query.rs`, `adapter-http-viewer`, `viewer-domain` | EXTEND | Authority labels; `score_attested`; `--include-unattested` | unbounded-preservation: universe = local store + PDS; nothing changes (check read port only) |
+| `search` render | `crates/cli/src/verbs/search.rs` | EXTEND | "authority not checked here" on `github:` assertion rows; local label when a local check exists | unbounded-preservation: universe = local store + index; nothing changes |
+| Scorer + feed | `crates/scoring/src/score.rs`; `ports::AttributedClaim` + `adapter-duckdb/src/graph_query.rs` | EXTEND | `score_attested(feed, view)`; the feed gains each claim's reference types (from `claim_references` / `peer_claim_references`) so `kind` is computable | **unbounded-preservation**: ∀F, V: `score_attested(F, V) == score({c ∈ F │ kind(c) = Assertion ∧ (subject ∉ github: ∨ attested(c, V))})`; no row altered. Properties over `kind`/`classify` (not only this definition) |
+| `GithubPort::read_repo_authority` | `crates/ports/src/lib.rs`, `crates/adapter-github` | EXTEND | Exactly 2 GETs (`/repos` + contents, always); NEW redirect policy: ≤ 1 redirect, same host only (today `build_client()` follows any) | unbounded-preservation: universe = local store + GitHub; GET only, nothing written |
+| `RepoAuthorityCheckReadPort` | `crates/ports` | NEW | `latest(subjects)` | unbounded-preservation: universe = local store; nothing changes |
+| `RepoAuthorityCheckWritePort` | `crates/ports` | NEW | `record(observation)` (insert only) | bounded-change: universe = local store; delta = one insert into `repo_authority_checks` |
+| v8 adapters | `crates/adapter-duckdb/src/{schema_v8,repo_authority_checks}.rs` | EXTEND | Forward-only idempotent migration; insert-only; latest via read query; live probe | bounded-change: universe = `openlore.duckdb`; delta = v8 tables created once + one insert per `record`; no `UPDATE`/`DELETE` |
+| Review-app publish | `crates/openlore-review-app/src/routes/{publish,review}.rs` (extends `owner_can_publish`, which checks `link_verified` today), `executor.rs`, `review-domain/src/plans.rs` | EXTEND — owner-tier publish check shipped by ADR-089 (U-OOS-1); remaining here: none beyond the share draft | Fresh bio read + `read_repo_authority` in the request; `PublishPlan` execution needs a permit; refusal page with hand-off. Org repos are not reachable here in v1 (scan = owned repos) | bounded-change: universe = the user's PDS repo + app state; delta = one `createRecord` per claim of a confirmed, permitted `PublishPlan`; plan building and preview have an empty delta |
+| `xtask check-arch` | `xtask/src/check_arch.rs` | EXTEND | `sign_only_with_permit` (`IdentityPort::sign` only in `sign_permitted` + allowlisted `philosophy_add.rs`; `publish_signed_claim` / `PublishPlan` execution take a permit), `authority_evidence_only_from_adapters` (observation/evidence constructors only in `adapter-duckdb`, `adapter-github`, `test-support`), `repo_authority_checks_insert_only`, `authority_readers_hold_no_write_handle`, `scoring_callers_use_score_attested` | unbounded-preservation: universe = the source tree; reads only |
+| Imported candidates (slice 5) | `adapter-duckdb` `imported_candidates`, `crates/cli/src/verbs/candidates.rs` | NEW (optional) | Insert-only local record of imported candidates; offline list | bounded-change: universe = local store; delta = inserts into `imported_candidates` on import (`candidates list`: empty delta); never read by scoring/inference (structural rule `imported_candidates_not_in_scoring_or_inference`) |
+| `FakeGithub` + fixtures | `crates/test-support` | EXTEND | Repo owner/redirect/contents fixtures + lie catalogue (ADR-087) | bounded-change (test-only): universe = the double's state; delta = the fixture state a test sets; touches no production store |
 
 ## Per-verb capabilities (composition root injects the narrowest handle)
 
@@ -148,6 +161,10 @@ L3 is not drawn: the new pure module has four public functions and two types (be
   checks show `Owner`, 2 days old → permit → sign, no network used. With a 9-day-old or missing
   check → refused: "re-check with `openlore authority verify --subject github:me/tool`" (the
   proposed I-9 exception, ADR-086 §5).
+- **GitHub cannot answer at sign time** (`scrape … --sign` online, rate-limited or unreachable;
+  OOS-D7 clarification 2026-10-20): the in-invocation refresh records nothing and the gate falls
+  back to the latest local check exactly as offline — permit iff `Attested` and ≤ 7 days old,
+  else refuse naming `openlore authority verify --subject <s>`.
 - **Spoofed dispute** (a foreign client writes a `github:acme/tool embodiesPhilosophy X` claim with
   a `counters` reference): `kind = Counter` → shown as a dispute, never weighted.
 - **Observation order** (owner verifies, a listed DID verifies, owner verifies again): every
@@ -181,19 +198,20 @@ federated; no signing column (signing still goes through the gate from a fresh d
 
 | Existing component | File | Overlap | Decision | Contract shape / universe / assertion |
 |---|---|---|---|---|
-| GDL `identity_link` (`check_link`, `project`, `link_view`, matcher) | `crates/claim-domain/src/identity_link.rs` (proposed) | Person and owner-tier proof | **REUSE** | Pure; property: person authority ⇒ a `verified` link to the subject's id |
-| GDL `identity_link_checks` + read port | ADR-085 §7 | Link check state | **REUSE** | Read-only here; writes only via `authority verify` |
-| `did_tokens` matcher | `review-domain/src/ownership.rs` → `claim-domain` (GDL) | Exact DID token in the authority file | **REUSE** | Pure; existing proptests |
-| `GithubPort` `/repos` read inside `harvest_repo` | `crates/adapter-github/src/lib.rs` | Repo owner data | **EXTEND** (`read_repo_authority`) — *challenged*: `harvest_repo` returns signals only; widening it would couple the signal SSOT to authority | Read-only |
-| `list_owned_repos` (`type=owner`) | `GithubPort` | Review app's scan scope | **REUSE unchanged** | — |
-| Shared sign batch / single publish path | `sign_batch.rs`, `claim_publish.rs` | Compose → sign → publish | **EXTEND** (take a permit) | Shell |
-| `PublishPlan` | `review-domain/src/plans.rs` | Self-attested publish | **EXTEND** (permit) | Plan-value |
-| Retraction / counter rules | `claim-domain/src/retraction.rs`, `validate_counter_claim.rs` | Exemptions | **REUSE unchanged** | Pure |
-| ADR-071 provenance verdict | `claim-domain/src/provenance.rs` | DID side | **REUSE** (input to `classify`) | Pure |
-| `scoring::score` | `crates/scoring/src/score.rs` | Aggregation | **EXTEND** (`score_attested` wrapper) | Unbounded preservation |
-| Insert-only check-store pattern | ADR-085 §7 | Observation storage | **REUSE pattern** | Bounded change |
-| Repo-authority ports | `crates/ports` | — | **CREATE NEW** — *challenged*: GDL ports are keyed by (DID, GitHub user id); a repo observation is keyed by repo subject and carries owner + file data | See above |
-| `authority verify` verb | `crates/cli/src/verbs/` | — | **CREATE NEW** — *challenged*: `identity verify` checks links only; folding repo checks into it would give an identity verb repo semantics | Shell |
+| GDL `identity_link` (`check_link`, `project`, `link_view`, matcher) | `crates/claim-domain/src/identity_link.rs` (proposed) | Person and owner-tier proof | **REUSE** | pure-function; property: person authority ⇒ a `verified` link to the subject's id |
+| GDL `identity_link_checks` + read port | ADR-085 §7 | Link check state | **REUSE** | unbounded-preservation (readers): universe = `identity_link_checks`; writes only via `authority verify` / `scrape --sign` (bounded-change rows above) |
+| `did_tokens` matcher | `review-domain/src/ownership.rs` → `claim-domain` (GDL) | Exact DID token in the authority file | **REUSE** | pure-function; existing proptests |
+| `GithubPort` `/repos` read inside `harvest_repo` | `crates/adapter-github/src/lib.rs` | Repo owner data | **EXTEND** (`read_repo_authority`) — *challenged*: `harvest_repo` returns signals only; widening it would couple the signal SSOT to authority | unbounded-preservation: universe = local store + GitHub; GET only |
+| `list_owned_repos` (`type=owner`) | `GithubPort` | Review app's scan scope | **REUSE unchanged** | unbounded-preservation: universe = local store + GitHub; GET only |
+| Shared sign batch / single publish path | `sign_batch.rs`, `claim_publish.rs` | Compose → sign → publish | **EXTEND** (take a permit) | bounded-change: universe = local store + the signer's PDS repo; delta = per permit one artifact + one `claims` row + one `createRecord` / `record_publication` |
+| `PublishPlan` | `review-domain/src/plans.rs` | Self-attested publish | **EXTEND** (permit) | pure-function (returns the plan; its execution is the bounded-change review-app publish row) |
+| Retraction / counter rules | `claim-domain/src/retraction.rs`, `validate_counter_claim.rs` | Exemptions | **REUSE unchanged** | pure-function |
+| ADR-071 provenance verdict | `claim-domain/src/provenance.rs` | DID side | **REUSE** (input to `classify`) | pure-function |
+| `claim_domain::authority` owner tier (`may_sign`, `SigningPermit`, `SigningRefusal`) | `crates/claim-domain/src/authority.rs` (ADR-089) | Permit type, owner-tier gate from same-request reads | **EXTEND** (U-OOS-3): add the CLI entry from local checks and a `RepoListed` basis; ADR-089 entry unchanged | pure-function |
+| `scoring::score` | `crates/scoring/src/score.rs` | Aggregation | **EXTEND** (`score_attested` wrapper) | unbounded-preservation (definition in the component table) |
+| Insert-only check-store pattern | ADR-085 §7 | Observation storage | **REUSE pattern** | bounded-change: universe = the check table; delta = one insert per observation |
+| Repo-authority ports | `crates/ports` | — | **CREATE NEW** — *challenged*: GDL ports are keyed by (DID, GitHub user id); a repo observation is keyed by repo subject and carries owner + file data | read port unbounded-preservation; write port bounded-change (one insert) — separate traits, see the component table |
+| `authority verify` verb | `crates/cli/src/verbs/` | — | **CREATE NEW** — *challenged*: `identity verify` checks links only; folding repo checks into it would give an identity verb repo semantics | bounded-change: universe = local store; delta = inserts into the two check tables |
 
 **Verdict**: 0 new crates; CREATE NEW = two port traits + one verb (+ optional slice-5 table/verb),
 all challenged; the rest REUSE/EXTEND.

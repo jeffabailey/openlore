@@ -136,6 +136,12 @@ repo-meta folder, CODEOWNERS can guard it) vs root `OPENLORE` (more visible, clu
 | B. Live check at every sign | Freshest; breaks I-9 for `github:` claims; `infer people` turns online. |
 | C. No gate; reader-side only | Not what the user asked. |
 
+**Clarification (2026-10-20, decided by the orchestrator within option A; DISTILL review):
+GitHub unavailable at sign time.** Online verbs try to refresh authority in the same invocation.
+If GitHub cannot answer (rate limit, unreachable), the refresh records nothing and the gate falls
+back to the latest local check exactly as offline: permit iff `Attested` and ≤ 7 days old, else
+refuse naming `openlore authority verify --subject <s>`. Recorded in ADR-086 §5.
+
 ### OOS-D8 — Where the gate runs — recommended (follows from D2/D7)
 Sign sites (every inline `IdentityPort::sign` today): `claim_add.rs`, `claim_counter.rs` (exempt
 permit), `claim_retract.rs` (exempt permit), `sign_batch.rs` (`scrape github --sign`, `scrape person
@@ -178,7 +184,13 @@ Hand-off (all options): the refusal and the candidate list print "can be signed 
 and the command the owner runs (`openlore scrape github <owner/repo> --sign N`). Candidates are
 deterministic from public data, so the owner re-derives them; no data transfer is needed.
 
-### OOS-D13 — Review app — ACCEPTED (user, 2026-10-14)
+### OOS-D13 — Review app — SUPERSEDED by review-app-repos-and-accounts (2026-10-20, U-OOS-1)
+That feature shipped option B (import any public repo into unsigned private suggestions, "Not
+yours to publish") with the publish-time owner check (ADR-088/089) and GDL slice 3 shipped the
+link prompt. Slice 4 here is reduced to the share-draft rule (UC-21), whose meaning of "Attested"
+is open (U-OOS-4, below). The original record follows.
+
+Originally ACCEPTED (user, 2026-10-14):
 | Option | Trade-off |
 |---|---|
 | **A. Publish-time authority check in the request (fresh bio read + `read_repo_authority`); keep scanning owned repos only; prompt to publish the identity link so readers see claims as `owner`** (recommended) | Closes the transfer-after-scan gap at +1 request per publish request + 2 per repo (3 for one repo); no new OAuth scope. |
@@ -205,6 +217,33 @@ Acceptance Designer"), incl. spoofed-kind and observation-order cases. Propertie
 derivations (`kind`, `requirement`, `classify` against the ADR-087 rule table), not only the
 `score_attested` definition (review H-9).
 
+## Corrections from the DISTILL review (2026-10-20)
+
+Source: `docs/feature/owner-only-signing/distill/wave-decisions.md` § Upstream Issues.
+
+- **Contract shapes** restated as exactly one of pure-function / bounded-change /
+  unbounded-preservation in `architecture-design.md` (component and reuse tables).
+- **U-OOS-2 — WS-10 is affected.** WS-1..WS-10 (`tests/acceptance/walking_skeleton.rs`) sign
+  `github:rust-lang/rust`, a `github:` repo assertion, so under the gate they fail at signing.
+  ADR-086 §5 and the brief's I-9 row are corrected: the slice-01 walking skeleton needs a fixture
+  with authority (e.g. a listed DID, or the signer's own repo with a fresh check) or a non-`github:`
+  subject; DELIVER decides which, keeping an I-9 test on a non-`github:` subject. The
+  offline-with-fresh-check case is PS-4 / RA-10.
+- **U-OOS-3 — `may_sign` already exists.** The shipped `claim_domain::authority::may_sign`
+  (ADR-089, review-app owner tier) takes same-request reads, not local checks. The CLI needs a
+  second entry point in the same module and a `RepoListed` basis on the same `SigningPermit`;
+  permits are still minted only inside `claim_domain::authority`.
+- **U-OOS-1** — OOS-D13 superseded (above); slice 4 = share-draft rule only.
+- **OOS-D7 clarification** — GitHub unavailable at sign time (above).
+
+### Proposed rulings — PROPOSED, need user confirmation (not accepted)
+
+| ID | Question | Proposed ruling | Alternative |
+|---|---|---|---|
+| P-OOS-1 (U-OOS-7) | `graph query --include-unattested` without `--weighted` | `--include-unattested` requires `--weighted`; used without it, `graph query` exits 2 with a usage message ("--include-unattested requires --weighted") and prints no results. The unweighted listing already shows every claim with its label, so the flag has nothing to add there. | Accept and ignore the flag (silent no-op hides a user mistake) |
+| P-OOS-2 (U-OOS-4) | What "Attested" means in the review app's share draft (the app keeps no CLI check store) | The owner tier holds now: the share request re-reads the user's bio and each quoted repo's owner, as publish does (ADR-089 §4), and quotes a claim only if that read permits it; a repo whose read fails or no longer holds is listed as "not counted: authority not proven". Cost: up to 2 GitHub reads per quoted repo per share preview, inside the per-DID budget. | Trust scan-time ownership (no extra reads, but quotes repos transferred since the scan) |
+| P-OOS-3 (U-OOS-6) | What `candidates list` shows after re-importing the same repo | Each candidate (subject, predicate, object) once, with the most recent import's confidence, evidence and time; `imported_candidates` stays insert-only and the de-duplication is in the read query. | List every import row (a history; repeats on each re-import) |
+
 ## Architecture Summary
 
 - **Pure core** `claim-domain::authority` (NEW module): `requirement(claim) → Exempt | Required(
@@ -220,7 +259,8 @@ derivations (`kind`, `requirement`, `classify` against the ADR-087 rule table), 
 - **CLI**: NEW `openlore authority verify`; gate in every composer + `claim publish`; labels in
   `graph query`, `infer people`, `scrape` views, viewer; `--include-unattested`; (slice 5)
   `openlore candidates list`.
-- **Review app**: publish-time authority check; identity-link prompt.
+- **Review app**: share draft quotes attested claims only (publish-time check and identity-link
+  prompt shipped by review-app-repos-and-accounts / GDL slice 3; OOS-D13 superseded).
 - **Indexer**: unchanged. **Lexicon**: unchanged. **New crates**: 0.
 
 ## Technology Stack
@@ -260,7 +300,8 @@ listing), which arrives in slice 2.
 2. Repo authority: `read_repo_authority`, v8 `repo_authority_checks`, `authority verify`, gate in
    `scrape github/person --sign`, `claim add`, `claim publish`.
 3. Readers: labels (CLI, viewer, search), `score_attested` + `--include-unattested`.
-4. Review app: publish-time check, identity-link prompt.
+4. Review app: share draft quotes attested claims only (UC-21; pending U-OOS-4). The
+   publish-time check and identity-link prompt shipped elsewhere (OOS-D13 superseded).
 5. (If A-11 holds) `imported_candidates` + `candidates list`.
 
 ## KPIs (registered in `docs/product/kpi-contracts.yaml` 2026-10-14)
