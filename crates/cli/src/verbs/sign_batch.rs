@@ -12,16 +12,17 @@
 use std::io::Write;
 
 use anyhow::{anyhow, Result};
-use claim_domain::authority::{may_sign_from_checks, requirement, ClaimShape, Requirement};
-use claim_domain::{
-    canonicalize, compute_cid, reference_rules_validate, ClaimLookup, ClaimReference,
-    ReferenceType, SignedClaim,
+use claim_domain::authority::{
+    exempt_permit, may_sign_from_checks, permit_ungated_repo_t1, requirement, ClaimShape,
+    Requirement, SigningPermit,
 };
+use claim_domain::{reference_rules_validate, ClaimLookup, ClaimReference, ReferenceType};
 
 use crate::io::prompt_line;
 use crate::render::render_signing_refused;
 use crate::verbs::claim_add::{build_unsigned_claim, render_compose_preview, ComposedClaim};
 use crate::verbs::claim_publish::{publish_signed_claim, render_publish_success};
+use crate::verbs::sign_permitted::sign_permitted;
 use crate::verbs::StorageClaimLookup;
 use crate::wiring::Wiring;
 
@@ -258,9 +259,10 @@ fn sign_candidate_via_slice01(
     // the owner of the account it is about. The claim gated is the one the
     // human composed (an edited subject or predicate included), before any
     // preview, signature, write or publish.
-    if refuse_without_authority(wiring, &subject, &predicate, &candidate.references)? {
+    let Some(permit) = permit_or_refusal(wiring, &subject, &predicate, &candidate.references)?
+    else {
         return Ok(SignOutcome::Refused);
-    }
+    };
 
     // Assemble the composed claim — SAME shape `claim add` builds. composed_at
     // from the clock port for testable determinism.
@@ -306,20 +308,14 @@ fn sign_candidate_via_slice01(
     };
     reference_rules_validate(&unsigned, Some(&lookup as &dyn ClaimLookup))
         .map_err(|e| anyhow!("reference rules rejected the candidate claim: {e}"))?;
-    let canonical_bytes =
-        canonicalize(&unsigned).map_err(|e| anyhow!("canonicalizing candidate claim: {e}"))?;
-    let unsigned_cid = compute_cid(&canonical_bytes);
-    writeln!(stdout, "Computing claim CID {}", unsigned_cid.0)?;
+    let signed = sign_permitted(wiring.identity.as_ref(), &permit, unsigned)
+        .map_err(|e| anyhow!("signing candidate claim: {e:#}"))?;
+    writeln!(
+        stdout,
+        "Computing claim CID {}",
+        signed.signature.signed_cid.0
+    )?;
     stdout.flush()?;
-
-    let signature = wiring
-        .identity
-        .sign(&unsigned_cid)
-        .map_err(|e| anyhow!("signing candidate claim: {e}"))?;
-    let signed = SignedClaim {
-        unsigned,
-        signature,
-    };
 
     // The signed-from-scraper claim is the user's OWN artifact — own `claims`
     // table + own `claims/<cid>.json`.
@@ -392,34 +388,49 @@ fn sign_candidate_via_slice01(
     Ok(SignOutcome::Signed)
 }
 
-/// Refuse (printing why and who can sign) when the claim needs person
-/// authority the signer lacks, judged from this reader's local checks — the
-/// SAME gate `claim add` runs. Repo and exempt subjects keep today's path
-/// until the repo tier lands (accepted transitional risk T1).
-fn refuse_without_authority(
+/// The permit to sign the composed claim under, or `None` after printing
+/// why it is refused — the SAME gate `claim add` runs: a person candidate
+/// needs its owner's authority, judged from this reader's local checks; a
+/// `github:` subject naming no account or repo is never signed (fail
+/// closed). Repo subjects keep today's ungated path until the repo tier
+/// lands (accepted transitional risk T1).
+fn permit_or_refusal(
     wiring: &Wiring,
     subject: &str,
     predicate: &str,
     references: &[ClaimReference],
-) -> Result<bool> {
+) -> Result<Option<SigningPermit>> {
+    let signer = &wiring.identity.author_did().0;
     let reference_types: Vec<ReferenceType> = references.iter().map(|r| r.ref_type).collect();
     let claim = ClaimShape {
         subject,
         predicate,
         reference_types: &reference_types,
     };
-    let Requirement::Person(person) = requirement(claim) else {
-        return Ok(false);
-    };
-    let now = wiring.clock.now_utc();
-    let links = wiring.signer_linked_accounts(now)?;
-    match may_sign_from_checks(&wiring.identity.author_did().0, &person, &links, now) {
-        Ok(_) => Ok(false),
-        Err(refusal) => {
-            eprint!("{}", render_signing_refused(&refusal));
-            Ok(true)
+    let permit = match requirement(claim) {
+        Requirement::Person(person) => {
+            let now = wiring.clock.now_utc();
+            let links = wiring.signer_linked_accounts(now)?;
+            match may_sign_from_checks(signer, &person, &links, now) {
+                Ok(permit) => Some(permit),
+                Err(refusal) => {
+                    eprint!("{}", render_signing_refused(&refusal));
+                    return Ok(None);
+                }
+            }
         }
-    }
+        Requirement::Malformed => {
+            eprintln!(
+                "Not signed: {subject} names no GitHub account (github:<login>) or repo (github:<owner>/<repo>)."
+            );
+            return Ok(None);
+        }
+        Requirement::Exempt => exempt_permit(signer, claim),
+        Requirement::Repo { .. } => permit_ungated_repo_t1(signer, claim),
+    };
+    permit
+        .map(Some)
+        .ok_or_else(|| anyhow!("no signing permit for {subject}"))
 }
 
 /// Whether the sign-prompt answer is the SKIP gesture: the literal `skip` /

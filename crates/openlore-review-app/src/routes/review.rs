@@ -505,7 +505,10 @@ impl<'a> PublishChecks<'a> {
     /// verified again under the login GitHub serves now (ADR-089 §2: the
     /// fresh read is the verification).
     pub(crate) async fn proven(&self, permit: &SigningPermit) {
-        let PermitBasis::Owner(github_user_id) = permit.basis();
+        // The review app mints only owner permits (`may_sign`).
+        let PermitBasis::Owner(github_user_id) = permit.basis() else {
+            return;
+        };
         let stored_unverified = self
             .accounts
             .iter()

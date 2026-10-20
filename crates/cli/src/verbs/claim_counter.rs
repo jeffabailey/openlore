@@ -33,15 +33,17 @@
 use std::io::Write;
 
 use anyhow::{anyhow, Context, Result};
+use claim_domain::authority::exempt_permit;
 use claim_domain::{
-    canonicalize, compute_cid, normalize_reason, validate_counter_claim, Cid, ClaimLookup,
-    ClaimReference, Did, ReferenceType, SignedClaim, UnsignedClaim,
+    normalize_reason, validate_counter_claim, Cid, ClaimLookup, ClaimReference, Did, ReferenceType,
+    SignedClaim, UnsignedClaim,
 };
 use ports::{PeerStoragePort, StoragePort};
 
 use crate::io::prompt_line;
 use crate::orientation::{self, OrientationMilestone};
 use crate::render::{render_counter_compose_preview, ComposedCounterClaim};
+use crate::verbs::sign_permitted::{reference_types, shape_of, sign_permitted};
 use crate::wiring::Wiring;
 
 /// Argument struct for the `claim counter` verb (mirrors the clap
@@ -174,21 +176,23 @@ pub fn run(wiring: &Wiring, args: &ClaimCounterArgs) -> Result<ClaimCounterOutco
 
     // Step 7: canonicalize → compute_cid → sign → persist. SAME pure-core
     // path `claim_add` uses; canonicalize folds the `reason` into the
-    // bytes so the CID + signature cover it (ADR-006 lex order).
-    let canonical_bytes =
-        canonicalize(&unsigned).map_err(|e| anyhow!("canonicalizing counter-claim: {e}"))?;
-    let unsigned_cid = compute_cid(&canonical_bytes);
-    writeln!(stdout, "Computing claim CID {}", unsigned_cid.0)?;
+    // bytes so the CID + signature cover it (ADR-006 lex order). A dispute
+    // carries no weight, so it needs no authority over its subject
+    // (ADR-086 §2): it is signed under an exempt permit.
+    let reference_types = reference_types(&unsigned);
+    let permit = exempt_permit(
+        &wiring.identity.author_did().0,
+        shape_of(&unsigned, &reference_types),
+    )
+    .ok_or_else(|| anyhow!("a counter-claim needs no signing authority"))?;
+    let signed = sign_permitted(wiring.identity.as_ref(), &permit, unsigned)
+        .map_err(|e| anyhow!("signing counter-claim: {e:#}"))?;
+    writeln!(
+        stdout,
+        "Computing claim CID {}",
+        signed.signature.signed_cid.0
+    )?;
     stdout.flush()?;
-
-    let signature = wiring
-        .identity
-        .sign(&unsigned_cid)
-        .map_err(|e| anyhow!("signing counter-claim: {e}"))?;
-    let signed = SignedClaim {
-        unsigned,
-        signature,
-    };
 
     // The counter-claim is the user's OWN artifact — it lands in the user's
     // OWN `claims` table + `claims/<cid>.json` (NOT peer_claims).

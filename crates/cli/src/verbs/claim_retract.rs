@@ -39,11 +39,12 @@
 //! "retracted by author" by walking `query_referencing`.
 
 use anyhow::{anyhow, Context, Result};
+use claim_domain::authority::exempt_permit;
 use claim_domain::{
-    canonicalize, compute_cid, reference_rules_validate, Cid, ClaimLookup, ClaimReference,
-    ReferenceType, SignedClaim, UnsignedClaim,
+    reference_rules_validate, Cid, ClaimLookup, ClaimReference, ReferenceType, UnsignedClaim,
 };
 
+use crate::verbs::sign_permitted::{reference_types, shape_of, sign_permitted};
 use crate::verbs::StorageClaimLookup;
 use crate::wiring::Wiring;
 
@@ -129,23 +130,20 @@ pub fn run(wiring: &Wiring, args: &ClaimRetractArgs) -> Result<ClaimRetractOutco
     // Step 4: canonicalize → CID → sign → persist. Same shape as
     // `claim_add::run` so a future refactor that promotes this to a
     // shared helper is straightforward.
-    let canonical_bytes =
-        canonicalize(&unsigned).map_err(|e| anyhow!("canonicalizing retraction: {e}"))?;
-    let unsigned_cid = compute_cid(&canonical_bytes);
+    // A withdrawal carries no weight, so it needs no authority over its
+    // subject (ADR-086 §2): it is signed under an exempt permit.
+    let reference_types = reference_types(&unsigned);
+    let permit = exempt_permit(
+        &wiring.identity.author_did().0,
+        shape_of(&unsigned, &reference_types),
+    )
+    .ok_or_else(|| anyhow!("a retraction needs no signing authority"))?;
+    let signed = sign_permitted(wiring.identity.as_ref(), &permit, unsigned)
+        .map_err(|e| anyhow!("signing retraction: {e:#}"))?;
 
     // Emit the `Computing claim CID <cid>` marker — WS-14 reuses the
     // WS-6/WS-7 parser to extract the new CID from stdout.
-    println!("Computing claim CID {}", unsigned_cid.0);
-
-    let signature = wiring
-        .identity
-        .sign(&unsigned_cid)
-        .map_err(|e| anyhow!("signing retraction: {e}"))?;
-
-    let signed = SignedClaim {
-        unsigned,
-        signature,
-    };
+    println!("Computing claim CID {}", signed.signature.signed_cid.0);
 
     wiring
         .storage

@@ -33,17 +33,18 @@
 use std::io::Write;
 
 use anyhow::{anyhow, Context, Result};
-use claim_domain::{
-    canonicalize, compute_cid, ClaimReference, ConfidenceBucket, Did, ReferenceType, SignedClaim,
-    UnsignedClaim,
-};
+use claim_domain::{ClaimReference, ConfidenceBucket, Did, ReferenceType, UnsignedClaim};
 
-use claim_domain::authority::{may_sign_from_checks, requirement, ClaimShape, Requirement};
+use claim_domain::authority::{
+    exempt_permit, may_sign_from_checks, permit_ungated_repo_t1, requirement, ClaimShape,
+    Requirement,
+};
 use claim_domain::identity_link::is_reserved_predicate;
 use lexicon::ObjectAdvisory;
 
 use crate::io::prompt_line;
 use crate::render::{render_reserved_predicate_refused, render_signing_refused};
+use crate::verbs::sign_permitted::sign_permitted;
 use crate::wiring::Wiring;
 
 /// Argument struct for the `claim add` verb (mirrors the clap subcommand).
@@ -110,29 +111,32 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
     }
 
     // Owner-only signing (ADR-086/087): every claim asks what authority it
-    // needs. An assertion about a person's GitHub account is signed only by
-    // its owner, judged from this reader's local checks; a `github:` subject
-    // that names no account or repo is never signed (fail closed). A refusal
-    // happens before any prompt or side effect: nothing is signed, written or
-    // published. Exempt and repo subjects keep today's path until the repo
-    // tier lands (accepted transitional risk T1).
+    // needs, and is signed only under the permit that answer mints. An
+    // assertion about a person's GitHub account is signed only by its owner,
+    // judged from this reader's local checks; a `github:` subject that names
+    // no account or repo is never signed (fail closed). A refusal happens
+    // before any prompt or side effect: nothing is signed, written or
+    // published. Repo subjects keep today's ungated path until the repo tier
+    // lands (accepted transitional risk T1).
+    let signer = wiring.identity.author_did().0.clone();
     let claim = ClaimShape {
         subject: &args.subject,
         predicate: &args.predicate,
         reference_types: &[],
     };
-    match requirement(claim) {
+    let permit = match requirement(claim) {
         Requirement::Person(person) => {
             let now = wiring.clock.now_utc();
             let links = wiring.signer_linked_accounts(now)?;
-            if let Err(refusal) =
-                may_sign_from_checks(&wiring.identity.author_did().0, &person, &links, now)
-            {
-                eprint!("{}", render_signing_refused(&refusal));
-                return Ok(ClaimAddOutcome {
-                    exit_code: 1,
-                    stdout: String::new(),
-                });
+            match may_sign_from_checks(&signer, &person, &links, now) {
+                Ok(permit) => Some(permit),
+                Err(refusal) => {
+                    eprint!("{}", render_signing_refused(&refusal));
+                    return Ok(ClaimAddOutcome {
+                        exit_code: 1,
+                        stdout: String::new(),
+                    });
+                }
             }
         }
         Requirement::Malformed => {
@@ -145,8 +149,10 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
                 stdout: String::new(),
             });
         }
-        Requirement::Exempt | Requirement::Repo { .. } => {}
+        Requirement::Exempt => exempt_permit(&signer, claim),
+        Requirement::Repo { .. } => permit_ungated_repo_t1(&signer, claim),
     }
+    .ok_or_else(|| anyhow!("no signing permit for {}", args.subject))?;
 
     // Step 2: assemble the composed claim. composed_at comes from the
     // clock port for testability — the test harness can pin it later
@@ -157,7 +163,7 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
         object: args.object.clone(),
         evidence: args.evidence.clone(),
         confidence: args.confidence,
-        author_did: wiring.identity.author_did().0.clone(),
+        author_did: signer,
         composed_at: wiring.clock.now_utc().to_rfc3339(),
         references: Vec::new(),
     };
@@ -205,21 +211,14 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
     // can leak into the persisted artifact. WS-5 verifies this
     // end-to-end at the subprocess + filesystem boundary.
     let unsigned = build_unsigned_claim(&composed)?;
-    let canonical_bytes =
-        canonicalize(&unsigned).map_err(|e| anyhow!("canonicalizing claim: {e}"))?;
-    let unsigned_cid = compute_cid(&canonical_bytes);
+    let signed = sign_permitted(wiring.identity.as_ref(), &permit, unsigned)
+        .map_err(|e| anyhow!("signing claim: {e:#}"))?;
 
-    writeln!(std::io::stdout(), "Computing claim CID {}", unsigned_cid.0)?;
-
-    let signature = wiring
-        .identity
-        .sign(&unsigned_cid)
-        .map_err(|e| anyhow!("signing claim: {e}"))?;
-
-    let signed = SignedClaim {
-        unsigned,
-        signature,
-    };
+    writeln!(
+        std::io::stdout(),
+        "Computing claim CID {}",
+        signed.signature.signed_cid.0
+    )?;
 
     wiring
         .storage

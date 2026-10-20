@@ -5,13 +5,19 @@
 //! any production SQL that updates or deletes a repo observation is a finding;
 //! inserts and reads are not; the real tree passes. Step 02-02: the repo
 //! observation (`FoundRepo`, `RepoObservation::Found`) is held by the same
-//! evidence rule.
+//! evidence rule. Step 02-05: `sign_only_with_permit` — an `IdentityPort`
+//! sign outside `sign_permitted` is a finding (philosophy records allowlisted);
+//! `t1_entry_only_from_sign_batch` — the transitional T1 entry called from any
+//! verb but `claim_add` and `sign_batch` is a finding; the real tree passes
+//! both.
 
 use std::path::{Path, PathBuf};
 
 use xtask::check_arch::{
     classify_authority_evidence, classify_repo_authority_checks_literal,
+    classify_sign_only_with_permit, classify_t1_entry_callers,
     scan_authority_evidence_only_from_adapters, scan_repo_authority_checks_insert_only,
+    scan_sign_only_with_permit, scan_t1_entry_only_from_sign_batch,
 };
 
 const FABRICATED_PERSON_EVIDENCE: &str = "
@@ -173,4 +179,103 @@ fn a_production_update_or_delete_of_repo_observations_is_reported_anywhere_and_t
         Vec::<String>::new(),
         "the real tree only inserts and reads repo_authority_checks"
     );
+}
+
+const SIGNS_DIRECTLY: &str = "
+fn sign_and_keep(wiring: &Wiring, cid: &Cid) -> Result<SignatureBlock> {
+    let block = wiring.identity.sign(cid)?;
+    let again = IdentityPort::sign(wiring.identity.as_ref(), cid)?;
+    Ok(block)
+}
+#[cfg(test)]
+mod tests {
+    fn signs_in_a_test(identity: &FakeIdentity, cid: &Cid) { identity.sign(cid).unwrap(); }
+}";
+
+const SIGNS_THROUGH_THE_PERMIT: &str = "
+pub(crate) fn sign_permitted(identity: &dyn IdentityPort, permit: &SigningPermit) {
+    identity.sign(&cid);
+}
+fn helper(identity: &dyn IdentityPort) { identity.sign(&cid); }";
+
+#[test]
+fn a_sign_outside_sign_permitted_is_a_finding_but_philosophy_records_may_sign() {
+    let findings =
+        classify_sign_only_with_permit("crates/cli/src/verbs/claim_counter.rs", SIGNS_DIRECTLY);
+    assert_eq!(findings.len(), 2, "both production signs: {findings:?}");
+    assert!(
+        findings.iter().all(|f| f.contains("sign_only_with_permit")
+            && f.contains("crates/cli/src/verbs/claim_counter.rs")),
+        "{findings:?}"
+    );
+
+    assert!(classify_sign_only_with_permit(
+        "crates/cli/src/verbs/philosophy_add.rs",
+        SIGNS_DIRECTLY
+    )
+    .is_empty());
+
+    let in_gate = classify_sign_only_with_permit(
+        "crates/cli/src/verbs/sign_permitted.rs",
+        SIGNS_THROUGH_THE_PERMIT,
+    );
+    assert_eq!(
+        in_gate.len(),
+        1,
+        "only the helper outside the gate: {in_gate:?}"
+    );
+    assert!(
+        classify_sign_only_with_permit(
+            "crates/cli/src/verbs/claim_add.rs",
+            SIGNS_THROUGH_THE_PERMIT
+        )
+        .len()
+            == 2,
+        "a `sign_permitted` outside its module is no gate"
+    );
+}
+
+#[test]
+fn the_real_tree_signs_only_through_sign_permitted() {
+    let findings = scan_sign_only_with_permit(&root()).expect("scan");
+    assert!(findings.is_empty(), "{findings:#?}");
+}
+
+const CALLS_THE_T1_ENTRY: &str = "
+fn sign_repo_claim(signer: &str, claim: ClaimShape<'_>) -> Option<SigningPermit> {
+    claim_domain::authority::permit_ungated_repo_t1(signer, claim)
+}
+fn later() { let entry = permit_ungated_repo_t1; }";
+
+#[test]
+fn the_t1_entry_called_from_claim_counter_is_a_finding_but_claim_add_and_sign_batch_may_call_it() {
+    let findings =
+        classify_t1_entry_callers("crates/cli/src/verbs/claim_counter.rs", CALLS_THE_T1_ENTRY);
+    assert_eq!(
+        findings.len(),
+        2,
+        "the call and the reference: {findings:?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .all(|f| f.contains("t1_entry_only_from_sign_batch") && f.contains("claim_counter.rs")),
+        "{findings:?}"
+    );
+
+    for allowed in [
+        "crates/cli/src/verbs/claim_add.rs",
+        "crates/cli/src/verbs/sign_batch.rs",
+    ] {
+        assert!(
+            classify_t1_entry_callers(allowed, CALLS_THE_T1_ENTRY).is_empty(),
+            "{allowed}"
+        );
+    }
+}
+
+#[test]
+fn the_real_tree_calls_the_t1_entry_only_from_claim_add_and_sign_batch() {
+    let findings = scan_t1_entry_only_from_sign_batch(&root()).expect("scan");
+    assert!(findings.is_empty(), "{findings:#?}");
 }

@@ -2763,6 +2763,219 @@ pub fn scan_signing_permit_not_serializable(workspace_root: &Path) -> anyhow::Re
 }
 
 // -----------------------------------------------------------------------------
+// Sign sites (owner-only-signing step 02-05, ADR-086 §4, rulings F1/F2)
+// -----------------------------------------------------------------------------
+//
+// * `sign_only_with_permit`: an `IdentityPort` sign is called only inside
+//   `sign_permitted`, which signs a draft only under a `SigningPermit` for its
+//   subject; philosophy records (not claims) are allowlisted. The crates that
+//   implement the signing primitive itself are out of scope.
+// * `t1_entry_only_from_sign_batch`: the transitional ungated repo entry
+//   (accepted risk T1) is reached only from `claim_add` and `sign_batch`.
+
+/// The one module whose `sign_permitted` may sign.
+const SIGN_PERMITTED_SOURCE: &str = "crates/cli/src/verbs/sign_permitted.rs";
+
+/// The gate that signs under a permit.
+const SIGN_PERMITTED: &str = "sign_permitted";
+
+/// Sources that sign without a permit: philosophy records are not claims.
+const SIGN_ALLOWLIST: &[&str] = &["crates/cli/src/verbs/philosophy_add.rs"];
+
+/// Crates that implement signing itself (the primitive, the identity adapter,
+/// OAuth proof keys, the identity test double), not sign sites.
+const SIGN_IMPLEMENTING_CRATES: &[&str] = &[
+    "crates/claim-domain/",
+    "crates/adapter-atproto-did/",
+    "crates/adapter-atproto-oauth/",
+    "crates/test-support/",
+];
+
+/// Production sign calls (`x.sign(cid)`, `IdentityPort::sign(x, cid)`)
+/// outside the gate. `gate_honoured`: the source is the gate's module, so a
+/// `fn sign_permitted` there may sign.
+struct SignCallCollector {
+    gate_honoured: bool,
+    inside_gate: bool,
+    ungated_calls: Vec<String>,
+}
+
+impl SignCallCollector {
+    fn record(&mut self, call: &str) {
+        if !self.inside_gate {
+            self.ungated_calls.push(call.to_string());
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for SignCallCollector {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if !is_test_only(&item.attrs) {
+            syn::visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if is_test_only(&item.attrs) {
+            return;
+        }
+        let outer = self.inside_gate;
+        self.inside_gate = self.gate_honoured && item.sig.ident == SIGN_PERMITTED;
+        syn::visit::visit_item_fn(self, item);
+        self.inside_gate = outer;
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "sign" && call.args.len() == 1 {
+            self.record("`.sign(..)`");
+        }
+        syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(callee) = call.func.as_ref() {
+            let segments: Vec<String> = callee
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect();
+            if segments.ends_with(&["IdentityPort".to_string(), "sign".to_string()]) {
+                self.record("`IdentityPort::sign(..)`");
+            }
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+}
+
+/// Pure rule for one source at `rel_path`: every production sign outside
+/// `sign_permitted` in its module, as findings.
+pub fn classify_sign_only_with_permit(rel_path: &str, source: &str) -> Vec<String> {
+    if SIGN_ALLOWLIST.contains(&rel_path)
+        || SIGN_IMPLEMENTING_CRATES
+            .iter()
+            .any(|allowed| rel_path.starts_with(allowed))
+    {
+        return Vec::new();
+    }
+    let Ok(file) = syn::parse_file(source) else {
+        return vec![format!("sign_only_with_permit: {rel_path}: unparsable")];
+    };
+    let mut collector = SignCallCollector {
+        gate_honoured: rel_path == SIGN_PERMITTED_SOURCE,
+        inside_gate: false,
+        ungated_calls: Vec::new(),
+    };
+    collector.visit_file(&file);
+    collector
+        .ungated_calls
+        .into_iter()
+        .map(|call| {
+            format!(
+                "sign_only_with_permit: {rel_path}: {call} outside `{SIGN_PERMITTED}` — every \
+                 OpenLore sign goes through `{SIGN_PERMITTED}` in {SIGN_PERMITTED_SOURCE}, \
+                 under a permit minted in claim_domain::authority (ADR-086 §4)"
+            )
+        })
+        .collect()
+}
+
+/// Effect shell for `sign_only_with_permit`; the gate's module must exist,
+/// so the rule cannot pass vacuously.
+pub fn scan_sign_only_with_permit(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for path in crate_sources(workspace_root) {
+        findings.extend(classify_sign_only_with_permit(
+            &workspace_relative(workspace_root, &path),
+            &std::fs::read_to_string(&path)?,
+        ));
+    }
+    if !workspace_root.join(SIGN_PERMITTED_SOURCE).is_file() {
+        findings.push(format!(
+            "sign_only_with_permit: {SIGN_PERMITTED_SOURCE} missing — the rule would pass vacuously"
+        ));
+    }
+    Ok(findings)
+}
+
+/// The transitional ungated repo entry (accepted risk T1, ruling F1).
+const T1_ENTRY: &str = "permit_ungated_repo_t1";
+
+/// Where the T1 entry is defined (and unit-tested).
+const T1_ENTRY_SOURCE: &str = "crates/claim-domain/src/authority.rs";
+
+/// The verbs that may reach the T1 entry in this step (narrowed to
+/// `sign_batch` in 02-07, deleted in 02-09).
+const T1_ENTRY_CALLERS: &[&str] = &[
+    "crates/cli/src/verbs/claim_add.rs",
+    "crates/cli/src/verbs/sign_batch.rs",
+];
+
+/// Production expressions naming the T1 entry (a call or a fn reference).
+#[derive(Default)]
+struct T1EntryCollector {
+    references: usize,
+}
+
+impl<'ast> Visit<'ast> for T1EntryCollector {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if !is_test_only(&item.attrs) {
+            syn::visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if !is_test_only(&item.attrs) {
+            syn::visit::visit_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        if last_segment(&path.path).as_deref() == Some(T1_ENTRY) {
+            self.references += 1;
+        }
+        syn::visit::visit_expr_path(self, path);
+    }
+}
+
+/// Pure rule for one source at `rel_path`: every production use of the T1
+/// entry outside its allowed callers, as findings.
+pub fn classify_t1_entry_callers(rel_path: &str, source: &str) -> Vec<String> {
+    if rel_path == T1_ENTRY_SOURCE || T1_ENTRY_CALLERS.contains(&rel_path) {
+        return Vec::new();
+    }
+    let Ok(file) = syn::parse_file(source) else {
+        return vec![format!(
+            "t1_entry_only_from_sign_batch: {rel_path}: unparsable"
+        )];
+    };
+    let mut collector = T1EntryCollector::default();
+    collector.visit_file(&file);
+    (0..collector.references)
+        .map(|_| {
+            format!(
+                "t1_entry_only_from_sign_batch: {rel_path}: reaches `{T1_ENTRY}` — only {} \
+                 may sign a repo subject ungated (accepted risk T1, ruling F1); a counter, a \
+                 retraction or a link takes `exempt_permit`",
+                T1_ENTRY_CALLERS.join(" and ")
+            )
+        })
+        .collect()
+}
+
+/// Effect shell for `t1_entry_only_from_sign_batch`.
+pub fn scan_t1_entry_only_from_sign_batch(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for path in crate_sources(workspace_root) {
+        findings.extend(classify_t1_entry_callers(
+            &workspace_relative(workspace_root, &path),
+            &std::fs::read_to_string(&path)?,
+        ));
+    }
+    Ok(findings)
+}
+
+// -----------------------------------------------------------------------------
 // Review-app rules (bluesky-claim-review-app, component-boundaries §5)
 // -----------------------------------------------------------------------------
 //
@@ -3722,6 +3935,8 @@ pub fn run() -> anyhow::Result<i32> {
     let publish_permit_findings = scan_review_publish_plan_needs_permit(&workspace_root)?;
     let authority_evidence_findings = scan_authority_evidence_only_from_adapters(&workspace_root)?;
     let signing_permit_serde_findings = scan_signing_permit_not_serializable(&workspace_root)?;
+    let sign_site_findings = scan_sign_only_with_permit(&workspace_root)?;
+    let t1_entry_findings = scan_t1_entry_only_from_sign_batch(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -3753,6 +3968,8 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(publish_permit_findings);
     rendered.extend(authority_evidence_findings);
     rendered.extend(signing_permit_serde_findings);
+    rendered.extend(sign_site_findings);
+    rendered.extend(t1_entry_findings);
 
     if rendered.is_empty() {
         println!(

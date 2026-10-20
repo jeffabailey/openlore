@@ -12,11 +12,12 @@ use std::io::Write;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Utc};
+use claim_domain::authority::exempt_permit;
 use claim_domain::identity_link::{
     check_link, is_already_linked, is_github_login, CheckVerdict, GithubObservation, LinkDraft,
     ProofCheck, ProvenLink,
 };
-use claim_domain::{canonicalize, compute_cid, SignedClaim};
+use claim_domain::SignedClaim;
 use ports::{GithubError, LinkCheck, StoredLinkLineage};
 
 use crate::io::prompt_line;
@@ -29,6 +30,7 @@ use crate::verbs::claim_publish::{
     PublishError,
 };
 use crate::verbs::identity_reads::observation_of;
+use crate::verbs::sign_permitted::{reference_types, shape_of, sign_permitted};
 use crate::wiring::Wiring;
 
 /// Arguments of `identity link github <login>`.
@@ -99,15 +101,16 @@ fn refuse_if_already_linked(wiring: &Wiring, proven: &ProvenLink) -> Result<()> 
 /// Sign the proven link and keep it in the local store.
 fn sign_and_keep(wiring: &Wiring, draft: LinkDraft) -> Result<SignedClaim> {
     let unsigned = draft.into_unsigned();
-    let canonical = canonicalize(&unsigned).map_err(|e| anyhow!("canonicalizing link: {e}"))?;
-    let signature = wiring
-        .identity
-        .sign(&compute_cid(&canonical))
-        .map_err(|e| anyhow!("signing link: {e}"))?;
-    let signed = SignedClaim {
-        unsigned,
-        signature,
-    };
+    // An identity link carries no weight, so it needs no authority over its
+    // subject (ADR-086 §2): it is signed under an exempt permit.
+    let reference_types = reference_types(&unsigned);
+    let permit = exempt_permit(
+        &wiring.identity.author_did().0,
+        shape_of(&unsigned, &reference_types),
+    )
+    .ok_or_else(|| anyhow!("an identity link needs no signing authority"))?;
+    let signed = sign_permitted(wiring.identity.as_ref(), &permit, unsigned)
+        .map_err(|e| anyhow!("signing link: {e:#}"))?;
     wiring
         .storage
         .write_signed_claim(&signed)

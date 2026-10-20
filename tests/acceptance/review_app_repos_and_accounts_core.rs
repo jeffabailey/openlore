@@ -456,6 +456,7 @@ fn sut_may_sign(
             subject: permit.subject().to_string(),
             basis: match permit.basis() {
                 PermitBasis::Owner(id) => BasisView::Owner(id),
+                other => unreachable!("may_sign mints owner permits only, got {other:?}"),
             },
         },
         Err(SigningRefusal::NotOwnedByListedAccount) => PermitView::NotOwnedByListedAccount,

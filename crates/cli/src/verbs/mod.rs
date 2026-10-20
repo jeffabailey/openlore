@@ -68,6 +68,9 @@ pub mod scrape_person;
 // in Phase 03/04 (AV-* scenarios register at 01-05).
 pub mod search;
 pub mod sign_batch;
+// owner-only-signing (ADR-086 §4): the one place a claim is signed, under a
+// `SigningPermit` for its subject (`xtask check-arch` sign_only_with_permit).
+pub(crate) mod sign_permitted;
 // Slice-06 (htmx viewer; ADR-028/030): the `openlore ui` read-only viewer verb.
 // A long-running localhost HTTP server over a READ-ONLY `StoreReadPort`; the
 // ONLY verb that links `adapter-http-viewer` (cli is its sole linker).

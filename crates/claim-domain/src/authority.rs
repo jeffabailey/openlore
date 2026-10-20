@@ -69,12 +69,19 @@ pub enum OwnerBioRead<'a> {
 /// Why the signer holds the permit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermitBasis {
-    /// The repo's owner is the signer's listed GitHub account (its id).
+    /// The subject's owner is the signer's GitHub account (its id).
     Owner(u64),
+    /// The claim needs no authority: a dispute, a withdrawal, an identity
+    /// link, or a subject that is not on GitHub (ADR-086 §1-2).
+    Exempt,
+    /// A repo assertion signed ungated until the repo tier lands (accepted
+    /// transitional risk T1, ruling F1).
+    UngatedT1,
 }
 
-/// The signer may publish an assertion about `subject`. Minted only by
-/// [`may_sign`]; never serialized, never stored.
+/// The signer may publish a claim about `subject`. Minted only in this
+/// module ([`may_sign`], [`may_sign_from_checks`], [`exempt_permit`],
+/// [`permit_ungated_repo_t1`]); never serialized, never stored.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SigningPermit {
     signer: String,
@@ -541,6 +548,30 @@ pub fn may_sign_from_checks(
                 login: person.login().to_string(),
             },
         }),
+    }
+}
+
+/// A permit for a claim that needs no authority (ADR-086 §1-2, ruling F2):
+/// `None` when `claim` is an assertion about a `github:` subject.
+pub fn exempt_permit(signer: &str, claim: ClaimShape<'_>) -> Option<SigningPermit> {
+    matches!(requirement(claim), Requirement::Exempt)
+        .then(|| permit(signer, claim.subject, PermitBasis::Exempt))
+}
+
+/// The transitional ungated entry (accepted risk T1, ruling F1): a permit
+/// for an assertion about a `github:<owner>/<repo>` subject, with no
+/// authority judged; `None` for any other claim. Deleted once the repo tier
+/// lands.
+pub fn permit_ungated_repo_t1(signer: &str, claim: ClaimShape<'_>) -> Option<SigningPermit> {
+    matches!(requirement(claim), Requirement::Repo { .. })
+        .then(|| permit(signer, claim.subject, PermitBasis::UngatedT1))
+}
+
+fn permit(signer: &str, subject: &str, basis: PermitBasis) -> SigningPermit {
+    SigningPermit {
+        signer: signer.to_string(),
+        subject: subject.to_string(),
+        basis,
     }
 }
 
@@ -1017,8 +1048,10 @@ mod gate_from_checks_tests {
                 .any(|l| current_check(l).is_none() && same(&l.linked_login));
             match may_sign_from_checks(JEFF, &person(&subject), &links, now()) {
                 Ok(permit) => {
-                    let PermitBasis::Owner(id) = permit.basis();
-                    prop_assert!(fresh.contains(&id), "{links:?}");
+                    prop_assert!(
+                        matches!(permit.basis(), PermitBasis::Owner(id) if fresh.contains(&id)),
+                        "{links:?}"
+                    );
                     prop_assert_eq!(permit.subject(), subject.as_str());
                     prop_assert_eq!(permit.signer(), JEFF);
                 }
@@ -1143,6 +1176,65 @@ mod gate_from_checks_tests {
         )];
         let permit = may_sign_from_checks(JEFF, &person("github:jeff-b"), &renamed, now());
         assert_eq!(permit.map(|p| p.basis()), Ok(PermitBasis::Owner(7)));
+    }
+
+    proptest! {
+        /// A claim needing no authority — a dispute, a withdrawal, an
+        /// identity link, a subject off GitHub — gets an exempt permit for
+        /// its own subject and signer, whatever the subject; an assertion
+        /// about a GitHub account or repo never does. The T1 entry permits
+        /// only repo assertions.
+        #[test]
+        fn exempt_and_t1_permits_follow_the_requirement(
+            subject in prop_oneof![
+                "github:[a-z]{1,8}",
+                "github:[a-z]{1,8}/[a-z]{1,8}",
+                "(https|did|ex):[a-z]{1,8}",
+            ],
+            references in prop_oneof![
+                Just(vec![]),
+                Just(vec![ReferenceType::Counters]),
+                Just(vec![ReferenceType::Retracts]),
+                Just(vec![ReferenceType::Supersedes]),
+            ],
+            predicate in prop_oneof![Just("adheresToPhilosophy"), Just("sameAs")],
+        ) {
+            let claim = ClaimShape { subject: &subject, predicate, reference_types: &references };
+            let needed = requirement(claim);
+
+            let exempt = exempt_permit(JEFF, claim);
+            prop_assert_eq!(exempt.is_some(), needed == Requirement::Exempt);
+            if let Some(permit) = exempt {
+                prop_assert_eq!(
+                    (permit.signer(), permit.subject(), permit.basis()),
+                    (JEFF, subject.as_str(), PermitBasis::Exempt)
+                );
+            }
+
+            let ungated = permit_ungated_repo_t1(JEFF, claim);
+            prop_assert_eq!(ungated.is_some(), matches!(needed, Requirement::Repo { .. }));
+            if let Some(permit) = ungated {
+                prop_assert_eq!(
+                    (permit.signer(), permit.subject(), permit.basis()),
+                    (JEFF, subject.as_str(), PermitBasis::UngatedT1)
+                );
+            }
+        }
+    }
+
+    // bypass: a dispute about a GitHub account needs no authority.
+    #[test]
+    fn a_dispute_about_an_account_is_exempt() {
+        let dispute = ClaimShape {
+            subject: "github:someone",
+            predicate: "adheresToPhilosophy",
+            reference_types: &[ReferenceType::Counters],
+        };
+        assert_eq!(
+            exempt_permit(JEFF, dispute).map(|p| p.basis()),
+            Some(PermitBasis::Exempt)
+        );
+        assert_eq!(exempt_permit(JEFF, assertion_about("github:someone")), None);
     }
 
     // bypass: a repo subject names its owner and name.
