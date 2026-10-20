@@ -64,7 +64,7 @@ Fixture (revision 1): `tests/fixtures/owner-only-signing-v7-store/` — frozen v
 | PS-2 | A person claim Jeff cannot attest is refused, says why and who can sign (3) | ADR-087 §1, ADR-086 §10 |
 | PS-3 | Jeff can always dispute or withdraw, whatever authority he holds (2; ACTIVE; wire body asserted) | OOS-D11, KPI-OOS-3 |
 | PS-4 | With the network off, Jeff signs about himself only from a check at most 7 days old (4) | ADR-086 §5, I-9, A-6 |
-| PS-5 | Jeff signs an inferred adherence only about himself (2) | UC-9, A-8 |
+| PS-5 | Jeff signs an inferred adherence only about himself (2 + the supersedes case, U-OOS-12) | UC-9, A-8 |
 | PS-6 | Jeff's inferred people say who can sign each candidate, and listing writes nothing | ADR-086 §10 |
 | PS-7 | Jeff still signs about his account when its bio also names another identity (ACTIVE) | UC-2 |
 | PS-8 | After Jeff renames his GitHub account, he signs only under the new login (2) | ADR-087 §1, G-2 |
@@ -239,7 +239,19 @@ Scenario Outline: Jeff signs an inferred adherence only about himself
     | person     | outcome                                                                                        |
     | jeffbailey | the adherence is signed and reaches his published repo                                         |
     | BurntSushi | nothing is signed or published; he is told BurntSushi can sign it after linking the account   |
+
+@driving_port @real-io @security @kpi-oos-1 @uc-9 @a-8 @s-oos-1 @u-oos-12 @contract-shape:unbounded-preservation
+Scenario: A stronger inference about BurntSushi is not signed, though Jeff signed the earlier one
+  Given Jeff once held a verified link to BurntSushi's account
+  And Jeff signed the inferred memory-safety adherence about BurntSushi from ripgrep alone
+  And Jeff has since withdrawn that link
+  And Jeff recorded that BurntSushi also builds rust-lang/regex, so the inference about him is stronger
+  When Jeff signs the stronger candidate about BurntSushi
+  Then nothing is signed or published; he is told BurntSushi can sign it after linking the account
+  And his earlier adherence about BurntSushi reads as before
 ```
+
+U-OOS-12 (supersedes half) lives here, not in PS-2: `claim add` carries no reference arguments, so the only verb that signs a `supersedes` claim is `infer people --sign` (a STRONGER candidate supersedes Jeff's earlier inference when the evidence grows). The Given uses real verbs only: Jeff could attest BurntSushi's account when he signed the earlier claim, then withdrew the link (`claim retract`), so the superseding claim meets `NoLink`. The Given checks that the listing shows the candidate as STRONGER, naming the earlier claim, before the When runs. Primary Thens: the refusal and the hand-off, plus `assert_jeff_sees_no_change`. The store guardrail is secondary. The case runs in the same `#[test]` after the two table rows.
 
 **PS-6 (chained on PS-5's Given)** — `jeffs_inferred_people_say_who_can_sign_each_candidate_and_listing_writes_nothing`
 

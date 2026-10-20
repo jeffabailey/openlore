@@ -399,6 +399,16 @@ fn store_where_jeff_and_burntsushi_build_memory_safe_repos() -> LinkWorld {
 ///     | person     | outcome                                                                                        |
 ///     | jeffbailey | the adherence is signed and reaches his published repo                                         |
 ///     | BurntSushi | nothing is signed or published; he is told BurntSushi can sign it after linking the account   |
+///
+/// @driving_port @real-io @security @kpi-oos-1 @uc-9 @a-8 @s-oos-1 @u-oos-12 @contract-shape:unbounded-preservation
+/// Scenario: A stronger inference about BurntSushi is not signed, though Jeff signed the earlier one
+///   Given Jeff once held a verified link to BurntSushi's account
+///   And Jeff signed the inferred memory-safety adherence about BurntSushi from ripgrep alone
+///   And Jeff has since withdrawn that link
+///   And Jeff recorded that BurntSushi also builds rust-lang/regex, so the inference about him is stronger
+///   When Jeff signs the stronger candidate about BurntSushi
+///   Then nothing is signed or published; he is told BurntSushi can sign it after linking the account
+///   And his earlier adherence about BurntSushi reads as before
 /// ```
 #[test]
 #[ignore = "DISTILL owner-only-signing PS-5: pending DELIVER"]
@@ -431,6 +441,64 @@ fn jeff_signs_an_inferred_adherence_only_about_himself() {
             }
         }
     }
+
+    // U-OOS-12: the superseding inference about someone else's account.
+    let row = "supersedes BurntSushi";
+    let (world, earlier) = store_where_jeff_signed_burntsushis_inference_then_withdrew_the_link();
+    let subject = Subject::Person(BURNTSUSHI_GH);
+    let listed = when_jeff_lists_inferred_people(&world);
+    assert_candidate_would_supersede(&listed, subject, &earlier);
+    let n = candidate_number_naming(&listed, subject);
+    let seen = what_jeff_sees(&world, subject);
+    let before = capture_authority_universe(&world.env);
+
+    let outcome = when_jeff_signs_inferred(&world, n, CHECK_PLUS_2_DAYS);
+
+    assert_signing_refused(
+        &outcome,
+        subject,
+        Refusal::NoLink,
+        Some(CanSign::Login(BURNTSUSHI_GH.login)),
+        None,
+        row,
+    );
+    assert_jeff_sees_no_change(row, &seen, &world, subject);
+    guardrail_store_unchanged(row, &before, &world.env);
+}
+
+/// The store PS-5's supersedes case starts from: Jeff linked "jeffbailey"
+/// and once held a verified link to BurntSushi's account; Rachel published
+/// memory-safety claims about ripgrep and regex; Jeff recorded ripgrep's
+/// contributors, signed the inference about BurntSushi from ripgrep alone,
+/// withdrew his BurntSushi link, then recorded regex's contributors (the
+/// evidence change). Returns the world and the earlier claim's CID.
+fn store_where_jeff_signed_burntsushis_inference_then_withdrew_the_link() -> (LinkWorld, String) {
+    let mut world = authority_world();
+    given_jeff_linked_his_account(&world);
+    let burntsushi_link = given_jeff_held_a_link_to(&world, BURNTSUSHI_GH);
+    given_repo_scraped(
+        &world.env,
+        &RIPGREP.full(),
+        jeff_and_burntsushi_contribute(),
+        None,
+    );
+    given_rachel_published(
+        &mut world,
+        [RIPGREP, REGEX]
+            .iter()
+            .map(|r| peer_claim_about(Subject::Repo(*r)))
+            .collect(),
+    );
+    let earlier =
+        given_jeff_signed_inferred_about(&world, Subject::Person(BURNTSUSHI_GH), CHECK_PLUS_2_DAYS);
+    given_jeff_withdrew_his_link(&world, &burntsushi_link, CHECK_PLUS_2_DAYS);
+    given_repo_scraped(
+        &world.env,
+        &REGEX.full(),
+        jeff_and_burntsushi_contribute(),
+        None,
+    );
+    (world, earlier)
 }
 
 /// PS-6 (chained on PS-5's Given)

@@ -305,6 +305,57 @@ pub fn given_jeff_linked_his_account(world: &LinkWorld) -> String {
     given_i_linked(world, JEFF_GH, Some(LINKED_AT))
 }
 
+/// GIVEN: Jeff once held a verified link to `account` (GitHub serves it and
+/// its bio named his DID) at `LINKED_AT`, so he could attest it. Returns the
+/// link's CID.
+pub fn given_jeff_held_a_link_to(world: &LinkWorld, account: Account) -> String {
+    world.github.register(account.on_github());
+    given_i_linked(world, account, Some(LINKED_AT))
+}
+
+/// GIVEN: Jeff withdrew his link `link_cid` (`claim retract`) at `now`.
+pub fn given_jeff_withdrew_his_link(world: &LinkWorld, link_cid: &str, now: &str) {
+    let out = when_jeff_retracts(world, link_cid, now);
+    assert_eq!(
+        out.status,
+        0,
+        "precondition: Jeff may withdraw his link {link_cid};{}",
+        context(&out)
+    );
+}
+
+/// GIVEN: Jeff signed (and published) the inferred candidate about `subject`
+/// with `infer people --sign` at `now`, while he could attest it. Returns the
+/// signed claim's CID.
+pub fn given_jeff_signed_inferred_about(world: &LinkWorld, subject: Subject, now: &str) -> String {
+    let listed = when_jeff_lists_inferred_people(world);
+    let n = candidate_number_naming(&listed, subject);
+    let before = claim_files(&world.env);
+    let out = when_jeff_signs_inferred(world, n, now);
+    assert_eq!(
+        out.status,
+        0,
+        "precondition: Jeff may sign the inference about {};{}",
+        subject.uri(),
+        context(&out)
+    );
+    new_claim_cids(&before, &world.env)
+        .pop()
+        .expect("precondition: the inferred adherence is signed")
+}
+
+/// GIVEN (precondition, read through `infer people`): the candidate about
+/// `subject` is STRONGER and would supersede Jeff's earlier claim `earlier`.
+pub fn assert_candidate_would_supersede(listed: &CliOutcome, subject: Subject, earlier: &str) {
+    let n = candidate_number_naming(listed, subject);
+    let block = candidate_block(&listed.stdout, n).expect("candidate block");
+    assert!(
+        block.contains("STRONGER") && block.contains(earlier),
+        "precondition: the candidate about {} supersedes {earlier};\n{block}",
+        subject.uri()
+    );
+}
+
 /// GIVEN (outside OpenLore): `repo`'s default branch holds `file`.
 pub fn the_repo_holds_authority_file(world: &LinkWorld, repo: RepoRef, file: AuthorityFile) {
     world
