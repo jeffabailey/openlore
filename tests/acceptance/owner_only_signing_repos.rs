@@ -293,9 +293,9 @@ fn an_organization_repo_is_signed_only_by_a_did_its_authority_file_lists_exactly
 ///   Then her anvil claim reads "repo-listed" and her tidepool claim "third-party"
 ///   And GitHub was asked once for each repo and once for each repo's authority file
 ///   And nothing reached his published repo
+///   And re-checking only his own claims (`--mine`) says there is nothing to re-check, asks GitHub nothing and records nothing
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-4: pending DELIVER"]
 fn rechecking_authority_labels_each_peers_repo_claims_and_records_one_observation_per_repo() {
     let mut world = authority_world();
     the_repo_holds_authority_file(&world, ANVIL, listing(&[RACHEL_DID]));
@@ -363,6 +363,22 @@ fn rechecking_authority_labels_each_peers_repo_claims_and_records_one_observatio
             ),
         )],
     );
+
+    // U-OOS-12 row `--mine`: only Jeff's own claims are re-checked, and he has
+    // none here — Rachel's claims are never re-checked on his behalf.
+    let asked_before_mine = world.github_paths().len();
+    let before_mine = capture_authority_universe(&world.env);
+
+    let mine = when_jeff_verifies_authority(&world, &["--mine"], Some(CHECK_PLUS_2_DAYS));
+
+    assert_eq!(mine.status, 0, "{}\n{}", mine.stdout, mine.stderr);
+    assert!(
+        mine.stdout.contains(NOTHING_TO_RECHECK),
+        "--mine says `{NOTHING_TO_RECHECK}`;\n{}",
+        mine.stdout
+    );
+    assert_github_not_asked(&world, asked_before_mine, "--mine");
+    guardrail_store_unchanged("--mine", &before_mine, &world.env);
 }
 
 /// RA-5 (table over how GitHub fails; chained on RA-4's Given)
@@ -612,7 +628,6 @@ fn a_listed_identity_stays_listed_whoever_observed_the_repo_last() {
 ///   And GitHub is not asked anything, and nothing in his store changed
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-14: pending DELIVER"]
 fn with_no_github_claims_in_his_store_rechecking_authority_asks_github_nothing() {
     let world = authority_world();
     let seen = what_jeff_sees(&world, Subject::Repo(TIDEPOOL));

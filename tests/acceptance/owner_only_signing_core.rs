@@ -239,8 +239,106 @@ fn sut_requirement(claim: &ClaimView) -> RequirementView {
     }
 }
 
-fn sut_classify(_claim: &ClaimView, _evidence: &EvidenceView) -> AuthorityView {
-    todo!("RED: bind to claim_domain::authority::classify (owner-only-signing slices 1-2)")
+fn sut_classify(claim: &ClaimView, evidence: &EvidenceView) -> AuthorityView {
+    use claim_domain::authority::{
+        classify, AttestedTier, Authority, AuthorityEvidence, AuthorityFileSeen, ClaimShape,
+        LatestLinkCheck, LatestRepoObservation, LinkedAccountEvidence, RepoFinding, RepoOwnerKind,
+        Unattested,
+    };
+    use claim_domain::identity_link::CheckVerdict;
+    use claim_domain::ReferenceType;
+    let now = Utc.with_ymd_and_hms(2026, 10, 8, 9, 0, 0).unwrap();
+    let at = |age_minutes: i64| now - chrono::Duration::minutes(age_minutes);
+    // The DuckDB read port's join: the author's links, each with its latest check.
+    let links: Vec<LinkedAccountEvidence> = evidence
+        .links
+        .iter()
+        .filter(|link| link.did == claim.author)
+        .map(|link| LinkedAccountEvidence {
+            github_id: link.github_id,
+            linked_login: link.linked_login.clone(),
+            latest_check: evidence
+                .checks
+                .iter()
+                .find(|c| c.did == link.did && c.github_id == link.github_id)
+                .map(|c| LatestLinkCheck {
+                    login_seen: c.login_seen.clone(),
+                    verdict: if c.verified {
+                        CheckVerdict::Verified
+                    } else {
+                        CheckVerdict::DidMissing
+                    },
+                    checked_at: at(c.age_minutes),
+                }),
+        })
+        .collect();
+    let repo = evidence.repo.as_ref().map(|observed| match observed {
+        RepoObsView::Found {
+            owner_id,
+            organization,
+            file,
+            age_minutes,
+        } => LatestRepoObservation {
+            finding: RepoFinding::Found {
+                owner_id: *owner_id,
+                owner_kind: if *organization {
+                    RepoOwnerKind::Organization
+                } else {
+                    RepoOwnerKind::User
+                },
+                authority_file: match file {
+                    FileView::Absent => AuthorityFileSeen::Absent,
+                    FileView::Present(dids) => AuthorityFileSeen::Present(dids.clone()),
+                    FileView::Invalid => AuthorityFileSeen::Invalid,
+                },
+            },
+            checked_at: at(*age_minutes),
+        },
+        RepoObsView::NotFound { age_minutes } => LatestRepoObservation {
+            finding: RepoFinding::NotFound,
+            checked_at: at(*age_minutes),
+        },
+    });
+    let reference_types: Vec<ReferenceType> = claim
+        .references
+        .iter()
+        .map(|r| match r {
+            RefView::Retracts => ReferenceType::Retracts,
+            RefView::Counters => ReferenceType::Counters,
+            RefView::Supersedes => ReferenceType::Supersedes,
+            RefView::Corrects => ReferenceType::Corrects,
+        })
+        .collect();
+    let classified = classify(
+        ClaimShape {
+            subject: &claim.subject,
+            predicate: &claim.predicate,
+            reference_types: &reference_types,
+        },
+        &AuthorityEvidence {
+            author: &claim.author,
+            author_links: &links,
+            repo: repo.as_ref(),
+        },
+        now,
+    );
+    match classified {
+        Some(Authority::Attested(AttestedTier::Owner { github_id })) => {
+            AuthorityView::Owner { github_id }
+        }
+        Some(Authority::Attested(AttestedTier::RepoListed)) => AuthorityView::RepoListed,
+        Some(Authority::Unattested(reason)) => AuthorityView::Unattested(match reason {
+            Unattested::NoLink => ReasonView::NoLink,
+            Unattested::LinkNotVerified => ReasonView::LinkNotVerified,
+            Unattested::LoginNotCurrent => ReasonView::LoginNotCurrent,
+            Unattested::NotRepoOwner => ReasonView::NotRepoOwner,
+            Unattested::OrgOwnedNotListed => ReasonView::OrgOwnedNotListed,
+            Unattested::FileInvalid => ReasonView::FileInvalid,
+            Unattested::RepoNotFound => ReasonView::RepoNotFound,
+        }),
+        Some(Authority::NotChecked) => AuthorityView::NotChecked,
+        None => panic!("a github: assertion is always classified: {claim:?}"),
+    }
 }
 
 /// The CLI gate from local checks (ADR-086 §4-5). NOT the shipped review-app
@@ -881,7 +979,6 @@ proptest! {
     /// subject exactly when the ADR-087 table says so.
     /// `@property @s-oos-1 @s-oos-4 @contract-shape:pure-function`
     #[test]
-    #[ignore = "DISTILL owner-only-signing CORE-OOS-3: bind sut_classify (DELIVER slices 1-2)"]
     fn a_claim_is_attested_exactly_when_the_authority_table_says_so(
         claim in arb_github_assertion(),
         evidence in arb_evidence(false),

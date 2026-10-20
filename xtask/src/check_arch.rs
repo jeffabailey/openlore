@@ -1941,6 +1941,72 @@ pub fn scan_identity_link_readers_hold_no_write_handle(
     Ok(findings)
 }
 
+// -----------------------------------------------------------------------------
+// Authority readers (owner-only-signing, ADR-087 §5, DESIGN capability table)
+// -----------------------------------------------------------------------------
+//
+// * `authority_readers_hold_no_write_handle`: the reader verbs (`graph
+//   query`, `search`, `identity list`, `infer people`, `candidates list`) and
+//   the viewer adapter name no repo-authority-check or identity-link-check
+//   write port, wiring slot, write method or recheck handle. Only `authority
+//   verify`, `identity verify` and the `--sign` import paths (`scrape github`,
+//   `scrape person`) may hold them.
+
+/// The reader verb modules (a module not yet written is skipped).
+const AUTHORITY_READER_SOURCES: &[&str] = &[
+    "crates/cli/src/verbs/graph_query.rs",
+    "crates/cli/src/verbs/search.rs",
+    "crates/cli/src/verbs/identity_list.rs",
+    "crates/cli/src/verbs/infer_people.rs",
+    "crates/cli/src/verbs/candidates.rs",
+];
+
+/// What a reader may not name: the check-write ports, their wiring slots,
+/// their write methods and the handles that bundle them.
+const AUTHORITY_READER_FORBIDDEN_TOKENS: &[&str] = &[
+    "RepoAuthorityCheckWritePort",
+    "repo_authority_check_writes",
+    "authority_recheck_handles",
+    "IdentityLinkCheckWritePort",
+    "identity_link_check_writes",
+    "record_check",
+    "link_recheck_handles",
+    "refresh_signers_own_link",
+    "recheck_and_record",
+];
+
+/// Effect shell for `authority_readers_hold_no_write_handle`.
+pub fn scan_authority_readers_hold_no_write_handle(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let verb_sources = AUTHORITY_READER_SOURCES
+        .iter()
+        .map(|rel_path| workspace_root.join(rel_path))
+        .filter(|path| path.is_file());
+    let viewer_sources = rust_sources_under(&workspace_root.join(VIEWER_ADAPTER_SOURCES));
+    let mut findings = Vec::new();
+    for path in verb_sources.chain(viewer_sources) {
+        let source = std::fs::read_to_string(&path)?;
+        let rel_path = path
+            .strip_prefix(workspace_root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        findings.extend(
+            classify_forbidden_words(&source, AUTHORITY_READER_FORBIDDEN_TOKENS)
+                .into_iter()
+                .map(|finding| {
+                    format!(
+                        "{rel_path}: {finding} — a reader holds no repo-authority or \
+                         identity-link check-write handle (authority_readers_hold_no_write_handle, \
+                         ADR-087 §5)"
+                    )
+                }),
+        );
+    }
+    Ok(findings)
+}
+
 /// The `identity verify` verb module and what it may not name: the whole
 /// store, signing and publishing, the purge, and the whole wiring.
 const IDENTITY_VERIFY_SOURCE: &str = "crates/cli/src/verbs/identity_verify.rs";
@@ -3643,6 +3709,7 @@ pub fn run() -> anyhow::Result<i32> {
     let repo_authority_checks_findings = scan_repo_authority_checks_insert_only(&workspace_root)?;
     let identity_link_reader_findings =
         scan_identity_link_readers_hold_no_write_handle(&workspace_root)?;
+    let authority_reader_findings = scan_authority_readers_hold_no_write_handle(&workspace_root)?;
     let identity_link_compose_findings =
         scan_identity_link_compose_only_via_proven_link(&workspace_root)?;
     let identity_link_purge_findings =
@@ -3677,6 +3744,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(identity_link_checks_findings);
     rendered.extend(repo_authority_checks_findings);
     rendered.extend(identity_link_reader_findings);
+    rendered.extend(authority_reader_findings);
     rendered.extend(identity_link_compose_findings);
     rendered.extend(identity_link_purge_findings);
     rendered.extend(identity_verify_findings);
@@ -4743,6 +4811,86 @@ mod tests {
 
         assert_eq!(
             scan_identity_link_readers_hold_no_write_handle(real_workspace_root())
+                .expect("scan real tree"),
+            Vec::<String>::new(),
+            "the real readers hold read handles only"
+        );
+    }
+
+    // --- authority_readers_hold_no_write_handle (ADR-087 §5) ----------------
+
+    #[test]
+    fn a_reader_holding_a_check_write_handle_is_reported_and_the_real_tree_passes() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let verbs = violating.path().join("crates/cli/src/verbs");
+        std::fs::create_dir_all(&verbs).expect("mkdir");
+        std::fs::write(
+            verbs.join("graph_query.rs"),
+            "// a RepoAuthorityCheckWritePort in a comment is no handle\n\
+             fn run(writes: &dyn RepoAuthorityCheckWritePort) {}\n\
+             fn label(wiring: &Wiring) { let h = wiring.link_recheck_handles(); }\n",
+        )
+        .expect("write");
+        std::fs::write(
+            verbs.join("search.rs"),
+            "fn run(wiring: &Wiring) { wiring.repo_authority_check_writes.record(&c); }\n",
+        )
+        .expect("write");
+        std::fs::write(
+            verbs.join("authority_verify.rs"),
+            "fn run(writes: &dyn RepoAuthorityCheckWritePort) {}\n",
+        )
+        .expect("write");
+        let viewer = violating.path().join("crates/adapter-http-viewer/src");
+        std::fs::create_dir_all(&viewer).expect("mkdir");
+        std::fs::write(
+            viewer.join("labels.rs"),
+            "fn label(h: AuthorityVerifyHandles) { h.authority_recheck_handles(); }\n",
+        )
+        .expect("write");
+
+        let findings = scan_authority_readers_hold_no_write_handle(violating.path()).expect("scan");
+        let named = |path: &str, token: &str| {
+            findings
+                .iter()
+                .any(|f| f.starts_with(path) && f.contains(&format!("`{token}`")))
+        };
+        assert_eq!(findings.len(), 4, "{findings:?}");
+        assert!(
+            named(
+                "crates/cli/src/verbs/graph_query.rs",
+                "RepoAuthorityCheckWritePort"
+            ),
+            "{findings:?}"
+        );
+        assert!(
+            named(
+                "crates/cli/src/verbs/graph_query.rs",
+                "link_recheck_handles"
+            ),
+            "{findings:?}"
+        );
+        assert!(
+            named(
+                "crates/cli/src/verbs/search.rs",
+                "repo_authority_check_writes"
+            ),
+            "{findings:?}"
+        );
+        assert!(
+            named(
+                "crates/adapter-http-viewer/src/labels.rs",
+                "authority_recheck_handles"
+            ),
+            "{findings:?}"
+        );
+        assert!(
+            !findings.iter().any(|f| f.contains("authority_verify.rs")),
+            "authority verify may hold the write handles: {findings:?}"
+        );
+
+        assert_eq!(
+            scan_authority_readers_hold_no_write_handle(real_workspace_root())
                 .expect("scan real tree"),
             Vec::<String>::new(),
             "the real readers hold read handles only"

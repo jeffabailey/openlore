@@ -36,8 +36,8 @@ use ports::{
     ClockPort, ContributionLinkPort, GithubPort, IdentityLinkCheckPurgePort,
     IdentityLinkCheckReadPort, IdentityLinkCheckWritePort, IdentityPort, IndexQueryPort,
     InstanceReadPort, LinkCandidateReadPort, LinkLineageReadPort, PdsPort, PeerStoragePort,
-    ProbeOutcome, ProbeRefused, PublishPort, RepoAuthorityCheckReadPort, StoragePort,
-    StoreReadPort,
+    ProbeOutcome, ProbeRefused, PublishPort, RepoAuthorityCheckReadPort,
+    RepoAuthorityCheckWritePort, StoragePort, StoreReadPort,
 };
 
 use crate::paths::OpenLorePaths;
@@ -74,6 +74,10 @@ pub struct Wiring {
     /// connection. Its live probe refuses startup when the store cannot keep
     /// two observations of one repo.
     pub repo_authority_checks: Box<dyn RepoAuthorityCheckReadPort>,
+    /// The WRITE side of the repo observations (insert only), handed only to
+    /// the verbs that observe a repo (`authority verify`); readers are never
+    /// handed it (check-arch `authority_readers_hold_no_write_handle`).
+    pub repo_authority_check_writes: Box<dyn RepoAuthorityCheckWritePort>,
     /// The stored claims carrying the identity-link predicate — candidates the
     /// pure projection decides on (Q-RM-5). Read-only.
     pub link_candidates: Box<dyn LinkCandidateReadPort>,
@@ -156,6 +160,8 @@ impl Wiring {
             Box::new(storage.identity_link_purge_adapter());
         let repo_authority_checks: Box<dyn RepoAuthorityCheckReadPort> =
             Box::new(storage.repo_authority_check_adapter());
+        let repo_authority_check_writes: Box<dyn RepoAuthorityCheckWritePort> =
+            Box::new(storage.repo_authority_check_adapter());
         let link_candidates: Box<dyn LinkCandidateReadPort> =
             Box::new(storage.identity_link_check_adapter());
         let link_lineage: Box<dyn LinkLineageReadPort> = Box::new(storage.link_lineage_adapter());
@@ -220,6 +226,7 @@ impl Wiring {
             identity_link_check_writes,
             identity_link_check_purge,
             repo_authority_checks,
+            repo_authority_check_writes,
             link_candidates,
             link_lineage,
             store_read,
@@ -329,6 +336,20 @@ impl Wiring {
             claims: self.link_candidates.as_ref(),
             lineage: self.link_lineage.as_ref(),
             github: self.github.as_ref(),
+        }
+    }
+
+    /// The narrow handles `authority verify` holds (DESIGN capability row):
+    /// the link re-check path, the repo observation read and write ports,
+    /// read-only claim reads and GitHub — no signing, no publishing.
+    pub fn authority_recheck_handles(
+        &self,
+    ) -> crate::verbs::authority_verify::AuthorityVerifyHandles<'_> {
+        crate::verbs::authority_verify::AuthorityVerifyHandles {
+            links: self.link_recheck_handles(),
+            repo_checks: self.repo_authority_checks.as_ref(),
+            repo_check_writes: self.repo_authority_check_writes.as_ref(),
+            claims: self.store_read.as_ref(),
         }
     }
 

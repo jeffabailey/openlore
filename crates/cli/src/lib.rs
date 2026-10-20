@@ -70,6 +70,10 @@ pub enum Command {
     /// (github-did-identity-link; ADR-084/085).
     #[command(subcommand)]
     Identity(IdentityCommand),
+    /// Who may speak for a GitHub account or repo (owner-only-signing;
+    /// ADR-086/087).
+    #[command(subcommand)]
+    Authority(AuthorityCommand),
     /// Search the NETWORK index — slice-05 (ADR-027). A NEW top-level verb
     /// (WD-113): `graph query` stays unambiguously LOCAL; `search` is the only
     /// NETWORK verb. Queries the self-hosted indexer over HTTP/XRPC along one
@@ -360,6 +364,23 @@ pub enum IdentityCommand {
         /// The DID whose checks to forget.
         #[arg(long, value_parser = parse_did)]
         did: claim_domain::Did,
+    },
+}
+
+/// Authority verbs (owner-only-signing; ADR-087 §5-6).
+#[derive(Debug, Subcommand)]
+pub enum AuthorityCommand {
+    /// Re-check the authority of the local `github:` claims (yours and
+    /// followed peers') from public GitHub data: one look at each repo and
+    /// its authority file, plus the identity-link checks the labels need.
+    /// Prints each claim's label; never signs or publishes.
+    Verify {
+        /// Re-check only the claims about this subject.
+        #[arg(long)]
+        subject: Option<String>,
+        /// Re-check only your own claims.
+        #[arg(long)]
+        mine: bool,
     },
 }
 
@@ -829,6 +850,30 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
                 Err(err) => {
                     eprintln!("openlore identity verify: {err:#}");
+                    1
+                }
+            }
+        }
+        Command::Authority(AuthorityCommand::Verify { subject, mine }) => {
+            let args = verbs::authority_verify::AuthorityVerifyArgs {
+                subject,
+                author: mine.then(|| wiring.identity.author_did().0.clone()),
+            };
+            match verbs::authority_verify::run(
+                &wiring.authority_recheck_handles(),
+                &args,
+                wiring.clock.now_utc(),
+            ) {
+                Ok(report) => {
+                    print!("{}", report.stdout);
+                    report
+                        .unreadable
+                        .iter()
+                        .for_each(|line| eprintln!("openlore authority verify: {line}"));
+                    i32::from(!report.unreadable.is_empty())
+                }
+                Err(err) => {
+                    eprintln!("openlore authority verify: {err:#}");
                     1
                 }
             }

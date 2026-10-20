@@ -20,6 +20,9 @@
 //! - `scrape_github`: derive candidate claims from a public GitHub target,
 //!   optionally signing selected candidates via the slice-01 pipeline.
 
+// owner-only-signing (ADR-087 §5-6): re-check the authority of local `github:`
+// claims; holds the check-write handles, never signs or publishes.
+pub mod authority_verify;
 pub mod claim_add;
 pub mod claim_counter;
 pub mod claim_publish;

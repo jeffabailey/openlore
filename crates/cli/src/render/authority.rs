@@ -4,10 +4,15 @@
 //! Wording pins: `tests/acceptance/support/authority.rs`.
 
 use chrono::{DateTime, Utc};
-use claim_domain::authority::{AuthorityRefusal, Unattested, WhoCanSign, SIGNING_WINDOW_DAYS};
+use claim_domain::authority::{
+    Authority, AuthorityRefusal, Unattested, WhoCanSign, SIGNING_WINDOW_DAYS,
+};
 
 /// The fixed hand-off lead.
 pub const CAN_BE_SIGNED_BY: &str = "Can be signed by";
+
+/// The in-repo authority file, as refusals name it (ADR-087 §3).
+const AUTHORITY_FILE: &str = ".github/openlore-authority";
 
 /// Why the signer holds no authority over `subject`, as one sentence.
 fn refusal_reason(subject: &str, reason: Unattested) -> String {
@@ -19,6 +24,17 @@ fn refusal_reason(subject: &str, reason: Unattested) -> String {
         Unattested::LoginNotCurrent => {
             format!("{subject} is no longer the login of your linked GitHub account")
         }
+        Unattested::NotRepoOwner => {
+            format!("{subject} is not owned by your linked GitHub account")
+        }
+        Unattested::OrgOwnedNotListed => format!(
+            "{subject} is owned by the organization and your DID is not listed in \
+             {AUTHORITY_FILE}"
+        ),
+        Unattested::FileInvalid => {
+            format!("{subject}'s {AUTHORITY_FILE} is not a valid authority file")
+        }
+        Unattested::RepoNotFound => format!("{subject} was not found on GitHub"),
     }
 }
 
@@ -60,6 +76,43 @@ pub fn render_signing_refused(refusal: &AuthorityRefusal) -> String {
         ),
     };
     format!("Not signed: {why}. Nothing was signed or published.\n{next}\n")
+}
+
+/// `authority verify` with no `github:` claim in scope.
+pub const NOTHING_TO_RECHECK: &str = "No GitHub claims to re-check";
+
+/// Render `authority verify` when no `github:` claim is in scope.
+pub fn render_nothing_to_recheck() -> String {
+    format!("{NOTHING_TO_RECHECK}; GitHub was not asked.\n")
+}
+
+/// One re-checked claim: who wrote it, about what, and its label now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabelledClaim {
+    pub subject: String,
+    pub author: String,
+    pub authority: Authority,
+}
+
+/// Render the labels `authority verify` decided, one `subject:` block per
+/// subject (in the order given) with one `author:` line per claim. Nothing
+/// is signed or published.
+pub fn render_authority_labels(claims: &[LabelledClaim]) -> String {
+    let blocks: Vec<String> = claims
+        .chunk_by(|a, b| a.subject == b.subject)
+        .map(|about_one_subject| {
+            let rows: String = about_one_subject
+                .iter()
+                .map(|claim| format!("  author: {}  {}\n", claim.author, claim.authority.label()))
+                .collect();
+            format!("subject: {}\n{rows}", about_one_subject[0].subject)
+        })
+        .collect();
+    format!(
+        "Re-checked authority of {} GitHub claim(s); nothing was signed or published.\n\n{}",
+        claims.len(),
+        blocks.join("\n")
+    )
 }
 
 #[cfg(test)]

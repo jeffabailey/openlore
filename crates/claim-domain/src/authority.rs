@@ -387,15 +387,25 @@ pub struct LatestLinkCheck {
     pub checked_at: DateTime<Utc>,
 }
 
-/// Why the signer holds no person authority (ADR-087 §1).
+/// Why a claim's author holds no authority over its subject (ADR-087 §1-3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unattested {
-    /// None of the signer's links names the account.
+    /// None of the author's links names the account.
     NoLink,
-    /// The signer's link to the account is not verified by its latest check.
+    /// The author's link to the account is not verified by its latest check.
     LinkNotVerified,
-    /// The subject login is no longer the login of the signer's linked account.
+    /// The subject login is no longer the login of the author's linked account.
     LoginNotCurrent,
+    /// A user owns the repo, and it is not an account the author has a
+    /// verified link to.
+    NotRepoOwner,
+    /// An organization owns the repo and its authority file does not list
+    /// the author.
+    OrgOwnedNotListed,
+    /// The repo's authority file is not a valid authority file.
+    FileInvalid,
+    /// GitHub did not have the repo when it was last observed.
+    RepoNotFound,
 }
 
 /// The person tier, judged over the signer's links.
@@ -437,11 +447,7 @@ fn link_standing(
     now: DateTime<Utc>,
 ) -> Option<PersonAuthority> {
     let names_login = |other: &str| other.eq_ignore_ascii_case(login);
-    let current_check = link
-        .latest_check
-        .as_ref()
-        .filter(|check| check.checked_at <= now);
-    match current_check {
+    match current_check(link, now) {
         Some(check) if names_login(&check.login_seen) => Some(match check.verdict {
             CheckVerdict::Verified => PersonAuthority::Attested {
                 github_id: link.github_id,
@@ -465,7 +471,7 @@ fn standing_rank(standing: &PersonAuthority) -> (u8, Reverse<Option<DateTime<Utc
         PersonAuthority::NotChecked => (1, Reverse(None)),
         PersonAuthority::Unattested(Unattested::LinkNotVerified) => (2, Reverse(None)),
         PersonAuthority::Unattested(Unattested::LoginNotCurrent) => (3, Reverse(None)),
-        PersonAuthority::Unattested(Unattested::NoLink) => (4, Reverse(None)),
+        PersonAuthority::Unattested(_) => (4, Reverse(None)),
     }
 }
 
@@ -542,6 +548,236 @@ pub fn may_sign_from_checks(
 /// [`SIGNING_WINDOW_DAYS`] old, counted in whole minutes.
 fn within_signing_window(checked_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
     (now - checked_at).num_minutes() <= SIGNING_WINDOW_DAYS * 24 * 60
+}
+
+// -----------------------------------------------------------------------------
+// Reader labels: who a claim's author is to its subject (ADR-086 §8, ADR-087 §1-3)
+// -----------------------------------------------------------------------------
+
+/// The `.github/openlore-authority` file as an observation saw it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthorityFileSeen {
+    Absent,
+    /// The exact DID tokens the file lists.
+    Present(Vec<String>),
+    /// Any other shape: grants nothing.
+    Invalid,
+}
+
+/// What this reader's latest observation of a repo found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoFinding {
+    Found {
+        owner_id: u64,
+        owner_kind: RepoOwnerKind,
+        authority_file: AuthorityFileSeen,
+    },
+    /// GitHub did not have the repo (missing or private); no file was read.
+    NotFound,
+}
+
+/// This reader's latest observation of one repo subject (ADR-087 §4-5):
+/// authority is current, so only the latest observation decides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LatestRepoObservation {
+    pub finding: RepoFinding,
+    pub checked_at: DateTime<Utc>,
+}
+
+/// The tier an attested claim stands on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttestedTier {
+    /// The author owns the subject: the linked account a person subject
+    /// names, or the user account that owns a repo (its GitHub id).
+    Owner { github_id: u64 },
+    /// The repo's authority file lists the author's DID.
+    RepoListed,
+}
+
+/// What a claim about a `github:` subject is, to this reader: its author's
+/// word about their own account or repo, someone else's word about it, or
+/// not yet checked here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Authority {
+    Attested(AttestedTier),
+    Unattested(Unattested),
+    NotChecked,
+}
+
+/// The reader label of an attested owner's claim.
+pub const OWNER_LABEL: &str = "owner";
+/// The reader label of a claim by a DID the repo's authority file lists.
+pub const REPO_LISTED_LABEL: &str = "repo-listed";
+/// The reader label of a claim by anyone else.
+pub const THIRD_PARTY_LABEL: &str = "third-party";
+/// The reader label of a claim whose authority has no check here yet.
+pub const NOT_CHECKED_LABEL: &str = "authority not checked";
+
+impl Authority {
+    /// The reader label — one spelling everywhere.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Authority::Attested(AttestedTier::Owner { .. }) => OWNER_LABEL,
+            Authority::Attested(AttestedTier::RepoListed) => REPO_LISTED_LABEL,
+            Authority::Unattested(_) => THIRD_PARTY_LABEL,
+            Authority::NotChecked => NOT_CHECKED_LABEL,
+        }
+    }
+}
+
+/// Everything local this reader holds about one claim's author and subject.
+#[derive(Debug, Clone, Copy)]
+pub struct AuthorityEvidence<'a> {
+    /// The claim author's bare DID.
+    pub author: &'a str,
+    /// The author's active identity links, each with this reader's latest check.
+    pub author_links: &'a [LinkedAccountEvidence],
+    /// The latest observation of the repo a repo claim is about (`None`:
+    /// never observed here, or not a repo claim).
+    pub repo: Option<&'a LatestRepoObservation>,
+}
+
+/// Who `claim`'s author is to its subject, judged from this reader's latest
+/// local checks (ADR-087 §1-3). `None` when the claim needs no authority
+/// (exempt) or names nothing GitHub could attest (malformed): readers label
+/// neither. A check dated after `now` counts as missing; age never changes
+/// the label (only the signing gate's window).
+pub fn classify(
+    claim: ClaimShape<'_>,
+    evidence: &AuthorityEvidence<'_>,
+    now: DateTime<Utc>,
+) -> Option<Authority> {
+    match requirement(claim) {
+        Requirement::Person(person) => Some(person_authority(&person, evidence.author_links, now)),
+        Requirement::Repo { .. } => Some(repo_authority(evidence, now)),
+        Requirement::Exempt | Requirement::Malformed => None,
+    }
+}
+
+/// The person tier as a reader sees it: as [`classify_person`], except that
+/// a link whose latest check is not verified reads not verified whatever
+/// login that check saw.
+fn person_authority(
+    person: &PersonSubject,
+    links: &[LinkedAccountEvidence],
+    now: DateTime<Utc>,
+) -> Authority {
+    links
+        .iter()
+        .filter_map(|link| reader_link_standing(person.login(), link, now))
+        .min_by_key(standing_rank)
+        .map_or(Authority::Unattested(Unattested::NoLink), Authority::from)
+}
+
+/// What one link tells a reader about `login`.
+fn reader_link_standing(
+    login: &str,
+    link: &LinkedAccountEvidence,
+    now: DateTime<Utc>,
+) -> Option<PersonAuthority> {
+    let names_login = |other: &str| other.eq_ignore_ascii_case(login);
+    match current_check(link, now) {
+        Some(check)
+            if check.verdict != CheckVerdict::Verified
+                && (names_login(&check.login_seen) || names_login(&link.linked_login)) =>
+        {
+            Some(PersonAuthority::Unattested(Unattested::LinkNotVerified))
+        }
+        _ => link_standing(login, link, now),
+    }
+}
+
+impl From<PersonAuthority> for Authority {
+    fn from(person: PersonAuthority) -> Self {
+        match person {
+            PersonAuthority::Attested { github_id, .. } => {
+                Authority::Attested(AttestedTier::Owner { github_id })
+            }
+            PersonAuthority::NotChecked => Authority::NotChecked,
+            PersonAuthority::Unattested(reason) => Authority::Unattested(reason),
+        }
+    }
+}
+
+/// A link's latest check, unless it is dated after `now` (then: missing).
+fn current_check(link: &LinkedAccountEvidence, now: DateTime<Utc>) -> Option<&LatestLinkCheck> {
+    link.latest_check
+        .as_ref()
+        .filter(|check| check.checked_at <= now)
+}
+
+/// The repo tiers over the latest observation (ADR-087 §2-3). Only the
+/// latest observation decides: a former owner reads unattested.
+fn repo_authority(evidence: &AuthorityEvidence<'_>, now: DateTime<Utc>) -> Authority {
+    match evidence.repo.map(|observed| &observed.finding) {
+        None => Authority::NotChecked,
+        Some(RepoFinding::NotFound) => Authority::Unattested(Unattested::RepoNotFound),
+        Some(RepoFinding::Found {
+            owner_id,
+            owner_kind,
+            authority_file,
+        }) => found_repo_authority(evidence, *owner_id, *owner_kind, authority_file, now),
+    }
+}
+
+/// How the author stands to a repo owner's account through their links.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OwnerLink {
+    Verified,
+    NotVerified,
+    NotChecked,
+    None,
+}
+
+/// The author's strongest link standing to the account `owner_id`, judged
+/// by each link's latest check (by account id: a rename does not matter).
+fn owner_link(links: &[LinkedAccountEvidence], owner_id: u64, now: DateTime<Utc>) -> OwnerLink {
+    links
+        .iter()
+        .filter(|link| link.github_id == owner_id)
+        .map(|link| match current_check(link, now) {
+            Some(check) if check.verdict == CheckVerdict::Verified => OwnerLink::Verified,
+            Some(_) => OwnerLink::NotVerified,
+            None => OwnerLink::NotChecked,
+        })
+        .min_by_key(|standing| *standing as u8)
+        .unwrap_or(OwnerLink::None)
+}
+
+/// The authority file lists `author` as an exact token (no prefix, no case folding).
+fn lists_author(authority_file: &AuthorityFileSeen, author: &str) -> bool {
+    matches!(authority_file, AuthorityFileSeen::Present(dids) if dids.iter().any(|did| did == author))
+}
+
+/// Owner: a user owns the repo and the author has a verified link to that
+/// account (an organization is never an owner). RepoListed: the authority
+/// file lists the author. Otherwise the nearest reason it is not attested.
+fn found_repo_authority(
+    evidence: &AuthorityEvidence<'_>,
+    owner_id: u64,
+    owner_kind: RepoOwnerKind,
+    authority_file: &AuthorityFileSeen,
+    now: DateTime<Utc>,
+) -> Authority {
+    let user_owned = owner_kind == RepoOwnerKind::User;
+    let link = owner_link(evidence.author_links, owner_id, now);
+    if user_owned && link == OwnerLink::Verified {
+        return Authority::Attested(AttestedTier::Owner {
+            github_id: owner_id,
+        });
+    }
+    if lists_author(authority_file, evidence.author) {
+        return Authority::Attested(AttestedTier::RepoListed);
+    }
+    match (owner_kind, link, authority_file) {
+        (RepoOwnerKind::User, OwnerLink::NotVerified, _) => {
+            Authority::Unattested(Unattested::LinkNotVerified)
+        }
+        (RepoOwnerKind::User, OwnerLink::NotChecked, _) => Authority::NotChecked,
+        (_, _, AuthorityFileSeen::Invalid) => Authority::Unattested(Unattested::FileInvalid),
+        (RepoOwnerKind::Organization, _, _) => Authority::Unattested(Unattested::OrgOwnedNotListed),
+        (RepoOwnerKind::User, _, _) => Authority::Unattested(Unattested::NotRepoOwner),
+    }
 }
 
 #[cfg(test)]

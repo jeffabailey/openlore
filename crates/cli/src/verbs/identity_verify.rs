@@ -95,9 +95,10 @@ fn recheck(
 /// Re-check one link on a fresh GitHub read (at most two: its login, then
 /// its account number) and append the decided check — the read-decide-append
 /// `identity verify` and the sign-time refresh of the signer's own link
-/// ([`refresh_signers_own_link`], OOS-D7) share. A GitHub failure, or an answer naming no account, appends
-/// nothing: the reason is returned instead.
-fn recheck_and_record(
+/// ([`refresh_signers_own_link`], OOS-D7) and `authority verify` share. A
+/// GitHub failure, or an answer naming no account, appends nothing: the
+/// reason is returned instead.
+pub(crate) fn recheck_and_record(
     github: &dyn GithubPort,
     check_writes: &dyn IdentityLinkCheckWritePort,
     runtime: &tokio::runtime::Runtime,
