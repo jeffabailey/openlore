@@ -212,4 +212,4 @@ Iteration 2 (re-review of ed27d3d, with design a600ad3, stories 680f56b, rulings
   its secondary guardrail because its primary Thens are preservation Thens that already hold; this
   is the nature of a preservation scenario, recorded as a known exception, not fixed.
 
-Handoff to DELIVER: ready once the user acknowledges the Mandate-8 waiver.
+Mandate-8 waiver ACKNOWLEDGED by the user (2026-10-20); Sentinel condition met. Handoff to DELIVER: ready.
