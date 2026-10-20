@@ -8,3 +8,6 @@
 | U-OOS-D4 | 01-06 | PS-9 passed on activation; successful-refresh rows added by DISTILL (e65d144), mutation-verified. | Resolved. |
 | U-OOS-D5 | 02-01 | `tests/acceptance/identity_link.rs` IL-13a pinned schema list ending at v7; now expects v7 then v8 (EXPECTATION, schema head moved). | Accepted (orchestrator). |
 | U-OOS-D6 | 02-01 | No CLI-level test kills "probe skipped at startup" (same gap exists for the v7 identity-link probe). | Open: DISTILL scenario (break table → any verb → health.startup.refused) before mutation phase. |
+| U-OOS-D7 | 02-03 | No AT kills "one GitHub read per claim instead of per repo" (RA-4 has one claim per repo). | Open: DISTILL row with two claims about one repo, before mutation phase. |
+| U-OOS-D8 | 02-03 | CORE-OOS-3 oracle (unverified latest check -> LinkNotVerified regardless of login) disagrees with the may_sign_from_checks property (other login -> LoginNotCurrent); classify uses a reader-side override. Only the Unattested reason differs; permit decisions agree. | Accepted; revisit at review (unify the reason rule). |
+| U-OOS-D9 | 02-03 | classify's new evidence inputs (LatestRepoObservation, RepoFinding, AuthorityFileSeen) are not in authority_evidence_only_from_adapters. | Open: add to the rule in refactor/review. |
