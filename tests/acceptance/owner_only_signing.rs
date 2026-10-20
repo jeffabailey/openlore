@@ -308,9 +308,24 @@ fn with_the_network_off_jeff_signs_about_himself_only_from_a_check_at_most_7_day
 ///     | GitHub says it is too busy to answer            | 3 October 09:00 | the claim is signed and reaches his published repo                             |
 ///     | GitHub cannot be reached                        | 3 October 09:00 | the claim is signed and reaches his published repo                             |
 ///     | GitHub says it is too busy to answer            | 8 October 09:01 | nothing is signed; he is told to re-check authority, with the command to run   |
+///
+/// @driving_port @real-io @security @s-oos-3 @r-3 @adr-087-6 @contract-shape:bounded-change
+/// Scenario Outline: When GitHub answers as Jeff signs from an import, his own link is re-checked first, once
+///   Given Jeff linked "jeffbailey" and his link was checked on 1 October at 09:00
+///   And Rachel's signed claims say two repos built by BurntSushi and jeffbailey are memory-safe
+///   And GitHub answers every profile read, BurntSushi's included
+///   When Jeff reads "<person>" as a person and signs candidate 1 on 21 October at 09:00
+///   Then <outcome>
+///   And GitHub was asked for Jeff's own profile <asked>
+///   Examples:
+///     | person     | outcome                                                                                              | asked                                                     |
+///     | jeffbailey | the claim is signed and reaches his published repo; his identities show one new check, dated today   | once for the import and exactly once more for the re-check |
+///     | BurntSushi | nothing is signed; he is told BurntSushi can sign it after linking; his identities read as before    | never                                                     |
 /// ```
 #[test]
 fn when_github_cannot_answer_as_jeff_signs_from_an_import_his_latest_check_decides() {
+    // The import itself reads the person's profile once (`scrape person`).
+    const IMPORT_READS_THE_PROFILE: usize = 1;
     let own = Subject::Person(JEFF_GH);
     let rows: [(ProfileTrouble, &str, Option<Refusal>); 3] = [
         (ProfileTrouble::TooBusy, CHECK_PLUS_2_DAYS, None),
@@ -324,7 +339,7 @@ fn when_github_cannot_answer_as_jeff_signs_from_an_import_his_latest_check_decid
     for (trouble, now, refusal) in rows {
         let row = format!("{trouble:?} at {now}");
         let world = store_where_jeff_and_burntsushi_build_memory_safe_repos();
-        github_stops_answering_jeffs_profile_after(&world, 1, trouble);
+        github_stops_answering_jeffs_profile_after(&world, IMPORT_READS_THE_PROFILE, trouble);
         let seen = what_jeff_sees(&world, own);
         let before = capture_authority_universe(&world.env);
 
@@ -349,6 +364,68 @@ fn when_github_cannot_answer_as_jeff_signs_from_an_import_his_latest_check_decid
             what_jeff_sees(&world, own).identities,
             seen.identities,
             "[{row}] the failed re-check recorded nothing"
+        );
+    }
+
+    // GitHub answers: a stale (20-day-old) check is refreshed exactly once
+    // when Jeff signs about his own account, and never otherwise.
+    let rows: [(Account, Option<Refusal>, usize); 2] = [
+        (JEFF_GH, None, IMPORT_READS_THE_PROFILE + 1),
+        (BURNTSUSHI_GH, Some(Refusal::NoLink), 0),
+    ];
+    for (person, refusal, jeffs_profile_reads) in rows {
+        let row = format!("GitHub answers, {} at {CHECK_PLUS_20_DAYS}", person.login);
+        let subject = Subject::Person(person);
+        let world = store_where_jeff_and_burntsushi_build_memory_safe_repos();
+        github_serves_the_profile_of(&world, BURNTSUSHI_GH);
+        let seen = what_jeff_sees(&world, subject);
+        let checks_before = link_checks(&world.env);
+        let before = capture_authority_universe(&world.env);
+        let asked_before = world.github_paths().len();
+
+        let outcome = when_jeff_scrapes_person_and_signs(&world, person, CHECK_PLUS_20_DAYS);
+        let asked = world.github_paths_since(asked_before);
+
+        match refusal {
+            None => {
+                assert_signed_and_published(&world, &outcome, subject);
+                let listed = when_i_list(&world, Some(CHECK_PLUS_20_DAYS));
+                assert_check_age(&listed, MY_DID, JEFF_GH, "today", false);
+                let mut one_more = checks_before.clone();
+                one_more.push(CheckRow::of(MY_DID, JEFF_GH, Verdict::Verified));
+                assert_eq!(
+                    link_checks(&world.env),
+                    one_more,
+                    "[{row}] guardrail: exactly one new check of Jeff's own link"
+                );
+            }
+            Some(reason) => {
+                assert_signing_refused(
+                    &outcome,
+                    subject,
+                    reason,
+                    Some(CanSign::Login(person.login)),
+                    None,
+                    &row,
+                );
+                assert_nothing_signed_or_published(&row, &seen, &world, subject);
+                assert_eq!(
+                    what_jeff_sees(&world, subject).identities,
+                    seen.identities,
+                    "[{row}] his linked identities read as before (no check recorded)"
+                );
+                guardrail_nothing_signed(&row, &before, &world.env);
+                assert_eq!(
+                    link_checks(&world.env),
+                    checks_before,
+                    "[{row}] guardrail: no check recorded"
+                );
+            }
+        }
+        assert_eq!(
+            profile_reads_of(&asked, JEFF_GH),
+            jeffs_profile_reads,
+            "[{row}] how often GitHub was asked for Jeff's own profile; asked: {asked:#?}"
         );
     }
 }

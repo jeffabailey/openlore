@@ -729,6 +729,23 @@ pub fn github_stops_answering_jeffs_profile_after(
     }
 }
 
+/// GIVEN (outside OpenLore): GitHub serves `account`'s public profile (no
+/// bio), so Jeff can read the account as a person.
+pub fn github_serves_the_profile_of(world: &LinkWorld, account: Account) {
+    world.github.register(account.on_github());
+}
+
+/// THEN (request log): how many times GitHub was asked for `account`'s
+/// profile among `asked` (GitHub's request log since a point in time).
+pub fn profile_reads_of(asked: &[String], account: Account) -> usize {
+    let by_login = account.login_path();
+    let by_id = account.id_path();
+    asked
+        .iter()
+        .filter(|path| **path == by_login || **path == by_id)
+        .count()
+}
+
 /// GIVEN: Jeff re-checked authority for every `github:` claim in his store.
 pub fn given_jeff_verified_authority(world: &LinkWorld, now: &str) {
     let out = when_jeff_verifies_authority(world, &[], Some(now));

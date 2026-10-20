@@ -68,7 +68,7 @@ Fixture (revision 1): `tests/fixtures/owner-only-signing-v7-store/` — frozen v
 | PS-6 | Jeff's inferred people say who can sign each candidate, and listing writes nothing | ADR-086 §10 |
 | PS-7 | Jeff still signs about his account when its bio also names another identity (ACTIVE) | UC-2 |
 | PS-8 | After Jeff renames his GitHub account, he signs only under the new login (2) | ADR-087 §1, G-2 |
-| PS-9 | When GitHub cannot answer as Jeff signs from an import, his latest check decides (3) | ruling R3, ADR-086 §5 clarification |
+| PS-9 | When GitHub cannot answer as Jeff signs from an import, his latest check decides (3); when it answers, his own link is re-checked first, once (2) | ruling R3, ADR-086 §5 clarification, ADR-087 §6 |
 | RA-1 | Jeff imports his own repo and signs what it shows | ADR-087 §2, KPI-OOS-4 |
 | RA-2 | Jeff imports anything public, but signing what he cannot attest is refused with a hand-off (3) | ADR-086 §10, OOS-D12 |
 | RA-3 | An organization repo is signed only by an identity its authority file lists exactly (11) | ADR-087 §3, lie catalogue |
@@ -223,7 +223,25 @@ Scenario Outline: When GitHub cannot answer as Jeff signs from an import, his la
     | GitHub says it is too busy to answer            | 3 October 09:00 | the claim is signed and reaches his published repo                             |
     | GitHub cannot be reached                        | 3 October 09:00 | the claim is signed and reaches his published repo                             |
     | GitHub says it is too busy to answer            | 8 October 09:01 | nothing is signed; he is told to re-check authority, with the command to run   |
+
+@driving_port @real-io @security @s-oos-3 @r-3 @adr-087-6 @contract-shape:bounded-change
+Scenario Outline: When GitHub answers as Jeff signs from an import, his own link is re-checked first, once
+  Given Jeff linked "jeffbailey" and his link was checked on 1 October at 09:00
+  And Rachel's signed claims say two repos built by BurntSushi and jeffbailey are memory-safe
+  And GitHub answers every profile read, BurntSushi's included
+  When Jeff reads "<person>" as a person and signs candidate 1 on 21 October at 09:00
+  Then <outcome>
+  And GitHub was asked for Jeff's own profile <asked>
+  Examples:
+    | person     | outcome                                                                                              | asked                                                      |
+    | jeffbailey | the claim is signed and reaches his published repo; his identities show one new check, dated today   | once for the import and exactly once more for the re-check |
+    | BurntSushi | nothing is signed; he is told BurntSushi can sign it after linking; his identities read as before    | never                                                      |
 ```
+
+The two success rows (added after DELIVER step 01-06) pin the sign-time refresh itself: the
+1 October check is 20 days old, so without the refresh the `jeffbailey` row is refused as too
+old. Deleting the `refresh_signers_own_link` call in `crates/cli/src/verbs/scrape_person.rs`
+turns the test red at the row's primary Then (signed and published).
 
 **PS-5 (table over whose adherence Jeff signs)** — `jeff_signs_an_inferred_adherence_only_about_himself`
 
