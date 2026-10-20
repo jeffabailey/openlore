@@ -327,19 +327,30 @@ impl Wiring {
 
     /// The repo-tier evidence of a repo subject (owner-only-signing, ADR-087
     /// §2-5): this reader's latest observation of the repo not dated after
-    /// `now` (`None`: never observed here). Read port only — GitHub is not
+    /// `now`, with the name GitHub served it under (`None`: never observed
+    /// here). Read port only — GitHub is not
     /// asked and nothing is recorded.
     pub fn latest_repo_observation(
         &self,
         subject: &str,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Option<claim_domain::authority::LatestRepoObservation>> {
+    ) -> Result<Option<claim_domain::authority::ServedRepoObservation>> {
         let latest = self
             .repo_authority_checks
             .latest(&[ports::RepoSubjectKey::of(subject)], now)
             .context("reading the repo's latest authority observation")?;
         Ok(latest.into_iter().next().map(|check| {
-            crate::verbs::authority_verify::latest_observation(check.observation, check.checked_at)
+            let served_as = match &check.observation {
+                ports::RepoObservation::Found(found) => Some(found.full_name_seen.clone()),
+                ports::RepoObservation::RepoNotFound => None,
+            };
+            claim_domain::authority::ServedRepoObservation {
+                latest: crate::verbs::authority_verify::latest_observation(
+                    check.observation,
+                    check.checked_at,
+                ),
+                served_as,
+            }
         }))
     }
 

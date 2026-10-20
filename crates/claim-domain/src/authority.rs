@@ -192,18 +192,20 @@ fn owner_account(listed: &[u64], repo: RepoRead<'_>) -> Result<u64, SigningRefus
 /// with its new name; anything else is judged by [`owner_account`].
 fn still_named(subject: &str, repo: RepoRead<'_>) -> Result<(), SigningRefusal> {
     match repo {
-        RepoRead::Found(facts)
-            if !subject
-                .strip_prefix("github:")
-                .unwrap_or(subject)
-                .eq_ignore_ascii_case(&facts.full_name) =>
-        {
-            Err(SigningRefusal::RepoRenamed {
-                now: facts.full_name.clone(),
-            })
-        }
+        RepoRead::Found(facts) => match served_under_another_name(subject, &facts.full_name) {
+            Some(current_name) => Err(SigningRefusal::RepoRenamed { now: current_name }),
+            None => Ok(()),
+        },
         _ => Ok(()),
     }
+}
+
+/// The `owner/name` GitHub serves `subject`'s repo as, when that is another
+/// repo name than `subject`'s — compared without letter case, as GitHub
+/// does: letter case alone is not a rename.
+fn served_under_another_name(subject: &str, served_as: &str) -> Option<String> {
+    let named = subject.strip_prefix("github:").unwrap_or(subject);
+    (!named.eq_ignore_ascii_case(served_as)).then(|| served_as.to_string())
 }
 
 // -----------------------------------------------------------------------------
@@ -601,6 +603,58 @@ pub fn may_sign_repo_from_checks(
             repo_authority(&evidence, now),
         )),
     }
+}
+
+/// This reader's latest observation of a repo subject with the `owner/name`
+/// GitHub served the repo under then (`served_as`: `None` when GitHub did
+/// not have it). A redirect GitHub answers for a renamed or transferred repo
+/// shows here as another name (ADR-087 A-10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedRepoObservation {
+    pub latest: LatestRepoObservation,
+    pub served_as: Option<String>,
+}
+
+/// Why no permit was minted for a repo claim from local checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoSigningRefusal {
+    /// The latest observation shows GitHub serving `subject`'s repo as
+    /// `now` (renamed or transferred): authority is current, so the claim is
+    /// signed only under the name GitHub serves now (ADR-087 §2).
+    Renamed { subject: String, now: String },
+    /// The repo tier of the gate refused ([`may_sign_repo_from_checks`]).
+    Authority(AuthorityRefusal),
+}
+
+/// The repo gate `claim add` signs through: refuses a `subject` the latest
+/// observation (not dated after `now`) shows GitHub serving under another
+/// name — letter case alone is not a rename — and otherwise judges authority
+/// by [`may_sign_repo_from_checks`].
+pub fn may_sign_repo_as_served(
+    signer: &str,
+    subject: &str,
+    links: &[LinkedAccountEvidence],
+    repo: Option<&ServedRepoObservation>,
+    now: DateTime<Utc>,
+) -> Result<SigningPermit, RepoSigningRefusal> {
+    let observed = repo.filter(|observed| observed.latest.checked_at <= now);
+    if let Some(current_name) = observed
+        .and_then(|observed| observed.served_as.as_deref())
+        .and_then(|served_as| served_under_another_name(subject, served_as))
+    {
+        return Err(RepoSigningRefusal::Renamed {
+            subject: subject.to_string(),
+            now: current_name,
+        });
+    }
+    may_sign_repo_from_checks(
+        signer,
+        subject,
+        links,
+        observed.map(|observed| &observed.latest),
+        now,
+    )
+    .map_err(RepoSigningRefusal::Authority)
 }
 
 /// One attested repo tier and the oldest check it rests on.
@@ -1376,6 +1430,89 @@ mod gate_from_checks_tests {
             Some(PermitBasis::Exempt)
         );
         assert_eq!(exempt_permit(JEFF, assertion_about("github:someone")), None);
+    }
+
+    /// Jeff's repo (owner id 1) observed a day ago under `served_as`.
+    fn served(
+        finding: RepoFinding,
+        served_as: Option<&str>,
+        age: Duration,
+    ) -> ServedRepoObservation {
+        ServedRepoObservation {
+            latest: LatestRepoObservation {
+                finding,
+                checked_at: now() - age,
+            },
+            served_as: served_as.map(str::to_string),
+        }
+    }
+
+    fn jeffs_repo() -> RepoFinding {
+        RepoFinding::Found {
+            owner_id: 1,
+            owner_kind: RepoOwnerKind::User,
+            authority_file: AuthorityFileSeen::Absent,
+        }
+    }
+
+    // bypass: one example per served-name outcome; wording pins live in the ATs.
+    #[test]
+    fn a_repo_claim_is_signed_only_under_the_name_github_serves_now() {
+        let links = [link(
+            1,
+            "jeffbailey",
+            Some(("jeffbailey", CheckVerdict::Verified)),
+        )];
+        let subject = "github:jeffbailey/tidepool";
+        let one_day = Duration::days(1);
+        let owner = Ok(PermitBasis::Owner(1));
+        let cases = [
+            (
+                served(jeffs_repo(), Some("jeffbailey/tidepool"), one_day),
+                owner.clone(),
+            ),
+            (
+                served(jeffs_repo(), Some("JeffBailey/TidePool"), one_day),
+                owner,
+            ),
+            (
+                served(jeffs_repo(), Some("jeffbailey/tidepool-rs"), one_day),
+                Err(RepoSigningRefusal::Renamed {
+                    subject: subject.to_string(),
+                    now: "jeffbailey/tidepool-rs".to_string(),
+                }),
+            ),
+            (
+                served(jeffs_repo(), Some("acme-tools/tidepool"), one_day),
+                Err(RepoSigningRefusal::Renamed {
+                    subject: subject.to_string(),
+                    now: "acme-tools/tidepool".to_string(),
+                }),
+            ),
+            (
+                served(RepoFinding::NotFound, None, one_day),
+                Err(RepoSigningRefusal::Authority(
+                    AuthorityRefusal::Unattested {
+                        subject: subject.to_string(),
+                        reason: Unattested::RepoNotFound,
+                        can_sign: WhoCanSign::RepoOwnerOrListed {
+                            login: "jeffbailey".to_string(),
+                        },
+                    },
+                )),
+            ),
+            (
+                served(jeffs_repo(), Some("jeffbailey/tidepool-rs"), -one_day),
+                Err(RepoSigningRefusal::Authority(AuthorityRefusal::Recheck {
+                    subject: subject.to_string(),
+                    last_checked: None,
+                })),
+            ),
+        ];
+        for (observed, expected) in cases {
+            let decided = may_sign_repo_as_served(JEFF, subject, &links, Some(&observed), now());
+            assert_eq!(decided.map(|p| p.basis()), expected, "{observed:?}");
+        }
     }
 
     // bypass: a repo subject names its owner and name.

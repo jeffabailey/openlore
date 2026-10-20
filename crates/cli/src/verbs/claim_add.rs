@@ -36,14 +36,16 @@ use anyhow::{anyhow, Context, Result};
 use claim_domain::{ClaimReference, ConfidenceBucket, Did, ReferenceType, UnsignedClaim};
 
 use claim_domain::authority::{
-    exempt_permit, may_sign_from_checks, may_sign_repo_from_checks, requirement, AuthorityRefusal,
-    ClaimShape, Requirement, SigningPermit,
+    exempt_permit, may_sign_from_checks, may_sign_repo_as_served, requirement, AuthorityRefusal,
+    ClaimShape, RepoSigningRefusal, Requirement, SigningPermit,
 };
 use claim_domain::identity_link::is_reserved_predicate;
 use lexicon::ObjectAdvisory;
 
 use crate::io::prompt_line;
-use crate::render::{render_reserved_predicate_refused, render_signing_refused};
+use crate::render::{
+    render_repo_signing_refused, render_reserved_predicate_refused, render_signing_refused,
+};
 use crate::verbs::sign_permitted::sign_permitted;
 use crate::wiring::Wiring;
 
@@ -115,7 +117,8 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
     // assertion about a person's GitHub account is signed only by its owner,
     // judged from this reader's local checks; an assertion about a repo by
     // its owner or a DID its authority file lists, judged from the latest
-    // local observation of the repo and link check — offline, GitHub is not
+    // local observation of the repo and link check, and only under the name
+    // GitHub served it as then — offline, GitHub is not
     // asked (C-OOS-9). A `github:` subject that names no account or repo is
     // never signed (fail closed). A refusal happens before any prompt or side
     // effect: nothing is signed, written or published.
@@ -140,8 +143,8 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
             let links = wiring.signer_linked_accounts(now)?;
             let repo = wiring.latest_repo_observation(&args.subject, now)?;
             let decided =
-                may_sign_repo_from_checks(&signer, &args.subject, &links, repo.as_ref(), now);
-            let Some(permit) = permitted_or_refused(decided) else {
+                may_sign_repo_as_served(&signer, &args.subject, &links, repo.as_ref(), now);
+            let Some(permit) = repo_permitted_or_refused(decided) else {
                 return Ok(refused());
             };
             Some(permit)
@@ -310,6 +313,15 @@ fn permitted_or_refused(
 ) -> Option<SigningPermit> {
     decided
         .map_err(|refusal| eprint!("{}", render_signing_refused(&refusal)))
+        .ok()
+}
+
+/// The repo gate's permit, or `None` once its refusal is shown on stderr.
+fn repo_permitted_or_refused(
+    decided: std::result::Result<SigningPermit, RepoSigningRefusal>,
+) -> Option<SigningPermit> {
+    decided
+        .map_err(|refusal| eprint!("{}", render_repo_signing_refused(&refusal)))
         .ok()
 }
 

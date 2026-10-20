@@ -551,7 +551,6 @@ fn after_jeff_transfers_his_repo_his_earlier_claim_reads_third_party_and_nothing
 ///     | jeffbailey/tidepool     | nothing is signed; he is told GitHub serves this repo as jeffbailey/tidepool-rs |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-8: pending DELIVER"]
 fn after_jeff_renames_his_repo_he_signs_only_under_the_name_github_serves_now() {
     let rows: [(RepoRef, Option<Refusal>); 2] =
         [(TIDEPOOL_RENAMED, None), (TIDEPOOL, Some(Refusal::Renamed))];
@@ -665,7 +664,6 @@ fn with_no_github_claims_in_his_store_rechecking_authority_asks_github_nothing()
 ///   Then nothing is signed; he is told it was not found on GitHub
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-15: pending DELIVER"]
 fn a_repo_github_does_not_have_is_recorded_as_not_found_and_cannot_be_signed() {
     let world = authority_world();
     let vanished = Subject::Repo(VANISHED);

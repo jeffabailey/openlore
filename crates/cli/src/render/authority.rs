@@ -5,7 +5,7 @@
 
 use chrono::{DateTime, Utc};
 use claim_domain::authority::{
-    Authority, AuthorityRefusal, Unattested, WhoCanSign, SIGNING_WINDOW_DAYS,
+    Authority, AuthorityRefusal, RepoSigningRefusal, Unattested, WhoCanSign, SIGNING_WINDOW_DAYS,
 };
 
 /// The fixed hand-off lead.
@@ -83,6 +83,18 @@ pub fn render_signing_refused(refusal: &AuthorityRefusal) -> String {
         ),
     };
     format!("Not signed: {why}. Nothing was signed or published.\n{next}\n")
+}
+
+/// Render a refused repo signature: GitHub serves the repo under another
+/// name now (sign it under that name), or the authority refusal.
+pub fn render_repo_signing_refused(refusal: &RepoSigningRefusal) -> String {
+    match refusal {
+        RepoSigningRefusal::Renamed { subject, now } => format!(
+            "Not signed: GitHub serves this repo as {now}, not {subject}. Nothing was signed or \
+             published.\nSign the claim about github:{now} instead.\n"
+        ),
+        RepoSigningRefusal::Authority(refusal) => render_signing_refused(refusal),
+    }
 }
 
 /// `authority verify` with no `github:` claim in scope.
