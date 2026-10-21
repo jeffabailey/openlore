@@ -96,9 +96,9 @@ impl DuckDbStoreReadAdapter {
     /// Read one counter's free-text `reason` from its on-disk `SignedClaim`
     /// artifact — the ADR-046 step-B read (the reason is NOT a DB column; it lives
     /// in the artifact, ADR-015), located as every stored artifact is
-    /// ([`crate::artifact_paths::stored_artifact`]): an own counter by its CID
-    /// under `claims/`, a pulled one under `peer_claims/`; a CID or recorded
-    /// path that is not plain is never read. READ-ONLY: a plain `fs::read`,
+    /// ([`crate::artifact_paths::stored_artifact`]): an own counter by its CID,
+    /// a pulled one by its recorded relative path; a CID or recorded path that
+    /// is not plain is never read. READ-ONLY: a plain `fs::read`,
     /// LOCAL only, no network.
     ///
     /// BEST-EFFORT (graceful degradation, review D2): the counter entry itself is

@@ -1,7 +1,8 @@
-//! Where a stored claim's artifact is read from (D17): an own claim under
-//! this store's `claims/<cid>.json`, a pulled claim under its `peer_claims/`
-//! root — never at an absolute path recorded when it was written, and never
-//! from a CID or recorded path that could climb out of those directories.
+//! Where a stored claim's artifact is read from (D17): an own claim by its
+//! CID in this store's own-claim directory, a pulled claim by its recorded
+//! relative path in the pulled-claim directory — never at an absolute path
+//! recorded when it was written, and never from a CID or recorded path that
+//! could climb out of those directories.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -67,7 +68,7 @@ mod tests {
             Some(root.join("did_plc_rachel/bafyabc.json"))
         );
         for hostile in [
-            "peer_claims/../claims/bafyabc.json",
+            "peer_claims/../outside/bafyabc.json",
             "/etc/bafyabc.json",
             "peer_claims//bafyabc.json/../bafyabc.json",
             "peer_claims/did/other.json",
