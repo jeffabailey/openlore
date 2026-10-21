@@ -346,4 +346,163 @@ mod tests {
             "the larger import_id wins the tie"
         );
     }
+
+    fn schema_versions(db: &Path) -> Vec<i64> {
+        let conn = Connection::open(db).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT version FROM schema_version ORDER BY version")
+            .unwrap();
+        let versions = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        versions
+    }
+
+    fn assert_refused_as_unreliable(outcome: ProbeOutcome) {
+        match outcome {
+            ProbeOutcome::Refused { reason, .. } => assert_eq!(
+                reason,
+                ProbeRefusalReason::StorageImportedCandidatesUnreliable
+            ),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    /// D29: a healthy store passes the probe and keeps nothing from it; a
+    /// store that cannot keep an import, or reads back something else than
+    /// the sentinel, is refused as StorageImportedCandidatesUnreliable.
+    #[test]
+    fn the_probe_passes_a_healthy_store_untouched_and_refuses_one_that_cannot_keep_an_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("openlore.duckdb");
+        let storage = DuckDbStorageAdapter::open(&db).unwrap();
+        let kept = storage.imported_candidate_adapter();
+
+        assert!(matches!(kept.probe(), ProbeOutcome::Ok));
+        assert_eq!(
+            kept.list(None).unwrap(),
+            Vec::new(),
+            "the sentinel rolled back"
+        );
+
+        {
+            let conn = storage.conn.lock().unwrap();
+            conn.execute_batch("DROP TABLE imported_candidates")
+                .unwrap();
+        }
+        assert_refused_as_unreliable(kept.probe());
+    }
+
+    #[test]
+    fn a_sentinel_read_back_altered_is_refused() {
+        let altered = ImportedCandidate {
+            confidence: 0.5,
+            ..sentinel_candidate()
+        };
+        assert!(matches!(
+            judge_sentinel(&[sentinel_candidate()]),
+            ProbeOutcome::Ok
+        ));
+        for readback in [
+            vec![],
+            vec![altered],
+            vec![sentinel_candidate(), sentinel_candidate()],
+        ] {
+            assert_refused_as_unreliable(judge_sentinel(&readback));
+        }
+    }
+
+    /// D29: an import is kept whole or not at all — a candidate that cannot
+    /// be inserted rolls back the rows already inserted for that import, and
+    /// earlier imports are untouched.
+    #[test]
+    fn a_failed_insert_rolls_the_whole_import_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("openlore.duckdb");
+        let storage = DuckDbStorageAdapter::open(&db).unwrap();
+        let kept = storage.imported_candidate_adapter();
+        let earlier = pinning(ANVIL, 0.4, "https://example.org/earlier");
+        kept.record_import(&import_of(on(1), earlier.clone()))
+            .unwrap();
+        {
+            // Make a second row for one subject in one import impossible.
+            let conn = storage.conn.lock().unwrap();
+            conn.execute_batch(
+                "CREATE UNIQUE INDEX one_row_per_import_subject \
+                 ON imported_candidates (import_id, subject_key)",
+            )
+            .unwrap();
+        }
+        let failing = CandidateImport {
+            imported_at: on(3),
+            candidates: vec![
+                pinning("github:jeffbailey/tidepool", 0.9, "https://example.org/a"),
+                pinning("github:jeffbailey/tidepool", 0.8, "https://example.org/b"),
+            ],
+        };
+
+        let refused = kept.record_import(&failing);
+
+        assert!(
+            matches!(refused, Err(ImportedCandidateError::Store(_))),
+            "{refused:?}"
+        );
+        let listed = kept.list(None).unwrap();
+        drop(kept);
+        drop(storage);
+        assert_eq!(stored_rows(&db), 1, "nothing of the failed import stays");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].candidate, earlier);
+    }
+
+    /// D29: a store at v8 (no imported_candidates) gains the table on open,
+    /// records v9 once, keeps what it held, and keeps imports.
+    #[test]
+    fn opening_a_v8_store_migrates_it_to_v9_and_keeps_what_it_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("openlore.duckdb");
+        {
+            let storage = DuckDbStorageAdapter::open(&db).unwrap();
+            let conn = storage.conn.lock().unwrap();
+            // Wind the fresh store back to v8.
+            conn.execute_batch(
+                "DROP TABLE imported_candidates; \
+                 DROP SEQUENCE imported_candidate_ids; \
+                 DROP SEQUENCE candidate_import_ids; \
+                 DELETE FROM schema_version WHERE version = 9;",
+            )
+            .unwrap();
+        }
+        let held_before = |db: &Path| -> i64 {
+            Connection::open(db)
+                .unwrap()
+                .query_row("SELECT count(*) FROM schema_version", [], |row| row.get(0))
+                .unwrap()
+        };
+        assert!(!schema_versions(&db).contains(&9), "wound back to v8");
+        let versions_at_v8 = held_before(&db);
+
+        let storage = DuckDbStorageAdapter::open(&db).unwrap();
+        let kept = storage.imported_candidate_adapter();
+        let candidate = pinning(ANVIL, 0.9, "https://example.org/after");
+        kept.record_import(&import_of(on(2), candidate.clone()))
+            .unwrap();
+        let listed = kept.list(None).unwrap();
+        drop(kept);
+        drop(storage);
+        DuckDbStorageAdapter::open(&db).unwrap();
+
+        let versions = schema_versions(&db);
+        assert_eq!(
+            versions.iter().filter(|v| **v == 9).count(),
+            1,
+            "v9 recorded once, also on reopen: {versions:?}"
+        );
+        assert_eq!(held_before(&db), versions_at_v8 + 1, "older versions kept");
+        assert!(versions.contains(&8), "{versions:?}");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].candidate, candidate);
+    }
 }
