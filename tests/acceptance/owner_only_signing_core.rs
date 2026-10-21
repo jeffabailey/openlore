@@ -586,7 +586,13 @@ fn oracle_person(author: &str, login: &str, ev: &EvidenceView) -> Expected {
             None => e.not_checked = true,
         }
     }
-    if !related {
+    // EXPECTATION change (DELIVER review D27): a reader holding no identity
+    // link of the author at all has not checked their authority (was: NoLink,
+    // read "third-party"); an author with links, none naming the account,
+    // still reads NoLink. The gate oracle reads only `owner_ids`.
+    if mine.is_empty() {
+        e.not_checked = true;
+    } else if !related {
         e.reasons.insert(ReasonView::NoLink);
     }
     e

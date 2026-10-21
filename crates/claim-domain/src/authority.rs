@@ -449,27 +449,36 @@ pub fn classify_person(
         .unwrap_or(PersonAuthority::Unattested(Unattested::NoLink))
 }
 
-/// What one link says about `login`; `None` when it names another account.
+/// What one link says about `login` — the one rule the gate and every
+/// reader share (D8); `None` when the link names another account. A link
+/// names `login` when it was linked under it or its latest check saw it. Its
+/// latest check decides: not verified, the proof is gone whatever login it
+/// saw (LinkNotVerified); verified and seeing `login`, the owner; verified
+/// under another login, `login` is no longer current; never checked here,
+/// not checked.
 fn link_standing(
     login: &str,
     link: &LinkedAccountEvidence,
     now: DateTime<Utc>,
 ) -> Option<PersonAuthority> {
     let names_login = |other: &str| other.eq_ignore_ascii_case(login);
-    match current_check(link, now) {
-        Some(check) if names_login(&check.login_seen) => Some(match check.verdict {
-            CheckVerdict::Verified => PersonAuthority::Attested {
-                github_id: link.github_id,
-                checked_at: check.checked_at,
-            },
-            _ => PersonAuthority::Unattested(Unattested::LinkNotVerified),
-        }),
-        Some(_) if names_login(&link.linked_login) => {
-            Some(PersonAuthority::Unattested(Unattested::LoginNotCurrent))
-        }
-        None if names_login(&link.linked_login) => Some(PersonAuthority::NotChecked),
-        _ => None,
+    let check = current_check(link, now);
+    let related = names_login(&link.linked_login)
+        || check.is_some_and(|check| names_login(&check.login_seen));
+    if !related {
+        return None;
     }
+    Some(match check {
+        Some(check) if check.verdict != CheckVerdict::Verified => {
+            PersonAuthority::Unattested(Unattested::LinkNotVerified)
+        }
+        Some(check) if names_login(&check.login_seen) => PersonAuthority::Attested {
+            github_id: link.github_id,
+            checked_at: check.checked_at,
+        },
+        Some(_) => PersonAuthority::Unattested(Unattested::LoginNotCurrent),
+        None => PersonAuthority::NotChecked,
+    })
 }
 
 /// The strongest standing wins: attested (the most recent check first), then
@@ -880,37 +889,19 @@ pub fn classify(
     }
 }
 
-/// The person tier as a reader sees it: as [`classify_person`], except that
-/// a link whose latest check is not verified reads not verified whatever
-/// login that check saw.
+/// The person tier as a reader sees it: [`classify_person`], except that a
+/// reader holding no identity link of the author at all has not checked
+/// their authority (D27) — it cannot tell their own account from someone
+/// else's. (The gate, judging the signer's own links, says "no link".)
 fn person_authority(
     person: &PersonSubject,
     links: &[LinkedAccountEvidence],
     now: DateTime<Utc>,
 ) -> Authority {
-    links
-        .iter()
-        .filter_map(|link| reader_link_standing(person.login(), link, now))
-        .min_by_key(standing_rank)
-        .map_or(Authority::Unattested(Unattested::NoLink), Authority::from)
-}
-
-/// What one link tells a reader about `login`.
-fn reader_link_standing(
-    login: &str,
-    link: &LinkedAccountEvidence,
-    now: DateTime<Utc>,
-) -> Option<PersonAuthority> {
-    let names_login = |other: &str| other.eq_ignore_ascii_case(login);
-    match current_check(link, now) {
-        Some(check)
-            if check.verdict != CheckVerdict::Verified
-                && (names_login(&check.login_seen) || names_login(&link.linked_login)) =>
-        {
-            Some(PersonAuthority::Unattested(Unattested::LinkNotVerified))
-        }
-        _ => link_standing(login, link, now),
+    if links.is_empty() {
+        return Authority::NotChecked;
     }
+    classify_person(person, links, now).into()
 }
 
 impl From<PersonAuthority> for Authority {
@@ -1189,17 +1180,23 @@ mod gate_from_checks_tests {
 
     /// ADR-087 §1 stated over the evidence, independently of the gate: the
     /// reason a refusal about `login` gives when no link attests it. A link
-    /// whose current check saw the login unverified is not verified; a link
-    /// checked since under another login names a login that is no longer
-    /// current; no link naming the login is no link at all.
+    /// naming the login (linked under it, or its current check saw it) whose
+    /// current check is not verified is not verified, whatever login that
+    /// check saw (D8: the rule readers use too); a link linked under the
+    /// login and verified since under another names a login that is no
+    /// longer current; no link naming the login is no link at all.
     fn adr_087_reason(login: &str, links: &[LinkedAccountEvidence]) -> Unattested {
         let same = |other: &str| other.eq_ignore_ascii_case(login);
         let not_verified = links.iter().any(|l| {
-            current_check(l)
-                .is_some_and(|c| same(&c.login_seen) && c.verdict != CheckVerdict::Verified)
+            current_check(l).is_some_and(|c| {
+                c.verdict != CheckVerdict::Verified
+                    && (same(&c.login_seen) || same(&l.linked_login))
+            })
         });
         let renamed_since = links.iter().any(|l| {
-            same(&l.linked_login) && current_check(l).is_some_and(|c| !same(&c.login_seen))
+            same(&l.linked_login)
+                && current_check(l)
+                    .is_some_and(|c| c.verdict == CheckVerdict::Verified && !same(&c.login_seen))
         });
         if not_verified {
             Unattested::LinkNotVerified
@@ -1314,14 +1311,62 @@ mod gate_from_checks_tests {
                 )],
                 Unattested::LoginNotCurrent,
             ),
+            // D8: a latest check that is not verified says the proof is
+            // gone, whatever login it saw — gate and reader alike.
+            (
+                vec![link(
+                    1,
+                    "jeffbailey",
+                    Some(("jeff-b", CheckVerdict::DidMissing)),
+                )],
+                Unattested::LinkNotVerified,
+            ),
         ];
         for (links, reason) in cases {
+            let reader = classify(
+                assertion_about("github:jeffbailey"),
+                &AuthorityEvidence {
+                    author: JEFF,
+                    author_links: &links,
+                    repo: None,
+                },
+                now(),
+            );
+            if !links.is_empty() {
+                assert_eq!(
+                    reader,
+                    Some(Authority::Unattested(reason)),
+                    "reader: {links:?}"
+                );
+            }
             let refused = may_sign_from_checks(JEFF, &jeff, &links, now()).unwrap_err();
             let AuthorityRefusal::Unattested { reason: got, .. } = refused else {
                 panic!("{links:?} is unattested, got {refused:?}");
             };
             assert_eq!(got, reason, "{links:?}");
         }
+    }
+
+    // bypass: D27 — the reader's two person outcomes with no attesting link.
+    #[test]
+    fn a_reader_holding_no_link_of_the_author_has_not_checked_their_authority() {
+        let about_jeff = assertion_about("github:jeffbailey");
+        let judged = |links: &[LinkedAccountEvidence]| {
+            classify(
+                about_jeff,
+                &AuthorityEvidence {
+                    author: "did:plc:sven",
+                    author_links: links,
+                    repo: None,
+                },
+                now(),
+            )
+        };
+        assert_eq!(judged(&[]), Some(Authority::NotChecked));
+        assert_eq!(
+            judged(&[link(9, "sven", Some(("sven", CheckVerdict::Verified)))]),
+            Some(Authority::Unattested(Unattested::NoLink))
+        );
     }
 
     // bypass: the window's edges at minute granularity (A-6, DWD-OOS-14).
