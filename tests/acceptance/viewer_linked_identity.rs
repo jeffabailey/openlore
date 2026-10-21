@@ -704,7 +704,7 @@ fn a_claims_detail_page_shows_its_authors_linked_identity() {
 ///   Then <what he sees>
 ///   Examples:
 ///     | the network index                                                           | what he sees |
-///     | holds Rachel's link and Sven's claim that rust-lang/regex is maintained by github "rachelk" | Rachel's group shows "did:plc:rachel-test is github:rachelk — verified today"; her link row is labelled "authority not checked here"; Sven's group has no linked identity and his row no label |
+///     | holds Rachel's link and Sven's claim that rust-lang/regex is maintained by github "rachelk" | Rachel's group shows "did:plc:rachel-test is github:rachelk — verified today"; her link row is labelled "authority not checked here"; Sven's group has no linked identity and his row reads "authority not checked here" |
 ///     | is not configured                                                           | the "network index is unavailable" notice, and no linked identity |
 /// ```
 #[test]
@@ -774,10 +774,15 @@ fn network_search_shows_each_authors_linked_identity_and_labels_link_rows() {
         regions_html(&svens).is_empty(),
         "[Sven's group] no linked identity;\n{svens}"
     );
+    // EXPECTATION change (owner-only-signing DELIVER review D27, the viewer
+    // twin of IR-16b): RD-7/RD-7b supersede U-7 — every github: assertion
+    // row is labelled from Jeff's own checks, and he holds none of
+    // rust-lang/regex, so Sven's row reads `authority not checked here`
+    // (was: unlabelled).
     assert_eq!(
         label_on(&svens, &svens_row),
-        Some(false),
-        "[Sven's group] a github row that is not a link is listed and unlabelled (U-7);\n{svens}"
+        Some(true),
+        "[Sven's group] a github assertion row Jeff has not checked reads `{SEARCH_LABEL}` (RD-7b);\n{svens}"
     );
 
     assert!(
