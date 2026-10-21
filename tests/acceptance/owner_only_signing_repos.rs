@@ -657,6 +657,62 @@ fn a_listed_identity_stays_listed_whoever_observed_the_repo_last() {
     );
 }
 
+/// RA-9b (crafter-owned regression, DELIVER review D19: the shared weight
+/// suites list every claim author, so they cannot notice an ignored file)
+/// ```gherkin
+/// @driving_port @real-io @security @kpi-oos-2 @adr-087-3 @c-oos-6 @oos-d19 @contract-shape:bounded-change
+/// Scenario: Only the identity a repo's authority file lists moves its weight
+///   Given anvil's authority file listed Jeff, and he signed and published a claim about anvil
+///   And Rachel published a claim about anvil and Jeff pulled it
+///   And anvil's authority file now lists Rachel and not Jeff, and Jeff re-checked authority
+///   When Jeff asks for the weighted view of memory-safety, explaining anvil's weight
+///   Then anvil's weight is built from Rachel's claim alone
+///   And he is told "1 claim not counted: 1 third-party"
+/// ```
+#[test]
+fn only_the_identity_a_repos_authority_file_lists_moves_its_weight() {
+    let anvil = Subject::Repo(ANVIL);
+    let mut world = authority_world();
+    the_repo_holds_authority_file(&world, ANVIL, listing(&[MY_DID]));
+    given_jeff_verified_authority_of(&world, anvil, LINKED_AT);
+    given_jeff_signed_and_published(&world, anvil, LINKED_AT);
+    given_rachel_published(&mut world, vec![peer_claim_about(anvil)]);
+    the_repo_holds_authority_file(&world, ANVIL, listing(&[RACHEL_DID]));
+    given_jeff_verified_authority(&world, CHECK_PLUS_2_DAYS);
+
+    let weighted = when_jeff_reads_philosophy(
+        &world,
+        MEMORY_SAFETY,
+        &["--weighted", "--explain", &anvil.uri()],
+        Some(CHECK_PLUS_2_DAYS),
+    );
+
+    assert_eq!(
+        weighted.status, 0,
+        "{}\n{}",
+        weighted.stdout, weighted.stderr
+    );
+    assert!(
+        weighted
+            .stdout
+            .contains(&format!("Contribution: {RACHEL_DID}")),
+        "Rachel's listed claim counts;\n{}",
+        weighted.stdout
+    );
+    assert!(
+        !weighted.stdout.contains(&format!("Contribution: {MY_DID}")),
+        "Jeff's claim, no longer listed, does not count;\n{}",
+        weighted.stdout
+    );
+    assert!(
+        weighted
+            .stdout
+            .contains("1 claim not counted: 1 third-party."),
+        "{}",
+        weighted.stdout
+    );
+}
+
 /// RA-14 (C4b: re-check with nothing to re-check)
 /// ```gherkin
 /// @driving_port @real-io @edge @c3 @c4b @adr-087-6 @s-oos-5 @contract-shape:unbounded-preservation
