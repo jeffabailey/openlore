@@ -3055,3 +3055,56 @@ fn graph_query_weighted_end_to_end_wires_scoring_feed_without_persisting_outputs
         );
     }
 }
+
+/// Crafter-owned regression (owner-only-signing DELIVER review): every
+/// explorer flag combination `graph query` does not serve is a usage mistake
+/// — exit 2 with a message naming the flags to use — never a crash. Rows are
+/// each reachable fall-through of the explorer dispatch.
+///
+/// @real-io @driving_port @error @regression
+#[test]
+fn graph_query_unserved_explorer_flag_combinations_are_usage_mistakes_not_crashes() {
+    let env = TestEnv::initialized();
+    let object = "org.openlore.philosophy.dependency-pinning";
+    let subject = "github:rust-lang/cargo";
+    let did = "did:plc:rachel-test";
+    let rows: [&[&str]; 9] = [
+        &["--traverse"],
+        &["--weighted"],
+        &["--subject", subject, "--weighted"],
+        &["--explain", subject],
+        &["--object", object, "--explain", subject],
+        &["--object", object, "--traverse", "--weighted"],
+        &["--object", object, "--traverse", "--explain", subject],
+        &["--contributor", did, "--weighted", "--explain", subject],
+        &["--contributor", did, "--traverse", "--weighted"],
+    ];
+    for flags in rows {
+        let mut args = vec!["graph", "query"];
+        args.extend_from_slice(flags);
+        let outcome = run_openlore(&env, &args);
+        assert_eq!(
+            outcome.status, 2,
+            "{flags:?} is a usage mistake (exit 2);\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            outcome.stdout, outcome.stderr
+        );
+        for named in [
+            "--object",
+            "--contributor",
+            "--traverse",
+            "--weighted",
+            "--explain",
+        ] {
+            assert!(
+                outcome.stderr.contains(named),
+                "{flags:?}: the usage message names {named};\n--- stderr ---\n{}",
+                outcome.stderr
+            );
+        }
+        assert!(
+            !outcome.stderr.contains("panicked"),
+            "{flags:?} never crashes;\n--- stderr ---\n{}",
+            outcome.stderr
+        );
+    }
+}

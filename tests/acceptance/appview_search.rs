@@ -2592,3 +2592,32 @@ fn share_encodes_contributor_dimension_resolving_to_the_trail() {
         resolved.stdout
     );
 }
+
+/// Crafter-owned regression (owner-only-signing DELIVER review): `openlore
+/// search` with no dimension is a usage mistake — exit 2 with a message naming
+/// the dimension flags — never a crash. No indexer is consulted.
+///
+/// @real-io @driving_port @error @regression
+#[test]
+fn search_without_a_dimension_is_a_usage_mistake_not_a_crash() {
+    let env = TestEnv::initialized();
+    let rows: [&[&str]; 2] = [&["search"], &["search", "--hide-retracted"]];
+    for args in rows {
+        let outcome = run_openlore(&env, args);
+        let shown = format!("{}\n{}", outcome.stdout, outcome.stderr);
+        assert_eq!(
+            outcome.status, 2,
+            "{args:?} is a usage mistake (exit 2);\n{shown}"
+        );
+        for named in ["--object", "--contributor", "--subject"] {
+            assert!(
+                shown.contains(named),
+                "{args:?}: the usage message names {named};\n{shown}"
+            );
+        }
+        assert!(
+            !shown.contains("panicked"),
+            "{args:?} never crashes;\n{shown}"
+        );
+    }
+}

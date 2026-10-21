@@ -116,6 +116,13 @@ pub struct GraphQueryArgs {
 /// The usage error for `--include-unattested` without `--weighted` (P-OOS-1).
 pub const INCLUDE_UNATTESTED_NEEDS_WEIGHTED: &str = "--include-unattested requires --weighted";
 
+/// The usage error for an explorer flag combination `graph query` does not
+/// serve (e.g. `--traverse` or `--weighted` with no `--object`/`--contributor`,
+/// `--traverse` with `--weighted`, `--explain` without `--object … --weighted`).
+pub const UNSERVED_EXPLORER_COMBINATION: &str = "this flag combination is not supported; use \
+     --object <philosophy> or --contributor <did>, alone or with one of --traverse [--depth K] \
+     or --weighted; --explain <subject> needs --object <philosophy> --weighted";
+
 impl GraphQueryArgs {
     /// True iff ANY slice-04 explorer flag is present. The explorer flags imply
     /// federated scope (WD-87 / OD-GRAPH-4); the bare `--subject`/`--federated`
@@ -276,12 +283,8 @@ fn run_federated(wiring: &Wiring, subject: &str) -> Result<GraphQueryOutcome> {
 /// claims via the extended `StoragePort` scoring-feed / dimension / traversal
 /// read methods, then the pure `scoring` core for `--weighted`/`--explain`.
 ///
-/// SCAFFOLD: true (slice-04) — the body is a `todo!()`. DD-GRAPH-13 bootstrap:
-/// this routes the parsed explorer flags into per-dimension handlers whose
-/// bodies are also `todo!()`, so every slice-04 acceptance scenario reaches a
-/// `todo!()` panic (RED) rather than a compile error (BROKEN). The per-scenario
-/// GREEN implementation (Release 1: GQE-1/10/26; Release 2: GQE-6/20; Release 3:
-/// GQE-16) lands the read path one acceptance scenario at a time.
+/// Any other combination of explorer flags is a usage mistake (exit 2,
+/// [`UNSERVED_EXPLORER_COMBINATION`] on stderr), never a crash.
 fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> {
     // The dispatch tree (DELIVER materializes one branch per acceptance
     // scenario):
@@ -302,14 +305,12 @@ fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutc
     //   - GQE-1 (US-GRAPH-001): `--object` grouped by subject (step 03-01).
     //   - GQE-6 (US-GRAPH-002): `--contributor` — one developer's reasoning
     //     trail, listed under the DID (step 03-06).
-    // The --weighted / --traverse / --explain branches stay RED (todo!()) so
-    // GQE-10.. fail for the right reason.
     // GQE-20 (US-GRAPH-004): the `--traverse` branch — a bounded, cycle-safe
     // walk of contributor<->project<->philosophy edges via
     // `StoragePort::traverse_graph`, rendered as the philosophy->projects->
     // authors tree with the cross-project "Connections found" callout (Gate 5).
     // Routed before the dimension listings so `--object O --traverse` traverses
-    // rather than listing. (--contributor/--depth legs stay RED for GQE-21..25.)
+    // rather than listing.
     if args.traverse && !args.weighted && args.explain.is_none() {
         if let Some(object) = args.object.as_deref() {
             return run_traverse_object(wiring, object, args.depth);
@@ -326,7 +327,6 @@ fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutc
     // (`StoragePort::query_attributed_for_scoring`, per-claim UNION ALL — no SQL
     // aggregation) into the PURE `scoring::score` core, then renders the ranked
     // WeightedView with the transparent no-ML formula + the never-stored footer.
-    // The `--explain` leg stays RED for GQE-16.
     if args.weighted && !args.traverse && args.explain.is_none() {
         if let Some(object) = args.object.as_deref() {
             return run_weighted_object(wiring, object, args.include_unattested);
@@ -368,15 +368,11 @@ fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutc
         }
     }
 
-    let _ = (wiring, args);
-    todo!(
-        "DELIVER (slice-04): dispatch the explorer surface — for --weighted/--explain feed the \
-         extended StoragePort attributed claims into the pure scoring::score core and render the \
-         WeightedView (+ Contribution breakdown for --explain); for --traverse call \
-         StoragePort::traverse_graph(start, bound); else render the plain attributed dimension \
-         listing. Explorer flags imply federated scope (WD-87/OD-GRAPH-4); every rendered row \
-         carries its author_did (anti-merging, WD-73). (ADR-020; GQE-1..27)"
-    )
+    eprintln!("openlore graph query: {UNSERVED_EXPLORER_COMBINATION}");
+    Ok(GraphQueryOutcome {
+        exit_code: 2,
+        stdout: String::new(),
+    })
 }
 
 /// GQE-1 (US-GRAPH-001 happy): the `--object <philosophy>` dimension read. Calls

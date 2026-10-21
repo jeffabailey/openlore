@@ -26,14 +26,8 @@
 //! emits a render-only `peer add` follow affordance — it REUSES the slice-03
 //! command verbatim; there is no auto-follow, no parallel subscription state.
 //!
-//! Bootstrap SCAFFOLD (step 01-04): the verb + its `SearchArgs`/`SearchOutcome`
-//! + the dimension dispatch are established; the bodies are `todo!()` (the live
-//! XRPC query + the renders + the graceful-degradation path land in Phase 03/04,
-//! driven by the AV-* acceptance scenarios registering at 01-05).
-//
-// SCAFFOLD: true
-
-#![allow(dead_code)] // scaffold; the live search dispatch lands in Phase 03/04
+//! With no dimension, mode or link the verb is a usage mistake (exit 2) naming
+//! the dimension flags.
 
 use adapter_index_query::HttpIndexQueryAdapter;
 use anyhow::Result;
@@ -104,10 +98,10 @@ pub struct SearchOutcome {
 /// - a dimension (`--object`/`--contributor`/`--subject`) → query the indexer,
 ///   re-compose per-author, render the attributed network result; on an
 ///   unreachable indexer degrade gracefully to the local-only message (exit 0).
+/// - none of these → a usage error naming the dimension flags (exit 2).
 ///
-/// Bootstrap SCAFFOLD (step 01-04): the dispatch SHAPE is established; the bodies
-/// are `todo!()`. The verb reads the SOFT-probed `HttpIndexQueryAdapter` the CLI
-/// composition root wired (WD-116).
+/// The verb reads the SOFT-probed `HttpIndexQueryAdapter` the CLI composition
+/// root wired (WD-116).
 pub fn run(wiring: &Wiring, args: &SearchArgs) -> Result<SearchOutcome> {
     if let Some(link) = &args.link {
         return run_resolve_link(wiring, link);
@@ -795,12 +789,17 @@ fn resolve_link_usage_error(link: &str) -> SearchOutcome {
     }
 }
 
-/// No dimension / mode supplied: a usage error pointing at the dimension flags.
-/// SCAFFOLD — the exact usage message lands with the verb behavior.
+/// No dimension / mode supplied: a usage error (exit 2) naming the dimension
+/// flags — there is nothing to search for. Mirrors the other usage-error
+/// shapes.
 fn run_no_dimension(_args: &SearchArgs) -> Result<SearchOutcome> {
-    // SCAFFOLD: true — render the usage error naming
-    // --object/--contributor/--subject. Lands in Phase 03/04.
-    todo!("openlore search — usage error (no dimension supplied) (Phase 03/04)")
+    Ok(SearchOutcome {
+        exit_code: 2,
+        stdout: "openlore search requires a dimension: pass --object <philosophy>, \
+                 --contributor <did>, or --subject <uri> (or open a shared \
+                 `openlore://search?...` link).\n"
+            .to_string(),
+    })
 }
 
 #[cfg(test)]
