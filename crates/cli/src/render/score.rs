@@ -15,15 +15,16 @@ above. They are NOT stored, NOT signed, and NOT published. Re-running after a `p
 change them. Each weight decomposes to the exact claims that produced it; nothing is merged or \
 invented.";
 
-/// Render the `graph query --object <philosophy> --weighted` result: the
+/// Render the `graph query --weighted` result (by philosophy or by
+/// contributor, headed by `object`): the
 /// projects ranked by adherence weight (descending), each weight shown WITH its
 /// inputs, the transparent NO-ML formula, and the never-stored display-only
 /// footer. Pure function — no I/O, no storage access.
 ///
 /// ## Transparency contract (WD-71 / KPI-GRAPH-3; US-GRAPH-003)
 ///
-/// `view.ranked` is already sorted weight-descending by the pure `scoring::score`
-/// core. A weight is NEVER shown as a bare number: each carries its claim count,
+/// `view.ranked` is already sorted weight-descending by the pure
+/// `scoring::score_attested` core. A weight is NEVER shown as a bare number: each carries its claim count,
 /// distinct-author count, and max confidence (the formula inputs), so a user can
 /// reproduce it by hand against the printed formula. The formula block states
 /// "no ML" verbatim (WD-71). Cross-project triangulation by the SAME author and
@@ -35,11 +36,10 @@ invented.";
 /// breakdown surfaces the contributing authors by DID (from the pairing's
 /// non-empty `contributions`), so the aggregate always decomposes to its claims.
 ///
-/// ## Sparse honesty (WD-74; Gate 3) — RED for GQE-11
+/// ## Sparse honesty (WD-74; Gate 3)
 ///
-/// The `[SPARSE]` honesty line for a thin (1-claim 1-author) pairing lands with
-/// GQE-11 (step 05-02). This renderer prints the bucket label for every pairing;
-/// the sparse-specific "(!) based on N claims by M authors" advice is added then.
+/// A thin (1-claim 1-author) `[SPARSE]` pairing carries the "(!) based on N
+/// claims by M authors" honesty block ([`render_sparse_honesty_block`]).
 pub fn render_weighted_view(object: &str, view: &scoring::WeightedView) -> String {
     let mut out = String::new();
     let heading = format!("Weighted view: {object}");
@@ -48,11 +48,7 @@ pub fn render_weighted_view(object: &str, view: &scoring::WeightedView) -> Strin
     out.push_str(&"=".repeat(heading.len()));
     out.push_str("\n\n");
     out.push_str("Projects ranked by adherence weight (transparent formula below):\n\n");
-
-    for (index, pairing) in view.ranked.iter().enumerate() {
-        out.push_str(&render_weighted_pairing(index + 1, pairing));
-    }
-
+    out.push_str(&render_ranked_pairings(view));
     out.push_str(&render_weight_formula_block());
     out.push('\n');
     out.push_str(WEIGHTED_NEVER_STORED_FOOTER);
@@ -360,11 +356,19 @@ const UNATTESTED_SECTION_HEADING: &str = "Unattested claims, by author";
 /// The ranked pairings alone (no formula, no notice): the rows `--explain`
 /// shows beside its breakdown so the audited weight reads in context. Pure.
 pub fn render_weighted_ranking(object: &str, view: &scoring::WeightedView) -> String {
-    let mut out = format!("Projects weighted for {object}:\n\n");
-    for (index, pairing) in view.ranked.iter().enumerate() {
-        out.push_str(&render_weighted_pairing(index + 1, pairing));
-    }
-    out
+    format!(
+        "Projects weighted for {object}:\n\n{}",
+        render_ranked_pairings(view)
+    )
+}
+
+/// Every ranked pairing of `view`, numbered from 1 in weight order. Pure.
+fn render_ranked_pairings(view: &scoring::WeightedView) -> String {
+    view.ranked
+        .iter()
+        .enumerate()
+        .map(|(index, pairing)| render_weighted_pairing(index + 1, pairing))
+        .collect()
 }
 
 /// The not-counted footer: how many claims the weighted view left out, the

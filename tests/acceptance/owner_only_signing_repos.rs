@@ -12,8 +12,9 @@
 //! cross-host redirect, 403, outage), `PeerPds`, `FakePds`, `FakeIdentity`.
 //!
 //! Layer 3 subprocess — example-only (Mandate 9); sad paths are named rows
-//! (Mandate 11). Every scenario is `#[ignore]`d pending DELIVER except the
-//! active guard IC-5 (holds today, must hold after slice 5). IC-4 pins the
+//! (Mandate 11). Every scenario is enabled (DELIVER slices 2 and 5); only the
+//! frozen-v7 fixture regenerator stays `#[ignore]`d (run on demand). IC-5 is
+//! the guard that held before slice 5 and must keep holding. IC-4 pins the
 //! accepted ruling P-OOS-3 (was U-OOS-6).
 //!
 //! Observation (ruling R1): PRIMARY Thens read exit status, refusal text,

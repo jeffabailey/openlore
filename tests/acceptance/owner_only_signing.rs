@@ -14,11 +14,9 @@
 //! rows (Mandate 11). Refusal families are tables. Vocabulary:
 //! `support/authority.rs`.
 //!
-//! Every scenario is `#[ignore]`d (house rule D-d: a red test on trunk blocks
-//! every image job) EXCEPT the active guards PS-3 and PS-7, which hold today
-//! and must hold after DELIVER (scaffold policy, DWD-OOS-2). DELIVER enables
-//! WS-OOS-1 first; it fails today for the business reason (row 2: `claim
-//! add` signs Rachel's account).
+//! Every scenario is enabled (DELIVER slice 1, WS-OOS-1 first). PS-3 and
+//! PS-7 are the guards that held before DELIVER and must keep holding
+//! (scaffold policy, DWD-OOS-2).
 //!
 //! Observation (ruling R1, GDL D-e): PRIMARY Thens read exit status, the
 //! refusal text, what Jeff sees through `graph query` / `identity list` and

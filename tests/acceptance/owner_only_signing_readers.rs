@@ -19,7 +19,7 @@
 //! Layer 3/4 — example-only (Mandate 9). The unbounded weight invariant over
 //! generated feeds is CORE-OOS-5 in `owner_only_signing_core.rs` (layer 2);
 //! here RD-4 pins it through both driving ports with one example per kind.
-//! Every scenario is `#[ignore]`d pending DELIVER. Every Then reads a
+//! Every scenario is enabled (DELIVER slice 3). Every Then reads a
 //! driving port (reader output, viewer pages, PDS wire); the store universe
 //! is only a labelled SECONDARY guardrail (ruling R1).
 
