@@ -388,3 +388,94 @@ mod tests {
         assert_eq!(TraversalBound::DEFAULT_MAX_DEPTH, 2);
     }
 }
+
+#[cfg(test)]
+mod feed_authority_tests {
+    use super::*;
+    use crate::{NetworkResultRowRaw, PeerClaimProvenance};
+    use chrono::TimeZone;
+    use claim_domain::authority::{AttestedTier, Unattested};
+    use claim_domain::KeyId;
+
+    /// A reader that holds a repo observation listing Jeff: Jeff is
+    /// repo-listed for every `github:` subject, anyone else third-party; a
+    /// claim needing no authority gets no entry.
+    struct JeffIsListed;
+
+    impl FeedAuthorityReadPort for JeffIsListed {
+        fn feed_authority(&self, feed: &[ScoringFeedRow]) -> Result<FeedAuthority, String> {
+            Ok(FeedAuthority::new(
+                feed.iter()
+                    .filter(|row| row.claim.subject.starts_with("github:"))
+                    .map(|row| {
+                        let authority = if row.claim.author_did.0 == "did:plc:jeff" {
+                            Authority::Attested(AttestedTier::RepoListed)
+                        } else {
+                            Authority::Unattested(Unattested::NotRepoOwner)
+                        };
+                        (row.claim.cid.clone(), authority)
+                    }),
+            ))
+        }
+    }
+
+    fn index_row(author_did: &str, cid: &str, subject: &str) -> NetworkResultRowRaw {
+        NetworkResultRowRaw {
+            author_did: Did(author_did.to_string()),
+            cid: Cid(cid.to_string()),
+            subject: subject.to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.memory-safety".to_string(),
+            confidence: 0.6,
+            composed_at: Utc.with_ymd_and_hms(2026, 10, 8, 9, 0, 0).unwrap(),
+            verified_against: KeyId(author_did.to_string()),
+            evidence: vec![],
+            references: vec![],
+            provenance: PeerClaimProvenance::AppSigned,
+        }
+    }
+
+    // bypass: one row per judgment; the rows share a cid on purpose.
+    #[test]
+    fn each_index_row_is_judged_by_its_position_and_bare_author_did() {
+        let rows = [
+            index_row(
+                "did:plc:jeff#org.openlore.application",
+                "bafy-same",
+                "github:jeffbailey/tidepool",
+            ),
+            index_row("did:plc:rachel", "bafy-same", "github:jeffbailey/tidepool"),
+            index_row("did:plc:jeff", "bafy-other", "https:example.com"),
+        ];
+        assert_eq!(
+            index_rows_authority(&JeffIsListed, &rows),
+            Ok(vec![
+                Some(Authority::Attested(AttestedTier::RepoListed)),
+                Some(Authority::Unattested(Unattested::NotRepoOwner)),
+                None,
+            ])
+        );
+    }
+
+    // bypass: the judgment map hands back exactly what was judged.
+    #[test]
+    fn a_feed_authority_hands_back_every_judgment_by_cid() {
+        let judged = FeedAuthority::new([
+            (Cid("bafy-a".to_string()), Authority::NotChecked),
+            (
+                Cid("bafy-b".to_string()),
+                Authority::Attested(AttestedTier::RepoListed),
+            ),
+        ]);
+        assert_eq!(
+            judged.into_by_cid(),
+            BTreeMap::from([
+                ("bafy-a".to_string(), Authority::NotChecked),
+                (
+                    "bafy-b".to_string(),
+                    Authority::Attested(AttestedTier::RepoListed)
+                ),
+            ])
+        );
+    }
+}

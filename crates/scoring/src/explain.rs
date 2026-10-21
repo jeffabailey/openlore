@@ -196,4 +196,19 @@ mod not_counted_tests {
             }
         );
     }
+
+    /// Claims needing no authority are never left out, whatever the
+    /// reader's view says of them.
+    #[test]
+    fn a_claim_needing_no_authority_is_never_left_out() {
+        let feed = vec![
+            row("exempt", "https:example.com"),
+            row("third-party", "github:jeffbailey/tidepool"),
+        ];
+        let left: Vec<&str> = left_out(&feed, rachels_standing)
+            .iter()
+            .map(|claim| claim.row.claim.cid.0.as_str())
+            .collect();
+        assert_eq!(left, vec!["third-party"]);
+    }
 }

@@ -1632,6 +1632,246 @@ mod gate_from_checks_tests {
             }
         );
     }
+
+    // bypass: GitHub's login and repo-name syntax, one example per edge.
+    #[test]
+    fn a_github_subject_names_an_account_or_repo_only_in_githubs_own_syntax() {
+        let names_account = |subject: &str| {
+            matches!(
+                requirement(assertion_about(subject)),
+                Requirement::Person(_)
+            )
+        };
+        let names_repo = |subject: &str| {
+            matches!(
+                requirement(assertion_about(subject)),
+                Requirement::Repo { .. }
+            )
+        };
+        let malformed =
+            |subject: &str| requirement(assertion_about(subject)) == Requirement::Malformed;
+
+        let accounts = [
+            "github:jeff-b".to_string(),
+            "github:J3ff".to_string(),
+            format!("github:{}", "a".repeat(39)),
+        ];
+        for subject in &accounts {
+            assert!(names_account(subject), "{subject} names an account");
+        }
+        let not_accounts = [
+            "github:".to_string(),
+            "github:-jeff".to_string(),
+            "github:jeff-".to_string(),
+            "github:jeff_b".to_string(),
+            "github:jeff.b".to_string(),
+            format!("github:{}", "a".repeat(40)),
+        ];
+        for subject in &not_accounts {
+            assert!(malformed(subject), "{subject} names no account");
+        }
+        let repos = [
+            "github:jeffbailey/tide.pool_rs-2".to_string(),
+            "github:jeffbailey/.github".to_string(),
+            format!("github:jeffbailey/{}", "r".repeat(100)),
+        ];
+        for subject in &repos {
+            assert!(names_repo(subject), "{subject} names a repo");
+        }
+        let not_repos = [
+            "github:jeffbailey/".to_string(),
+            "github:jeffbailey/.".to_string(),
+            "github:jeffbailey/..".to_string(),
+            "github:jeffbailey/tide$pool".to_string(),
+            "github:jeffbailey/tide pool".to_string(),
+            format!("github:jeffbailey/{}", "r".repeat(101)),
+            "github:-jeff/tidepool".to_string(),
+            "github:jeff_b/tidepool".to_string(),
+        ];
+        for subject in &not_repos {
+            assert!(malformed(subject), "{subject} names no repo");
+        }
+    }
+
+    fn observed(finding: RepoFinding, age: Duration) -> LatestRepoObservation {
+        LatestRepoObservation {
+            finding,
+            checked_at: now() - age,
+        }
+    }
+
+    fn found(owner_kind: RepoOwnerKind, authority_file: AuthorityFileSeen) -> RepoFinding {
+        RepoFinding::Found {
+            owner_id: 1,
+            owner_kind,
+            authority_file,
+        }
+    }
+
+    fn listing(dids: &[&str]) -> AuthorityFileSeen {
+        AuthorityFileSeen::Present(dids.iter().map(|did| did.to_string()).collect())
+    }
+
+    // bypass: one example per repo tier and reason (ADR-087 §2-3).
+    #[test]
+    fn a_reader_labels_a_repo_claim_from_the_latest_observation_and_the_authors_links() {
+        use RepoOwnerKind::{Organization, User};
+        let verified_to = |id| {
+            link(
+                id,
+                "jeffbailey",
+                Some(("jeffbailey", CheckVerdict::Verified)),
+            )
+        };
+        let to_owner_verified = [verified_to(1)];
+        let to_other_verified = [verified_to(2)];
+        let to_owner_not_verified = [link(
+            1,
+            "jeffbailey",
+            Some(("jeffbailey", CheckVerdict::DifferentDid)),
+        )];
+        let to_owner_unchecked = [link(1, "jeffbailey", None)];
+        let owner = Authority::Attested(AttestedTier::Owner { github_id: 1 });
+        let listed = Authority::Attested(AttestedTier::RepoListed);
+        let cases: [(&[LinkedAccountEvidence], Option<RepoFinding>, Authority); 11] = [
+            (
+                &to_owner_verified,
+                Some(found(User, AuthorityFileSeen::Absent)),
+                owner,
+            ),
+            (
+                &to_other_verified,
+                Some(found(User, AuthorityFileSeen::Absent)),
+                Authority::Unattested(Unattested::NotRepoOwner),
+            ),
+            (
+                &to_owner_not_verified,
+                Some(found(User, AuthorityFileSeen::Absent)),
+                Authority::Unattested(Unattested::LinkNotVerified),
+            ),
+            (
+                &to_owner_unchecked,
+                Some(found(User, AuthorityFileSeen::Absent)),
+                Authority::NotChecked,
+            ),
+            (
+                &to_owner_not_verified,
+                Some(found(User, listing(&[JEFF]))),
+                listed,
+            ),
+            (
+                &to_owner_verified,
+                Some(found(Organization, AuthorityFileSeen::Absent)),
+                Authority::Unattested(Unattested::OrgOwnedNotListed),
+            ),
+            (&[], Some(found(Organization, listing(&[JEFF]))), listed),
+            (
+                &[],
+                Some(found(
+                    Organization,
+                    listing(&["did:plc:rachel", "did:plc:jeff2"]),
+                )),
+                Authority::Unattested(Unattested::OrgOwnedNotListed),
+            ),
+            (
+                &[],
+                Some(found(Organization, AuthorityFileSeen::Invalid)),
+                Authority::Unattested(Unattested::FileInvalid),
+            ),
+            (
+                &to_owner_verified,
+                Some(RepoFinding::NotFound),
+                Authority::Unattested(Unattested::RepoNotFound),
+            ),
+            (&to_owner_verified, None, Authority::NotChecked),
+        ];
+        for (links, finding, expected) in cases {
+            let observation = finding.map(|finding| observed(finding, Duration::days(1)));
+            let evidence = AuthorityEvidence {
+                author: JEFF,
+                author_links: links,
+                repo: observation.as_ref(),
+            };
+            assert_eq!(
+                classify(
+                    assertion_about("github:jeffbailey/tidepool"),
+                    &evidence,
+                    now()
+                ),
+                Some(expected),
+                "{links:?} {observation:?}"
+            );
+        }
+    }
+
+    // bypass: the repo tier honours the signing window to the minute.
+    #[test]
+    fn a_repo_permit_rests_on_an_observation_within_the_signing_window() {
+        let subject = "github:acme-tools/anvil";
+        let file = found(RepoOwnerKind::Organization, listing(&[JEFF]));
+        let at_edge = observed(file.clone(), Duration::minutes(WINDOW_MINUTES));
+        assert_eq!(
+            may_sign_repo_from_checks(JEFF, subject, &[], Some(&at_edge), now()).map(|p| p.basis()),
+            Ok(PermitBasis::RepoListed)
+        );
+        let too_old = observed(file, Duration::minutes(WINDOW_MINUTES + 1));
+        assert_eq!(
+            may_sign_repo_from_checks(JEFF, subject, &[], Some(&too_old), now()),
+            Err(AuthorityRefusal::Recheck {
+                subject: subject.to_string(),
+                last_checked: Some(too_old.checked_at),
+            })
+        );
+    }
+
+    // bypass: an organization repo is signed only by a DID its file lists.
+    #[test]
+    fn only_a_listed_did_can_sign_about_an_organization_repo() {
+        let subject = "github:acme-tools/anvil";
+        let org_repo = observed(
+            found(RepoOwnerKind::Organization, AuthorityFileSeen::Absent),
+            Duration::days(1),
+        );
+        assert_eq!(
+            may_sign_repo_from_checks(JEFF, subject, &[], Some(&org_repo), now()),
+            Err(AuthorityRefusal::Unattested {
+                subject: subject.to_string(),
+                reason: Unattested::OrgOwnedNotListed,
+                can_sign: WhoCanSign::ListedInAuthorityFile,
+            })
+        );
+    }
+
+    // bypass: re-publishing needs no fresh authority; first publishing does.
+    #[test]
+    fn only_a_claim_already_published_here_gets_a_republish_permit() {
+        let subject = "github:jeffbailey/tidepool";
+        let permit = republish_permit(JEFF, subject, Some(now()));
+        assert_eq!(
+            permit
+                .as_ref()
+                .map(|p| (p.signer(), p.subject(), p.basis())),
+            Some((JEFF, subject, PermitBasis::Exempt))
+        );
+        assert_eq!(republish_permit(JEFF, subject, None), None);
+    }
+
+    // bypass: the reader labels are spelled once, here.
+    #[test]
+    fn each_authority_reads_under_its_own_label() {
+        let labels = [
+            (
+                Authority::Attested(AttestedTier::Owner { github_id: 1 }),
+                "owner",
+            ),
+            (Authority::Attested(AttestedTier::RepoListed), "repo-listed"),
+            (Authority::Unattested(Unattested::NoLink), "third-party"),
+            (Authority::NotChecked, "authority not checked"),
+        ];
+        for (authority, label) in labels {
+            assert_eq!(authority.label(), label, "{authority:?}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1666,5 +1906,15 @@ mod authority_file_tests {
         let over_limit = format!("{at_limit}#");
         assert_eq!(authority_file_dids(over_limit.as_bytes()), None);
         assert_eq!(authority_file_dids(b"did:plc:jeff\n\xff\xfe"), None);
+    }
+
+    // bypass: the limit is ADR-087 §3's 4 KiB, stated without the constant.
+    #[test]
+    fn a_four_kibibyte_file_still_grants() {
+        let file = format!("did:plc:jeff\n{}", "#".repeat(4096 - 13));
+        assert_eq!(
+            authority_file_dids(file.as_bytes()),
+            Some(vec!["did:plc:jeff".to_string()])
+        );
     }
 }

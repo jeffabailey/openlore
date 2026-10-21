@@ -229,3 +229,75 @@ fn migration_v8_upgrades_a_v7_store_once_and_keeps_its_rows() {
     );
     assert_eq!(stored_checks(&db), 1, "reopening keeps the observation");
 }
+
+#[test]
+fn the_gate_and_the_classifier_read_each_repos_latest_observation_as_github_served_it() {
+    use adapter_duckdb::{latest_repo_observations, served_repo_observation};
+    use claim_domain::authority::{
+        AuthorityFileSeen, LatestRepoObservation, RepoFinding, ServedRepoObservation,
+    };
+    use std::collections::BTreeMap;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("openlore.duckdb");
+    let storage = DuckDbStorageAdapter::open(&db).unwrap();
+    let checks = storage.repo_authority_check_adapter();
+    for check in [
+        observed(
+            "github:acme/tool",
+            5,
+            found(RepoOwnerKind::User, AuthorityFile::Absent),
+        ),
+        observed("github:gone/repo", 3, RepoObservation::RepoNotFound),
+    ] {
+        checks.record(&check).unwrap();
+    }
+    let tool = LatestRepoObservation {
+        finding: RepoFinding::Found {
+            owner_id: 7,
+            owner_kind: RepoOwnerKind::User,
+            authority_file: AuthorityFileSeen::Absent,
+        },
+        checked_at: at(5),
+    };
+    let gone = LatestRepoObservation {
+        finding: RepoFinding::NotFound,
+        checked_at: at(3),
+    };
+    let key = RepoSubjectKey::of;
+
+    assert_eq!(
+        latest_repo_observations(
+            &checks,
+            &[
+                key("github:acme/tool"),
+                key("github:gone/repo"),
+                key("github:never/seen")
+            ],
+            at(9)
+        )
+        .unwrap(),
+        BTreeMap::from([
+            (key("github:acme/tool"), tool.clone()),
+            (key("github:gone/repo"), gone.clone()),
+        ])
+    );
+    assert_eq!(
+        served_repo_observation(&checks, key("github:acme/tool"), at(9)).unwrap(),
+        Some(ServedRepoObservation {
+            latest: tool,
+            served_as: Some("acme/Tool".to_string()),
+        })
+    );
+    assert_eq!(
+        served_repo_observation(&checks, key("github:gone/repo"), at(9)).unwrap(),
+        Some(ServedRepoObservation {
+            latest: gone,
+            served_as: None,
+        })
+    );
+    assert_eq!(
+        served_repo_observation(&checks, key("github:never/seen"), at(9)).unwrap(),
+        None
+    );
+}

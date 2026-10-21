@@ -466,3 +466,69 @@ mod identity_link_drop_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod score_attested_tests {
+    use chrono::{TimeZone, Utc};
+    use claim_domain::authority::{AttestedTier, Unattested};
+    use claim_domain::{Cid, Did, ReferenceType};
+    use ports::AuthorRelationship;
+
+    use super::*;
+
+    fn row(cid: &str, subject: &str, object: &str, references: &[ReferenceType]) -> ScoringFeedRow {
+        ScoringFeedRow {
+            claim: AttributedClaim {
+                author_did: Did("did:plc:rachel".to_string()),
+                cid: Cid(cid.to_string()),
+                subject: subject.to_string(),
+                predicate: "embodiesPhilosophy".to_string(),
+                object: object.to_string(),
+                confidence: 0.6,
+                composed_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+                relationship: AuthorRelationship::SubscribedPeer,
+            },
+            reference_types: references.to_vec(),
+        }
+    }
+
+    /// Rachel's standing as this reader sees it, by claim cid. The dispute
+    /// and the malformed subject read attested here so that only their
+    /// kind and subject keep them out of the weighted view.
+    fn rachels_standing(row: &ScoringFeedRow) -> Option<Authority> {
+        match row.claim.cid.0.as_str() {
+            "attested" | "dispute" | "malformed" => {
+                Some(Authority::Attested(AttestedTier::RepoListed))
+            }
+            "third-party" => Some(Authority::Unattested(Unattested::NotRepoOwner)),
+            "unchecked" => Some(Authority::NotChecked),
+            _ => None,
+        }
+    }
+
+    // bypass: one row per eligibility rule (ADR-086 §8, A-13).
+    #[test]
+    fn only_attested_github_assertions_and_assertions_needing_no_authority_carry_weight() {
+        let attested = row("attested", "github:acme-tools/anvil", "a", &[]);
+        let exempt = row("exempt", "https:example.com", "d", &[]);
+        let feed = vec![
+            attested.clone(),
+            row("third-party", "github:jeffbailey/tidepool", "b", &[]),
+            row("unchecked", "github:rachelk", "c", &[]),
+            exempt.clone(),
+            row(
+                "dispute",
+                "github:jeffbailey/tidepool",
+                "e",
+                &[ReferenceType::Counters],
+            ),
+            row("malformed", "github:acme-tools/anvil/extra", "f", &[]),
+        ];
+        let view = score_attested(&feed, rachels_standing, &ScoringConfig::DEFAULT);
+        assert_eq!(
+            view,
+            score(&[attested.claim, exempt.claim], &ScoringConfig::DEFAULT)
+        );
+        assert_eq!(view.ranked.len(), 2);
+    }
+}

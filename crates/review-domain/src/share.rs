@@ -392,4 +392,81 @@ mod tests {
             }
         }
     }
+
+    mod quote_permitted_tests {
+        use super::*;
+        use ports::claim_domain::authority::{
+            may_sign, OwnerBioRead, RepoFacts, RepoOwnerKind, RepoRead,
+        };
+
+        const JEFF: &str = "did:plc:jeff";
+        const PROFILE: &str = "https://app.openlore.example/@jeff.bsky.social";
+
+        fn claim(subject: &str, slug: &str) -> PublishedClaim {
+            PublishedClaim {
+                subject: subject.to_string(),
+                object: format!("org.openlore.philosophy.{slug}"),
+                confidence_bp: 2500,
+                rkey: format!("baf-{slug}"),
+            }
+        }
+
+        /// A permit for `subject` as this request's gate (ADR-089
+        /// `may_sign`) mints it: Jeff's user account owns the repo and its
+        /// bio holds his DID.
+        fn permit_for(subject: &str) -> SigningPermit {
+            let facts = RepoFacts {
+                repo_id: 7,
+                full_name: subject.trim_start_matches("github:").to_string(),
+                owner_id: 1,
+                owner_login: "jeffbailey".to_string(),
+                owner_kind: RepoOwnerKind::User,
+                fork: false,
+                archived: false,
+            };
+            may_sign(
+                JEFF,
+                subject,
+                &[1],
+                RepoRead::Found(&facts),
+                OwnerBioRead::Bio(Some(JEFF)),
+            )
+            .expect("Jeff owns his repo")
+        }
+
+        // bypass: one quoted and one not-counted claim pin the split.
+        #[test]
+        fn only_a_claim_a_permit_of_this_request_covers_is_quoted() {
+            let kelp = claim("github:jeffbailey/kelp", "memory-safety");
+            let tide = claim("github:jeffbailey/tidepool", "test-driven");
+            let quote = quote_permitted(
+                &[kelp.clone(), tide.clone()],
+                &[permit_for("github:jeffbailey/kelp")],
+            );
+            assert_eq!(quote.quoted(), std::slice::from_ref(&kelp));
+            assert_eq!(quote.not_counted(), std::slice::from_ref(&tide));
+            assert_eq!(quote.plan(PROFILE), share_draft(PROFILE, &[kelp]));
+        }
+
+        // bypass: the share is offered whenever any claim is live.
+        #[test]
+        fn the_share_is_offered_while_any_claim_is_live_whether_quoted_or_not() {
+            let kelp = claim("github:jeffbailey/kelp", "memory-safety");
+            let none_quoted = quote_permitted(std::slice::from_ref(&kelp), &[]);
+            assert_eq!(none_quoted.plan(PROFILE), share_draft(PROFILE, &[]));
+            assert!(none_quoted.plan(PROFILE).is_ok());
+
+            let all_quoted = quote_permitted(
+                std::slice::from_ref(&kelp),
+                &[permit_for("github:jeffbailey/kelp")],
+            );
+            assert_eq!(all_quoted.not_counted(), &[] as &[PublishedClaim]);
+            assert!(all_quoted.plan(PROFILE).is_ok());
+
+            assert_eq!(
+                quote_permitted(&[], &[]).plan(PROFILE),
+                Err(ShareRefusal::NothingPublished)
+            );
+        }
+    }
 }
