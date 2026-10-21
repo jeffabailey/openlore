@@ -65,6 +65,21 @@ fn recheck_reason(subject: &str, last_checked: Option<DateTime<Utc>>) -> String 
     }
 }
 
+/// What did not happen to a refused claim: it was not signed.
+pub const NOT_SIGNED: &str = "Not signed";
+
+/// What did not happen to a refused stored claim: it was not published.
+pub const NOT_PUBLISHED: &str = "Not published";
+
+/// Render a refused claim whose `github:` subject names no account or repo
+/// (fail closed); `outcome` is what did not happen to it.
+pub fn render_unattestable_subject(outcome: &str, subject: &str) -> String {
+    format!(
+        "{outcome}: {subject} names no GitHub account (github:<login>) or repo \
+         (github:<owner>/<repo>).\n"
+    )
+}
+
 /// Render a refused signature: nothing was signed or published, why, and the
 /// hand-off or the re-check command.
 pub fn render_signing_refused(refusal: &AuthorityRefusal) -> String {

@@ -45,6 +45,7 @@ use lexicon::ObjectAdvisory;
 use crate::io::prompt_line;
 use crate::render::{
     render_repo_signing_refused, render_reserved_predicate_refused, render_signing_refused,
+    render_unattestable_subject, NOT_SIGNED,
 };
 use crate::verbs::sign_permitted::sign_permitted;
 use crate::wiring::Wiring;
@@ -113,14 +114,8 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
     }
 
     // Owner-only signing (ADR-086/087): every claim asks what authority it
-    // needs, and is signed only under the permit that answer mints. An
-    // assertion about a person's GitHub account is signed only by its owner,
-    // judged from this reader's local checks; an assertion about a repo by
-    // its owner or a DID its authority file lists, judged from the latest
-    // local observation of the repo and link check, and only under the name
-    // GitHub served it as then — offline, GitHub is not
-    // asked (C-OOS-9). A `github:` subject that names no account or repo is
-    // never signed (fail closed). A refusal happens before any prompt or side
+    // needs, and is signed only under the permit the sign-time gate mints
+    // ([`sign_time_permit`]). A refusal happens before any prompt or side
     // effect: nothing is signed, written or published.
     let signer = wiring.identity.author_did().0.clone();
     let claim = ClaimShape {
@@ -128,37 +123,16 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
         predicate: &args.predicate,
         reference_types: &[],
     };
-    let permit = match requirement(claim) {
-        Requirement::Person(person) => {
-            let now = wiring.clock.now_utc();
-            let links = wiring.signer_linked_accounts(now)?;
-            let decided = may_sign_from_checks(&signer, &person, &links, now);
-            let Some(permit) = permitted_or_refused(decided) else {
-                return Ok(refused());
-            };
-            Some(permit)
-        }
-        Requirement::Repo { .. } => {
-            let now = wiring.clock.now_utc();
-            let links = wiring.signer_linked_accounts(now)?;
-            let repo = wiring.latest_repo_observation(&args.subject, now)?;
-            let decided =
-                may_sign_repo_as_served(&signer, &args.subject, &links, repo.as_ref(), now);
-            let Some(permit) = repo_permitted_or_refused(decided) else {
-                return Ok(refused());
-            };
-            Some(permit)
-        }
-        Requirement::Malformed => {
-            eprintln!(
-                "Not signed: {} names no GitHub account (github:<login>) or repo (github:<owner>/<repo>).",
-                args.subject
+    let permit = match sign_time_permit(wiring, claim)? {
+        Ok(permit) => permit,
+        Err(refusal) => {
+            eprint!(
+                "{}",
+                refusal.render(&args.subject, render_repo_signing_refused)
             );
             return Ok(refused());
         }
-        Requirement::Exempt => exempt_permit(&signer, claim),
-    }
-    .ok_or_else(|| anyhow!("no signing permit for {}", args.subject))?;
+    };
 
     // Step 2: assemble the composed claim. composed_at comes from the
     // clock port for testability — the test harness can pin it later
@@ -307,22 +281,63 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
     })
 }
 
-/// The permit the gate minted, or `None` once its refusal is shown on stderr.
-fn permitted_or_refused(
-    decided: std::result::Result<SigningPermit, AuthorityRefusal>,
-) -> Option<SigningPermit> {
-    decided
-        .map_err(|refusal| eprint!("{}", render_signing_refused(&refusal)))
-        .ok()
+/// Why the sign-time gate minted no permit.
+pub(crate) enum SignTimeRefusal {
+    /// The person tier refused ([`may_sign_from_checks`]).
+    Person(AuthorityRefusal),
+    /// The repo tier refused ([`may_sign_repo_as_served`]).
+    Repo(RepoSigningRefusal),
+    /// A `github:` subject that names no account or repo: never signed
+    /// (fail closed).
+    Unattestable,
 }
 
-/// The repo gate's permit, or `None` once its refusal is shown on stderr.
-fn repo_permitted_or_refused(
-    decided: std::result::Result<SigningPermit, RepoSigningRefusal>,
-) -> Option<SigningPermit> {
-    decided
-        .map_err(|refusal| eprint!("{}", render_repo_signing_refused(&refusal)))
-        .ok()
+impl SignTimeRefusal {
+    /// What stderr shows for the refused claim about `subject`; the repo
+    /// tier's refusal is rendered by `render_repo` (the import hand-off
+    /// differs from `claim add`'s).
+    pub(crate) fn render(
+        &self,
+        subject: &str,
+        render_repo: impl FnOnce(&RepoSigningRefusal) -> String,
+    ) -> String {
+        match self {
+            SignTimeRefusal::Person(refusal) => render_signing_refused(refusal),
+            SignTimeRefusal::Repo(refusal) => render_repo(refusal),
+            SignTimeRefusal::Unattestable => render_unattestable_subject(NOT_SIGNED, subject),
+        }
+    }
+}
+
+/// The sign-time gate `claim add` and an import's `--sign` share (ADR-086/087):
+/// the permit `claim` is signed under, or why none was minted. An assertion
+/// about a person's GitHub account needs its owner, judged from this reader's
+/// local checks; one about a repo its owner or a DID its authority file
+/// lists, from the latest local observation of the repo and link check, and
+/// only under the name GitHub served it as then — GitHub is not asked
+/// (C-OOS-9). A claim that needs no authority gets the exempt permit.
+pub(crate) fn sign_time_permit(
+    wiring: &Wiring,
+    claim: ClaimShape<'_>,
+) -> Result<std::result::Result<SigningPermit, SignTimeRefusal>> {
+    let signer = &wiring.identity.author_did().0;
+    Ok(match requirement(claim) {
+        Requirement::Person(person) => {
+            let now = wiring.clock.now_utc();
+            let links = wiring.signer_linked_accounts(now)?;
+            may_sign_from_checks(signer, &person, &links, now).map_err(SignTimeRefusal::Person)
+        }
+        Requirement::Repo { .. } => {
+            let now = wiring.clock.now_utc();
+            let links = wiring.signer_linked_accounts(now)?;
+            let repo = wiring.latest_repo_observation(claim.subject, now)?;
+            may_sign_repo_as_served(signer, claim.subject, &links, repo.as_ref(), now)
+                .map_err(SignTimeRefusal::Repo)
+        }
+        Requirement::Malformed => Err(SignTimeRefusal::Unattestable),
+        Requirement::Exempt => Ok(exempt_permit(signer, claim)
+            .ok_or_else(|| anyhow!("no signing permit for {}", claim.subject))?),
+    })
 }
 
 /// A refused signature: nothing signed, written or published; exit 1.

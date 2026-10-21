@@ -31,7 +31,6 @@
 use std::io::Write;
 
 use anyhow::{bail, Result};
-use claim_domain::bare_did;
 use ports::GithubError;
 use scraper_domain::{
     normalize_target, person_repo_count_for, select_person_repos, DEFAULT_CONTRIBUTOR_COUNT,
@@ -42,9 +41,9 @@ use crate::render::{
     render_public_data_banner, render_unauthenticated_budget_note, AuthReport,
 };
 use crate::verbs::claim_publish::build_tokio_runtime;
-use crate::verbs::identity_verify::refresh_signers_own_link;
 use crate::verbs::scrape_github::{
-    person_view, scrape_repo_into_store, ContributorsOutcome, RepoTarget,
+    person_view, refresh_own_link_before_signing, scrape_repo_into_store, ContributorsOutcome,
+    RepoTarget,
 };
 use crate::wiring::Wiring;
 
@@ -127,15 +126,7 @@ pub fn run(wiring: &Wiring, args: &ScrapePersonArgs) -> Result<ScrapePersonOutco
     }
 
     if args.sign.is_some() {
-        // OOS-D7 / R3: signing from an import first refreshes the signer's
-        // own link to this account; when GitHub cannot answer, nothing is
-        // recorded and the gate decides on the latest local check.
-        refresh_signers_own_link(
-            &wiring.link_recheck_handles(),
-            bare_did(&wiring.identity.author_did().0),
-            &profile.login,
-            wiring.clock.now_utc(),
-        )?;
+        refresh_own_link_before_signing(wiring, &profile.login)?;
     }
     let outcome = person_view(wiring, &profile.login, args.sign.as_deref(), String::new())?;
     Ok(ScrapePersonOutcome {

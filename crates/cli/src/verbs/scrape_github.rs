@@ -43,8 +43,8 @@ use anyhow::{anyhow, Result};
 use claim_domain::bare_did;
 use claim_domain::identity_link::{check_on_profile, RecheckScope};
 use ports::{
-    CandidateClaim, CandidateImport, GithubError, ImportedCandidate, LinkFilter,
-    RepoAuthorityCheck, RepoSubjectKey, TargetKind,
+    CandidateClaim, CandidateImport, GithubError, ImportedCandidate, LinkFilter, RepoSubjectKey,
+    TargetKind,
 };
 use scraper_domain::{
     contributor_count_for, derive_candidates, load_mapping, new_inferred_candidate_count,
@@ -59,6 +59,7 @@ use crate::render::{
     render_new_inferred_candidates_hint, render_no_contributors_requested,
     render_public_data_banner, render_retry_after, render_shared_contributors,
 };
+use crate::verbs::authority_verify::observe_and_record_repo;
 use crate::verbs::claim_publish::build_tokio_runtime;
 use crate::verbs::identity_reads::{check_of, links_in_scope, observation_of};
 use crate::verbs::identity_verify::refresh_signers_own_link;
@@ -295,16 +296,8 @@ fn scrape_repo(
         &scraped.authority_read,
     ));
 
-    // OOS-D7: signing from an import first refreshes the signer's own link
-    // to the repo owner's account; when GitHub cannot answer, nothing is
-    // recorded and the gate decides on the latest local check.
     if args.sign.is_some() {
-        refresh_signers_own_link(
-            &wiring.link_recheck_handles(),
-            bare_did(&wiring.identity.author_did().0),
-            target.owner,
-            wiring.clock.now_utc(),
-        )?;
+        refresh_own_link_before_signing(wiring, target.owner)?;
     }
 
     // (6) WITHOUT --sign: derive + render only, ZERO claim writes (the
@@ -330,6 +323,19 @@ fn scrape_repo(
         exit_code: outcome.exit_code,
         stdout: outcome.stdout,
     })
+}
+
+/// Signing from an import first refreshes the signer's OWN link to the
+/// account `login` names (OOS-D7, ruling R3) — `scrape github` and `scrape
+/// person` alike. When GitHub cannot answer, nothing is recorded and the
+/// gate decides on the latest local check.
+pub(crate) fn refresh_own_link_before_signing(wiring: &Wiring, login: &str) -> Result<()> {
+    refresh_signers_own_link(
+        &wiring.link_recheck_handles(),
+        bare_did(&wiring.identity.author_did().0),
+        login,
+        wiring.clock.now_utc(),
+    )
 }
 
 /// Keep every candidate this import derived as one import, stamped now. An
@@ -411,23 +417,19 @@ fn observe_repo_authority(
     target: &RepoTarget<'_>,
     subject: &str,
 ) -> Result<AuthorityRead> {
-    match runtime.block_on(wiring.github.read_repo_authority(target.owner, target.repo)) {
-        Ok(observation) => {
-            wiring
-                .repo_authority_check_writes
-                .record(&RepoAuthorityCheck {
-                    subject_key: RepoSubjectKey::of(subject),
-                    observation,
-                    checked_at: wiring.clock.now_utc(),
-                })
-                .map_err(|e| anyhow!("recording the authority observation of {subject}: {e}"))?;
-            Ok(AuthorityRead::Recorded)
-        }
-        Err(unanswered) => Ok(AuthorityRead::Unanswered(unanswered_reason(
-            wiring,
-            &unanswered,
-        ))),
-    }
+    let observed = observe_and_record_repo(
+        wiring.github.as_ref(),
+        wiring.repo_authority_check_writes.as_ref(),
+        runtime,
+        RepoSubjectKey::of(subject),
+        (target.owner, target.repo),
+        wiring.clock.now_utc(),
+    )
+    .map_err(|e| anyhow!("recording the authority observation of {subject}: {e}"))?;
+    Ok(match observed {
+        Ok(()) => AuthorityRead::Recorded,
+        Err(unanswered) => AuthorityRead::Unanswered(unanswered_reason(wiring, &unanswered)),
+    })
 }
 
 /// Why GitHub could not answer, with when to retry once its rate budget is

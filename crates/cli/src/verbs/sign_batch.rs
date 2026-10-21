@@ -13,15 +13,14 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 use anyhow::{anyhow, Result};
-use claim_domain::authority::{
-    exempt_permit, may_sign_from_checks, may_sign_repo_as_served, requirement, ClaimShape,
-    Requirement, SigningPermit,
-};
+use claim_domain::authority::{ClaimShape, SigningPermit};
 use claim_domain::{reference_rules_validate, ClaimLookup, ClaimReference, ReferenceType};
 
 use crate::io::prompt_line;
-use crate::render::{render_import_signing_refused, render_signing_refused};
-use crate::verbs::claim_add::{build_unsigned_claim, render_compose_preview, ComposedClaim};
+use crate::render::render_import_signing_refused;
+use crate::verbs::claim_add::{
+    build_unsigned_claim, render_compose_preview, sign_time_permit, ComposedClaim,
+};
 use crate::verbs::claim_publish::{publish_signed_claim, render_publish_success};
 use crate::verbs::sign_permitted::sign_permitted;
 use crate::verbs::StorageClaimLookup;
@@ -448,12 +447,10 @@ struct ComposedShape<'a> {
 }
 
 /// The permit to sign the composed claim under, or `None` after printing
-/// why it is refused — the SAME gate `claim add` runs, judged from this
-/// reader's local checks: a person candidate needs its owner's authority; a
-/// repo candidate its owner's or a DID its authority file lists, under the
-/// name GitHub served it as (a refusal names who can sign and the command
-/// they run); a `github:` subject naming no account or repo is never signed
-/// (fail closed).
+/// why it is refused — the SAME sign-time gate `claim add` runs
+/// ([`sign_time_permit`]); a refused repo candidate also names the command
+/// its owner runs, and why GitHub could not be asked about it in this
+/// invocation.
 fn permit_or_refusal(
     wiring: &Wiring,
     composed: &ComposedShape<'_>,
@@ -464,51 +461,22 @@ fn permit_or_refusal(
         predicate,
         references,
     } = *composed;
-    let signer = &wiring.identity.author_did().0;
     let reference_types: Vec<ReferenceType> = references.iter().map(|r| r.ref_type).collect();
     let claim = ClaimShape {
         subject,
         predicate,
         reference_types: &reference_types,
     };
-    let permit = match requirement(claim) {
-        Requirement::Person(person) => {
-            let now = wiring.clock.now_utc();
-            let links = wiring.signer_linked_accounts(now)?;
-            match may_sign_from_checks(signer, &person, &links, now) {
-                Ok(permit) => Some(permit),
-                Err(refusal) => {
-                    eprint!("{}", render_signing_refused(&refusal));
-                    return Ok(None);
-                }
-            }
-        }
-        Requirement::Malformed => {
-            eprintln!(
-                "Not signed: {subject} names no GitHub account (github:<login>) or repo (github:<owner>/<repo>)."
+    Ok(sign_time_permit(wiring, claim)?
+        .map_err(|refusal| {
+            eprint!(
+                "{}",
+                refusal.render(subject, |repo| {
+                    render_import_signing_refused(repo, unanswered.why(subject))
+                })
             );
-            return Ok(None);
-        }
-        Requirement::Exempt => exempt_permit(signer, claim),
-        Requirement::Repo { .. } => {
-            let now = wiring.clock.now_utc();
-            let links = wiring.signer_linked_accounts(now)?;
-            let repo = wiring.latest_repo_observation(subject, now)?;
-            match may_sign_repo_as_served(signer, subject, &links, repo.as_ref(), now) {
-                Ok(permit) => Some(permit),
-                Err(refusal) => {
-                    eprint!(
-                        "{}",
-                        render_import_signing_refused(&refusal, unanswered.why(subject))
-                    );
-                    return Ok(None);
-                }
-            }
-        }
-    };
-    permit
-        .map(Some)
-        .ok_or_else(|| anyhow!("no signing permit for {subject}"))
+        })
+        .ok())
 }
 
 /// Whether the sign-prompt answer is the SKIP gesture: the literal `skip` /

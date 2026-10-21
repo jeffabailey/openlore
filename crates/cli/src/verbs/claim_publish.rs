@@ -42,7 +42,7 @@ use claim_domain::{Cid, SignedClaim};
 use ports::PdsError;
 
 use crate::errors::render_pds_error;
-use crate::render::render_signing_refused;
+use crate::render::{render_signing_refused, render_unattestable_subject, NOT_PUBLISHED};
 use crate::verbs::sign_permitted::{reference_types, shape_of};
 use crate::wiring::Wiring;
 
@@ -191,9 +191,9 @@ fn publish_permit(
     let decided = match requirement(claim) {
         Requirement::Exempt => return Ok(exempt_permit(&signer, claim)),
         Requirement::Malformed => {
-            eprintln!(
-                "Not published: {} names no GitHub account (github:<login>) or repo (github:<owner>/<repo>).",
-                unsigned.subject
+            eprint!(
+                "{}",
+                render_unattestable_subject(NOT_PUBLISHED, &unsigned.subject)
             );
             return Ok(None);
         }
