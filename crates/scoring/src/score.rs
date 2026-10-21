@@ -149,10 +149,10 @@ pub fn score(claims: &[AttributedClaim], cfg: &ScoringConfig) -> WeightedView {
 /// reader's view — who each row's author is to its subject, from the latest
 /// local checks.
 ///
-/// Eligible: an assertion (never a dispute, a withdrawal or an identity link,
-/// A-13) that is about no GitHub account or repo, or whose author is attested
-/// for it. An unattested or unchecked `github:` assertion is shown elsewhere,
-/// never weighted.
+/// Eligible: a standing assertion (never a dispute, a withdrawal or an
+/// identity link, A-13, nor one its own author withdrew) that is about no
+/// GitHub account or repo, or whose author is attested for it. An unattested
+/// or unchecked `github:` assertion is shown elsewhere, never weighted.
 pub fn score_attested(
     feed: &[ScoringFeedRow],
     authority_of: impl Fn(&ScoringFeedRow) -> Option<Authority>,
@@ -171,6 +171,9 @@ fn is_weight_eligible(
     row: &ScoringFeedRow,
     authority_of: impl Fn(&ScoringFeedRow) -> Option<Authority>,
 ) -> bool {
+    if !stands(row) {
+        return false;
+    }
     match requirement(row.shape()) {
         Requirement::Exempt => kind(row.shape()) == ClaimKind::Assertion,
         Requirement::Person(_) | Requirement::Repo { .. } => {
@@ -178,6 +181,12 @@ fn is_weight_eligible(
         }
         Requirement::Malformed => false,
     }
+}
+
+/// Does `row` still stand? Not once its own author withdrew it (A-13). The
+/// one rule the weight and the not-counted footer share.
+pub(crate) fn stands(row: &ScoringFeedRow) -> bool {
+    !row.withdrawn_by_its_author
 }
 
 /// Drop every identity-link row before grouping AND before triangulation

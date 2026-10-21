@@ -76,6 +76,10 @@ pub struct AttributedClaim {
 pub struct ScoringFeedRow {
     pub claim: AttributedClaim,
     pub reference_types: Vec<ReferenceType>,
+    /// Its own author published a withdrawal of it (`retracts`; only the
+    /// author may withdraw a claim, A-13): it no longer stands, so it is
+    /// neither weighted nor counted as left out.
+    pub withdrawn_by_its_author: bool,
 }
 
 impl ScoringFeedRow {

@@ -506,7 +506,7 @@ fn run_weighted(
 
     let mut stdout = crate::render::render_weighted_view(heading, &weighed.view);
     stdout.push_str(&crate::render::render_not_counted_footer(
-        &scoring::not_counted(&weighed.left_out),
+        &scoring::not_counted(&weighed.left_out, &feed),
     ));
     if include_unattested {
         stdout.push('\n');
@@ -575,7 +575,7 @@ fn run_explain_object(wiring: &Wiring, object: &str, subject: &str) -> Result<Gr
     stdout.push('\n');
     stdout.push_str(&crate::render::render_weighted_ranking(object, view));
     stdout.push_str(&crate::render::render_not_counted_footer(
-        &scoring::not_counted(&weighed.left_out),
+        &scoring::not_counted(&weighed.left_out, &feed),
     ));
 
     Ok(GraphQueryOutcome {

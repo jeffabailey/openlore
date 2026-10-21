@@ -376,6 +376,8 @@ fn index_row_as_feed_row(position: usize, row: &NetworkResultRowRaw) -> ScoringF
             relationship: AuthorRelationship::NetworkUnfollowed,
         },
         reference_types: row.references.iter().map(|r| r.ref_type).collect(),
+        // Labels only: the judge never reads whether a row was withdrawn.
+        withdrawn_by_its_author: false,
     }
 }
 

@@ -331,6 +331,7 @@ fn sut_score(claims: &[AttributedClaim]) -> scoring::WeightedView {
         .map(|claim| ports::ScoringFeedRow {
             claim: claim.clone(),
             reference_types: vec![],
+            withdrawn_by_its_author: false,
         })
         .collect();
     scoring::score_attested(

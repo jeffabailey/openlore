@@ -58,14 +58,16 @@ pub struct LeftOut<'a> {
     pub authority: Authority,
 }
 
-/// Every `github:` assertion in `feed` whose author is not attested for it,
-/// in feed order. The complement of the attested rows `score_attested`
-/// weighs; claims that need no authority are never left out.
+/// Every standing `github:` assertion in `feed` whose author is not attested
+/// for it, in feed order. The complement of the attested rows
+/// `score_attested` weighs; claims that need no authority, and claims their
+/// own author withdrew, are never left out.
 pub fn left_out<'a>(
     feed: &'a [ScoringFeedRow],
     authority_of: impl Fn(&ScoringFeedRow) -> Option<Authority>,
 ) -> Vec<LeftOut<'a>> {
     feed.iter()
+        .filter(|row| crate::score::stands(row))
         .filter(|row| needs_authority(row))
         .filter_map(|row| match authority_of(row)? {
             Authority::Attested(_) => None,
@@ -82,33 +84,141 @@ fn needs_authority(row: &ScoringFeedRow) -> bool {
     )
 }
 
+/// The reason a standing assertion about a malformed `github:` subject (one
+/// naming no account or repo) is not counted: no one can be attested for it.
+pub const MALFORMED_SUBJECT_REASON: &str = "malformed GitHub subject";
+
 /// How many claims the weighted view left out, and why: one count per reader
-/// label, in a fixed order (`third-party` before `authority not checked`),
-/// reasons with no claim omitted.
+/// label, in a fixed order (`third-party`, `authority not checked`, then
+/// [`MALFORMED_SUBJECT_REASON`]), reasons with no claim omitted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotCounted {
     pub total: usize,
     pub by_reason: Vec<(&'static str, usize)>,
 }
 
-/// Count `left_out` per reason (the reader label).
-pub fn not_counted(left_out: &[LeftOut<'_>]) -> NotCounted {
-    let reasons = [
+/// Count `left_out` per reason (the reader label), and the standing
+/// assertions of `feed` about a malformed `github:` subject.
+pub fn not_counted(left_out: &[LeftOut<'_>], feed: &[ScoringFeedRow]) -> NotCounted {
+    let labelled = [
         claim_domain::authority::THIRD_PARTY_LABEL,
         claim_domain::authority::NOT_CHECKED_LABEL,
-    ];
-    let count_of = |reason: &str| {
-        left_out
+    ]
+    .map(|reason| {
+        let count = left_out
             .iter()
             .filter(|claim| claim.authority.label() == reason)
-            .count()
-    };
+            .count();
+        (reason, count)
+    });
+    let malformed = feed
+        .iter()
+        .filter(|row| crate::score::stands(row))
+        .filter(|row| requirement(row.shape()) == Requirement::Malformed)
+        .count();
+    let by_reason: Vec<(&'static str, usize)> = labelled
+        .into_iter()
+        .chain([(MALFORMED_SUBJECT_REASON, malformed)])
+        .filter(|(_, count)| *count > 0)
+        .collect();
     NotCounted {
-        total: left_out.len(),
-        by_reason: reasons
+        total: left_out.len() + malformed,
+        by_reason,
+    }
+}
+
+#[cfg(test)]
+mod not_counted_tests {
+    use chrono::{TimeZone, Utc};
+    use claim_domain::authority::{AttestedTier, Unattested};
+    use claim_domain::{Cid, Did};
+    use ports::{AttributedClaim, AuthorRelationship};
+
+    use super::*;
+    use crate::{score_attested, ScoringConfig};
+
+    fn row(cid: &str, subject: &str, withdrawn: bool) -> ScoringFeedRow {
+        ScoringFeedRow {
+            claim: AttributedClaim {
+                author_did: Did("did:plc:rachel".to_string()),
+                cid: Cid(cid.to_string()),
+                subject: subject.to_string(),
+                predicate: "embodiesPhilosophy".to_string(),
+                object: "org.openlore.philosophy.memory-safety".to_string(),
+                confidence: 0.6,
+                composed_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+                relationship: AuthorRelationship::SubscribedPeer,
+            },
+            reference_types: vec![],
+            withdrawn_by_its_author: withdrawn,
+        }
+    }
+
+    /// Rachel is third-party to every `github:` subject except `attested`.
+    fn rachels_standing(row: &ScoringFeedRow) -> Option<Authority> {
+        match row.claim.cid.0.as_str() {
+            "attested" | "attested-withdrawn" => {
+                Some(Authority::Attested(AttestedTier::RepoListed))
+            }
+            "malformed" | "malformed-withdrawn" => None,
+            _ => Some(Authority::Unattested(Unattested::NotRepoOwner)),
+        }
+    }
+
+    fn feed() -> Vec<ScoringFeedRow> {
+        vec![
+            row("attested", "github:acme-tools/anvil", false),
+            row("attested-withdrawn", "github:acme-tools/kelp", true),
+            row("third-party", "github:jeffbailey/tidepool", false),
+            row("third-party-withdrawn", "github:jeffbailey/reef", true),
+            row("malformed", "github:acme-tools/anvil/extra", false),
+            row("malformed-withdrawn", "github:", true),
+        ]
+    }
+
+    // bypass: one worked feed covering each standing x reason pair.
+    #[test]
+    fn a_claim_its_author_withdrew_is_neither_weighted_nor_counted_as_left_out() {
+        let feed = feed();
+        let view = score_attested(&feed, rachels_standing, &ScoringConfig::DEFAULT);
+        let weighted: Vec<&str> = view.ranked.iter().map(|p| p.subject.as_str()).collect();
+        assert_eq!(weighted, ["github:acme-tools/anvil"]);
+
+        let left_out = left_out(&feed, rachels_standing);
+        let cids: Vec<&str> = left_out
+            .iter()
+            .map(|c| c.row.claim.cid.0.as_str())
+            .collect();
+        assert_eq!(cids, ["third-party"]);
+    }
+
+    #[test]
+    fn a_standing_claim_about_a_malformed_github_subject_is_disclosed_as_not_counted() {
+        let feed = feed();
+        assert_eq!(
+            not_counted(&left_out(&feed, rachels_standing), &feed),
+            NotCounted {
+                total: 2,
+                by_reason: vec![
+                    (claim_domain::authority::THIRD_PARTY_LABEL, 1),
+                    (MALFORMED_SUBJECT_REASON, 1),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn with_no_malformed_subject_the_reasons_are_the_reader_labels_alone() {
+        let feed: Vec<ScoringFeedRow> = feed()
             .into_iter()
-            .map(|reason| (reason, count_of(reason)))
-            .filter(|(_, count)| *count > 0)
-            .collect(),
+            .filter(|row| !row.claim.cid.0.starts_with("malformed"))
+            .collect();
+        assert_eq!(
+            not_counted(&left_out(&feed, rachels_standing), &feed),
+            NotCounted {
+                total: 1,
+                by_reason: vec![(claim_domain::authority::THIRD_PARTY_LABEL, 1)],
+            }
+        );
     }
 }
