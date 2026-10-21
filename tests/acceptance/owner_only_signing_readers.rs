@@ -117,7 +117,6 @@ fn every_claim_about_a_repo_is_shown_with_whose_word_it_is() {
 ///   And he is told "2 claims not counted: 1 third-party, 1 authority not checked" with the command to re-check
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RD-2: pending DELIVER"]
 fn the_weighted_view_counts_only_attested_claims_and_says_what_it_left_out() {
     let world = labelled_store();
     let tidepool = TIDEPOOL.subject();
@@ -173,7 +172,6 @@ fn the_weighted_view_counts_only_attested_claims_and_says_what_it_left_out() {
 ///   And a separate "Unattested claims, by author" section lists Rachel's tidepool and kelp claims under her name, and not her anvil claim
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RD-3: pending DELIVER"]
 fn jeff_can_see_the_claims_left_out_per_author_without_changing_the_weight() {
     let world = labelled_store();
     let plain = when_jeff_reads_philosophy(
@@ -606,7 +604,6 @@ fn after_jeff_renames_his_account_his_claim_about_the_old_login_reads_third_part
 ///   And no claim is listed
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RD-11: pending DELIVER (slice 3; ruling P-OOS-1)"]
 fn asking_for_unattested_claims_without_the_weighted_view_is_a_usage_mistake() {
     let world = labelled_store();
 

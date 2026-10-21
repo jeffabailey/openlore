@@ -107,7 +107,14 @@ pub struct GraphQueryArgs {
     pub weighted: bool,
     /// `--explain <subject>` (slice-04 / ADR-020): per-claim weight audit. OPT-IN.
     pub explain: Option<String>,
+    /// `--include-unattested` (owner-only-signing, P-OOS-1): add the claims
+    /// the weighted view left out, per author, apart from the weighted rows.
+    /// Only meaningful with `--weighted` ([`INCLUDE_UNATTESTED_NEEDS_WEIGHTED`]).
+    pub include_unattested: bool,
 }
+
+/// The usage error for `--include-unattested` without `--weighted` (P-OOS-1).
+pub const INCLUDE_UNATTESTED_NEEDS_WEIGHTED: &str = "--include-unattested requires --weighted";
 
 impl GraphQueryArgs {
     /// True iff ANY slice-04 explorer flag is present. The explorer flags imply
@@ -322,7 +329,7 @@ fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutc
     // The `--explain` leg stays RED for GQE-16.
     if args.weighted && !args.traverse && args.explain.is_none() {
         if let Some(object) = args.object.as_deref() {
-            return run_weighted_object(wiring, object);
+            return run_weighted_object(wiring, object, args.include_unattested);
         }
     }
 
@@ -460,7 +467,11 @@ fn run_contributor_dimension(wiring: &Wiring, contributor: &str) -> Result<Graph
 /// Explorer flags imply federated scope (WD-87) — the feed already spans own +
 /// peers. Weights are DERIVED + DISPLAY-ONLY: computed at query time, NEVER
 /// persisted/signed/published (WD-72).
-fn run_weighted_object(wiring: &Wiring, object: &str) -> Result<GraphQueryOutcome> {
+fn run_weighted_object(
+    wiring: &Wiring,
+    object: &str,
+    include_unattested: bool,
+) -> Result<GraphQueryOutcome> {
     let filter = ports::ScoringFilter::ByObject {
         object: object.to_string(),
     };
@@ -471,9 +482,18 @@ fn run_weighted_object(wiring: &Wiring, object: &str) -> Result<GraphQueryOutcom
 
     // The aggregation happens HERE, in the pure core — never in SQL — over the
     // rows this reader can weigh (ADR-086 §8).
-    let view = score_attested_here(wiring, &feed)?;
+    let weighed = weigh_here(wiring, &feed)?;
 
-    let stdout = crate::render::render_weighted_view(object, &view);
+    let mut stdout = crate::render::render_weighted_view(object, &weighed.view);
+    stdout.push_str(&crate::render::render_not_counted_footer(
+        &scoring::not_counted(&weighed.left_out),
+    ));
+    if include_unattested {
+        stdout.push('\n');
+        stdout.push_str(&crate::render::render_unattested_by_author(
+            &weighed.left_out,
+        ));
+    }
 
     Ok(GraphQueryOutcome {
         exit_code: 0,
@@ -519,7 +539,8 @@ fn run_explain_object(wiring: &Wiring, object: &str, subject: &str) -> Result<Gr
 
     // The aggregation happens HERE, in the pure core — never in SQL — over the
     // rows this reader can weigh (ADR-086 §8).
-    let view = score_attested_here(wiring, &feed)?;
+    let weighed = weigh_here(wiring, &feed)?;
+    let view = &weighed.view;
 
     // GQE-18 (architecture-design §5.2 invariant 5): `--explain` for a subject
     // absent from the result set is a USAGE ERROR (non-zero exit), distinct from
@@ -530,7 +551,12 @@ fn run_explain_object(wiring: &Wiring, object: &str, subject: &str) -> Result<Gr
         anyhow::bail!("Subject {subject} is not in this result set.");
     };
 
-    let stdout = crate::render::render_weighted_explain(object, pairing);
+    let mut stdout = crate::render::render_weighted_explain(object, pairing);
+    stdout.push('\n');
+    stdout.push_str(&crate::render::render_weighted_ranking(object, view));
+    stdout.push_str(&crate::render::render_not_counted_footer(
+        &scoring::not_counted(&weighed.left_out),
+    ));
 
     Ok(GraphQueryOutcome {
         exit_code: 0,
@@ -698,7 +724,7 @@ fn annotate_claims(
 }
 
 /// Who each `github:` assertion in `filter`'s feed is the word of, to this
-/// reader: the same judge the weighted view uses ([`score_attested_here`]),
+/// reader: the same judge the weighted view uses ([`weigh_here`]),
 /// over the latest local checks (check READ ports only). Claims that need no
 /// authority (disputes, withdrawals, identity links, non-GitHub subjects)
 /// carry no entry.
@@ -721,19 +747,27 @@ fn labels_here(wiring: &Wiring, filter: &ports::ScoringFilter) -> Result<Authori
         .collect())
 }
 
-/// The weighted view of `feed` for this reader: [`scoring::score_attested`]
-/// judged by the latest local checks (check READ ports only).
-fn score_attested_here(
-    wiring: &Wiring,
-    feed: &[ports::ScoringFeedRow],
-) -> Result<scoring::WeightedView> {
+/// The weighted view of a feed for this reader, and the claims it left out
+/// (shown apart, never merged into a weighted pairing; C-OOS-6).
+struct Weighed<'a> {
+    view: scoring::WeightedView,
+    left_out: Vec<scoring::LeftOut<'a>>,
+}
+
+/// Weigh `feed` for this reader: [`scoring::score_attested`] and
+/// [`scoring::left_out`], both judged by the SAME latest local checks
+/// (check READ ports only).
+fn weigh_here<'a>(wiring: &Wiring, feed: &'a [ports::ScoringFeedRow]) -> Result<Weighed<'a>> {
     let authority = wiring
         .feed_authority_reads()
         .feed_authority(feed)
         .map_err(|message| anyhow::anyhow!("reading this reader's authority checks: {message}"))?;
-    Ok(scoring::score_attested(
-        feed,
-        |row| authority.of(row),
-        &scoring::ScoringConfig::DEFAULT,
-    ))
+    Ok(Weighed {
+        view: scoring::score_attested(
+            feed,
+            |row| authority.of(row),
+            &scoring::ScoringConfig::DEFAULT,
+        ),
+        left_out: scoring::left_out(feed, |row| authority.of(row)),
+    })
 }

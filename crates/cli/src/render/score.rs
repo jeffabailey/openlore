@@ -348,6 +348,80 @@ pub(crate) fn render_explain_contribution(
 }
 
 // -----------------------------------------------------------------------------
+// owner-only-signing (ADR-086 §8, C-OOS-6) — what the weighted view left out
+// -----------------------------------------------------------------------------
+
+/// The command that re-checks authority, named wherever claims are left out.
+const RECHECK_AUTHORITY_COMMAND: &str = "openlore authority verify";
+
+/// The heading of the per-author section `--include-unattested` adds.
+const UNATTESTED_SECTION_HEADING: &str = "Unattested claims, by author";
+
+/// The ranked pairings alone (no formula, no notice): the rows `--explain`
+/// shows beside its breakdown so the audited weight reads in context. Pure.
+pub fn render_weighted_ranking(object: &str, view: &scoring::WeightedView) -> String {
+    let mut out = format!("Projects weighted for {object}:\n\n");
+    for (index, pairing) in view.ranked.iter().enumerate() {
+        out.push_str(&render_weighted_pairing(index + 1, pairing));
+    }
+    out
+}
+
+/// The not-counted footer: how many claims the weighted view left out, the
+/// count per reason, and the command to re-check. Empty when nothing was
+/// left out. Pure.
+pub fn render_not_counted_footer(not_counted: &scoring::NotCounted) -> String {
+    if not_counted.total == 0 {
+        return String::new();
+    }
+    let reasons = not_counted
+        .by_reason
+        .iter()
+        .map(|(reason, count)| format!("{count} {reason}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{total} not counted: {reasons}. Re-check with `{RECHECK_AUTHORITY_COMMAND}`.\n",
+        total = pluralize(
+            u32::try_from(not_counted.total).unwrap_or(u32::MAX),
+            "claim"
+        ),
+    )
+}
+
+/// The `--include-unattested` section: every left-out claim under its
+/// author's DID (authors in DID order, claims in feed order), each with its
+/// reader label. Never carries a weight (C-OOS-6). Pure.
+pub fn render_unattested_by_author(left_out: &[scoring::LeftOut<'_>]) -> String {
+    let mut by_author: std::collections::BTreeMap<&str, Vec<&scoring::LeftOut<'_>>> =
+        std::collections::BTreeMap::new();
+    for claim in left_out {
+        by_author
+            .entry(claim.row.claim.author_did.0.as_str())
+            .or_default()
+            .push(claim);
+    }
+    let mut out = format!(
+        "{UNATTESTED_SECTION_HEADING}\n{}\n(shown apart; never weighted)\n\n",
+        "=".repeat(UNATTESTED_SECTION_HEADING.len())
+    );
+    for (author, claims) in by_author {
+        out.push_str(&format!("  author: {author}\n"));
+        for claim in claims {
+            out.push_str(&format!(
+                "    {subject}   [{label}]   confidence {confidence}   cid {cid}\n",
+                subject = claim.row.claim.subject,
+                label = claim.authority.label(),
+                confidence = render_candidate_confidence(claim.row.claim.confidence),
+                cid = claim.row.claim.cid.0,
+            ));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+// -----------------------------------------------------------------------------
 // Slice-05 (ADR-027) — `openlore search` network-result renderers
 // -----------------------------------------------------------------------------
 //

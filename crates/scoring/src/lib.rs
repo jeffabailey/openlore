@@ -24,7 +24,7 @@ mod explain;
 mod score;
 
 pub use config::ScoringConfig;
-pub use explain::Contribution;
+pub use explain::{left_out, not_counted, Contribution, LeftOut, NotCounted};
 pub use score::{
     score, score_attested, weight_bucket, EmptyContributions, WeightBucket, WeightedPairing,
     WeightedView,

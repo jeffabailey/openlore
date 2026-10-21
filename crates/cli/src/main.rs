@@ -11,11 +11,17 @@
 
 #![forbid(unsafe_code)]
 
-use clap::Parser;
+use clap::{error::ErrorKind, CommandFactory, Parser};
 use cli::{dispatch, Cli};
 
 fn main() -> std::process::ExitCode {
     let parsed = Cli::parse();
+    if let Some(mistake) = parsed.usage_mistake() {
+        // A clap usage error: printed to stderr with the usage line, exit 2.
+        Cli::command()
+            .error(ErrorKind::MissingRequiredArgument, mistake)
+            .exit();
+    }
     let code = dispatch(parsed);
     std::process::ExitCode::from(u8::try_from(code & 0xFF).unwrap_or(1))
 }

@@ -38,6 +38,22 @@ pub struct Cli {
     pub command: Command,
 }
 
+impl Cli {
+    /// A flag combination clap parses but the verbs refuse as a usage
+    /// mistake (exit 2): `--include-unattested` without `--weighted`
+    /// (P-OOS-1).
+    pub fn usage_mistake(&self) -> Option<&'static str> {
+        match &self.command {
+            Command::Graph(GraphCommand::Query {
+                include_unattested: true,
+                weighted: false,
+                ..
+            }) => Some(verbs::graph_query::INCLUDE_UNATTESTED_NEEDS_WEIGHTED),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Resolve identity, create DuckDB + identity config (idempotent).
@@ -296,6 +312,10 @@ pub enum GraphCommand {
         /// subject absent from the result set is a usage error (non-zero exit).
         #[arg(long)]
         explain: Option<String>,
+        /// Also list the claims the weighted view left out, per author, apart
+        /// from the weighted rows (owner-only-signing). Requires `--weighted`.
+        #[arg(long)]
+        include_unattested: bool,
     },
 }
 
@@ -658,6 +678,7 @@ pub fn dispatch(cli: Cli) -> i32 {
             depth,
             weighted,
             explain,
+            include_unattested,
         }) => {
             match verbs::graph_query::run(
                 &wiring,
@@ -670,6 +691,7 @@ pub fn dispatch(cli: Cli) -> i32 {
                     depth,
                     weighted,
                     explain,
+                    include_unattested,
                 },
             ) {
                 Ok(outcome) => {
