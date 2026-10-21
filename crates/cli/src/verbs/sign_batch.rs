@@ -401,7 +401,7 @@ fn sign_candidate_via_slice01(
         drop(stdin);
         // SINGLE publish code path (WD-66 / I-SCR-6) — the SAME helper
         // `claim add`'s Y branch, `claim counter`, and `claim retract` use.
-        match publish_signed_claim(wiring, &signed) {
+        match publish_signed_claim(wiring, &permit, &signed) {
             Ok(publish_outcome) => {
                 // The publish prompt above ends without a newline (the user's
                 // y/N answer follows it inline). Start the success block on a

@@ -8,7 +8,8 @@
 //! evidence rule. Step 02-05: `sign_only_with_permit` — an `IdentityPort`
 //! sign outside `sign_permitted` is a finding (philosophy records allowlisted);
 //! the real tree passes. Step 02-09 deleted the transitional T1 entry and its
-//! rule.
+//! rule. Step 02-11: the same rule holds `publish_signed_claim` to a
+//! `&SigningPermit` parameter.
 
 use std::path::{Path, PathBuf};
 
@@ -230,6 +231,46 @@ fn a_sign_outside_sign_permitted_is_a_finding_but_philosophy_records_may_sign() 
         .len()
             == 2,
         "a `sign_permitted` outside its module is no gate"
+    );
+}
+
+const PUBLISHES_UNDER_A_PERMIT: &str = "
+pub fn publish_signed_claim(
+    wiring: &Wiring,
+    permit: &claim_domain::authority::SigningPermit,
+    signed: &SignedClaim,
+) {}";
+
+const PUBLISHES_WITHOUT_A_PERMIT: &str = "
+pub fn publish_signed_claim(wiring: &Wiring, signed: &SignedClaim) {}
+fn helper(permit: &SigningPermit) {}";
+
+#[test]
+fn the_single_publish_path_without_a_permit_parameter_is_a_finding() {
+    let publish = "crates/cli/src/verbs/claim_publish.rs";
+    assert!(
+        classify_sign_only_with_permit(publish, PUBLISHES_UNDER_A_PERMIT).is_empty(),
+        "publishing under `&SigningPermit` passes"
+    );
+    for (source, why) in [
+        (PUBLISHES_WITHOUT_A_PERMIT, "no permit parameter"),
+        ("fn helper() {}", "no publish path"),
+    ] {
+        let findings = classify_sign_only_with_permit(publish, source);
+        assert_eq!(findings.len(), 1, "{why}: {findings:?}");
+        assert!(
+            findings[0].contains("sign_only_with_permit")
+                && findings[0].contains("publish_signed_claim"),
+            "{why}: {findings:?}"
+        );
+    }
+    assert!(
+        classify_sign_only_with_permit(
+            "crates/cli/src/verbs/claim_add.rs",
+            PUBLISHES_WITHOUT_A_PERMIT
+        )
+        .is_empty(),
+        "only the publish module is held to it"
     );
 }
 

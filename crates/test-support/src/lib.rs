@@ -300,6 +300,13 @@ impl StoragePort for InMemoryStorage {
         panic!("Not yet implemented -- RED scaffold");
     }
 
+    fn published_at(
+        &self,
+        _cid: &Cid,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, StorageError> {
+        panic!("Not yet implemented -- RED scaffold");
+    }
+
     /// Cross-store federated query (slice-03 extension).
     ///
     /// SCAFFOLD: true (slice-03) — RED scaffold. The FQ-* acceptance

@@ -231,7 +231,7 @@ pub fn run(wiring: &Wiring, args: &ClaimCounterArgs) -> Result<ClaimCounterOutco
         // Single publish code path (I-FED-5 / WD-22 / WD-33): the SAME
         // helper the standalone `claim publish`, `claim add` Y branch, and
         // `claim retract` use. Published to the user's OWN PDS.
-        match crate::verbs::claim_publish::publish_signed_claim(wiring, &signed) {
+        match crate::verbs::claim_publish::publish_signed_claim(wiring, &permit, &signed) {
             Ok(publish_outcome) => {
                 let rendered =
                     crate::verbs::claim_publish::render_publish_success(&publish_outcome);

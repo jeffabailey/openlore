@@ -12,7 +12,7 @@ use std::io::Write;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Utc};
-use claim_domain::authority::exempt_permit;
+use claim_domain::authority::{exempt_permit, SigningPermit};
 use claim_domain::identity_link::{
     check_link, is_already_linked, is_github_login, CheckVerdict, GithubObservation, LinkDraft,
     ProofCheck, ProvenLink,
@@ -98,8 +98,9 @@ fn refuse_if_already_linked(wiring: &Wiring, proven: &ProvenLink) -> Result<()> 
     Ok(())
 }
 
-/// Sign the proven link and keep it in the local store.
-fn sign_and_keep(wiring: &Wiring, draft: LinkDraft) -> Result<SignedClaim> {
+/// Sign the proven link and keep it in the local store; the permit it was
+/// signed under publishes it.
+fn sign_and_keep(wiring: &Wiring, draft: LinkDraft) -> Result<(SigningPermit, SignedClaim)> {
     let unsigned = draft.into_unsigned();
     // An identity link carries no weight, so it needs no authority over its
     // subject (ADR-086 §2): it is signed under an exempt permit.
@@ -115,7 +116,7 @@ fn sign_and_keep(wiring: &Wiring, draft: LinkDraft) -> Result<SignedClaim> {
         .storage
         .write_signed_claim(&signed)
         .map_err(|e| anyhow!("keeping the signed link locally: {e:#}"))?;
-    Ok(signed)
+    Ok((permit, signed))
 }
 
 /// Show the exact record and ask; only an interactive `y` confirms (Q-GDL-D2).
@@ -133,11 +134,11 @@ fn confirmed_after_preview(draft: &LinkDraft) -> Result<bool> {
 
 /// Record the one passing check, then publish the signed link.
 fn link(wiring: &Wiring, proven: &ProvenLink, draft: LinkDraft) -> Result<String> {
-    let signed = sign_and_keep(wiring, draft)?;
+    let (permit, signed) = sign_and_keep(wiring, draft)?;
     wiring
         .identity_link_check_writes
         .record_check(&passing_check(proven, wiring.clock.now_utc()))?;
-    let published = publish_signed_claim(wiring, &signed)
+    let published = publish_signed_claim(wiring, &permit, &signed)
         .map_err(|err| anyhow!("{}", render_link_publish_failure(proven, &err)))?;
     Ok(render_publish_success(&published))
 }

@@ -80,8 +80,8 @@ pub enum PermitBasis {
 
 /// The signer may publish a claim about `subject`. Minted only in this
 /// module ([`may_sign`], [`may_sign_from_checks`],
-/// [`may_sign_repo_from_checks`], [`exempt_permit`]); never serialized,
-/// never stored.
+/// [`may_sign_repo_from_checks`], [`exempt_permit`], [`republish_permit`]);
+/// never serialized, never stored.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SigningPermit {
     signer: String,
@@ -748,6 +748,18 @@ fn repo_can_sign(subject: &str, finding: &RepoFinding) -> WhoCanSign {
 pub fn exempt_permit(signer: &str, claim: ClaimShape<'_>) -> Option<SigningPermit> {
     matches!(requirement(claim), Requirement::Exempt)
         .then(|| permit(signer, claim.subject, PermitBasis::Exempt))
+}
+
+/// A permit to re-publish a claim this store already published
+/// (`published_at`: its first publication here; `None`: never published).
+/// Re-publishing is idempotent and needs no fresh authority (ADR-086 §4); a
+/// claim never published gets no permit here — it goes through the gate.
+pub fn republish_permit(
+    signer: &str,
+    subject: &str,
+    published_at: Option<DateTime<Utc>>,
+) -> Option<SigningPermit> {
+    published_at.map(|_| permit(signer, subject, PermitBasis::Exempt))
 }
 
 fn permit(signer: &str, subject: &str, basis: PermitBasis) -> SigningPermit {

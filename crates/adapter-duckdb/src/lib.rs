@@ -600,9 +600,9 @@ impl StoragePort for DuckDbStorageAdapter {
                 message: lock_err.to_string(),
             })?;
 
-        let artifact_path: Option<String> = conn
+        let stored: Option<String> = conn
             .query_row(
-                "SELECT artifact_path FROM claims WHERE cid = ?",
+                "SELECT cid FROM claims WHERE cid = ?",
                 duckdb::params![cid.0],
                 |row| row.get::<_, String>(0),
             )
@@ -614,13 +614,17 @@ impl StoragePort for DuckDbStorageAdapter {
 
         drop(conn);
 
-        let Some(artifact_path) = artifact_path else {
+        if stored.is_none() {
             return Ok(None);
-        };
+        }
 
+        // The artifact is read where this store keeps it (`<claims_dir>/<cid>.json`,
+        // where `write_signed_claim` put it), not at the absolute path recorded
+        // then: a store restored or moved to another home still reads its claims.
+        let artifact_path = self.artifact_path(cid);
         let bytes = fs::read(&artifact_path).map_err(|err| StorageError::ReadFailed {
             cid: cid.clone(),
-            message: format!("read artifact {artifact_path}: {err}"),
+            message: format!("read artifact {}: {err}", artifact_path.display()),
         })?;
 
         let claim: SignedClaim =
@@ -741,6 +745,26 @@ impl StoragePort for DuckDbStorageAdapter {
         })?;
 
         Ok(())
+    }
+
+    fn published_at(&self, cid: &Cid) -> Result<Option<DateTime<Utc>>, StorageError> {
+        let read_failed = |message: String| StorageError::ReadFailed {
+            cid: cid.clone(),
+            message,
+        };
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|lock_err| read_failed(lock_err.to_string()))?;
+        let published: Option<Option<chrono::NaiveDateTime>> = conn
+            .query_row(
+                "SELECT published_at FROM claims WHERE cid = ?",
+                duckdb::params![cid.0],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|err| read_failed(format!("query claims.published_at: {err}")))?;
+        Ok(published.flatten().map(|naive| naive.and_utc()))
     }
 
     fn query_federated_by_subject(&self, subject: &str) -> Result<Vec<FederatedRow>, StorageError> {

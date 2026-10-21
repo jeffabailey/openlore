@@ -2770,12 +2770,19 @@ pub fn scan_signing_permit_not_serializable(workspace_root: &Path) -> anyhow::Re
 //   `sign_permitted`, which signs a draft only under a `SigningPermit` for its
 //   subject; philosophy records (not claims) are allowlisted. The crates that
 //   implement the signing primitive itself are out of scope.
+//   Step 02-11: the single publish path `publish_signed_claim` takes a
+//   `&SigningPermit`, so every caller publishes under a permit.
 
 /// The one module whose `sign_permitted` may sign.
 const SIGN_PERMITTED_SOURCE: &str = "crates/cli/src/verbs/sign_permitted.rs";
 
 /// The gate that signs under a permit.
 const SIGN_PERMITTED: &str = "sign_permitted";
+
+/// The module of the single publish path (ADR-003), and its function: it
+/// publishes only under a `&SigningPermit` (owner-only-signing step 02-11).
+const PUBLISH_SOURCE: &str = "crates/cli/src/verbs/claim_publish.rs";
+const PUBLISH_SIGNED_CLAIM: &str = "publish_signed_claim";
 
 /// Sources that sign without a permit: philosophy records are not claims.
 const SIGN_ALLOWLIST: &[&str] = &["crates/cli/src/verbs/philosophy_add.rs"];
@@ -2865,7 +2872,7 @@ pub fn classify_sign_only_with_permit(rel_path: &str, source: &str) -> Vec<Strin
         ungated_calls: Vec::new(),
     };
     collector.visit_file(&file);
-    collector
+    let mut findings: Vec<String> = collector
         .ungated_calls
         .into_iter()
         .map(|call| {
@@ -2875,7 +2882,43 @@ pub fn classify_sign_only_with_permit(rel_path: &str, source: &str) -> Vec<Strin
                  under a permit minted in claim_domain::authority (ADR-086 §4)"
             )
         })
-        .collect()
+        .collect();
+    if rel_path == PUBLISH_SOURCE && !publishes_only_with_a_permit(&file) {
+        findings.push(format!(
+            "sign_only_with_permit: {rel_path}: `fn {PUBLISH_SIGNED_CLAIM}` missing or without a \
+             `&{SIGNING_PERMIT}` parameter — every caller publishes under a permit minted in \
+             claim_domain::authority (ADR-086 §4)"
+        ));
+    }
+    findings
+}
+
+/// The single publish path `fn publish_signed_claim` exists at the top level
+/// and takes a `&SigningPermit`.
+fn publishes_only_with_a_permit(file: &syn::File) -> bool {
+    file.items.iter().any(|item| match item {
+        syn::Item::Fn(function) if function.sig.ident == PUBLISH_SIGNED_CLAIM => {
+            function.sig.inputs.iter().any(|input| match input {
+                syn::FnArg::Typed(typed) => is_ref_to_signing_permit(&typed.ty),
+                syn::FnArg::Receiver(_) => false,
+            })
+        }
+        _ => false,
+    })
+}
+
+/// `&SigningPermit` (under any path).
+fn is_ref_to_signing_permit(ty: &syn::Type) -> bool {
+    let syn::Type::Reference(reference) = ty else {
+        return false;
+    };
+    let syn::Type::Path(path) = reference.elem.as_ref() else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == SIGNING_PERMIT)
 }
 
 /// Effect shell for `sign_only_with_permit`; the gate's module must exist,
@@ -2888,10 +2931,12 @@ pub fn scan_sign_only_with_permit(workspace_root: &Path) -> anyhow::Result<Vec<S
             &std::fs::read_to_string(&path)?,
         ));
     }
-    if !workspace_root.join(SIGN_PERMITTED_SOURCE).is_file() {
-        findings.push(format!(
-            "sign_only_with_permit: {SIGN_PERMITTED_SOURCE} missing — the rule would pass vacuously"
-        ));
+    for required in [SIGN_PERMITTED_SOURCE, PUBLISH_SOURCE] {
+        if !workspace_root.join(required).is_file() {
+            findings.push(format!(
+                "sign_only_with_permit: {required} missing — the rule would pass vacuously"
+            ));
+        }
     }
     Ok(findings)
 }

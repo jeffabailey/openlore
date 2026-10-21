@@ -139,35 +139,6 @@ impl Wiring {
 
         let identity: Box<dyn IdentityPort> = Box::new(build_identity(&did)?);
 
-        let storage_db_path = paths.duckdb_file();
-        let storage = DuckDbStorageAdapter::open(&storage_db_path)
-            .with_context(|| format!("opening DuckDB at {}", storage_db_path.display()))?;
-        // Slice-03 peer-storage adapter SHARES the same DuckDB connection
-        // pool as the author-storage adapter (Q-DELIVER-3): construct it
-        // from the open `DuckDbStorageAdapter` BEFORE boxing the latter
-        // behind the `StoragePort` trait object. No second DB handle. The
-        // local user's DID is threaded in so the adapter can enforce the
-        // WD-40 SelfAttribution guard at the storage write boundary (layer 2).
-        let peer_storage: Box<dyn PeerStoragePort> =
-            Box::new(storage.peer_adapter(identity.author_did()));
-        let store_read: Box<dyn StoreReadPort> = Box::new(storage.read_adapter());
-        let contribution_links: Box<dyn ContributionLinkPort> =
-            Box::new(storage.contribution_link_adapter());
-        let identity_link_checks: Box<dyn IdentityLinkCheckReadPort> =
-            Box::new(storage.identity_link_check_adapter());
-        let identity_link_check_writes: Box<dyn IdentityLinkCheckWritePort> =
-            Box::new(storage.identity_link_check_adapter());
-        let identity_link_check_purge: Box<dyn IdentityLinkCheckPurgePort> =
-            Box::new(storage.identity_link_purge_adapter());
-        let repo_authority_checks: Box<dyn RepoAuthorityCheckReadPort> =
-            Box::new(storage.repo_authority_check_adapter());
-        let repo_authority_check_writes: Box<dyn RepoAuthorityCheckWritePort> =
-            Box::new(storage.repo_authority_check_adapter());
-        let link_candidates: Box<dyn LinkCandidateReadPort> =
-            Box::new(storage.identity_link_check_adapter());
-        let link_lineage: Box<dyn LinkLineageReadPort> = Box::new(storage.link_lineage_adapter());
-        let storage: Box<dyn StoragePort> = Box::new(storage);
-
         let pds_endpoint = std::env::var("OPENLORE_PDS_ENDPOINT").unwrap_or_default();
         let pds: Box<dyn PdsPort> = if pds_endpoint.is_empty() {
             // Slice-01 init verb does NOT call the PDS. We still wire a
@@ -206,6 +177,49 @@ impl Wiring {
         // scaffolds at this step; only the `scrape github` dispatch routing +
         // this wiring slot land in 01-04 (the live harvest is Phase 03/04).
         let github: Box<dyn GithubPort> = Box::new(GithubAdapter::from_env());
+
+        Self::over_local_store(paths, identity, pds, clock, github)
+    }
+
+    /// Wire the local store at `paths` (one DuckDB connection shared by
+    /// every store port) with the given identity, PDS, clock and GitHub
+    /// adapters. [`Wiring::production`] passes the env-configured adapters;
+    /// verb tests pass doubles.
+    pub(crate) fn over_local_store(
+        paths: OpenLorePaths,
+        identity: Box<dyn IdentityPort>,
+        pds: Box<dyn PdsPort>,
+        clock: Box<dyn ClockPort>,
+        github: Box<dyn GithubPort>,
+    ) -> Result<Self> {
+        let storage_db_path = paths.duckdb_file();
+        let storage = DuckDbStorageAdapter::open(&storage_db_path)
+            .with_context(|| format!("opening DuckDB at {}", storage_db_path.display()))?;
+        // Slice-03 peer-storage adapter SHARES the same DuckDB connection
+        // pool as the author-storage adapter (Q-DELIVER-3): construct it
+        // from the open `DuckDbStorageAdapter` BEFORE boxing the latter
+        // behind the `StoragePort` trait object. No second DB handle. The
+        // local user's DID is threaded in so the adapter can enforce the
+        // WD-40 SelfAttribution guard at the storage write boundary (layer 2).
+        let peer_storage: Box<dyn PeerStoragePort> =
+            Box::new(storage.peer_adapter(identity.author_did()));
+        let store_read: Box<dyn StoreReadPort> = Box::new(storage.read_adapter());
+        let contribution_links: Box<dyn ContributionLinkPort> =
+            Box::new(storage.contribution_link_adapter());
+        let identity_link_checks: Box<dyn IdentityLinkCheckReadPort> =
+            Box::new(storage.identity_link_check_adapter());
+        let identity_link_check_writes: Box<dyn IdentityLinkCheckWritePort> =
+            Box::new(storage.identity_link_check_adapter());
+        let identity_link_check_purge: Box<dyn IdentityLinkCheckPurgePort> =
+            Box::new(storage.identity_link_purge_adapter());
+        let repo_authority_checks: Box<dyn RepoAuthorityCheckReadPort> =
+            Box::new(storage.repo_authority_check_adapter());
+        let repo_authority_check_writes: Box<dyn RepoAuthorityCheckWritePort> =
+            Box::new(storage.repo_authority_check_adapter());
+        let link_candidates: Box<dyn LinkCandidateReadPort> =
+            Box::new(storage.identity_link_check_adapter());
+        let link_lineage: Box<dyn LinkLineageReadPort> = Box::new(storage.link_lineage_adapter());
+        let storage: Box<dyn StoragePort> = Box::new(storage);
 
         // Slice-05 (ADR-027): the index-query CLIENT slot. WIRED + SOFT-probed,
         // but at this bootstrap step it is `None` because

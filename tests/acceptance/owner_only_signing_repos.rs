@@ -511,7 +511,6 @@ fn when_githubs_budget_runs_out_mid_import_the_candidates_are_listed_and_his_lat
 ///   And his claim is not retracted, deleted or re-signed, and nothing is published
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-7: pending DELIVER"]
 fn after_jeff_transfers_his_repo_his_earlier_claim_reads_third_party_and_nothing_is_withdrawn() {
     let world = authority_world();
     given_jeff_linked_his_account(&world);
@@ -819,7 +818,6 @@ fn with_the_network_off_jeff_signs_a_repo_claim_only_from_fresh_checks() {
 ///     | with the network off |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-11a: pending DELIVER"]
 fn a_claim_jeff_signed_about_someone_elses_repo_before_owner_only_signing_is_never_published() {
     let ripgrep = Subject::Repo(RIPGREP);
     for offline in [false, true] {
@@ -862,7 +860,6 @@ fn a_claim_jeff_signed_about_someone_elses_repo_before_owner_only_signing_is_nev
 ///     | he signed and published it, then transferred tidepool and re-checked       | succeeds again, and his published repo is unchanged         |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-11b: pending DELIVER"]
 fn publishing_a_stored_claim_later_asks_for_authority_only_if_it_was_never_published() {
     #[derive(Clone, Copy)]
     enum History {

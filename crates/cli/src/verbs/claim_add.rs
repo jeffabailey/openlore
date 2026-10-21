@@ -274,7 +274,7 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
         // verb and the chained Y branch share one implementation.
         // The success-block rendering is the same WD-6 contract in
         // both invocation paths.
-        match crate::verbs::claim_publish::publish_signed_claim(wiring, &signed) {
+        match crate::verbs::claim_publish::publish_signed_claim(wiring, &permit, &signed) {
             Ok(publish_outcome) => {
                 let rendered =
                     crate::verbs::claim_publish::render_publish_success(&publish_outcome);

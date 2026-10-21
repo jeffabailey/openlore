@@ -34,10 +34,16 @@
 //! at this at-uri", not "we just wrote it".
 
 use anyhow::{anyhow, Context};
+use claim_domain::authority::{
+    exempt_permit, may_sign_from_checks, may_sign_repo_from_checks, republish_permit, requirement,
+    AuthorityRefusal, Requirement, SigningPermit,
+};
 use claim_domain::{Cid, SignedClaim};
 use ports::PdsError;
 
 use crate::errors::render_pds_error;
+use crate::render::render_signing_refused;
+use crate::verbs::sign_permitted::{reference_types, shape_of};
 use crate::wiring::Wiring;
 
 /// Typed failure modes for `publish_signed_claim`. Carrying the
@@ -144,7 +150,13 @@ pub fn run(
             ))
         })?;
 
-    let outcome = publish_signed_claim(wiring, &signed)?;
+    let Some(permit) = publish_permit(wiring, &signed)? else {
+        return Ok(ClaimPublishOutcome {
+            exit_code: 1,
+            stdout: String::new(),
+        });
+    };
+    let outcome = publish_signed_claim(wiring, &permit, &signed)?;
     let rendered = render_publish_success(&outcome);
 
     Ok(ClaimPublishOutcome {
@@ -153,8 +165,75 @@ pub fn run(
     })
 }
 
+/// The permit to publish a stored claim, or `None` once its refusal is shown
+/// on stderr (ADR-086 §4). A claim this store already published re-publishes
+/// idempotently, needing no fresh authority. A claim never published
+/// (`published_at IS NULL`) needs what signing it would need now, judged from
+/// this reader's local checks only — GitHub is not asked: a person's owner,
+/// or for a repo its owner or a DID its authority file lists.
+fn publish_permit(
+    wiring: &Wiring,
+    signed: &SignedClaim,
+) -> std::result::Result<Option<SigningPermit>, PublishError> {
+    let signer = wiring.identity.author_did().0.clone();
+    let unsigned = &signed.unsigned;
+    let published_at = wiring
+        .storage
+        .published_at(&signed.signature.signed_cid)
+        .context("reading whether the claim was published")
+        .map_err(PublishError::Other)?;
+    if let Some(permit) = republish_permit(&signer, &unsigned.subject, published_at) {
+        return Ok(Some(permit));
+    }
+    let references = reference_types(unsigned);
+    let claim = shape_of(unsigned, &references);
+    let now = wiring.clock.now_utc();
+    let decided = match requirement(claim) {
+        Requirement::Exempt => return Ok(exempt_permit(&signer, claim)),
+        Requirement::Malformed => {
+            eprintln!(
+                "Not published: {} names no GitHub account (github:<login>) or repo (github:<owner>/<repo>).",
+                unsigned.subject
+            );
+            return Ok(None);
+        }
+        Requirement::Person(person) => {
+            let links = signer_links(wiring, now)?;
+            may_sign_from_checks(&signer, &person, &links, now)
+        }
+        Requirement::Repo { .. } => {
+            let links = signer_links(wiring, now)?;
+            let repo = wiring
+                .latest_repo_observation(&unsigned.subject, now)
+                .map_err(PublishError::Other)?;
+            let observed = repo.as_ref().map(|served| &served.latest);
+            may_sign_repo_from_checks(&signer, &unsigned.subject, &links, observed, now)
+        }
+    };
+    Ok(permitted_or_refused(decided))
+}
+
+fn signer_links(
+    wiring: &Wiring,
+    now: chrono::DateTime<chrono::Utc>,
+) -> std::result::Result<Vec<claim_domain::authority::LinkedAccountEvidence>, PublishError> {
+    wiring
+        .signer_linked_accounts(now)
+        .map_err(PublishError::Other)
+}
+
+/// The permit the gate minted, or `None` once its refusal is shown on stderr.
+fn permitted_or_refused(
+    decided: std::result::Result<SigningPermit, AuthorityRefusal>,
+) -> Option<SigningPermit> {
+    decided
+        .map_err(|refusal| eprint!("{}", render_signing_refused(&refusal)))
+        .ok()
+}
+
 /// Publish a `SignedClaim` to the configured PDS and record publication
-/// metadata. The single publish code path per ADR-003 — both the
+/// metadata, under a [`SigningPermit`] for its subject and signer
+/// (ADR-086 §4). The single publish code path per ADR-003 — both the
 /// standalone verb and the `claim add` Y branch funnel through here.
 ///
 /// On success returns a [`PublishOutcome`] carrying the at-uri the
@@ -166,8 +245,10 @@ pub fn run(
 /// publish" — the user can't make progress by re-running the verb.
 pub fn publish_signed_claim(
     wiring: &Wiring,
+    permit: &SigningPermit,
     signed: &SignedClaim,
 ) -> std::result::Result<PublishOutcome, PublishError> {
+    refuse_a_permit_for_another_claim(permit, signed).map_err(PublishError::Other)?;
     let cid = signed.signature.signed_cid.clone();
     let cid_str = cid.0.clone();
 
@@ -219,6 +300,24 @@ pub fn publish_signed_claim(
         at_uri: create_outcome.at_uri.0,
         already_present: create_outcome.was_idempotent,
     })
+}
+
+/// A permit for another subject or signer than `signed`'s publishes nothing.
+fn refuse_a_permit_for_another_claim(
+    permit: &SigningPermit,
+    signed: &SignedClaim,
+) -> anyhow::Result<()> {
+    let claim = &signed.unsigned;
+    if permit.subject() != claim.subject || permit.signer() != claim.author_did.0 {
+        return Err(anyhow!(
+            "the publishing permit is for {} by {}, not for {} by {}",
+            permit.subject(),
+            permit.signer(),
+            claim.subject,
+            claim.author_did.0
+        ));
+    }
+    Ok(())
 }
 
 /// Pure function: render the post-publish success block.
@@ -300,6 +399,69 @@ mod tests {
         assert!(
             rendered.contains("at-uri: at://did:plc:test-jeff/org.openlore.claim/bafy_test_002"),
             "expected at-uri line on idempotent retry too; got:\n{rendered}"
+        );
+    }
+
+    /// Owner-only signing (ADR-086 §4, ruling F3, closes T2): a stored claim
+    /// Jeff signed about someone else's GitHub account, never published, is
+    /// refused by `claim publish` — Jeff holds no link to `rachelk`, so the
+    /// person gate mints no permit and nothing is written to his PDS.
+    #[test]
+    fn an_unpublished_person_claim_about_someone_elses_login_is_refused() {
+        use claim_domain::{canonicalize, compute_cid, Confidence, Did, UnsignedClaim};
+        use openlore_test_support::{FakeIdentity, FakePds};
+        use ports::IdentityPort;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let paths = crate::paths::OpenLorePaths {
+            config_dir: home.path().join("config"),
+            data_dir: home.path().join("data"),
+        };
+        let identity = FakeIdentity::jeff();
+        let unsigned = UnsignedClaim {
+            subject: "github:rachelk".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.memory-safety".to_string(),
+            evidence: Vec::new(),
+            confidence: Confidence::try_new(0.55).expect("confidence"),
+            author_did: Did(identity.author_did().0.clone()),
+            composed_at: "2026-10-01T09:00:00+00:00".to_string(),
+            references: Vec::new(),
+            reason: None,
+        };
+        let cid = compute_cid(&canonicalize(&unsigned).expect("canonical"));
+        let signed = SignedClaim {
+            unsigned,
+            signature: identity.sign(&cid).expect("sign"),
+        };
+        let pds = FakePds::for_did(identity.author_did().0.clone());
+        let wiring = Wiring::over_local_store(
+            paths,
+            Box::new(identity),
+            Box::new(pds.clone()),
+            Box::new(adapter_system_clock::SystemClockAdapter::new()),
+            Box::new(adapter_github::GithubAdapter::from_env()),
+        )
+        .expect("wiring over a fresh local store");
+        wiring.storage.write_signed_claim(&signed).expect("stored");
+
+        let outcome = run(
+            &wiring,
+            &ClaimPublishArgs {
+                cid: signed.signature.signed_cid.0.clone(),
+            },
+        )
+        .expect("a refusal is an outcome, not an error");
+
+        assert_ne!(outcome.exit_code, 0, "the publish is refused");
+        assert_eq!(pds.record_count(), 0, "nothing reaches Jeff's PDS");
+        assert_eq!(
+            wiring
+                .storage
+                .published_at(&signed.signature.signed_cid)
+                .expect("read publication"),
+            None,
+            "the claim stays never published"
         );
     }
 }

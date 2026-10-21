@@ -299,6 +299,10 @@ pub trait StoragePort {
         at_uri: &str,
         published_at: DateTime<Utc>,
     ) -> Result<(), StorageError>;
+    /// When this store first recorded `cid` as published (`claims.published_at`);
+    /// `None` when it was never published or is not in the store
+    /// (owner-only-signing ADR-086 §4: a never-published claim needs a permit).
+    fn published_at(&self, cid: &Cid) -> Result<Option<DateTime<Utc>>, StorageError>;
 
     // -------- slice-03 (federated read) --------
     /// Federated subject query: returns every row across BOTH the
