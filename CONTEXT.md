@@ -1,14 +1,14 @@
 # OpenLore — Resume Context
 
 ## Current Task
-review-app-repos-and-accounts (choose repos, import any public repo unsigned, up to 3 GitHub accounts) and identity-link viewer slice 4 delivered and archived (`docs/evolution/review-app-repos-and-accounts-evolution.md`, `github-did-identity-link-slice-4-evolution.md`); pushed at 85560a6, CI green, review app live (sha256:af7f7040…, store v2).
+owner-only-signing delivered and finalized (`docs/evolution/owner-only-signing-evolution.md`): main fast-forwarded to 5316d62, NOT pushed (102 commits ahead of origin), not deployed. All 25 steps pass DES integrity; review revised once; mutation 100% (176/176).
 
 ## Key Decisions
-- Anyone can import a public repo and get private unsigned suggestions; publishing needs a SigningPermit from a same-request owner + bio read (ADR-089). Admin-of-org repos (R4) deferred: needs GitHub OAuth.
-- GitHub page reads: 200/h per DID, 1000/h app-wide; scans keep the rest of the 5000/h token.
+- Only an account's owner (verified link) or a DID listed in a repo's `.github/openlore-authority` (or the repo owner) can sign about it; anyone can import unsigned candidates (ADR-086/087). Readers label and don't weigh third-party / unchecked claims.
+- Withdrawn claims keep their weight and footer place (ADR-022/WD-85); the reviewer's premise was rejected.
 - Push only when told, over SSH (`git push git@github.com:jeffabailey/openlore.git HEAD:main`); deploy with `deploy/ops.sh review-app deploy <40-hex sha>`.
 
 ## Next Steps
-- Slice-4 viewer design is still PROPOSED (docs/feature/github-did-identity-link/design); user to confirm its defaults.
-- Repos follow-ups (evolution doc "Deferred"): acceptance gaps #214, #424; @security test for the cross-origin guard; drop old `github_links` table.
-- Backlog in memory `openlore-follow-up-backlog.md`: `scan.refused`, SPIKE-6, htmx 4, TRUSTED_PROXIES, serde-saphyr; tofu-aws-pds swappiness release.
+- User decision: should `openlore publish push` need a SigningPermit (U-OOS-D30 in docs/feature/owner-only-signing/deliver/upstream-issues.md)? Other deferred: D31, D32, D34, D35.
+- On "push": push main, watch CI, then deploy the review app (store goes v8/v9 via migration).
+- Remove worktree ../openlore-oos (branch oos-deliver) once pushed; older backlog in memory `openlore-follow-up-backlog.md`.
