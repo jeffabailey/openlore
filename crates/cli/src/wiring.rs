@@ -75,8 +75,9 @@ pub struct Wiring {
     /// two observations of one repo.
     pub repo_authority_checks: Box<dyn RepoAuthorityCheckReadPort>,
     /// The WRITE side of the repo observations (insert only), handed only to
-    /// the verbs that observe a repo (`authority verify`); readers are never
-    /// handed it (check-arch `authority_readers_hold_no_write_handle`).
+    /// the verbs that observe a repo (`authority verify`, `scrape github`,
+    /// `scrape person`); readers are never handed it (check-arch
+    /// `authority_readers_hold_no_write_handle`).
     pub repo_authority_check_writes: Box<dyn RepoAuthorityCheckWritePort>,
     /// The stored claims carrying the identity-link predicate — candidates the
     /// pure projection decides on (Q-RM-5). Read-only.
@@ -356,8 +357,9 @@ impl Wiring {
 
     /// The narrow handles that re-check identity links on a fresh GitHub
     /// read and append the checks: `identity verify`, and the sign-time
-    /// refresh of the signer's own link a `scrape person --sign` runs
-    /// (OOS-D7) — the only signing path holding the check-write handle.
+    /// refresh of the signer's own link a `scrape github --sign` or `scrape
+    /// person --sign` runs (OOS-D7) — the only signing paths holding the
+    /// check-write handle.
     pub fn link_recheck_handles(&self) -> crate::verbs::identity_verify::IdentityVerifyHandles<'_> {
         crate::verbs::identity_verify::IdentityVerifyHandles {
             checks: self.identity_link_checks.as_ref(),

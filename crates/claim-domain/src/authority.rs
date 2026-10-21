@@ -74,17 +74,14 @@ pub enum PermitBasis {
     /// The claim needs no authority: a dispute, a withdrawal, an identity
     /// link, or a subject that is not on GitHub (ADR-086 §1-2).
     Exempt,
-    /// A repo assertion signed ungated until the repo tier lands (accepted
-    /// transitional risk T1, ruling F1).
-    UngatedT1,
     /// The repo's authority file lists the signer's DID (ADR-087 §3).
     RepoListed,
 }
 
 /// The signer may publish a claim about `subject`. Minted only in this
 /// module ([`may_sign`], [`may_sign_from_checks`],
-/// [`may_sign_repo_from_checks`], [`exempt_permit`],
-/// [`permit_ungated_repo_t1`]); never serialized, never stored.
+/// [`may_sign_repo_from_checks`], [`exempt_permit`]); never serialized,
+/// never stored.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SigningPermit {
     signer: String,
@@ -753,15 +750,6 @@ pub fn exempt_permit(signer: &str, claim: ClaimShape<'_>) -> Option<SigningPermi
         .then(|| permit(signer, claim.subject, PermitBasis::Exempt))
 }
 
-/// The transitional ungated entry (accepted risk T1, ruling F1): a permit
-/// for an assertion about a `github:<owner>/<repo>` subject, with no
-/// authority judged; `None` for any other claim. Deleted once the repo tier
-/// lands.
-pub fn permit_ungated_repo_t1(signer: &str, claim: ClaimShape<'_>) -> Option<SigningPermit> {
-    matches!(requirement(claim), Requirement::Repo { .. })
-        .then(|| permit(signer, claim.subject, PermitBasis::UngatedT1))
-}
-
 fn permit(signer: &str, subject: &str, basis: PermitBasis) -> SigningPermit {
     SigningPermit {
         signer: signer.to_string(),
@@ -1377,10 +1365,9 @@ mod gate_from_checks_tests {
         /// A claim needing no authority — a dispute, a withdrawal, an
         /// identity link, a subject off GitHub — gets an exempt permit for
         /// its own subject and signer, whatever the subject; an assertion
-        /// about a GitHub account or repo never does. The T1 entry permits
-        /// only repo assertions.
+        /// about a GitHub account or repo never does.
         #[test]
-        fn exempt_and_t1_permits_follow_the_requirement(
+        fn exempt_permits_follow_the_requirement(
             subject in prop_oneof![
                 "github:[a-z]{1,8}",
                 "github:[a-z]{1,8}/[a-z]{1,8}",
@@ -1403,15 +1390,6 @@ mod gate_from_checks_tests {
                 prop_assert_eq!(
                     (permit.signer(), permit.subject(), permit.basis()),
                     (JEFF, subject.as_str(), PermitBasis::Exempt)
-                );
-            }
-
-            let ungated = permit_ungated_repo_t1(JEFF, claim);
-            prop_assert_eq!(ungated.is_some(), matches!(needed, Requirement::Repo { .. }));
-            if let Some(permit) = ungated {
-                prop_assert_eq!(
-                    (permit.signer(), permit.subject(), permit.basis()),
-                    (JEFF, subject.as_str(), PermitBasis::UngatedT1)
                 );
             }
         }

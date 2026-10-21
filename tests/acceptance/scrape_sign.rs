@@ -71,6 +71,9 @@ fn scrape_sign_one_candidate_signs_and_publishes_via_slice_01_pipeline() {
     // second — `detect_signals` emits memory-safety first, dependency-pinning
     // second, the arm order the pure derivation preserves).
     let env = TestEnv::initialized();
+    // SEEDED-GIVEN (owner-only-signing 02-09): Maria's DID is listed for
+    // github:rust-lang/cargo, re-checked before the import signs.
+    seed_repo_authority(&env, "github:rust-lang/cargo", None);
     let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
         "rust-lang/cargo",
     ));
@@ -168,6 +171,9 @@ fn scrape_sign_accepting_all_defaults_signs_proposal_byte_for_byte_no_inflation(
     // values are deterministic — the SSOT mapping + the detectors fix them
     // exactly, so the test pins them as the byte-for-byte oracle below.
     let env = TestEnv::initialized();
+    // SEEDED-GIVEN (owner-only-signing 02-09): Maria's DID is listed for
+    // github:rust-lang/cargo, re-checked before the import signs.
+    seed_repo_authority(&env, "github:rust-lang/cargo", None);
     let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
         "rust-lang/cargo",
     ));
@@ -271,6 +277,9 @@ fn scrape_sign_provenance_is_display_only_and_does_not_alter_signed_cid() {
     // memory-safety proposal (detect_signals emits memory-safety first); this
     // scenario signs candidate 1 regardless of which philosophy it carries.
     let env = TestEnv::initialized();
+    // SEEDED-GIVEN (owner-only-signing 02-09): Maria's DID is listed for
+    // github:rust-lang/cargo, re-checked before the import signs.
+    seed_repo_authority(&env, "github:rust-lang/cargo", None);
     let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
         "rust-lang/cargo",
     ));
@@ -484,6 +493,9 @@ fn scrape_sign_out_of_range_confidence_reprompts_without_writing() {
     // memory-safety proposal (detect_signals emits memory-safety first); this
     // scenario signs candidate 1 regardless of which philosophy it carries.
     let env = TestEnv::initialized();
+    // SEEDED-GIVEN (owner-only-signing 02-09): Maria's DID is listed for
+    // github:rust-lang/cargo, re-checked before the import signs.
+    seed_repo_authority(&env, "github:rust-lang/cargo", None);
     let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
         "rust-lang/cargo",
     ));
@@ -572,6 +584,9 @@ fn scrape_sign_declining_publish_retains_local_claim_with_publish_hint() {
     // canonical cargo signals → five derived candidates. He selects candidate
     // 2 (a valid 1-based index within the 1..5 range).
     let env = TestEnv::initialized();
+    // SEEDED-GIVEN (owner-only-signing 02-09): Maria's DID is listed for
+    // github:rust-lang/cargo, re-checked before the import signs.
+    seed_repo_authority(&env, "github:rust-lang/cargo", None);
     let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
         "rust-lang/cargo",
     ));
@@ -679,6 +694,9 @@ fn scrape_sign_batch_walks_each_candidate_through_individual_compose_and_sign() 
     // slice-01 compose-sign-publish gesture (US-SCR-005; the human-gate holds
     // PER candidate, batch is convenience never a bypass; WD-49 / J-004c).
     let env = TestEnv::initialized();
+    // SEEDED-GIVEN (owner-only-signing 02-09): Maria's DID is listed for
+    // github:rust-lang/cargo, re-checked before the import signs.
+    seed_repo_authority(&env, "github:rust-lang/cargo", None);
     let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
         "rust-lang/cargo",
     ));
@@ -802,6 +820,9 @@ fn scrape_sign_batch_skip_one_candidate_does_not_abort_the_rest() {
     // the batch: candidates 1 and 5 still get signed + published (US-SCR-005
     // Ex 2; batch fault isolation, WD-49 / J-004c).
     let env = TestEnv::initialized();
+    // SEEDED-GIVEN (owner-only-signing 02-09): Maria's DID is listed for
+    // github:rust-lang/cargo, re-checked before the import signs.
+    seed_repo_authority(&env, "github:rust-lang/cargo", None);
     let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
         "rust-lang/cargo",
     ));

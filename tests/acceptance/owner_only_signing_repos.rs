@@ -65,7 +65,7 @@ use support::*;
 ///   And GitHub was asked once for tidepool's authority file
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-1: pending DELIVER"]
+#[ignore = "DISTILL owner-only-signing RA-1: activated in 03-02 — its 'reads owner' Then needs graph query reader labels (U-OOS-D15)"]
 fn jeff_imports_his_own_repo_and_signs_what_it_shows() {
     let world = authority_world();
     given_jeff_linked_his_account(&world);
@@ -112,7 +112,6 @@ fn jeff_imports_his_own_repo_and_signs_what_it_shows() {
 ///     | scrape person rachelk               | you have no identity link to                   | rachelk after linking                            |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-2: pending DELIVER"]
 fn jeff_imports_anything_public_but_signing_what_he_cannot_attest_is_refused_with_a_hand_off() {
     let rows: [(&str, Subject, Refusal, CanSign, Option<String>); 3] = [
         (
@@ -445,7 +444,6 @@ fn when_github_cannot_answer_rechecking_records_nothing_and_changes_nothing() {
 ///     | Jeff re-checked tidepool's authority on 1 October  | the claim is signed and published, on his 1 October checks                                    |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-6: pending DELIVER"]
 fn when_githubs_budget_runs_out_mid_import_the_candidates_are_listed_and_his_latest_check_decides()
 {
     let tidepool = Subject::Repo(TIDEPOOL);
@@ -709,7 +707,6 @@ fn a_repo_github_does_not_have_is_recorded_as_not_found_and_cannot_be_signed() {
 ///     | Jeff linked "jeffbailey" but tidepool was never observed                                  | jeffbailey/tidepool | 3 October 09:00 | refused: authority has not been checked             |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-10: activated in 02-09 — row 5's Given needs scrape github to record a repo observation (U-OOS-D14)"]
 fn with_the_network_off_jeff_signs_a_repo_claim_only_from_fresh_checks() {
     fn anvil_lists_jeff(w: &LinkWorld) {
         the_repo_holds_authority_file(w, ANVIL, listing(&[MY_DID]));
@@ -1122,7 +1119,6 @@ fn regenerate_the_frozen_v7_store_fixture() {
 ///     | GitHub says it is too busy to answer for his profile     | 21 October | nothing is signed; he is told to re-check authority, with the command    |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-13: pending DELIVER"]
 fn signing_from_an_import_rechecks_jeffs_own_link_first() {
     #[derive(Debug, Clone, Copy)]
     enum Github {

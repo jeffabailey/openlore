@@ -10,13 +10,17 @@
 //!    ONE `/users/{user}` read (US-CPI-005) — nothing of theirs is crawled;
 //! 3. a REPO target: `harvest_repo`, record its top-N human contributors as
 //!    contribution links (DDD-14), `derive_candidates(signals, mapping)` via
-//!    the PURE `scraper-domain`;
+//!    the PURE `scraper-domain`, then one look at the repo and its authority
+//!    file (`read_repo_authority`), recorded as a repo observation whoever
+//!    asks — nothing when GitHub cannot answer (ADR-087 §6);
 //! 4. render the candidate list (each candidate names its source signals —
 //!    auditability, KPI-SCR-3) and the contributors block;
-//! 5. IF `--sign`: the SHARED `sign_batch::sign_selected` validates the raw
+//! 5. IF `--sign`: refresh the signer's OWN link to the repo owner's account
+//!    (OOS-D7), then the SHARED `sign_batch::sign_selected` validates the raw
 //!    index list (duplicates / out-of-range rejected BEFORE any compose),
-//!    then walks each selected candidate through its OWN compose-sign-publish
-//!    gesture — the single sign/publish path (ADR-003 + WD-22 / DDD-12);
+//!    then walks each selected candidate through the repo gate and its OWN
+//!    compose-sign-publish gesture — the single sign/publish path (ADR-003 +
+//!    WD-22 / DDD-12); a refused candidate stays listed with the hand-off;
 //! 6. the end-of-scrape new-inferred-candidates hint (DDD-14).
 //!
 //! ## The human-gate at the type level (I-SCR-1 / WD-49)
@@ -36,8 +40,11 @@
 //! slice-01 verb internals).
 
 use anyhow::{anyhow, Result};
+use claim_domain::bare_did;
 use claim_domain::identity_link::{check_on_profile, RecheckScope};
-use ports::{CandidateClaim, GithubError, LinkFilter, TargetKind};
+use ports::{
+    CandidateClaim, GithubError, LinkFilter, RepoAuthorityCheck, RepoSubjectKey, TargetKind,
+};
 use scraper_domain::{
     contributor_count_for, derive_candidates, load_mapping, new_inferred_candidate_count,
     normalize_target, possible_renames, select_contributors, shared_contributors,
@@ -47,14 +54,15 @@ use scraper_domain::{
 
 use crate::render::{
     plural_suffix, render_auth_report, render_candidate_list, render_contributors_block,
-    render_contributors_not_recorded, render_linked_person_view,
+    render_contributors_not_recorded, render_github_could_not_be_asked, render_linked_person_view,
     render_new_inferred_candidates_hint, render_no_contributors_requested,
-    render_public_data_banner, render_shared_contributors,
+    render_public_data_banner, render_retry_after, render_shared_contributors,
 };
 use crate::verbs::claim_publish::build_tokio_runtime;
 use crate::verbs::identity_reads::{check_of, links_in_scope, observation_of};
+use crate::verbs::identity_verify::refresh_signers_own_link;
 use crate::verbs::infer_people::{person_signables, read_inference_report, read_person_link_lines};
-use crate::verbs::sign_batch::{self, SignableCandidate};
+use crate::verbs::sign_batch::{self, SignableCandidate, UnansweredRepos};
 use crate::wiring::Wiring;
 
 /// Argument struct for the `scrape github` verb (mirrors the clap subcommand).
@@ -275,8 +283,25 @@ fn scrape_repo(
         ));
     }
 
-    // (5a) The contributors block, below the candidates.
+    // (5a) The contributors block, below the candidates, then whether GitHub
+    // answered the look at the repo's authority.
     out.push_str(&render_contributors_outcome(&scraped.contributors));
+    out.push_str(&render_authority_read(
+        &scraped.subject,
+        &scraped.authority_read,
+    ));
+
+    // OOS-D7: signing from an import first refreshes the signer's own link
+    // to the repo owner's account; when GitHub cannot answer, nothing is
+    // recorded and the gate decides on the latest local check.
+    if args.sign.is_some() {
+        refresh_signers_own_link(
+            &wiring.link_recheck_handles(),
+            bare_did(&wiring.identity.author_did().0),
+            target.owner,
+            wiring.clock.now_utc(),
+        )?;
+    }
 
     // (6) WITHOUT --sign: derive + render only, ZERO claim writes (the
     // human-gate; scraper_never_persists_unsigned, I-SCR-1 / WD-49).
@@ -284,7 +309,13 @@ fn scrape_repo(
     // The candidate-list block already accumulated in `out` is handed to the
     // batch, which emits it to stdout BEFORE composing so the user reviews it.
     let signables: Vec<SignableCandidate> = scraped.candidates.iter().map(repo_signable).collect();
-    let mut outcome = sign_batch::list_or_sign(wiring, &signables, args.sign.as_deref(), out)?;
+    let mut outcome = sign_batch::list_or_sign_imported(
+        wiring,
+        &signables,
+        args.sign.as_deref(),
+        out,
+        &unanswered_repos(&scraped.subject, &scraped.authority_read),
+    )?;
 
     // (8) The one-line new-inferred-candidates hint, AFTER `--sign` so repo
     // claims signed in this run count (DDD-14). Silent when nothing changed.
@@ -304,13 +335,26 @@ pub(crate) struct RepoScrape {
     pub signal_count: usize,
     pub candidates: Vec<CandidateClaim>,
     pub contributors: ContributorsOutcome,
+    pub authority_read: AuthorityRead,
+}
+
+/// Whether GitHub answered this scrape's look at the repo and its authority
+/// file (ADR-087 §6).
+pub(crate) enum AuthorityRead {
+    /// The observation was recorded.
+    Recorded,
+    /// GitHub could not answer (why, with when to retry when rate-limited):
+    /// nothing was recorded.
+    Unanswered(String),
 }
 
 /// The shared per-repo beats of `scrape github` and `scrape person`: harvest
 /// the bounded public signal set, record the top-N human contributors
 /// (DDD-14), and derive candidates via the PURE scraper-domain (confidence
-/// 0.25; each names its source signal). Writes ONLY the unsigned
-/// contribution links — never a claim (I-SCR-1).
+/// 0.25; each names its source signal), then one look at the repo and its
+/// authority file recorded as a repo observation (ADR-087 §6). Writes ONLY
+/// the unsigned contribution links and that observation — never a claim
+/// (I-SCR-1).
 pub(crate) fn scrape_repo_into_store(
     wiring: &Wiring,
     runtime: &tokio::runtime::Runtime,
@@ -327,12 +371,73 @@ pub(crate) fn scrape_repo_into_store(
     let mapping = load_mapping(EMBEDDED_MAPPING_YAML)
         .map_err(|e| anyhow::anyhow!("embedded signal->predicate mapping failed to parse: {e}"))?;
     let candidates = derive_candidates(&subject, &signals, &mapping);
+    let authority_read = observe_repo_authority(wiring, runtime, target, &subject)?;
     Ok(RepoScrape {
         subject,
         signal_count: signals.len(),
         candidates,
         contributors,
+        authority_read,
     })
+}
+
+/// One look at the repo and its authority file (`read_repo_authority`: both
+/// reads, always — never the harvest's own repo body), recorded as this
+/// reader's observation of `subject` only once GitHub answered both. When
+/// GitHub cannot answer, nothing is recorded.
+fn observe_repo_authority(
+    wiring: &Wiring,
+    runtime: &tokio::runtime::Runtime,
+    target: &RepoTarget<'_>,
+    subject: &str,
+) -> Result<AuthorityRead> {
+    match runtime.block_on(wiring.github.read_repo_authority(target.owner, target.repo)) {
+        Ok(observation) => {
+            wiring
+                .repo_authority_check_writes
+                .record(&RepoAuthorityCheck {
+                    subject_key: RepoSubjectKey::of(subject),
+                    observation,
+                    checked_at: wiring.clock.now_utc(),
+                })
+                .map_err(|e| anyhow!("recording the authority observation of {subject}: {e}"))?;
+            Ok(AuthorityRead::Recorded)
+        }
+        Err(unanswered) => Ok(AuthorityRead::Unanswered(unanswered_reason(
+            wiring,
+            &unanswered,
+        ))),
+    }
+}
+
+/// Why GitHub could not answer, with when to retry once its rate budget is
+/// spent (the budget the adapter last observed). Never carries the token.
+fn unanswered_reason(wiring: &Wiring, unanswered: &GithubError) -> String {
+    match (unanswered, wiring.github.last_rate_budget()) {
+        (GithubError::RateLimited { .. }, Some(budget)) => {
+            format!("{unanswered}; {}", render_retry_after(budget.reset_at))
+        }
+        _ => unanswered.to_string(),
+    }
+}
+
+/// The note a scrape shows when GitHub could not answer about the repo's
+/// authority; nothing when the observation was recorded.
+fn render_authority_read(subject: &str, read: &AuthorityRead) -> String {
+    match read {
+        AuthorityRead::Recorded => String::new(),
+        AuthorityRead::Unanswered(why) => {
+            format!("{}.\n", render_github_could_not_be_asked(subject, why))
+        }
+    }
+}
+
+/// The repos this scrape could not observe, for the sign batch's refusals.
+fn unanswered_repos(subject: &str, read: &AuthorityRead) -> UnansweredRepos {
+    match read {
+        AuthorityRead::Recorded => UnansweredRepos::default(),
+        AuthorityRead::Unanswered(why) => UnansweredRepos::default().noting(subject, why.clone()),
+    }
 }
 
 /// The contributors beat of a repo scrape (contributor-philosophy-inference

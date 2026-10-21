@@ -73,6 +73,9 @@ pub mod authority;
 /// CLI and the viewer), so a port cannot drift from it: a person target
 /// (`user`) reads its public profile once and nothing else; a repo target
 /// (`owner/repo`) reads its repo record once (resolve and harvest share it).
+/// U-OOS-9: the repo authority observation that follows the harvest
+/// (ADR-087 §6: the record and its authority file, always both, never the
+/// harvest's body) is not the harvest's read and is not counted.
 #[allow(dead_code)]
 pub fn assert_target_record_read_once(seen_paths: &[String], target: &str) {
     match target.split_once('/') {
@@ -83,7 +86,17 @@ pub fn assert_target_record_read_once(seen_paths: &[String], target: &str) {
         ),
         Some(_) => {
             let record = format!("/repos/{target}");
-            let reads = seen_paths.iter().filter(|path| **path == record).count();
+            let authority_file = format!("{record}/contents/.github/openlore-authority");
+            let harvest_end = seen_paths
+                .iter()
+                .rposition(|path| {
+                    path.starts_with(&format!("{record}/")) && *path != authority_file
+                })
+                .map_or(seen_paths.len(), |last_harvest_read| last_harvest_read + 1);
+            let reads = seen_paths[..harvest_end]
+                .iter()
+                .filter(|path| **path == record)
+                .count();
             assert_eq!(reads, 1, "{record} is read once: {seen_paths:?}");
         }
     }

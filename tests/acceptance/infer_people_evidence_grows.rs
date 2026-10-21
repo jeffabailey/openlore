@@ -80,6 +80,9 @@ fn given_i_signed_the_inference_citing_rachel(env: &TestEnv) -> (String, Subscri
 fn a_newly_signed_repo_philosophy_proposes_a_new_person_inference() {
     // GIVEN BurntSushi is linked to rust-lang/regex.
     let env = TestEnv::initialized();
+    // SEEDED-GIVEN (owner-only-signing 02-09): Maria's DID is listed for
+    // github:rust-lang/regex, re-checked before the import signs.
+    seed_repo_authority(&env, "github:rust-lang/regex", None);
     given_repo_scraped(&env, "rust-lang/regex", burntsushi_only(), None);
 
     // WHEN Maria scrapes regex and signs candidate 3 (semantic-versioning).

@@ -9,17 +9,18 @@
 //! invariant, WD-66 / I-SCR-6): compose -> canonicalize -> CID -> sign ->
 //! persist -> optional publish via `claim_publish::publish_signed_claim`.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 
 use anyhow::{anyhow, Result};
 use claim_domain::authority::{
-    exempt_permit, may_sign_from_checks, permit_ungated_repo_t1, requirement, ClaimShape,
+    exempt_permit, may_sign_from_checks, may_sign_repo_as_served, requirement, ClaimShape,
     Requirement, SigningPermit,
 };
 use claim_domain::{reference_rules_validate, ClaimLookup, ClaimReference, ReferenceType};
 
 use crate::io::prompt_line;
-use crate::render::render_signing_refused;
+use crate::render::{render_import_signing_refused, render_signing_refused};
 use crate::verbs::claim_add::{build_unsigned_claim, render_compose_preview, ComposedClaim};
 use crate::verbs::claim_publish::{publish_signed_claim, render_publish_success};
 use crate::verbs::sign_permitted::sign_permitted;
@@ -53,6 +54,25 @@ pub struct ListOrSignOutcome {
     pub stdout: String,
 }
 
+/// The repos GitHub could not answer about in this invocation (rate limit,
+/// outage, refused redirect), each with why: nothing was recorded for them,
+/// so the gate decided on the latest local observation (OOS-D7).
+#[derive(Debug, Default)]
+pub struct UnansweredRepos(BTreeMap<String, String>);
+
+impl UnansweredRepos {
+    /// GitHub could not answer about the repo `subject` names, because `why`.
+    pub fn noting(mut self, subject: &str, why: String) -> Self {
+        self.0.insert(subject.to_lowercase(), why);
+        self
+    }
+
+    /// Why GitHub could not answer about `subject` (letter case aside).
+    fn why(&self, subject: &str) -> Option<&str> {
+        self.0.get(&subject.to_lowercase()).map(String::as_str)
+    }
+}
+
 /// The shared tail of every candidate-listing verb: WITHOUT `--sign` return
 /// the rendered listing untouched (zero writes); WITH `--sign` run the batch
 /// over `candidates` — the SAME numbering the listing shows (UC-8).
@@ -62,13 +82,38 @@ pub fn list_or_sign(
     raw_selection: Option<&str>,
     rendered_list: String,
 ) -> Result<ListOrSignOutcome> {
+    list_or_sign_imported(
+        wiring,
+        candidates,
+        raw_selection,
+        rendered_list,
+        &UnansweredRepos::default(),
+    )
+}
+
+/// [`list_or_sign`] for an import that asked GitHub about repos in this
+/// invocation: a repo GitHub could not answer about is refused naming that,
+/// when the latest local observation does not let the signer sign.
+pub fn list_or_sign_imported(
+    wiring: &Wiring,
+    candidates: &[SignableCandidate],
+    raw_selection: Option<&str>,
+    rendered_list: String,
+    unanswered: &UnansweredRepos,
+) -> Result<ListOrSignOutcome> {
     let Some(raw_selection) = raw_selection else {
         return Ok(ListOrSignOutcome {
             exit_code: 0,
             stdout: rendered_list,
         });
     };
-    let exit_code = sign_selected(wiring, candidates, raw_selection, &rendered_list)?;
+    let exit_code = sign_selected(
+        wiring,
+        candidates,
+        raw_selection,
+        &rendered_list,
+        unanswered,
+    )?;
     Ok(ListOrSignOutcome {
         exit_code,
         stdout: String::new(),
@@ -100,6 +145,7 @@ pub fn sign_selected(
     candidates: &[SignableCandidate],
     raw_selection: &str,
     candidate_list_out: &str,
+    unanswered: &UnansweredRepos,
 ) -> Result<i32> {
     let selection = selected_candidates(candidates, raw_selection).map_err(|e| anyhow!(e))?;
     print!("{candidate_list_out}");
@@ -118,7 +164,7 @@ pub fn sign_selected(
             println!("\n({signed_count} of {total_selected} signed)");
             std::io::stdout().flush()?;
         }
-        match sign_candidate_via_slice01(wiring, candidate)? {
+        match sign_candidate_via_slice01(wiring, candidate, unanswered)? {
             SignOutcome::Signed => signed_count += 1,
             SignOutcome::Skipped => {
                 // The skip is VISIBLE (named by its 1-based selection index)
@@ -236,6 +282,7 @@ fn parse_selection(raw: &str, candidate_count: usize) -> Result<Vec<usize>, Stri
 fn sign_candidate_via_slice01(
     wiring: &Wiring,
     candidate: &SignableCandidate,
+    unanswered: &UnansweredRepos,
 ) -> Result<SignOutcome> {
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
@@ -255,12 +302,16 @@ fn sign_candidate_via_slice01(
         .collect();
     let confidence = prompt_confidence(&mut stdout, &mut stdin, candidate.confidence)?;
 
-    // Owner-only signing (UC-9 / A-8): a person candidate is signed only by
-    // the owner of the account it is about. The claim gated is the one the
+    // Owner-only signing (UC-9 / A-8): a candidate is signed only by who
+    // holds authority over its subject. The claim gated is the one the
     // human composed (an edited subject or predicate included), before any
     // preview, signature, write or publish.
-    let Some(permit) = permit_or_refusal(wiring, &subject, &predicate, &candidate.references)?
-    else {
+    let claim = ComposedShape {
+        subject: &subject,
+        predicate: &predicate,
+        references: &candidate.references,
+    };
+    let Some(permit) = permit_or_refusal(wiring, &claim, unanswered)? else {
         return Ok(SignOutcome::Refused);
     };
 
@@ -388,18 +439,31 @@ fn sign_candidate_via_slice01(
     Ok(SignOutcome::Signed)
 }
 
+/// The parts of a composed candidate the signing gate judges.
+#[derive(Clone, Copy)]
+struct ComposedShape<'a> {
+    subject: &'a str,
+    predicate: &'a str,
+    references: &'a [ClaimReference],
+}
+
 /// The permit to sign the composed claim under, or `None` after printing
-/// why it is refused — the SAME gate `claim add` runs: a person candidate
-/// needs its owner's authority, judged from this reader's local checks; a
-/// `github:` subject naming no account or repo is never signed (fail
-/// closed). Repo subjects keep today's ungated path until the repo tier
-/// lands (accepted transitional risk T1).
+/// why it is refused — the SAME gate `claim add` runs, judged from this
+/// reader's local checks: a person candidate needs its owner's authority; a
+/// repo candidate its owner's or a DID its authority file lists, under the
+/// name GitHub served it as (a refusal names who can sign and the command
+/// they run); a `github:` subject naming no account or repo is never signed
+/// (fail closed).
 fn permit_or_refusal(
     wiring: &Wiring,
-    subject: &str,
-    predicate: &str,
-    references: &[ClaimReference],
+    composed: &ComposedShape<'_>,
+    unanswered: &UnansweredRepos,
 ) -> Result<Option<SigningPermit>> {
+    let ComposedShape {
+        subject,
+        predicate,
+        references,
+    } = *composed;
     let signer = &wiring.identity.author_did().0;
     let reference_types: Vec<ReferenceType> = references.iter().map(|r| r.ref_type).collect();
     let claim = ClaimShape {
@@ -426,7 +490,21 @@ fn permit_or_refusal(
             return Ok(None);
         }
         Requirement::Exempt => exempt_permit(signer, claim),
-        Requirement::Repo { .. } => permit_ungated_repo_t1(signer, claim),
+        Requirement::Repo { .. } => {
+            let now = wiring.clock.now_utc();
+            let links = wiring.signer_linked_accounts(now)?;
+            let repo = wiring.latest_repo_observation(subject, now)?;
+            match may_sign_repo_as_served(signer, subject, &links, repo.as_ref(), now) {
+                Ok(permit) => Some(permit),
+                Err(refusal) => {
+                    eprint!(
+                        "{}",
+                        render_import_signing_refused(&refusal, unanswered.why(subject))
+                    );
+                    return Ok(None);
+                }
+            }
+        }
     };
     permit
         .map(Some)

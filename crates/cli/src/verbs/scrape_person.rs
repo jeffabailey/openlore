@@ -13,8 +13,10 @@
 //!    archived repos skipped, ranked by stars then recent push);
 //! 4. scrape each through the SAME per-repo beats as `scrape github`
 //!    (`scrape_repo_into_store`): signals, candidates, contributors recorded
-//!    as unsigned links. A rate-limit refusal stops the loop; any other
-//!    per-repo refusal skips that repo;
+//!    as unsigned links, then one look at each repo and its authority file
+//!    recorded as a repo observation (nothing when GitHub cannot answer;
+//!    ADR-087 §6). A rate-limit refusal stops the loop; any other per-repo
+//!    refusal skips that repo;
 //! 5. WITH `--sign`: refresh the signer's OWN link to the person's account
 //!    (one fresh read; GitHub unable to answer records nothing, and the gate
 //!    falls back to the latest local check — OOS-D7, ruling R3);

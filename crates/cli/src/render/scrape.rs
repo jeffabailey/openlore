@@ -86,6 +86,15 @@ pub fn render_auth_report(report: &AuthReport) -> String {
     }
 }
 
+/// When GitHub's spent rate budget refills (`reset_at`: Unix seconds), as
+/// the retry hint a refusal names (ADR-087 §6).
+pub fn render_retry_after(reset_at: i64) -> String {
+    chrono::DateTime::from_timestamp(reset_at, 0).map_or_else(
+        || "retry after GitHub's rate budget refills".to_string(),
+        |refills| format!("retry after {}", refills.format("%Y-%m-%d %H:%M UTC")),
+    )
+}
+
 /// Render the contributors block of a repo scrape (contributor-philosophy-
 /// inference US-CPI-001 / Q-CPI-D1): how many HUMAN contributors were
 /// recorded as links, and every bot skipped on the way, by name. Carries NO

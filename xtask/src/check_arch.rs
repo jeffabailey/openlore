@@ -2770,9 +2770,6 @@ pub fn scan_signing_permit_not_serializable(workspace_root: &Path) -> anyhow::Re
 //   `sign_permitted`, which signs a draft only under a `SigningPermit` for its
 //   subject; philosophy records (not claims) are allowlisted. The crates that
 //   implement the signing primitive itself are out of scope.
-// * `t1_entry_only_from_sign_batch`: the transitional ungated repo entry
-//   (accepted risk T1) is reached only from `sign_batch` (`claim add` gates
-//   repo claims from local checks since 02-07).
 
 /// The one module whose `sign_permitted` may sign.
 const SIGN_PERMITTED_SOURCE: &str = "crates/cli/src/verbs/sign_permitted.rs";
@@ -2894,80 +2891,6 @@ pub fn scan_sign_only_with_permit(workspace_root: &Path) -> anyhow::Result<Vec<S
     if !workspace_root.join(SIGN_PERMITTED_SOURCE).is_file() {
         findings.push(format!(
             "sign_only_with_permit: {SIGN_PERMITTED_SOURCE} missing — the rule would pass vacuously"
-        ));
-    }
-    Ok(findings)
-}
-
-/// The transitional ungated repo entry (accepted risk T1, ruling F1).
-const T1_ENTRY: &str = "permit_ungated_repo_t1";
-
-/// Where the T1 entry is defined (and unit-tested).
-const T1_ENTRY_SOURCE: &str = "crates/claim-domain/src/authority.rs";
-
-/// The verbs that may reach the T1 entry (narrowed to `sign_batch` in
-/// 02-07, deleted in 02-09).
-const T1_ENTRY_CALLERS: &[&str] = &["crates/cli/src/verbs/sign_batch.rs"];
-
-/// Production expressions naming the T1 entry (a call or a fn reference).
-#[derive(Default)]
-struct T1EntryCollector {
-    references: usize,
-}
-
-impl<'ast> Visit<'ast> for T1EntryCollector {
-    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
-        if !is_test_only(&item.attrs) {
-            syn::visit::visit_item_mod(self, item);
-        }
-    }
-
-    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
-        if !is_test_only(&item.attrs) {
-            syn::visit::visit_item_fn(self, item);
-        }
-    }
-
-    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
-        if last_segment(&path.path).as_deref() == Some(T1_ENTRY) {
-            self.references += 1;
-        }
-        syn::visit::visit_expr_path(self, path);
-    }
-}
-
-/// Pure rule for one source at `rel_path`: every production use of the T1
-/// entry outside its allowed callers, as findings.
-pub fn classify_t1_entry_callers(rel_path: &str, source: &str) -> Vec<String> {
-    if rel_path == T1_ENTRY_SOURCE || T1_ENTRY_CALLERS.contains(&rel_path) {
-        return Vec::new();
-    }
-    let Ok(file) = syn::parse_file(source) else {
-        return vec![format!(
-            "t1_entry_only_from_sign_batch: {rel_path}: unparsable"
-        )];
-    };
-    let mut collector = T1EntryCollector::default();
-    collector.visit_file(&file);
-    (0..collector.references)
-        .map(|_| {
-            format!(
-                "t1_entry_only_from_sign_batch: {rel_path}: reaches `{T1_ENTRY}` — only {} \
-                 may sign a repo subject ungated (accepted risk T1, ruling F1); a counter, a \
-                 retraction or a link takes `exempt_permit`",
-                T1_ENTRY_CALLERS.join(" and ")
-            )
-        })
-        .collect()
-}
-
-/// Effect shell for `t1_entry_only_from_sign_batch`.
-pub fn scan_t1_entry_only_from_sign_batch(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
-    let mut findings = Vec::new();
-    for path in crate_sources(workspace_root) {
-        findings.extend(classify_t1_entry_callers(
-            &workspace_relative(workspace_root, &path),
-            &std::fs::read_to_string(&path)?,
         ));
     }
     Ok(findings)
@@ -3934,7 +3857,6 @@ pub fn run() -> anyhow::Result<i32> {
     let authority_evidence_findings = scan_authority_evidence_only_from_adapters(&workspace_root)?;
     let signing_permit_serde_findings = scan_signing_permit_not_serializable(&workspace_root)?;
     let sign_site_findings = scan_sign_only_with_permit(&workspace_root)?;
-    let t1_entry_findings = scan_t1_entry_only_from_sign_batch(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -3967,7 +3889,6 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(authority_evidence_findings);
     rendered.extend(signing_permit_serde_findings);
     rendered.extend(sign_site_findings);
-    rendered.extend(t1_entry_findings);
 
     if rendered.is_empty() {
         println!(

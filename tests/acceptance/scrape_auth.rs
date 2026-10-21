@@ -296,6 +296,9 @@ fn scrape_auth_rejected_token_exits_with_401_without_echoing_value() {
 #[test]
 fn scrape_auth_token_never_reaches_signed_claim_or_output_on_authenticated_sign() {
     let env = TestEnv::initialized();
+    // SEEDED-GIVEN (owner-only-signing 02-09): Maria's DID is listed for
+    // github:rust-lang/cargo, re-checked before the import signs.
+    seed_repo_authority(&env, "github:rust-lang/cargo", None);
 
     // GIVEN an AUTHENTICATED posture for the `rust-lang/cargo` public repo
     // whose five canonical cargo signals derive five candidates, carrying a

@@ -97,6 +97,41 @@ pub fn render_repo_signing_refused(refusal: &RepoSigningRefusal) -> String {
     }
 }
 
+/// Render a refused repo candidate of an import (OOS-D12): the refusal with
+/// the command the owner runs to sign it themselves — and, when GitHub could
+/// not be asked about the repo in this invocation (`github_unanswered`: why),
+/// that first, so a re-check names what stopped the fresh look.
+pub fn render_import_signing_refused(
+    refusal: &RepoSigningRefusal,
+    github_unanswered: Option<&str>,
+) -> String {
+    let unanswered = match (refusal, github_unanswered) {
+        (RepoSigningRefusal::Authority(AuthorityRefusal::Recheck { subject, .. }), Some(why)) => {
+            format!("{}.\n", render_github_could_not_be_asked(subject, why))
+        }
+        _ => String::new(),
+    };
+    let owner_signs = match refusal {
+        RepoSigningRefusal::Authority(AuthorityRefusal::Unattested { subject, .. }) => {
+            render_owner_signs_with(subject)
+        }
+        _ => String::new(),
+    };
+    format!(
+        "{unanswered}{}{owner_signs}",
+        render_repo_signing_refused(refusal)
+    )
+}
+
+/// The command a repo's owner (or a listed DID) runs to sign its imported
+/// candidates (OOS-D12 hand-off).
+fn render_owner_signs_with(subject: &str) -> String {
+    let repo = subject
+        .split_once(':')
+        .map_or(subject, |(_, owner_and_name)| owner_and_name);
+    format!("They would run `openlore scrape github {repo} --sign N`.\n")
+}
+
 /// `authority verify` with no `github:` claim in scope.
 pub const NOTHING_TO_RECHECK: &str = "No GitHub claims to re-check";
 
