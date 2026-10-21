@@ -252,19 +252,19 @@ fn jeff_can_see_the_claims_left_out_per_author_without_changing_the_weight() {
 
 /// RD-2b (crafter-owned regression, DELIVER review D25)
 /// ```gherkin
-/// @driving_port @real-io @c-oos-6 @a-13 @oos-d25 @contract-shape:bounded-change
-/// Scenario Outline: The not-counted footer leaves out withdrawn claims and discloses malformed subjects
+/// @driving_port @real-io @c-oos-6 @a-13 @wd-85 @oos-d25 @contract-shape:bounded-change
+/// Scenario Outline: The not-counted footer keeps withdrawn claims and discloses malformed subjects
 ///   Given the store of RD-1
 ///   And <more claims>
 ///   When Jeff asks for the weighted view of memory-safety
 ///   Then he is told "<left out>"
 ///   Examples:
 ///     | more claims                                                       | left out                                                                               |
-///     | Rachel published a second claim about tidepool, then withdrew it  | 2 claims not counted: 1 third-party, 1 authority not checked.                          |
+///     | Rachel published a second claim about tidepool, then withdrew it  | 3 claims not counted: 2 third-party, 1 authority not checked.                          |
 ///     | Rachel published a claim about github:acme-tools/anvil/extra       | 3 claims not counted: 1 third-party, 1 authority not checked, 1 malformed GitHub subject. |
 /// ```
 #[test]
-fn the_not_counted_footer_leaves_out_withdrawn_claims_and_discloses_malformed_subjects() {
+fn the_not_counted_footer_keeps_withdrawn_claims_and_discloses_malformed_subjects() {
     for row in ["withdrawn", "malformed"] {
         let mut world = labelled_store();
         let left_out = match row {
@@ -278,7 +278,9 @@ fn the_not_counted_footer_leaves_out_withdrawn_claims_and_discloses_malformed_su
                     &mut world,
                     vec![second.marking(claim_domain::ReferenceType::Retracts, &own[0])],
                 );
-                "2 claims not counted: 1 third-party, 1 authority not checked."
+                // Withdrawn is shown, never subtracted (ADR-022, WD-85): the
+                // retraction weighs nothing, its target stays third-party.
+                "3 claims not counted: 2 third-party, 1 authority not checked."
             }
             _ => {
                 given_rachel_published(

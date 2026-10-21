@@ -58,16 +58,14 @@ pub struct LeftOut<'a> {
     pub authority: Authority,
 }
 
-/// Every standing `github:` assertion in `feed` whose author is not attested
-/// for it, in feed order. The complement of the attested rows
-/// `score_attested` weighs; claims that need no authority, and claims their
-/// own author withdrew, are never left out.
+/// Every `github:` assertion in `feed` whose author is not attested for it,
+/// in feed order. The complement of the attested rows `score_attested`
+/// weighs; claims that need no authority are never left out.
 pub fn left_out<'a>(
     feed: &'a [ScoringFeedRow],
     authority_of: impl Fn(&ScoringFeedRow) -> Option<Authority>,
 ) -> Vec<LeftOut<'a>> {
     feed.iter()
-        .filter(|row| crate::score::stands(row))
         .filter(|row| needs_authority(row))
         .filter_map(|row| match authority_of(row)? {
             Authority::Attested(_) => None,
@@ -84,7 +82,7 @@ fn needs_authority(row: &ScoringFeedRow) -> bool {
     )
 }
 
-/// The reason a standing assertion about a malformed `github:` subject (one
+/// The reason an assertion about a malformed `github:` subject (one
 /// naming no account or repo) is not counted: no one can be attested for it.
 pub const MALFORMED_SUBJECT_REASON: &str = "malformed GitHub subject";
 
@@ -97,8 +95,8 @@ pub struct NotCounted {
     pub by_reason: Vec<(&'static str, usize)>,
 }
 
-/// Count `left_out` per reason (the reader label), and the standing
-/// assertions of `feed` about a malformed `github:` subject.
+/// Count `left_out` per reason (the reader label), and the assertions of
+/// `feed` about a malformed `github:` subject.
 pub fn not_counted(left_out: &[LeftOut<'_>], feed: &[ScoringFeedRow]) -> NotCounted {
     let labelled = [
         claim_domain::authority::THIRD_PARTY_LABEL,
@@ -113,7 +111,6 @@ pub fn not_counted(left_out: &[LeftOut<'_>], feed: &[ScoringFeedRow]) -> NotCoun
     });
     let malformed = feed
         .iter()
-        .filter(|row| crate::score::stands(row))
         .filter(|row| requirement(row.shape()) == Requirement::Malformed)
         .count();
     let by_reason: Vec<(&'static str, usize)> = labelled
@@ -135,9 +132,8 @@ mod not_counted_tests {
     use ports::{AttributedClaim, AuthorRelationship};
 
     use super::*;
-    use crate::{score_attested, ScoringConfig};
 
-    fn row(cid: &str, subject: &str, withdrawn: bool) -> ScoringFeedRow {
+    fn row(cid: &str, subject: &str) -> ScoringFeedRow {
         ScoringFeedRow {
             claim: AttributedClaim {
                 author_did: Did("did:plc:rachel".to_string()),
@@ -150,58 +146,37 @@ mod not_counted_tests {
                 relationship: AuthorRelationship::SubscribedPeer,
             },
             reference_types: vec![],
-            withdrawn_by_its_author: withdrawn,
         }
     }
 
     /// Rachel is third-party to every `github:` subject except `attested`.
     fn rachels_standing(row: &ScoringFeedRow) -> Option<Authority> {
         match row.claim.cid.0.as_str() {
-            "attested" | "attested-withdrawn" => {
-                Some(Authority::Attested(AttestedTier::RepoListed))
-            }
-            "malformed" | "malformed-withdrawn" => None,
+            "attested" => Some(Authority::Attested(AttestedTier::RepoListed)),
+            "malformed" | "malformed-empty" => None,
             _ => Some(Authority::Unattested(Unattested::NotRepoOwner)),
         }
     }
 
     fn feed() -> Vec<ScoringFeedRow> {
         vec![
-            row("attested", "github:acme-tools/anvil", false),
-            row("attested-withdrawn", "github:acme-tools/kelp", true),
-            row("third-party", "github:jeffbailey/tidepool", false),
-            row("third-party-withdrawn", "github:jeffbailey/reef", true),
-            row("malformed", "github:acme-tools/anvil/extra", false),
-            row("malformed-withdrawn", "github:", true),
+            row("attested", "github:acme-tools/anvil"),
+            row("third-party", "github:jeffbailey/tidepool"),
+            row("malformed", "github:acme-tools/anvil/extra"),
+            row("malformed-empty", "github:"),
         ]
     }
 
-    // bypass: one worked feed covering each standing x reason pair.
     #[test]
-    fn a_claim_its_author_withdrew_is_neither_weighted_nor_counted_as_left_out() {
-        let feed = feed();
-        let view = score_attested(&feed, rachels_standing, &ScoringConfig::DEFAULT);
-        let weighted: Vec<&str> = view.ranked.iter().map(|p| p.subject.as_str()).collect();
-        assert_eq!(weighted, ["github:acme-tools/anvil"]);
-
-        let left_out = left_out(&feed, rachels_standing);
-        let cids: Vec<&str> = left_out
-            .iter()
-            .map(|c| c.row.claim.cid.0.as_str())
-            .collect();
-        assert_eq!(cids, ["third-party"]);
-    }
-
-    #[test]
-    fn a_standing_claim_about_a_malformed_github_subject_is_disclosed_as_not_counted() {
+    fn a_claim_about_a_malformed_github_subject_is_disclosed_as_not_counted() {
         let feed = feed();
         assert_eq!(
             not_counted(&left_out(&feed, rachels_standing), &feed),
             NotCounted {
-                total: 2,
+                total: 3,
                 by_reason: vec![
                     (claim_domain::authority::THIRD_PARTY_LABEL, 1),
-                    (MALFORMED_SUBJECT_REASON, 1),
+                    (MALFORMED_SUBJECT_REASON, 2),
                 ],
             }
         );

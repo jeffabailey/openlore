@@ -461,7 +461,6 @@ fn sut_score_attested(feed: &[FeedRow]) -> scoring::WeightedView {
         .map(|row| ScoringFeedRow {
             claim: row.claim.clone(),
             reference_types: reference_types(row),
-            withdrawn_by_its_author: false,
         })
         .collect();
     // This reader's decision for each row, as the generated feed states it.

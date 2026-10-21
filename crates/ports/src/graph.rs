@@ -76,10 +76,6 @@ pub struct AttributedClaim {
 pub struct ScoringFeedRow {
     pub claim: AttributedClaim,
     pub reference_types: Vec<ReferenceType>,
-    /// Its own author published a withdrawal of it (`retracts`; only the
-    /// author may withdraw a claim, A-13): it no longer stands, so it is
-    /// neither weighted nor counted as left out.
-    pub withdrawn_by_its_author: bool,
 }
 
 impl ScoringFeedRow {
@@ -149,7 +145,6 @@ pub fn index_rows_authority(
 /// An index row as the judge reads it: its bare author DID and its own
 /// subject, predicate and reference types, keyed by its POSITION in the
 /// result rather than its cid — two rows sharing a cid never share a label.
-/// Labels only: whether a row was withdrawn is never read.
 fn index_row_as_feed_row(position: usize, row: &crate::NetworkResultRowRaw) -> ScoringFeedRow {
     ScoringFeedRow {
         claim: AttributedClaim {
@@ -163,7 +158,6 @@ fn index_row_as_feed_row(position: usize, row: &crate::NetworkResultRowRaw) -> S
             relationship: AuthorRelationship::NetworkUnfollowed,
         },
         reference_types: row.references.iter().map(|r| r.ref_type).collect(),
-        withdrawn_by_its_author: false,
     }
 }
 

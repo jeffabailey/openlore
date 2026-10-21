@@ -333,65 +333,20 @@ pub(crate) fn query_attributed_for_scoring(
 
 /// Pair each attributed claim with the types of the references it carries
 /// (UC-20), read from `claim_references` and `peer_claim_references`, so the
-/// pure scorer can tell an assertion from a dispute, a withdrawal or a link,
-/// and with whether its own author withdrew it. Types are sorted so a re-read
-/// is identical.
+/// pure scorer can tell an assertion from a dispute, a withdrawal or a link.
+/// Types are sorted so a re-read is identical.
 pub(crate) fn with_reference_types(
     conn: &duckdb::Connection,
     claims: Vec<AttributedClaim>,
 ) -> Result<Vec<ScoringFeedRow>, String> {
     let mut by_cid = reference_types_by_cid(conn)?;
-    let withdrawals = withdrawals_by_target(conn)?;
     Ok(claims
         .into_iter()
         .map(|claim| ScoringFeedRow {
             reference_types: by_cid.remove(&claim.cid.0).unwrap_or_default(),
-            withdrawn_by_its_author: is_withdrawn_by_its_author(&claim, &withdrawals),
             claim,
         })
         .collect())
-}
-
-/// Did `claim`'s own author withdraw it? A `retracts` reference to it from a
-/// claim by another author withdraws nothing (A-13). DIDs are compared bare
-/// of their `#fragment`.
-fn is_withdrawn_by_its_author(
-    claim: &AttributedClaim,
-    withdrawals: &BTreeMap<String, Vec<String>>,
-) -> bool {
-    let author = claim_domain::bare_did(&claim.author_did.0);
-    withdrawals.get(&claim.cid.0).is_some_and(|withdrawers| {
-        withdrawers
-            .iter()
-            .any(|by| claim_domain::bare_did(by) == author)
-    })
-}
-
-/// The authors of every local `retracts` reference, own and pulled, keyed by
-/// the cid it withdraws.
-fn withdrawals_by_target(
-    conn: &duckdb::Connection,
-) -> Result<BTreeMap<String, Vec<String>>, String> {
-    let sql = "SELECT r.referenced_cid, c.author_did FROM claim_references r \
-               JOIN claims c ON c.cid = r.referencing_cid WHERE r.ref_type = 'retracts' \
-               UNION ALL \
-               SELECT r.referenced_cid, p.author_did FROM peer_claim_references r \
-               JOIN peer_claims p ON p.cid = r.referencing_cid WHERE r.ref_type = 'retracts'";
-    let mut stmt = conn
-        .prepare(sql)
-        .map_err(|err| format!("prepare withdrawals_by_target: {err}"))?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(|err| format!("query_map withdrawals_by_target: {err}"))?;
-    let mut by_target: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for row in rows {
-        let (target, author) =
-            row.map_err(|err| format!("row decode withdrawals_by_target: {err}"))?;
-        by_target.entry(target).or_default().push(author);
-    }
-    Ok(by_target)
 }
 
 /// Every local claim's reference types, own and pulled, keyed by the
