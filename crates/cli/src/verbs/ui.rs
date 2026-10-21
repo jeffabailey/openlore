@@ -93,7 +93,7 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
     // The authority reads `/score` weighs by (owner-only-signing, ADR-086 §8):
     // the SAME judge `graph query` uses, over READ ports only.
     let feed_authority: adapter_http_viewer::SharedFeedAuthority =
-        Arc::new(crate::wiring::SharedFeedAuthority {
+        Arc::new(crate::reader_authority::SharedFeedAuthority {
             checks: Arc::new(storage.identity_link_check_adapter()),
             candidates: Arc::new(storage.identity_link_check_adapter()),
             lineage: Arc::new(storage.link_lineage_adapter()),

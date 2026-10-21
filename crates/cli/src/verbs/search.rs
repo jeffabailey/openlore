@@ -40,8 +40,8 @@ use anyhow::Result;
 use claim_domain::authority::Authority;
 use claim_domain::{Cid, Did};
 use ports::{
-    AttributedClaim, AuthorRelationship, FeedAuthorityReadPort, IndexQueryError, IndexQueryPort,
-    NetworkResultRowRaw, NetworkSearchResultRaw, ScoringFeedRow, SearchDimension,
+    AttributedClaim, AuthorRelationship, IndexQueryError, IndexQueryPort, NetworkResultRowRaw,
+    NetworkSearchResultRaw, ScoringFeedRow, SearchDimension,
 };
 
 use crate::render;
@@ -362,10 +362,7 @@ fn local_authority_of(
         .enumerate()
         .map(|(position, row)| index_row_as_feed_row(position, row))
         .collect();
-    let authority = wiring
-        .feed_authority_reads()
-        .feed_authority(&feed)
-        .map_err(|message| anyhow::anyhow!("reading this reader's authority checks: {message}"))?;
+    let authority = wiring.feed_authority_reads().judged(&feed)?;
     Ok(feed.iter().map(|row| authority.of(row)).collect())
 }
 
@@ -373,10 +370,9 @@ fn local_authority_of(
 /// subject, predicate and reference types, keyed by its POSITION in the
 /// result rather than its cid — two rows sharing a cid never share a label.
 fn index_row_as_feed_row(position: usize, row: &NetworkResultRowRaw) -> ScoringFeedRow {
-    let bare_author = row.author_did.0.split('#').next().unwrap_or_default();
     ScoringFeedRow {
         claim: AttributedClaim {
-            author_did: Did(bare_author.to_string()),
+            author_did: Did(claim_domain::bare_did(&row.author_did.0).to_string()),
             cid: Cid(position.to_string()),
             subject: row.subject.clone(),
             predicate: row.predicate.clone(),

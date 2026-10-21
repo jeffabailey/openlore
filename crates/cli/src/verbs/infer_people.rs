@@ -36,10 +36,10 @@ use scraper_domain::{
     NumberedCandidate, OwnClaim, PersonSubject, RepoClaim, ADHERES_TO_PHILOSOPHY,
 };
 
+use crate::reader_authority::labels_here;
 use crate::render::{
     render_linked_inference_report, render_person_derived_from, AuthorityByCid, PersonLinkLines,
 };
-use crate::verbs::graph_query::labels_here;
 use crate::verbs::sign_batch::{self, SignableCandidate};
 use crate::wiring::Wiring;
 

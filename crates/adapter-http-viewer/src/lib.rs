@@ -1157,16 +1157,10 @@ fn survey_authority(
         .flatten()
         .filter(|row| cids.contains(row.claim.cid.0.as_str()))
         .collect();
-    let Ok(authority) = reads.feed_authority(&feed) else {
-        return std::collections::BTreeMap::new();
-    };
-    feed.iter()
-        .filter_map(|row| {
-            authority
-                .of(row)
-                .map(|judged| (row.claim.cid.0.clone(), judged))
-        })
-        .collect()
+    reads
+        .feed_authority(&feed)
+        .map(ports::FeedAuthority::into_by_cid)
+        .unwrap_or_default()
 }
 
 /// Read the per-edge counter PRESENCE for a WHOLE traversal survey in ONE aggregate

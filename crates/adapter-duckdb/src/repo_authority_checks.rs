@@ -13,8 +13,12 @@
 
 use crate::conn::{ConnGuard, SharedConn};
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, TimeZone, Utc};
-use claim_domain::authority::RepoOwnerKind;
+use claim_domain::authority::{
+    AuthorityFileSeen, LatestRepoObservation, RepoFinding, RepoOwnerKind, ServedRepoObservation,
+};
 use duckdb::Connection;
 use ports::{
     AuthorityFile, FoundRepo, ProbeOutcome, ProbeRefusalReason, RepoAuthorityCheck,
@@ -250,6 +254,74 @@ impl RepoAuthorityCheckWritePort for DuckDbRepoAuthorityCheckAdapter {
     fn record(&self, check: &RepoAuthorityCheck) -> Result<(), RepoAuthorityCheckError> {
         let conn = self.lock()?;
         insert_check(&conn, check).map_err(store_error("record repo check"))
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Repo authority evidence (owner-only-signing, ADR-087 §2-5)
+// -----------------------------------------------------------------------------
+
+/// The repo-tier evidence of each of `subjects`: this reader's latest
+/// observation not dated after `now`, read through the observation READ port
+/// (a subject never observed here has no entry). Decoded here, so a caller
+/// never builds it (`authority_evidence_only_from_adapters`).
+pub fn latest_repo_observations(
+    repo_checks: &dyn RepoAuthorityCheckReadPort,
+    subjects: &[RepoSubjectKey],
+    now: DateTime<Utc>,
+) -> Result<BTreeMap<RepoSubjectKey, LatestRepoObservation>, RepoAuthorityCheckError> {
+    Ok(repo_checks
+        .latest(subjects, now)?
+        .into_iter()
+        .map(|check| {
+            (
+                check.subject_key,
+                latest_observation(check.observation, check.checked_at),
+            )
+        })
+        .collect())
+}
+
+/// The repo-tier evidence of `subject` with the `owner/name` GitHub served
+/// the repo under then (`None`: never observed here, not dated after `now`).
+pub fn served_repo_observation(
+    repo_checks: &dyn RepoAuthorityCheckReadPort,
+    subject: RepoSubjectKey,
+    now: DateTime<Utc>,
+) -> Result<Option<ServedRepoObservation>, RepoAuthorityCheckError> {
+    let latest = repo_checks.latest(&[subject], now)?;
+    Ok(latest.into_iter().next().map(|check| {
+        let served_as = match &check.observation {
+            RepoObservation::Found(found) => Some(found.full_name_seen.clone()),
+            RepoObservation::RepoNotFound => None,
+        };
+        ServedRepoObservation {
+            latest: latest_observation(check.observation, check.checked_at),
+            served_as,
+        }
+    }))
+}
+
+/// One stored repo observation, decoded for the pure gate and classifier.
+fn latest_observation(
+    observation: RepoObservation,
+    checked_at: DateTime<Utc>,
+) -> LatestRepoObservation {
+    let finding = match observation {
+        RepoObservation::Found(found) => RepoFinding::Found {
+            owner_id: found.owner_id,
+            owner_kind: found.owner_type,
+            authority_file: match found.authority_file {
+                AuthorityFile::Absent => AuthorityFileSeen::Absent,
+                AuthorityFile::Present(dids) => AuthorityFileSeen::Present(dids),
+                AuthorityFile::Invalid => AuthorityFileSeen::Invalid,
+            },
+        },
+        RepoObservation::RepoNotFound => RepoFinding::NotFound,
+    };
+    LatestRepoObservation {
+        finding,
+        checked_at,
     }
 }
 

@@ -19,6 +19,7 @@ pub mod errors;
 pub mod io;
 pub mod orientation;
 pub mod paths;
+pub mod reader_authority;
 pub mod render;
 pub mod verbs;
 pub mod wiring;

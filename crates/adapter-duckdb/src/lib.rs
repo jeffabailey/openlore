@@ -76,7 +76,9 @@ pub use identity_link_purge::DuckDbIdentityLinkPurgeAdapter;
 pub use imported_candidates::DuckDbImportedCandidateAdapter;
 pub use link_lineage::DuckDbLinkLineageAdapter;
 pub use peer_storage::DuckDbPeerStorageAdapter;
-pub use repo_authority_checks::DuckDbRepoAuthorityCheckAdapter;
+pub use repo_authority_checks::{
+    latest_repo_observations, served_repo_observation, DuckDbRepoAuthorityCheckAdapter,
+};
 pub use store_read::DuckDbStoreReadAdapter;
 
 /// Embedded-DuckDB `StoragePort` adapter.

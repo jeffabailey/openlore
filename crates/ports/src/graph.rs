@@ -111,6 +111,11 @@ impl FeedAuthority {
     pub fn of(&self, row: &ScoringFeedRow) -> Option<Authority> {
         self.by_cid.get(&row.claim.cid.0).copied()
     }
+
+    /// Every judged claim's authority, by cid.
+    pub fn into_by_cid(self) -> BTreeMap<String, Authority> {
+        self.by_cid
+    }
 }
 
 /// Judge a scoring feed's authority from what this reader holds locally: the

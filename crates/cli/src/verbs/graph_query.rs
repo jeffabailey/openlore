@@ -56,12 +56,12 @@
 //! and footer instead of the per-claim block.
 
 use anyhow::{Context, Result};
-use ports::FeedAuthorityReadPort;
 
 use crate::orientation::{self, OrientationMilestone};
+use crate::reader_authority::labels_here;
 use crate::render::{
     is_retracted_by, render_annotated_graph_query_result, render_labelled_federated_query_result,
-    AnnotatedClaim, AuthorityByCid,
+    AnnotatedClaim,
 };
 use crate::wiring::Wiring;
 
@@ -747,33 +747,6 @@ fn annotate_claims(
     Ok(annotated)
 }
 
-/// Who each `github:` assertion in `filter`'s feed is the word of, to this
-/// reader: the same judge the weighted view uses ([`weigh_here`]),
-/// over the latest local checks (check READ ports only). Claims that need no
-/// authority (disputes, withdrawals, identity links, non-GitHub subjects)
-/// carry no entry.
-pub(crate) fn labels_here(
-    wiring: &Wiring,
-    filter: &ports::ScoringFilter,
-) -> Result<AuthorityByCid> {
-    let feed = wiring
-        .storage
-        .query_attributed_for_scoring(filter)
-        .context("reading the claims to label")?;
-    let authority = wiring
-        .feed_authority_reads()
-        .feed_authority(&feed)
-        .map_err(|message| anyhow::anyhow!("reading this reader's authority checks: {message}"))?;
-    Ok(feed
-        .iter()
-        .filter_map(|row| {
-            authority
-                .of(row)
-                .map(|judged| (row.claim.cid.0.clone(), judged))
-        })
-        .collect())
-}
-
 /// The weighted view of a feed for this reader, and the claims it left out
 /// (shown apart, never merged into a weighted pairing; C-OOS-6).
 struct Weighed<'a> {
@@ -785,10 +758,7 @@ struct Weighed<'a> {
 /// [`scoring::left_out`], both judged by the SAME latest local checks
 /// (check READ ports only).
 fn weigh_here<'a>(wiring: &Wiring, feed: &'a [ports::ScoringFeedRow]) -> Result<Weighed<'a>> {
-    let authority = wiring
-        .feed_authority_reads()
-        .feed_authority(feed)
-        .map_err(|message| anyhow::anyhow!("reading this reader's authority checks: {message}"))?;
+    let authority = wiring.feed_authority_reads().judged(feed)?;
     Ok(Weighed {
         view: scoring::score_attested(
             feed,

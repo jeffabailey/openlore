@@ -1950,19 +1950,22 @@ pub fn scan_identity_link_readers_hold_no_write_handle(
 // -----------------------------------------------------------------------------
 //
 // * `authority_readers_hold_no_write_handle`: the reader verbs (`graph
-//   query`, `search`, `identity list`, `infer people`, `candidates list`) and
+//   query`, `search`, `identity list`, `infer people`, `candidates list`),
+//   the one judge they and `authority verify` share (`reader_authority`) and
 //   the viewer adapter name no repo-authority-check or identity-link-check
 //   write port, wiring slot, write method or recheck handle. Only `authority
 //   verify`, `identity verify` and the `--sign` import paths (`scrape github`,
 //   `scrape person`) may hold them.
 
-/// The reader verb modules (a module not yet written is skipped).
+/// The reader verb modules and their shared judge (a module not yet written
+/// is skipped).
 const AUTHORITY_READER_SOURCES: &[&str] = &[
     "crates/cli/src/verbs/graph_query.rs",
     "crates/cli/src/verbs/search.rs",
     "crates/cli/src/verbs/identity_list.rs",
     "crates/cli/src/verbs/infer_people.rs",
     "crates/cli/src/verbs/candidates.rs",
+    "crates/cli/src/reader_authority.rs",
 ];
 
 /// What a reader may not name: the check-write ports, their wiring slots,
@@ -2650,8 +2653,10 @@ pub fn scan_identity_link_compose_only_via_proven_link(
 //   person-tier evidence `LinkedAccountEvidence` / `LatestLinkCheck` (what
 //   `may_sign_from_checks` decides from, owner-only-signing ADR-087 §1) and
 //   the repo-tier observation `FoundRepo` / `RepoObservation::Found(..)`
-//   (ADR-087 §4) are built only by the GitHub and DuckDB adapters and test
-//   support (one allowlist, ADR-086).
+//   (ADR-087 §4) and the decoded repo evidence `LatestRepoObservation` /
+//   `RepoFinding` / `AuthorityFileSeen` / `ServedRepoObservation` (what
+//   `classify` and the repo gate decide from, U-OOS-D9) are built only by the
+//   GitHub and DuckDB adapters and test support (one allowlist, ADR-086).
 // * `signing_permit_not_serializable`: no serde on `SigningPermit`.
 
 /// The constructors that build a `PublishPlan`.
@@ -2833,7 +2838,10 @@ const AUTHORITY_EVIDENCE_CRATES: &[&str] = &[
 ];
 
 /// The evidence types `may_sign` and `may_sign_from_checks` decide from,
-/// person and repo tiers.
+/// person and repo tiers, and the repo-tier evidence the reader classifier
+/// and the repo gate decide from (`LatestRepoObservation`, its
+/// `RepoFinding` and `AuthorityFileSeen`, and `ServedRepoObservation`;
+/// U-OOS-D9).
 const AUTHORITY_EVIDENCE_TYPES: &[&str] = &[
     "RepoFacts",
     "GithubAccountProfile",
@@ -2841,11 +2849,38 @@ const AUTHORITY_EVIDENCE_TYPES: &[&str] = &[
     "LatestLinkCheck",
     "FoundRepo",
     "RepoObservation",
+    "LatestRepoObservation",
+    "RepoFinding",
+    "AuthorityFileSeen",
+    "ServedRepoObservation",
 ];
+
+/// The evidence a path builds: `Type` or `Type::Variant` when either names
+/// an evidence type (`Variant` only when the variant itself is capitalised,
+/// so an associated function is not mistaken for a variant).
+fn evidence_built_by(path: &syn::Path) -> Option<String> {
+    let segments: Vec<String> = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect();
+    let is_evidence = |name: &String| AUTHORITY_EVIDENCE_TYPES.contains(&name.as_str());
+    match segments.as_slice() {
+        [.., last] if is_evidence(last) => Some(last.clone()),
+        [.., ty, variant]
+            if is_evidence(ty) && variant.starts_with(|c: char| c.is_ascii_uppercase()) =>
+        {
+            Some(format!("{ty}::{variant}"))
+        }
+        _ => None,
+    }
+}
 
 #[derive(Default)]
 struct EvidenceCollector {
     built: Vec<String>,
+    /// Inside a pattern: a path there matches evidence, it builds none.
+    in_pattern: bool,
 }
 
 impl<'ast> Visit<'ast> for EvidenceCollector {
@@ -2861,13 +2896,28 @@ impl<'ast> Visit<'ast> for EvidenceCollector {
         }
     }
 
+    fn visit_pat(&mut self, pat: &'ast syn::Pat) {
+        let outer = self.in_pattern;
+        self.in_pattern = true;
+        syn::visit::visit_pat(self, pat);
+        self.in_pattern = outer;
+    }
+
     fn visit_expr_struct(&mut self, built: &'ast syn::ExprStruct) {
-        if let Some(name) = last_segment(&built.path) {
-            if AUTHORITY_EVIDENCE_TYPES.contains(&name.as_str()) {
-                self.built.push(format!("`{name} {{ .. }}`"));
-            }
+        if let Some(name) = evidence_built_by(&built.path) {
+            self.built.push(format!("`{name} {{ .. }}`"));
         }
         syn::visit::visit_expr_struct(self, built);
+    }
+
+    /// A unit variant of an evidence type (`RepoFinding::NotFound`).
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        if !self.in_pattern {
+            if let Some(name) = evidence_built_by(&path.path) {
+                self.built.push(format!("`{name}`"));
+            }
+        }
+        syn::visit::visit_expr_path(self, path);
     }
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
@@ -2886,6 +2936,11 @@ impl<'ast> Visit<'ast> for EvidenceCollector {
             if builds {
                 self.built.push(format!("`{}(..)`", segments.join("::")));
             }
+            // The callee was judged as a whole: only its arguments remain.
+            for argument in &call.args {
+                self.visit_expr(argument);
+            }
+            return;
         }
         syn::visit::visit_expr_call(self, call);
     }

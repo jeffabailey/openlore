@@ -13,16 +13,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use claim_domain::authority::{
-    classify, requirement, AuthorityEvidence, AuthorityFileSeen, ClaimShape, LatestRepoObservation,
-    LinkedAccountEvidence, RepoFinding, Requirement,
+    requirement, ClaimShape, LatestRepoObservation, RepoFinding, Requirement,
 };
-use claim_domain::identity_link::{IdentityLink, RecheckScope};
+use claim_domain::identity_link::RecheckScope;
 use claim_domain::ReferenceType;
 use ports::{
-    AuthorityFile, PageRequest, RepoAuthorityCheck, RepoAuthorityCheckReadPort,
-    RepoAuthorityCheckWritePort, RepoObservation, RepoSubjectKey, StoreReadPort, StoredLinkLineage,
+    GithubError, GithubPort, PageRequest, RepoAuthorityCheck, RepoAuthorityCheckError,
+    RepoAuthorityCheckReadPort, RepoAuthorityCheckWritePort, RepoSubjectKey, StoreReadPort,
 };
 
+use crate::reader_authority::{needs_authority, AuthorityReads, LocalEvidence};
 use crate::render::{
     render_authority_labels, render_github_could_not_be_asked, render_nothing_to_recheck,
     LabelledClaim,
@@ -40,6 +40,18 @@ pub struct AuthorityVerifyHandles<'a> {
     pub repo_check_writes: &'a dyn RepoAuthorityCheckWritePort,
     /// Read-only: the own and pulled claims whose authority is re-checked.
     pub claims: &'a dyn StoreReadPort,
+}
+
+impl AuthorityVerifyHandles<'_> {
+    /// The READ side of these handles: the evidence path every reader uses.
+    fn reads(&self) -> AuthorityReads<'_> {
+        AuthorityReads {
+            checks: self.links.checks,
+            candidates: self.links.claims,
+            lineage: self.links.lineage,
+            repo_checks: self.repo_checks,
+        }
+    }
 }
 
 /// Which claims one run re-checks.
@@ -107,9 +119,16 @@ pub fn run(
         repos_to_observe(&claims, named_repo),
         now,
     )?;
-    let repos = latest_repo_observations(handles.repo_checks, &claims, now)?;
+    let reads = handles.reads();
+    let repos =
+        reads.latest_repo_observations(claims.iter().filter_map(GithubClaim::repo_key), now)?;
     recheck_needed_links(handles, &runtime, &claims, &repos, now)?;
-    let labelled = label_claims(handles, &claims, &repos, now)?;
+    let evidence = LocalEvidence {
+        links_by_author: reads
+            .linked_accounts_by_author(claims.iter().map(|claim| claim.author.as_str()), now)?,
+        repos,
+    };
+    let labelled = label_claims(&claims, &evidence, now);
     Ok(AuthorityVerifyReport {
         stdout: render_authority_labels(&labelled),
         unreadable,
@@ -191,12 +210,7 @@ fn github_claims_in_scope(
                 required,
             }
         })
-        .filter(|claim| {
-            matches!(
-                claim.required,
-                Requirement::Person(_) | Requirement::Repo { .. }
-            )
-        })
+        .filter(|claim| needs_authority(claim.shape()))
         .filter(|claim| in_scope(claim, args))
         .collect();
     claims.sort_by(|a, b| {
@@ -263,66 +277,44 @@ fn observe_repos(
 ) -> Result<Vec<String>> {
     let mut unreadable = Vec::new();
     for (subject_key, (owner, name)) in repos {
-        match runtime.block_on(handles.links.github.read_repo_authority(&owner, &name)) {
-            Ok(observation) => handles.repo_check_writes.record(&RepoAuthorityCheck {
-                subject_key,
-                observation,
-                checked_at: now,
-            })?,
-            Err(err) => unreadable.push(render_github_could_not_be_asked(
-                subject_key.as_str(),
-                &err.to_string(),
-            )),
+        let subject = subject_key.as_str().to_string();
+        let observed = observe_and_record_repo(
+            handles.links.github,
+            handles.repo_check_writes,
+            runtime,
+            subject_key,
+            (&owner, &name),
+            now,
+        )?;
+        if let Err(err) = observed {
+            unreadable.push(render_github_could_not_be_asked(&subject, &err.to_string()));
         }
     }
     Ok(unreadable)
 }
 
-/// This reader's latest observation of each repo subject the claims name,
-/// decoded for the pure classifier.
-fn latest_repo_observations(
-    repo_checks: &dyn RepoAuthorityCheckReadPort,
-    claims: &[GithubClaim],
-    now: DateTime<Utc>,
-) -> Result<BTreeMap<RepoSubjectKey, LatestRepoObservation>> {
-    let subjects: Vec<RepoSubjectKey> = claims
-        .iter()
-        .filter_map(GithubClaim::repo_key)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    Ok(repo_checks
-        .latest(&subjects, now)?
-        .into_iter()
-        .map(|check| {
-            (
-                check.subject_key,
-                latest_observation(check.observation, check.checked_at),
-            )
-        })
-        .collect())
-}
-
-/// One stored repo observation, decoded for the pure gate and classifier.
-pub(crate) fn latest_observation(
-    observation: RepoObservation,
+/// One look at the repo `owner/name` and its authority file
+/// (`read_repo_authority`), recorded as this reader's observation of
+/// `subject_key` at `checked_at` once GitHub answered — the look `authority
+/// verify` and a repo scrape share (ADR-087 §6). When GitHub cannot answer,
+/// nothing is recorded and why is returned instead.
+pub(crate) fn observe_and_record_repo(
+    github: &dyn GithubPort,
+    repo_check_writes: &dyn RepoAuthorityCheckWritePort,
+    runtime: &tokio::runtime::Runtime,
+    subject_key: RepoSubjectKey,
+    (owner, name): (&str, &str),
     checked_at: DateTime<Utc>,
-) -> LatestRepoObservation {
-    let finding = match observation {
-        RepoObservation::Found(found) => RepoFinding::Found {
-            owner_id: found.owner_id,
-            owner_kind: found.owner_type,
-            authority_file: match found.authority_file {
-                AuthorityFile::Absent => AuthorityFileSeen::Absent,
-                AuthorityFile::Present(dids) => AuthorityFileSeen::Present(dids),
-                AuthorityFile::Invalid => AuthorityFileSeen::Invalid,
-            },
-        },
-        RepoObservation::RepoNotFound => RepoFinding::NotFound,
-    };
-    LatestRepoObservation {
-        finding,
-        checked_at,
+) -> std::result::Result<std::result::Result<(), GithubError>, RepoAuthorityCheckError> {
+    match runtime.block_on(github.read_repo_authority(owner, name)) {
+        Ok(observation) => repo_check_writes
+            .record(&RepoAuthorityCheck {
+                subject_key,
+                observation,
+                checked_at,
+            })
+            .map(Ok),
+        Err(unanswered) => Ok(Err(unanswered)),
     }
 }
 
@@ -398,45 +390,22 @@ fn link_is_needed(
 // Labels
 // -----------------------------------------------------------------------------
 
-/// Each claim's label from the latest local checks.
+/// Each claim's label, judged from this reader's latest local checks.
 fn label_claims(
-    handles: &AuthorityVerifyHandles<'_>,
     claims: &[GithubClaim],
-    repos: &BTreeMap<RepoSubjectKey, LatestRepoObservation>,
+    evidence: &LocalEvidence,
     now: DateTime<Utc>,
-) -> Result<Vec<LabelledClaim>> {
-    let active_links: Vec<IdentityLink> =
-        StoredLinkLineage::read(handles.links.claims, handles.links.lineage)
-            .context("reading the identity links")?
-            .active_links();
-    let mut evidence_by_author: BTreeMap<&str, Vec<LinkedAccountEvidence>> = BTreeMap::new();
-    for claim in claims {
-        if !evidence_by_author.contains_key(claim.author.as_str()) {
-            let evidence = adapter_duckdb::linked_account_evidence(
-                handles.links.checks,
-                &claim.author,
-                &active_links,
-                now,
-            )
-            .context("reading the identity link checks")?;
-            evidence_by_author.insert(&claim.author, evidence);
-        }
-    }
-    Ok(claims
+) -> Vec<LabelledClaim> {
+    claims
         .iter()
         .filter_map(|claim| {
-            let evidence = AuthorityEvidence {
-                author: &claim.author,
-                author_links: evidence_by_author
-                    .get(claim.author.as_str())
-                    .map_or(&[], Vec::as_slice),
-                repo: claim.repo_key().and_then(|key| repos.get(&key)),
-            };
-            classify(claim.shape(), &evidence, now).map(|authority| LabelledClaim {
-                subject: claim.subject.clone(),
-                author: claim.author.clone(),
-                authority,
-            })
+            evidence
+                .judge(claim.shape(), &claim.author, now)
+                .map(|authority| LabelledClaim {
+                    subject: claim.subject.clone(),
+                    author: claim.author.clone(),
+                    authority,
+                })
         })
-        .collect())
+        .collect()
 }

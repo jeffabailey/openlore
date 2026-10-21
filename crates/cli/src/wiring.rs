@@ -31,24 +31,18 @@ use adapter_github::GithubAdapter;
 use adapter_index_query::HttpIndexQueryAdapter;
 use adapter_publish_http::{HttpPublishAdapter, WriteToken};
 use adapter_system_clock::SystemClockAdapter;
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-
 use anyhow::{anyhow, Context, Result};
-use claim_domain::authority::{
-    classify, requirement, AuthorityEvidence, LatestRepoObservation, LinkedAccountEvidence,
-    Requirement,
-};
+use claim_domain::authority::{LinkedAccountEvidence, ServedRepoObservation};
 use ports::{
-    ClockPort, ContributionLinkPort, FeedAuthority, FeedAuthorityReadPort, GithubPort,
-    IdentityLinkCheckPurgePort, IdentityLinkCheckReadPort, IdentityLinkCheckWritePort,
-    IdentityPort, ImportedCandidateReadPort, ImportedCandidateWritePort, IndexQueryPort,
-    InstanceReadPort, LinkCandidateReadPort, LinkLineageReadPort, PdsPort, PeerStoragePort,
-    ProbeOutcome, ProbeRefused, PublishPort, RepoAuthorityCheckReadPort,
-    RepoAuthorityCheckWritePort, RepoSubjectKey, ScoringFeedRow, StoragePort, StoreReadPort,
+    ClockPort, ContributionLinkPort, GithubPort, IdentityLinkCheckPurgePort,
+    IdentityLinkCheckReadPort, IdentityLinkCheckWritePort, IdentityPort, ImportedCandidateReadPort,
+    ImportedCandidateWritePort, IndexQueryPort, InstanceReadPort, LinkCandidateReadPort,
+    LinkLineageReadPort, PdsPort, PeerStoragePort, ProbeOutcome, ProbeRefused, PublishPort,
+    RepoAuthorityCheckReadPort, RepoAuthorityCheckWritePort, StoragePort, StoreReadPort,
 };
 
 use crate::paths::OpenLorePaths;
+use crate::reader_authority::{AuthorityReads, LocalFeedAuthority};
 
 /// One adapter wired behind each port trait. Owned by the composition
 /// root for the duration of the program; dropped on shutdown.
@@ -339,59 +333,32 @@ impl Wiring {
         Ok(())
     }
 
-    /// Extra startup arm beyond the per-adapter probes: refuse to serve
-    /// any verb except `init` until `identity.toml` exists at the
-    /// resolved config path. This is the bootstrap-state contract from
-    /// WS-2: a fresh environment with no identity.toml is "not yet
-    /// initialized", and the user-facing remediation is `openlore init`.
-    ///
-    /// The refusal renders a structured hint that surfaces in the
-    /// `health.startup.refused` event payload so observability layers
-    /// can route on it; the human-readable stderr line names the exact
-    /// command to run.
     /// The person-tier evidence of the signer (owner-only-signing, ADR-087
     /// §1): the signer's active identity links, each with this reader's
-    /// latest check not dated after `now`. Read ports only — nothing is
-    /// checked, written or refreshed; the evidence is built by adapter-duckdb.
+    /// latest check not dated after `now`, through the same evidence path
+    /// every reader uses. Read ports only — nothing is checked, written or
+    /// refreshed.
     pub fn signer_linked_accounts(
         &self,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<claim_domain::authority::LinkedAccountEvidence>> {
-        let signer = claim_domain::bare_did(&self.identity.author_did().0).to_string();
-        let links = ports::StoredLinkLineage::read(&*self.link_candidates, &*self.link_lineage)
-            .context("reading the signer's identity links")?
-            .active_links();
-        adapter_duckdb::linked_account_evidence(&*self.identity_link_checks, &signer, &links, now)
-            .context("reading the signer's identity link checks")
+    ) -> Result<Vec<LinkedAccountEvidence>> {
+        let signer = claim_domain::bare_did(&self.identity.author_did().0);
+        let mut by_author = self
+            .authority_reads()
+            .linked_accounts_by_author([signer], now)?;
+        Ok(by_author.remove(signer).unwrap_or_default())
     }
 
     /// The repo-tier evidence of a repo subject (owner-only-signing, ADR-087
     /// §2-5): this reader's latest observation of the repo not dated after
     /// `now`, with the name GitHub served it under (`None`: never observed
-    /// here). Read port only — GitHub is not
-    /// asked and nothing is recorded.
+    /// here). Read port only — GitHub is not asked and nothing is recorded.
     pub fn latest_repo_observation(
         &self,
         subject: &str,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Option<claim_domain::authority::ServedRepoObservation>> {
-        let latest = self
-            .repo_authority_checks
-            .latest(&[ports::RepoSubjectKey::of(subject)], now)
-            .context("reading the repo's latest authority observation")?;
-        Ok(latest.into_iter().next().map(|check| {
-            let served_as = match &check.observation {
-                ports::RepoObservation::Found(found) => Some(found.full_name_seen.clone()),
-                ports::RepoObservation::RepoNotFound => None,
-            };
-            claim_domain::authority::ServedRepoObservation {
-                latest: crate::verbs::authority_verify::latest_observation(
-                    check.observation,
-                    check.checked_at,
-                ),
-                served_as,
-            }
-        }))
+    ) -> Result<Option<ServedRepoObservation>> {
+        self.authority_reads().served_repo_observation(subject, now)
     }
 
     /// The narrow handles that re-check identity links on a fresh GitHub
@@ -423,18 +390,37 @@ impl Wiring {
         }
     }
 
-    /// The authority reads every weighted view judges its feed by: the
-    /// latest identity-link checks and repo observations, READ ports only.
-    pub fn feed_authority_reads(&self) -> LocalFeedAuthority<'_> {
-        LocalFeedAuthority {
+    /// The READ ports every reader's authority evidence comes from: the
+    /// latest identity-link checks, the link claims and their lineage, and
+    /// the latest repo observations.
+    pub fn authority_reads(&self) -> AuthorityReads<'_> {
+        AuthorityReads {
             checks: self.identity_link_checks.as_ref(),
             candidates: self.link_candidates.as_ref(),
             lineage: self.link_lineage.as_ref(),
             repo_checks: self.repo_authority_checks.as_ref(),
+        }
+    }
+
+    /// The judge every weighted view and label judges its feed by, over
+    /// [`Wiring::authority_reads`] as of the clock's `now`.
+    pub fn feed_authority_reads(&self) -> LocalFeedAuthority<'_> {
+        LocalFeedAuthority {
+            reads: self.authority_reads(),
             clock: self.clock.as_ref(),
         }
     }
 
+    /// Extra startup arm beyond the per-adapter probes: refuse to serve
+    /// any verb except `init` until `identity.toml` exists at the
+    /// resolved config path. This is the bootstrap-state contract from
+    /// WS-2: a fresh environment with no identity.toml is "not yet
+    /// initialized", and the user-facing remediation is `openlore init`.
+    ///
+    /// The refusal renders a structured hint that surfaces in the
+    /// `health.startup.refused` event payload so observability layers
+    /// can route on it; the human-readable stderr line names the exact
+    /// command to run.
     pub fn check_initialized_state(&self) -> Result<(), ProbeRefusal> {
         let identity_path = self.paths.identity_toml();
         if identity_path.exists() {
@@ -460,137 +446,6 @@ impl Wiring {
             detail,
             structured,
         })
-    }
-}
-
-// -----------------------------------------------------------------------------
-// Reader authority (owner-only-signing, ADR-086 §8, ADR-087 §1-5)
-// -----------------------------------------------------------------------------
-
-/// What this reader holds locally to judge a scoring feed's `github:`
-/// assertions: each author's active identity links with their latest checks
-/// and the latest observation of each repo the feed names, as of the clock's
-/// `now`. Check READ ports only: nothing is asked, checked or recorded. The
-/// one judge `graph query` and the viewer share, so they weigh alike.
-pub struct LocalFeedAuthority<'a> {
-    pub checks: &'a dyn IdentityLinkCheckReadPort,
-    pub candidates: &'a dyn LinkCandidateReadPort,
-    pub lineage: &'a dyn LinkLineageReadPort,
-    pub repo_checks: &'a dyn RepoAuthorityCheckReadPort,
-    pub clock: &'a dyn ClockPort,
-}
-
-impl FeedAuthorityReadPort for LocalFeedAuthority<'_> {
-    fn feed_authority(
-        &self,
-        feed: &[ScoringFeedRow],
-    ) -> std::result::Result<FeedAuthority, String> {
-        self.judge(feed).map_err(|err| format!("{err:#}"))
-    }
-}
-
-impl LocalFeedAuthority<'_> {
-    fn judge(&self, feed: &[ScoringFeedRow]) -> Result<FeedAuthority> {
-        let now = self.clock.now_utc();
-        let needing: Vec<&ScoringFeedRow> = feed
-            .iter()
-            .filter(|row| {
-                matches!(
-                    requirement(row.shape()),
-                    Requirement::Person(_) | Requirement::Repo { .. }
-                )
-            })
-            .collect();
-        let links_by_author = self.links_by_author(&needing, now)?;
-        let repos = self.latest_repo_observations(&needing, now)?;
-        Ok(FeedAuthority::new(needing.into_iter().filter_map(|row| {
-            let author = row.claim.author_did.0.as_str();
-            let evidence = AuthorityEvidence {
-                author,
-                author_links: links_by_author.get(author).map_or(&[], Vec::as_slice),
-                repo: repos.get(&RepoSubjectKey::of(&row.claim.subject)),
-            };
-            classify(row.shape(), &evidence, now)
-                .map(|authority| (row.claim.cid.clone(), authority))
-        })))
-    }
-
-    /// Each author's active links, each with this reader's latest check.
-    fn links_by_author(
-        &self,
-        rows: &[&ScoringFeedRow],
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<BTreeMap<String, Vec<LinkedAccountEvidence>>> {
-        let active_links = ports::StoredLinkLineage::read(self.candidates, self.lineage)
-            .context("reading the identity links")?
-            .active_links();
-        let authors: BTreeSet<&str> = rows
-            .iter()
-            .map(|row| row.claim.author_did.0.as_str())
-            .collect();
-        authors
-            .into_iter()
-            .map(|author| {
-                adapter_duckdb::linked_account_evidence(self.checks, author, &active_links, now)
-                    .context("reading the identity link checks")
-                    .map(|evidence| (author.to_string(), evidence))
-            })
-            .collect()
-    }
-
-    /// This reader's latest observation of each repo the rows are about.
-    fn latest_repo_observations(
-        &self,
-        rows: &[&ScoringFeedRow],
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<BTreeMap<RepoSubjectKey, LatestRepoObservation>> {
-        let subjects: Vec<RepoSubjectKey> = rows
-            .iter()
-            .filter(|row| matches!(requirement(row.shape()), Requirement::Repo { .. }))
-            .map(|row| RepoSubjectKey::of(&row.claim.subject))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        Ok(self
-            .repo_checks
-            .latest(&subjects, now)
-            .context("reading the repos' latest authority observations")?
-            .into_iter()
-            .map(|check| {
-                (
-                    check.subject_key,
-                    crate::verbs::authority_verify::latest_observation(
-                        check.observation,
-                        check.checked_at,
-                    ),
-                )
-            })
-            .collect())
-    }
-}
-
-/// [`LocalFeedAuthority`] over shared handles, for the viewer process.
-pub struct SharedFeedAuthority {
-    pub checks: Arc<dyn IdentityLinkCheckReadPort + Send + Sync>,
-    pub candidates: Arc<dyn LinkCandidateReadPort + Send + Sync>,
-    pub lineage: Arc<dyn LinkLineageReadPort + Send + Sync>,
-    pub repo_checks: Arc<dyn RepoAuthorityCheckReadPort + Send + Sync>,
-    pub clock: Arc<dyn ClockPort + Send + Sync>,
-}
-
-impl FeedAuthorityReadPort for SharedFeedAuthority {
-    fn feed_authority(
-        &self,
-        feed: &[ScoringFeedRow],
-    ) -> std::result::Result<FeedAuthority, String> {
-        LocalFeedAuthority {
-            checks: self.checks.as_ref(),
-            candidates: self.candidates.as_ref(),
-            lineage: self.lineage.as_ref(),
-            repo_checks: self.repo_checks.as_ref(),
-            clock: self.clock.as_ref(),
-        }
-        .feed_authority(feed)
     }
 }
 

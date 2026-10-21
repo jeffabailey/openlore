@@ -14,6 +14,9 @@
 //! `imported_candidates_not_in_scoring_or_inference` — scoring reading the
 //! kept candidates, inference naming their port, rewriting them, or
 //! `candidates list` holding GitHub is a finding; the real tree passes.
+//! Refactor (U-OOS-D9): the decoded repo evidence (`LatestRepoObservation`,
+//! `RepoFinding`, `AuthorityFileSeen`, `ServedRepoObservation`) is held by
+//! the same evidence rule; matching it in a pattern builds nothing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -101,6 +104,70 @@ fn a_repo_observation_built_in_cli_code_is_a_finding_but_adapters_may_build_it()
     ] {
         assert!(
             classify_authority_evidence(allowed, FABRICATED_REPO_OBSERVATION).is_empty(),
+            "{allowed}"
+        );
+    }
+}
+
+const FABRICATED_REPO_EVIDENCE: &str = "
+fn decoded(row: &Row) -> ServedRepoObservation {
+    let finding = if row.found {
+        RepoFinding::Found {
+            owner_id: row.owner_id,
+            owner_kind: RepoOwnerKind::User,
+            authority_file: AuthorityFileSeen::Present(vec![row.did.clone()]),
+        }
+    } else {
+        claim_domain::authority::RepoFinding::NotFound
+    };
+    let _unlisted = AuthorityFileSeen::Absent;
+    ServedRepoObservation {
+        latest: LatestRepoObservation {
+            finding,
+            checked_at: row.checked_at,
+        },
+        served_as: None,
+    }
+}
+
+fn judged(latest: &LatestRepoObservation) -> bool {
+    match &latest.finding {
+        RepoFinding::Found { authority_file: AuthorityFileSeen::Absent, .. } => true,
+        RepoFinding::NotFound => false,
+    }
+}";
+
+#[test]
+fn decoded_repo_evidence_built_in_cli_code_is_a_finding_but_matching_it_is_not() {
+    let findings = classify_authority_evidence(
+        "crates/cli/src/verbs/authority_verify.rs",
+        FABRICATED_REPO_EVIDENCE,
+    );
+    for built in [
+        "`RepoFinding::Found { .. }`",
+        "`AuthorityFileSeen::Present(..)`",
+        "`RepoFinding::NotFound`",
+        "`AuthorityFileSeen::Absent`",
+        "`ServedRepoObservation { .. }`",
+        "`LatestRepoObservation { .. }`",
+    ] {
+        assert!(
+            findings.iter().any(|finding| finding.contains(built)),
+            "{built} must be a finding: {findings:#?}"
+        );
+    }
+    assert_eq!(
+        findings.len(),
+        6,
+        "the patterns in `judged` build nothing: {findings:#?}"
+    );
+
+    for allowed in [
+        "crates/adapter-duckdb/src/repo_authority_checks.rs",
+        "crates/test-support/src/lib.rs",
+    ] {
+        assert!(
+            classify_authority_evidence(allowed, FABRICATED_REPO_EVIDENCE).is_empty(),
             "{allowed}"
         );
     }
