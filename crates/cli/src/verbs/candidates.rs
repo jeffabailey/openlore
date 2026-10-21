@@ -23,7 +23,9 @@ pub fn run(kept: &dyn ImportedCandidateReadPort, subject: Option<&str>) -> Resul
     Ok(render_kept_candidates(&listed))
 }
 
-/// The candidate list, one line per kept candidate. Pure.
+/// The candidate list, one line per kept candidate — each (subject,
+/// predicate, object) once, as last imported (the read port de-duplicates,
+/// ruling P-OOS-3). Pure.
 fn render_kept_candidates(listed: &[KeptCandidate]) -> String {
     if listed.is_empty() {
         return NO_IMPORTED_CANDIDATES.to_string();

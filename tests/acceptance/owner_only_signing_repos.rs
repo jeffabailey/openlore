@@ -1377,7 +1377,6 @@ fn with_nothing_imported_the_list_says_so() {
 ///   Then anvil's dependency-pinning candidate is listed once, from the 3 October import
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing IC-4: pending DELIVER (slice 5; ruling P-OOS-3)"]
 fn importing_the_same_repo_twice_lists_each_candidate_once() {
     let world = authority_world();
     given_jeff_imported(&world, ANVIL, LINKED_AT);

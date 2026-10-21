@@ -39,7 +39,16 @@ const KEPT_COLUMNS: &str = "
            array_to_string(evidence, ' ')
     FROM imported_candidates";
 
-const KEPT_ORDER: &str = "ORDER BY subject_key, predicate, object, imported_at, import_id";
+/// Each (subject, predicate, object) once, as last imported (ruling P-OOS-3):
+/// max `imported_at`, then max `import_id`. The de-duplication lives in the
+/// read only — every import's rows stay stored.
+const LATEST_IMPORT_ONLY: &str = "
+    QUALIFY row_number() OVER (
+        PARTITION BY subject_key, predicate, object
+        ORDER BY imported_at DESC, import_id DESC
+    ) = 1";
+
+const KEPT_ORDER: &str = "ORDER BY subject_key, predicate, object";
 
 /// The candidates imports kept, sharing the one DuckDB connection.
 pub struct DuckDbImportedCandidateAdapter {
@@ -126,13 +135,14 @@ fn query_kept(
 ) -> Result<Vec<KeptCandidate>, duckdb::Error> {
     match subject {
         Some(key) => {
-            let sql = format!("{KEPT_COLUMNS} WHERE subject_key = ? {KEPT_ORDER}");
+            let sql =
+                format!("{KEPT_COLUMNS} WHERE subject_key = ? {LATEST_IMPORT_ONLY} {KEPT_ORDER}");
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(duckdb::params![key.as_str()], decode_kept)?;
             rows.collect()
         }
         None => {
-            let sql = format!("{KEPT_COLUMNS} {KEPT_ORDER}");
+            let sql = format!("{KEPT_COLUMNS} {LATEST_IMPORT_ONLY} {KEPT_ORDER}");
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([], decode_kept)?;
             rows.collect()
@@ -230,5 +240,110 @@ fn refuse(detail: String) -> ProbeOutcome {
         reason: ProbeRefusalReason::StorageImportedCandidatesUnreliable,
         structured: serde_json::json!({"adapter": "imported_candidates", "detail": detail}),
         detail,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Real-infrastructure integration tests: a REAL DuckDB file per test,
+    //! driven through the imported-candidate ports (never mocked).
+
+    use super::*;
+    use crate::DuckDbStorageAdapter;
+    use std::path::Path;
+
+    const ANVIL: &str = "github:acme-tools/anvil";
+    const PINNING: &str = "org.openlore.philosophy.dependency-pinning";
+
+    fn on(day: u32) -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 10, day, 9, 0, 0).unwrap()
+    }
+
+    fn pinning(subject: &str, confidence: f64, evidence: &str) -> ImportedCandidate {
+        ImportedCandidate {
+            subject: subject.to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: PINNING.to_string(),
+            confidence,
+            evidence: vec![evidence.to_string()],
+        }
+    }
+
+    fn import_of(
+        imported_at: chrono::DateTime<Utc>,
+        candidate: ImportedCandidate,
+    ) -> CandidateImport {
+        CandidateImport {
+            imported_at,
+            candidates: vec![candidate],
+        }
+    }
+
+    fn stored_rows(db: &Path) -> i64 {
+        Connection::open(db)
+            .unwrap()
+            .query_row("SELECT count(*) FROM imported_candidates", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn a_reimport_keeps_both_rows_but_lists_the_candidate_once_from_the_later_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("openlore.duckdb");
+        let storage = DuckDbStorageAdapter::open(&db).unwrap();
+        let kept = storage.imported_candidate_adapter();
+
+        // The later import is recorded FIRST, so neither insertion order nor
+        // import_id alone can pick the winner: only imported_at can.
+        let later = pinning(ANVIL, 0.9, "https://github.com/acme-tools/anvil/later");
+        let earlier = pinning(
+            "github:Acme-Tools/Anvil",
+            0.4,
+            "https://example.org/earlier",
+        );
+        kept.record_import(&import_of(on(3), later.clone()))
+            .unwrap();
+        kept.record_import(&import_of(on(1), earlier)).unwrap();
+
+        let listed = kept.list(None).unwrap();
+        let narrowed = kept.list(Some(&RepoSubjectKey::of(ANVIL))).unwrap();
+        drop(kept);
+        drop(storage);
+
+        assert_eq!(stored_rows(&db), 2, "both imports stay stored");
+        assert_eq!(
+            narrowed, listed,
+            "--subject narrows the same de-duplicated list"
+        );
+        assert_eq!(listed.len(), 1, "listed once: {listed:?}");
+        assert_eq!(listed[0].imported_at, on(3));
+        assert_eq!(listed[0].candidate, later);
+    }
+
+    #[test]
+    fn on_equal_import_time_the_larger_import_id_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("openlore.duckdb");
+        let storage = DuckDbStorageAdapter::open(&db).unwrap();
+        let kept = storage.imported_candidate_adapter();
+
+        let first = pinning(ANVIL, 0.4, "https://example.org/first");
+        let second = pinning(ANVIL, 0.9, "https://example.org/second");
+        kept.record_import(&import_of(on(3), first)).unwrap();
+        kept.record_import(&import_of(on(3), second.clone()))
+            .unwrap();
+
+        let listed = kept.list(None).unwrap();
+        drop(kept);
+        drop(storage);
+
+        assert_eq!(stored_rows(&db), 2, "both imports stay stored");
+        assert_eq!(listed.len(), 1, "listed once: {listed:?}");
+        assert_eq!(
+            listed[0].candidate, second,
+            "the larger import_id wins the tie"
+        );
     }
 }
