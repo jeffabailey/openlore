@@ -1099,6 +1099,7 @@ fn rachels_store(with_link: bool) -> LinkWorld {
         specs.push(link_spec(RACHEL_DID, RACHEL_GH));
     }
     given_peer_published(&mut world, Peer::Rachel, specs);
+    given_every_repo_lists_its_claim_authors(&world.env);
     world
 }
 

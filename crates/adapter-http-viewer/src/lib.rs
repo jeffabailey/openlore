@@ -34,10 +34,10 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ports::{
-    read_listed_links, ClockPort, GithubError, GithubPort, IdentityLinkCheckReadPort,
-    IndexQueryError, IndexQueryPort, IndexedClaim, LinkCandidateReadPort, LinkLineageReadPort,
-    LinkReadError, NetworkResultRowRaw, PageRequest, SearchDimension, StoreReadError,
-    StoreReadPort, TargetKind,
+    read_listed_links, ClockPort, FeedAuthorityReadPort, GithubError, GithubPort,
+    IdentityLinkCheckReadPort, IndexQueryError, IndexQueryPort, IndexedClaim,
+    LinkCandidateReadPort, LinkLineageReadPort, LinkReadError, NetworkResultRowRaw, PageRequest,
+    SearchDimension, StoreReadError, StoreReadPort, TargetKind,
 };
 use scraper_domain::{derive_candidates, load_mapping, normalize_target, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
@@ -235,9 +235,25 @@ pub struct ViewerServer {
     /// link probe refused (or none was wired): every person page then says its
     /// linked identities could not be read.
     link_reads: Option<LinkReads>,
+    /// The authority reads `/score` weighs its feed by (owner-only-signing,
+    /// ADR-086 §8). `None`: every `github:` assertion is, to this viewer, not
+    /// checked here — shown, never weighted.
+    feed_authority: Option<SharedFeedAuthority>,
 }
 
+/// A shared, READ-only judge of a scoring feed's authority.
+pub type SharedFeedAuthority = Arc<dyn FeedAuthorityReadPort + Send + Sync>;
+
 impl ViewerServer {
+    /// Give the viewer the authority reads its weighted view judges by — the
+    /// same judge `graph query` uses, so terminal and viewer weigh alike.
+    pub fn with_feed_authority(self, feed_authority: Option<SharedFeedAuthority>) -> Self {
+        Self {
+            feed_authority,
+            ..self
+        }
+    }
+
     /// Give the viewer the linked-identity reads its person pages show
     /// (slice 4; D-VL-4). The composition root passes `None` when its
     /// read-only startup probe refused (D-VL-7).
@@ -336,6 +352,7 @@ impl ViewerServer {
             github,
             index_query,
             link_reads: None,
+            feed_authority: None,
         })
     }
 
@@ -364,6 +381,7 @@ impl ViewerServer {
             let github = self.github.clone();
             let index_query = self.index_query.clone();
             let link_reads = self.link_reads.clone();
+            let feed_authority = self.feed_authority.clone();
             tokio::task::spawn(async move {
                 let service = service_fn(move |req| {
                     route(
@@ -372,6 +390,7 @@ impl ViewerServer {
                         github.clone(),
                         index_query.clone(),
                         link_reads.clone(),
+                        feed_authority.clone(),
                     )
                 });
                 let _ = hyper::server::conn::http1::Builder::new()
@@ -393,6 +412,7 @@ async fn route(
     github: Option<SharedGithub>,
     index_query: Option<SharedIndexQuery>,
     link_reads: Option<LinkReads>,
+    feed_authority: Option<SharedFeedAuthority>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
@@ -451,7 +471,13 @@ async fn route(
         // viewer ALREADY holds (NO new field, NO network — I-CS-5), runs the REUSED
         // pure `scoring::score` in the shell, and renders the ranked `WeightedView`.
         // Forks by `Shape` (ADR-033). Holds NO signing key (a read + pure compute).
-        SCORE_URL => score_page(store.as_ref(), link_reads.as_ref(), query.as_deref(), shape),
+        SCORE_URL => score_page(
+            store.as_ref(),
+            link_reads.as_ref(),
+            feed_authority.as_deref(),
+            query.as_deref(),
+            shape,
+        ),
         // `GET /project?subject=<uri>` — the project graph-traversal survey (slice-10;
         // ADR-042/043/044/045). Reads the project's LOCAL attributed survey over the
         // read-only store the viewer ALREADY holds (`query_project_survey` — claims ∪
@@ -837,10 +863,11 @@ fn claims_page(
 fn score_page(
     store: &dyn StoreReadPort,
     link_reads: Option<&LinkReads>,
+    feed_authority: Option<&(dyn FeedAuthorityReadPort + Send + Sync)>,
     query: Option<&str>,
     shape: Shape,
 ) -> Response<Full<Bytes>> {
-    let state = resolve_score_state(store, query);
+    let state = resolve_score_state(store, feed_authority, query);
     // The contributor's linked identities (slice 4; D-VL-1): a contributor that
     // is a DID is a person; a bare form or a malformed value is no one.
     let linked = linked_identities(
@@ -988,7 +1015,11 @@ fn score_counter_presence(
 /// `scoring::score` output). A contributor with zero local rows OR a store read
 /// failure → [`ScoreState::NoClaims`] naming the queried DID (graceful degradation;
 /// emptiness is never a fabricated zero score, and a read error never leaks).
-fn resolve_score_state(store: &dyn StoreReadPort, query: Option<&str>) -> ScoreState {
+fn resolve_score_state(
+    store: &dyn StoreReadPort,
+    feed_authority: Option<&(dyn FeedAuthorityReadPort + Send + Sync)>,
+    query: Option<&str>,
+) -> ScoreState {
     let Some(contributor) = query_param(query, "contributor").filter(|v| !v.is_empty()) else {
         // Bare `GET /score` — the empty contributor form.
         return ScoreState::Form;
@@ -998,7 +1029,16 @@ fn resolve_score_state(store: &dyn StoreReadPort, query: Option<&str>) -> ScoreS
         // WeightedView. The weight is computed HERE in Rust (the pure core), NEVER
         // in SQL — so the aggregate decomposes into the per-claim breakdown.
         Ok(feed) if !feed.is_empty() => {
-            let view = scoring::score(&feed, &scoring::ScoringConfig::DEFAULT);
+            // Only weight-eligible rows count (ADR-086 §8). Authority that
+            // cannot be read here counts as not checked: never weighted.
+            let authority = feed_authority
+                .and_then(|reads| reads.feed_authority(&feed).ok())
+                .unwrap_or_default();
+            let view = scoring::score_attested(
+                &feed,
+                |row| authority.of(row),
+                &scoring::ScoringConfig::DEFAULT,
+            );
             ScoreState::Scored { view }
         }
         // Zero local rows OR a read failure: the guided NoClaims state naming the
@@ -2052,9 +2092,9 @@ mod tests {
     use http_body_util::BodyExt;
     use hyper::StatusCode;
     use ports::{
-        AttributedClaim, AuthorRelationship, ClaimDetail, ClaimRow, CounterClaimRow,
-        NetworkResultRowRaw, Page, PageRequest, PeerClaimRow, PeerSubscriptionSummary,
-        StoreReadError, StoreReadPort, SurveyRow,
+        AuthorRelationship, ClaimDetail, ClaimRow, CounterClaimRow, NetworkResultRowRaw, Page,
+        PageRequest, PeerClaimRow, PeerSubscriptionSummary, StoreReadError, StoreReadPort,
+        SurveyRow,
     };
     use sha2::{Digest, Sha256};
     use std::collections::HashSet;
@@ -2320,7 +2360,7 @@ mod tests {
         fn query_contributor_scoring_feed(
             &self,
             _c: &Did,
-        ) -> Result<Vec<AttributedClaim>, StoreReadError> {
+        ) -> Result<Vec<ports::ScoringFeedRow>, StoreReadError> {
             unimplemented!("not read by the landing dashboard")
         }
         fn query_project_survey(&self, _s: &str) -> Result<Vec<SurveyRow>, StoreReadError> {

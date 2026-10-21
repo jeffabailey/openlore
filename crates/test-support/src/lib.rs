@@ -344,7 +344,7 @@ impl StoragePort for InMemoryStorage {
     fn query_attributed_for_scoring(
         &self,
         _filter: &ScoringFilter,
-    ) -> Result<Vec<AttributedClaim>, StorageError> {
+    ) -> Result<Vec<ports::ScoringFeedRow>, StorageError> {
         panic!("Not yet implemented -- RED scaffold (slice-04 query_attributed_for_scoring)");
     }
 

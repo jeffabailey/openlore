@@ -910,7 +910,7 @@ impl StoragePort for DuckDbStorageAdapter {
     fn query_attributed_for_scoring(
         &self,
         filter: &ScoringFilter,
-    ) -> Result<Vec<AttributedClaim>, StorageError> {
+    ) -> Result<Vec<ports::ScoringFeedRow>, StorageError> {
         graph_query::query_attributed_for_scoring(&self.conn, filter)
     }
 
@@ -938,7 +938,7 @@ pub(crate) fn bare_did(did: &str) -> String {
 }
 
 /// `ReferenceType` → wire string used in the SQL `CHECK` constraint.
-fn reference_type_to_sql(rt: ReferenceType) -> &'static str {
+pub(crate) fn reference_type_to_sql(rt: ReferenceType) -> &'static str {
     match rt {
         ReferenceType::Retracts => "retracts",
         ReferenceType::Corrects => "corrects",
@@ -950,7 +950,7 @@ fn reference_type_to_sql(rt: ReferenceType) -> &'static str {
 /// Inverse of `reference_type_to_sql`. Returns `Err(msg)` on unknown
 /// strings — defends against direct DB tampering producing a string
 /// outside the four known variants.
-fn reference_type_from_sql(s: &str) -> Result<ReferenceType, String> {
+pub(crate) fn reference_type_from_sql(s: &str) -> Result<ReferenceType, String> {
     match s {
         "retracts" => Ok(ReferenceType::Retracts),
         "corrects" => Ok(ReferenceType::Corrects),

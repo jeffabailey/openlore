@@ -653,7 +653,7 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
     fn query_contributor_scoring_feed(
         &self,
         contributor: &Did,
-    ) -> Result<Vec<AttributedClaim>, StoreReadError> {
+    ) -> Result<Vec<ports::ScoringFeedRow>, StoreReadError> {
         let conn = self.lock_conn()?;
 
         // The set of DIDs with a currently-ACTIVE peer subscription (`removed_at IS
@@ -743,7 +743,8 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
                 relationship,
             });
         }
-        Ok(feed)
+        crate::graph_query::with_reference_types(&conn, feed)
+            .map_err(|detail| StoreReadError::QueryFailed { detail })
     }
 
     fn query_project_survey(&self, subject: &str) -> Result<Vec<SurveyRow>, StoreReadError> {

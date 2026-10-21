@@ -24,7 +24,7 @@
 use chrono::{DateTime, Utc};
 use claim_domain::Did;
 
-use crate::AttributedClaim;
+use crate::ScoringFeedRow;
 
 /// One own-claim row from the `claims` table, projected for the read-only
 /// viewer. A FLAT DTO (not the rich `claim_domain::SignedClaim`): the viewer
@@ -465,7 +465,7 @@ pub trait StoreReadPort: Send + Sync {
     fn query_contributor_scoring_feed(
         &self,
         contributor: &Did,
-    ) -> Result<Vec<AttributedClaim>, StoreReadError>;
+    ) -> Result<Vec<ScoringFeedRow>, StoreReadError>;
 
     /// Read the LOCAL attributed SURVEY for ONE project subject (`/project`,
     /// slice-10 / ADR-042/043/044/045 / I-GT-2): every signed claim ABOUT

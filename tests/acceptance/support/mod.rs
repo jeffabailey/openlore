@@ -2937,6 +2937,7 @@ impl SeededGraph {
              --- stdout ---\n{}\n--- stderr ---\n{}",
             pulled.stdout, pulled.stderr
         );
+        given_every_repo_lists_its_claim_authors(env);
 
         // Record the new contributing claim's attribution shape.
         self.seeded.push(SeededClaim {
@@ -3557,6 +3558,9 @@ fn seed_peer_authored_graph(env: &TestEnv, peers: &[SeedPeer<'_>]) -> SeededGrap
         "seed_federated_graph: peer pull must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
         pulled.stdout, pulled.stderr
     );
+    // Each repo lists its authors, and the reader re-checked (only attested
+    // `github:` assertions weigh, owner-only-signing slice 3).
+    given_every_repo_lists_its_claim_authors(env);
 
     SeededGraph {
         _peers: held_peers,
@@ -8032,10 +8036,7 @@ pub fn seed_repo_authority(env: &TestEnv, subject: &str, now: Option<&str>) {
     let Some((owner, name)) = repo_of_github_subject(subject) else {
         return;
     };
-    let owner_id = 7_000_000
-        + owner
-            .bytes()
-            .fold(0_u64, |acc, byte| (acc * 31 + u64::from(byte)) % 1_000_000);
+    let owner_id = seeded_owner_id(owner);
     let github = openlore_test_support::FakeGithubAccounts::start(vec![
         openlore_test_support::GithubAccount::new(owner, owner_id)
             .organization()
@@ -8079,6 +8080,85 @@ pub fn seed_repo_authority_for_all<'a>(
             seen.push(key);
         }
     }
+}
+
+/// Given every repo the local store's claims are about lists its claim
+/// authors (own and pulled; plus the local user) in its authority file, and
+/// the reader re-checked authority — so each `github:` repo claim is
+/// repo-listed and weighs (owner-only-signing slice 3, ADR-086 §8: only
+/// attested `github:` assertions weigh). One fake GitHub, one `authority
+/// verify` run.
+pub fn given_every_repo_lists_its_claim_authors(env: &TestEnv) {
+    use std::collections::{BTreeMap, BTreeSet};
+    let own = env.identity.author_did().to_string();
+    let authored: Vec<(String, String)> = {
+        let conn = duckdb::Connection::open(env.duckdb_path()).expect("open the store");
+        let mut stmt = conn
+            .prepare(
+                "SELECT subject, author_did FROM claims \
+                 UNION ALL SELECT subject, author_did FROM peer_claims",
+            )
+            .expect("prepare the authors read");
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .expect("read the authors");
+        rows.map(|row| row.expect("decode an author row")).collect()
+    };
+    let mut listed: BTreeMap<(&str, &str), BTreeSet<&str>> = BTreeMap::new();
+    for (subject, author) in &authored {
+        if let Some(repo) = repo_of_github_subject(subject) {
+            let bare = author.split('#').next().unwrap_or(author);
+            listed.entry(repo).or_default().insert(bare);
+        }
+    }
+    if listed.is_empty() {
+        return;
+    }
+    let mut owners: BTreeMap<&str, openlore_test_support::GithubAccount> = BTreeMap::new();
+    for (owner, name) in listed.keys() {
+        let account = owners.remove(owner).unwrap_or_else(|| {
+            openlore_test_support::GithubAccount::new(owner, seeded_owner_id(owner)).organization()
+        });
+        owners.insert(
+            owner,
+            account.repo(openlore_test_support::GithubRepo::owned(name)),
+        );
+    }
+    let github = openlore_test_support::FakeGithubAccounts::start(owners.into_values().collect());
+    for ((owner, name), authors) in &listed {
+        let dids: BTreeSet<&str> = authors.iter().copied().chain([own.as_str()]).collect();
+        github.set_authority_file(
+            owner,
+            name,
+            Some(openlore_test_support::AuthorityFile::Lists(format!(
+                "# OpenLore signers for this repo\n{}\n",
+                dids.into_iter().collect::<Vec<_>>().join("\n")
+            ))),
+        );
+    }
+    let outcome = people::openlore_with(
+        env,
+        &["authority", "verify"],
+        people::Invocation {
+            github_base: Some(github.base_url()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        outcome.status, 0,
+        "precondition: `authority verify` must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+}
+
+/// The fake GitHub id the seeds give a repo owner (stable per login).
+fn seeded_owner_id(owner: &str) -> u64 {
+    7_000_000
+        + owner
+            .bytes()
+            .fold(0_u64, |acc, byte| (acc * 31 + u64::from(byte)) % 1_000_000)
 }
 
 /// `(owner, repo)` when `subject` is `github:<owner>/<repo>`.
@@ -13681,6 +13761,7 @@ pub fn seed_score_breakdown_one_contribution_countered(env: &TestEnv) -> SeededS
         .cloned()
         .collect::<Vec<_>>();
 
+    given_every_repo_lists_its_claim_authors(env);
     SeededScoreBreakdown {
         contributor_did: contributor_did.to_string(),
         ordered_cids,
@@ -13834,6 +13915,7 @@ pub fn seed_score_breakdown_target_two_counters_distinct_authors(
         .cloned()
         .collect::<Vec<_>>();
 
+    given_every_repo_lists_its_claim_authors(env);
     SeededScoreBreakdown {
         contributor_did: contributor_did.to_string(),
         ordered_cids,
@@ -14015,6 +14097,7 @@ pub fn seed_score_breakdown_identical_subtotals_one_countered(
          {uncountered_cids:?}"
     );
 
+    given_every_repo_lists_its_claim_authors(env);
     SeededScoreBreakdown {
         contributor_did: contributor_did.to_string(),
         ordered_cids,
@@ -14115,6 +14198,7 @@ pub fn seed_score_breakdown_none_countered(env: &TestEnv) -> SeededScoreBreakdow
          exercised over several un-countered rows; got {ordered_cids:?}"
     );
 
+    given_every_repo_lists_its_claim_authors(env);
     SeededScoreBreakdown {
         contributor_did: contributor_did.to_string(),
         uncountered_cids: ordered_cids.clone(),
@@ -14317,6 +14401,7 @@ pub fn seed_score_breakdown_many_pairings_known_countered_subset(
         .cloned()
         .collect::<Vec<_>>();
 
+    given_every_repo_lists_its_claim_authors(env);
     SeededScoreBreakdown {
         contributor_did: contributor_did.to_string(),
         ordered_cids,

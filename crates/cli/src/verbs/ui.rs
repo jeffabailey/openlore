@@ -90,6 +90,17 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
         clock: Arc::new(SystemClockAdapter::new()),
     });
 
+    // The authority reads `/score` weighs by (owner-only-signing, ADR-086 §8):
+    // the SAME judge `graph query` uses, over READ ports only.
+    let feed_authority: adapter_http_viewer::SharedFeedAuthority =
+        Arc::new(crate::wiring::SharedFeedAuthority {
+            checks: Arc::new(storage.identity_link_check_adapter()),
+            candidates: Arc::new(storage.identity_link_check_adapter()),
+            lineage: Arc::new(storage.link_lineage_adapter()),
+            repo_checks: Arc::new(storage.repo_authority_check_adapter()),
+            clock: Arc::new(SystemClockAdapter::new()),
+        });
+
     // Wire the slice-02 `GithubPort` (adapter-github) for the `/scrape` LIVE
     // propose route (US-VIEW-005). `from_env` resolves the GitHub API base (the
     // real public API, or the `OPENLORE_GITHUB_API_BASE` test seam) and the
@@ -140,7 +151,9 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
             Some(Arc::clone(&github)),
             index_query.clone(),
         ) {
-            Ok(server) => server.with_link_reads(link_reads),
+            Ok(server) => server
+                .with_link_reads(link_reads)
+                .with_feed_authority(Some(feed_authority)),
             Err(err) => {
                 eprintln!("openlore ui: {err}");
                 return 2;

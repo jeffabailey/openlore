@@ -56,6 +56,7 @@
 //! and footer instead of the per-claim block.
 
 use anyhow::{Context, Result};
+use ports::FeedAuthorityReadPort;
 
 use crate::orientation::{self, OrientationMilestone};
 use crate::render::{
@@ -455,8 +456,9 @@ fn run_weighted_object(wiring: &Wiring, object: &str) -> Result<GraphQueryOutcom
         .query_attributed_for_scoring(&filter)
         .with_context(|| format!("reading the scoring feed for object {object}"))?;
 
-    // The aggregation happens HERE, in the pure core — never in SQL.
-    let view = scoring::score(&feed, &scoring::ScoringConfig::DEFAULT);
+    // The aggregation happens HERE, in the pure core — never in SQL — over the
+    // rows this reader can weigh (ADR-086 §8).
+    let view = score_attested_here(wiring, &feed)?;
 
     let stdout = crate::render::render_weighted_view(object, &view);
 
@@ -502,8 +504,9 @@ fn run_explain_object(wiring: &Wiring, object: &str, subject: &str) -> Result<Gr
         .query_attributed_for_scoring(&filter)
         .with_context(|| format!("reading the scoring feed for object {object}"))?;
 
-    // The aggregation happens HERE, in the pure core — never in SQL.
-    let view = scoring::score(&feed, &scoring::ScoringConfig::DEFAULT);
+    // The aggregation happens HERE, in the pure core — never in SQL — over the
+    // rows this reader can weigh (ADR-086 §8).
+    let view = score_attested_here(wiring, &feed)?;
 
     // GQE-18 (architecture-design §5.2 invariant 5): `--explain` for a subject
     // absent from the result set is a USAGE ERROR (non-zero exit), distinct from
@@ -679,4 +682,21 @@ fn annotate_claims(
         });
     }
     Ok(annotated)
+}
+
+/// The weighted view of `feed` for this reader: [`scoring::score_attested`]
+/// judged by the latest local checks (check READ ports only).
+fn score_attested_here(
+    wiring: &Wiring,
+    feed: &[ports::ScoringFeedRow],
+) -> Result<scoring::WeightedView> {
+    let authority = wiring
+        .feed_authority_reads()
+        .feed_authority(feed)
+        .map_err(|message| anyhow::anyhow!("reading this reader's authority checks: {message}"))?;
+    Ok(scoring::score_attested(
+        feed,
+        |row| authority.of(row),
+        &scoring::ScoringConfig::DEFAULT,
+    ))
 }

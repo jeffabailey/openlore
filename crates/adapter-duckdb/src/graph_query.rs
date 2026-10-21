@@ -33,13 +33,13 @@
 //! the contract these bodies will satisfy.
 
 use crate::conn::SharedConn;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use claim_domain::{Cid, Did};
+use claim_domain::{Cid, Did, ReferenceType};
 use ports::{
-    AttributedClaim, AuthorRelationship, GraphEdge, GraphNode, ScoringFilter, StorageError,
-    TraversalBound, TraversalResult,
+    AttributedClaim, AuthorRelationship, GraphEdge, GraphNode, ScoringFeedRow, ScoringFilter,
+    StorageError, TraversalBound, TraversalResult,
 };
 
 use crate::bare_did;
@@ -323,8 +323,62 @@ pub(crate) fn query_by_contributor(
 pub(crate) fn query_attributed_for_scoring(
     conn: &SharedConn,
     filter: &ScoringFilter,
-) -> Result<Vec<AttributedClaim>, StorageError> {
-    query_attributed_dimension(conn, &scoring_filter_to_dimension(filter))
+) -> Result<Vec<ScoringFeedRow>, StorageError> {
+    let claims = query_attributed_dimension(conn, &scoring_filter_to_dimension(filter))?;
+    let conn = conn.lock().map_err(|lock_err| StorageError::QueryFailed {
+        message: lock_err.to_string(),
+    })?;
+    with_reference_types(&conn, claims).map_err(|message| StorageError::QueryFailed { message })
+}
+
+/// Pair each attributed claim with the types of the references it carries
+/// (UC-20), read from `claim_references` and `peer_claim_references`, so the
+/// pure scorer can tell an assertion from a dispute, a withdrawal or a link.
+/// Types are sorted so a re-read is identical.
+pub(crate) fn with_reference_types(
+    conn: &duckdb::Connection,
+    claims: Vec<AttributedClaim>,
+) -> Result<Vec<ScoringFeedRow>, String> {
+    let mut by_cid = reference_types_by_cid(conn)?;
+    Ok(claims
+        .into_iter()
+        .map(|claim| ScoringFeedRow {
+            reference_types: by_cid.remove(&claim.cid.0).unwrap_or_default(),
+            claim,
+        })
+        .collect())
+}
+
+/// Every local claim's reference types, own and pulled, keyed by the
+/// referencing claim's cid.
+fn reference_types_by_cid(
+    conn: &duckdb::Connection,
+) -> Result<BTreeMap<String, Vec<ReferenceType>>, String> {
+    let sql = "SELECT referencing_cid, ref_type FROM claim_references \
+               UNION ALL \
+               SELECT referencing_cid, ref_type FROM peer_claim_references";
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|err| format!("prepare reference_types_by_cid: {err}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|err| format!("query_map reference_types_by_cid: {err}"))?;
+    let mut by_cid: BTreeMap<String, Vec<ReferenceType>> = BTreeMap::new();
+    for row in rows {
+        let (cid, ref_type) =
+            row.map_err(|err| format!("row decode reference_types_by_cid: {err}"))?;
+        by_cid
+            .entry(cid)
+            .or_default()
+            .push(crate::reference_type_from_sql(&ref_type)?);
+    }
+    for types in by_cid.values_mut() {
+        types.sort_by_key(|reference| crate::reference_type_to_sql(*reference));
+        types.dedup();
+    }
+    Ok(by_cid)
 }
 
 /// Map a [`ScoringFilter`] onto the shared [`DimensionFilter`] the cross-store

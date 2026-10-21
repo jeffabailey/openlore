@@ -436,8 +436,38 @@ fn sut_may_sign(claim: &ClaimView, evidence: &EvidenceView, _window_minutes: i64
     }
 }
 
-fn sut_score_attested(_feed: &[FeedRow]) -> scoring::WeightedView {
-    todo!("RED: bind to scoring::score_attested (owner-only-signing slice 3)")
+fn sut_score_attested(feed: &[FeedRow]) -> scoring::WeightedView {
+    use claim_domain::authority::{AttestedTier, Authority, Unattested};
+    use claim_domain::ReferenceType;
+    use ports::ScoringFeedRow;
+    let reference_types = |row: &FeedRow| -> Vec<ReferenceType> {
+        row.references
+            .iter()
+            .map(|r| match r {
+                RefView::Retracts => ReferenceType::Retracts,
+                RefView::Counters => ReferenceType::Counters,
+                RefView::Supersedes => ReferenceType::Supersedes,
+                RefView::Corrects => ReferenceType::Corrects,
+            })
+            .collect()
+    };
+    let rows: Vec<ScoringFeedRow> = feed
+        .iter()
+        .map(|row| ScoringFeedRow {
+            claim: row.claim.clone(),
+            reference_types: reference_types(row),
+        })
+        .collect();
+    // This reader's decision for each row, as the generated feed states it.
+    let authority_of = |scored: &ScoringFeedRow| {
+        feed.iter()
+            .find(|row| row.claim == scored.claim && reference_types(row) == scored.reference_types)
+            .map(|row| match row.attested {
+                true => Authority::Attested(AttestedTier::RepoListed),
+                false => Authority::Unattested(Unattested::NotRepoOwner),
+            })
+    };
+    scoring::score_attested(&rows, authority_of, &ScoringConfig::DEFAULT)
 }
 
 /// The REAL scorer, for the oracle side of CORE-OOS-5.
@@ -1059,7 +1089,6 @@ proptest! {
     /// unattested GitHub assertions never moves it (KPI-OOS-2).
     /// `@property @s-oos-7 @contract-shape:pure-function`
     #[test]
-    #[ignore = "DISTILL owner-only-signing CORE-OOS-5: bind sut_score_attested (DELIVER slice 3)"]
     fn nothing_but_attested_assertions_moves_the_weight(
         feed in arb_feed(),
         extra in arb_weightless_rows(),

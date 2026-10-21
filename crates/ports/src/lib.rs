@@ -102,7 +102,8 @@ pub use federated_row::{
 // `GraphEdge`, are the I-GRAPH-2 / I-GRAPH-5 type-level anti-merging defenses.
 
 pub use graph::{
-    AttributedClaim, GraphEdge, GraphNode, ScoringFilter, TraversalBound, TraversalResult,
+    AttributedClaim, FeedAuthority, FeedAuthorityReadPort, GraphEdge, GraphNode, ScoringFeedRow,
+    ScoringFilter, TraversalBound, TraversalResult,
 };
 pub use peer_storage::{
     plan_add_subscription, AddSubscriptionOutcome, AddSubscriptionPlan, HardPurgeOutcome,
@@ -345,7 +346,7 @@ pub trait StoragePort {
     fn query_attributed_for_scoring(
         &self,
         filter: &ScoringFilter,
-    ) -> Result<Vec<AttributedClaim>, StorageError>;
+    ) -> Result<Vec<ScoringFeedRow>, StorageError>;
 
     /// Bounded, cycle-safe traversal of contributor↔project↔philosophy edges
     /// from `start`, capped at `bound.max_depth` (WD-76). Each [`GraphEdge`]

@@ -14,7 +14,8 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-use ports::AttributedClaim;
+use claim_domain::authority::{kind, requirement, Authority, ClaimKind, Requirement};
+use ports::{AttributedClaim, ScoringFeedRow};
 
 use crate::config::ScoringConfig;
 use crate::explain::Contribution;
@@ -141,6 +142,42 @@ pub fn score(claims: &[AttributedClaim], cfg: &ScoringConfig) -> WeightedView {
     });
 
     WeightedView { ranked }
+}
+
+/// The only scoring entry for readers (ADR-086 §8): the [`score`] of exactly
+/// the weight-eligible rows of `feed`, no row altered. `authority_of` is this
+/// reader's view — who each row's author is to its subject, from the latest
+/// local checks.
+///
+/// Eligible: an assertion (never a dispute, a withdrawal or an identity link,
+/// A-13) that is about no GitHub account or repo, or whose author is attested
+/// for it. An unattested or unchecked `github:` assertion is shown elsewhere,
+/// never weighted.
+pub fn score_attested(
+    feed: &[ScoringFeedRow],
+    authority_of: impl Fn(&ScoringFeedRow) -> Option<Authority>,
+    cfg: &ScoringConfig,
+) -> WeightedView {
+    let eligible: Vec<AttributedClaim> = feed
+        .iter()
+        .filter(|row| is_weight_eligible(row, &authority_of))
+        .map(|row| row.claim.clone())
+        .collect();
+    score(&eligible, cfg)
+}
+
+/// Does `row` carry weight for this reader?
+fn is_weight_eligible(
+    row: &ScoringFeedRow,
+    authority_of: impl Fn(&ScoringFeedRow) -> Option<Authority>,
+) -> bool {
+    match requirement(row.shape()) {
+        Requirement::Exempt => kind(row.shape()) == ClaimKind::Assertion,
+        Requirement::Person(_) | Requirement::Repo { .. } => {
+            matches!(authority_of(row), Some(Authority::Attested(_)))
+        }
+        Requirement::Malformed => false,
+    }
 }
 
 /// Drop every identity-link row before grouping AND before triangulation

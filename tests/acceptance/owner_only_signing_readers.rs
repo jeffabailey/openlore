@@ -243,7 +243,6 @@ fn jeff_can_see_the_claims_left_out_per_author_without_changing_the_weight() {
 ///     | a withdrawal of Jeff's claim (only its author may withdraw it)           |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RD-4: pending DELIVER (row 1 confirms A-13 today)"]
 fn nothing_but_an_attested_claim_moves_the_weight() {
     use claim_domain::ReferenceType;
     let anvil = Subject::Repo(ANVIL);

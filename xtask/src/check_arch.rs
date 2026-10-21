@@ -2007,6 +2007,114 @@ pub fn scan_authority_readers_hold_no_write_handle(
     Ok(findings)
 }
 
+// -----------------------------------------------------------------------------
+// Scoring callers (owner-only-signing, ADR-086 §8)
+// -----------------------------------------------------------------------------
+//
+// * `scoring_callers_use_score_attested`: the CLI and the viewer adapter weigh
+//   only through `scoring::score_attested`; neither names `scoring::score`
+//   (a call, a path or an import), so no reader can weigh a counter, a
+//   withdrawal, a link or an unattested `github:` assertion.
+
+/// The source trees whose scoring must go through `score_attested`.
+const SCORING_CALLER_SOURCES: &[&str] = &["crates/cli/src", "crates/adapter-http-viewer/src"];
+
+/// Pure rule: every place `source` names `scoring::score` itself — a path in
+/// an expression or type, or an import — as a `line N: …` finding.
+/// Comments are not code. An unparseable source is itself a finding (fail
+/// closed).
+pub fn classify_direct_score_uses(source: &str) -> Vec<String> {
+    let file = match syn::parse_file(source) {
+        Ok(file) => file,
+        Err(error) => {
+            return vec![format!(
+                "unparseable source, scoring calls unchecked: {error}"
+            )]
+        }
+    };
+    let mut collector = DirectScoreCollector { lines: Vec::new() };
+    collector.visit_file(&file);
+    let source_lines: Vec<&str> = source.lines().collect();
+    collector
+        .lines
+        .into_iter()
+        .map(|line| {
+            let code = source_lines.get(line - 1).map_or("", |code| code.trim());
+            format!("line {line}: `scoring::score` in `{code}`")
+        })
+        .collect()
+}
+
+/// `syn` visitor collecting the line of every path or import naming
+/// `scoring::score`.
+struct DirectScoreCollector {
+    lines: Vec<usize>,
+}
+
+impl<'ast> Visit<'ast> for DirectScoreCollector {
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        let names_score = path
+            .segments
+            .iter()
+            .zip(path.segments.iter().skip(1))
+            .find(|(first, second)| first.ident == "scoring" && second.ident == "score");
+        if let Some((_, score)) = names_score {
+            self.lines.push(score.ident.span().start().line);
+        }
+        syn::visit::visit_path(self, path);
+    }
+
+    fn visit_use_path(&mut self, use_path: &'ast syn::UsePath) {
+        if use_path.ident == "scoring" {
+            self.lines.extend(imported_score_lines(&use_path.tree));
+        }
+        syn::visit::visit_use_path(self, use_path);
+    }
+}
+
+/// The lines where a `use scoring::…` tree imports `score` itself.
+fn imported_score_lines(tree: &syn::UseTree) -> Vec<usize> {
+    match tree {
+        syn::UseTree::Name(name) if name.ident == "score" => {
+            vec![name.ident.span().start().line]
+        }
+        syn::UseTree::Rename(rename) if rename.ident == "score" => {
+            vec![rename.ident.span().start().line]
+        }
+        syn::UseTree::Group(group) => group.items.iter().flat_map(imported_score_lines).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Effect shell for `scoring_callers_use_score_attested`.
+pub fn scan_scoring_callers_use_score_attested(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for path in SCORING_CALLER_SOURCES
+        .iter()
+        .flat_map(|rel_dir| rust_sources_under(&workspace_root.join(rel_dir)))
+    {
+        let source = std::fs::read_to_string(&path)?;
+        let rel_path = path
+            .strip_prefix(workspace_root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        findings.extend(
+            classify_direct_score_uses(&source)
+                .into_iter()
+                .map(|finding| {
+                    format!(
+                        "{rel_path}: {finding} — readers weigh only through \
+                         scoring::score_attested (scoring_callers_use_score_attested, ADR-086 §8)"
+                    )
+                }),
+        );
+    }
+    Ok(findings)
+}
+
 /// The `identity verify` verb module and what it may not name: the whole
 /// store, signing and publishing, the purge, and the whole wiring.
 const IDENTITY_VERIFY_SOURCE: &str = "crates/cli/src/verbs/identity_verify.rs";
@@ -3902,6 +4010,7 @@ pub fn run() -> anyhow::Result<i32> {
     let authority_evidence_findings = scan_authority_evidence_only_from_adapters(&workspace_root)?;
     let signing_permit_serde_findings = scan_signing_permit_not_serializable(&workspace_root)?;
     let sign_site_findings = scan_sign_only_with_permit(&workspace_root)?;
+    let scoring_caller_findings = scan_scoring_callers_use_score_attested(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -3934,6 +4043,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(authority_evidence_findings);
     rendered.extend(signing_permit_serde_findings);
     rendered.extend(sign_site_findings);
+    rendered.extend(scoring_caller_findings);
 
     if rendered.is_empty() {
         println!(
@@ -4995,6 +5105,53 @@ mod tests {
                 .expect("scan real tree"),
             Vec::<String>::new(),
             "the real readers hold read handles only"
+        );
+    }
+
+    // --- scoring_callers_use_score_attested (ADR-086 §8) --------------------
+
+    #[test]
+    fn a_reader_scoring_directly_is_reported_and_the_real_tree_passes() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let verbs = violating.path().join("crates/cli/src/verbs");
+        std::fs::create_dir_all(&verbs).expect("mkdir");
+        std::fs::write(
+            verbs.join("graph_query.rs"),
+            "// scoring::score(&feed, &cfg) in a comment is no call\n\
+             fn weigh(feed: &[Row]) { let view = scoring::score(&feed, &cfg); }\n\
+             fn fine(feed: &[Row]) { let view = scoring::score_attested(feed, |_| None, &cfg); }\n",
+        )
+        .expect("write");
+        let viewer = violating.path().join("crates/adapter-http-viewer/src");
+        std::fs::create_dir_all(&viewer).expect("mkdir");
+        std::fs::write(
+            viewer.join("lib.rs"),
+            "use scoring::{score_attested, score as weigh};\n\
+             fn page() { let f = ::scoring::score; }\n",
+        )
+        .expect("write");
+
+        let findings = scan_scoring_callers_use_score_attested(violating.path()).expect("scan");
+        let at = |path: &str, line: usize| {
+            findings
+                .iter()
+                .any(|f| f.starts_with(path) && f.contains(&format!("line {line}:")))
+        };
+        assert_eq!(findings.len(), 3, "{findings:?}");
+        assert!(at("crates/cli/src/verbs/graph_query.rs", 2), "{findings:?}");
+        assert!(
+            at("crates/adapter-http-viewer/src/lib.rs", 1),
+            "{findings:?}"
+        );
+        assert!(
+            at("crates/adapter-http-viewer/src/lib.rs", 2),
+            "{findings:?}"
+        );
+
+        assert_eq!(
+            scan_scoring_callers_use_score_attested(real_workspace_root()).expect("scan real tree"),
+            Vec::<String>::new(),
+            "the real readers weigh only through score_attested"
         );
     }
 

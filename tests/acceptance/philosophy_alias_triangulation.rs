@@ -244,6 +244,7 @@ fn seed_alias_triangulation(env: &TestEnv) -> AliasTriangulation {
         pulled.stdout, pulled.stderr
     );
 
+    given_every_repo_lists_its_claim_authors(env);
     AliasTriangulation { _peer: pds }
 }
 

@@ -326,7 +326,22 @@ fn sut_is_reserved_predicate(predicate: &str) -> bool {
 
 /// The scoring choke point (REAL today).
 fn sut_score(claims: &[AttributedClaim]) -> scoring::WeightedView {
-    scoring::score(claims, &ScoringConfig::DEFAULT)
+    let feed: Vec<ports::ScoringFeedRow> = claims
+        .iter()
+        .map(|claim| ports::ScoringFeedRow {
+            claim: claim.clone(),
+            reference_types: vec![],
+        })
+        .collect();
+    scoring::score_attested(
+        &feed,
+        |_| {
+            Some(claim_domain::authority::Authority::Attested(
+                claim_domain::authority::AttestedTier::RepoListed,
+            ))
+        },
+        &ScoringConfig::DEFAULT,
+    )
 }
 
 // =============================================================================

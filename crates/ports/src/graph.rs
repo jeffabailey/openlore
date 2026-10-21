@@ -23,7 +23,10 @@
 // SCAFFOLD: false  (data types are real; behavior arrives via StoragePort)
 
 use chrono::{DateTime, Utc};
-use claim_domain::{Cid, Did};
+use std::collections::BTreeMap;
+
+use claim_domain::authority::{Authority, ClaimShape};
+use claim_domain::{Cid, Did, ReferenceType};
 
 use crate::federated_row::AuthorRelationship;
 
@@ -64,6 +67,57 @@ pub struct AttributedClaim {
     /// `You | SubscribedPeer | UnsubscribedCache` (slice-03 reuse) — drives the
     /// `--contributor` relationship label.
     pub relationship: AuthorRelationship,
+}
+
+/// One row of the scoring feed: the attributed claim plus the types of the
+/// references it carries (UC-20), so a reader can tell an assertion from a
+/// dispute, a withdrawal or an identity link (ADR-086 §2) before weighting it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScoringFeedRow {
+    pub claim: AttributedClaim,
+    pub reference_types: Vec<ReferenceType>,
+}
+
+impl ScoringFeedRow {
+    /// The fields authority and kind are decided from.
+    pub fn shape(&self) -> ClaimShape<'_> {
+        ClaimShape {
+            subject: &self.claim.subject,
+            predicate: &self.claim.predicate,
+            reference_types: &self.reference_types,
+        }
+    }
+}
+
+/// This reader's judgment of who each `github:` assertion's author is to its
+/// subject (ADR-086 §8, ADR-087 §1-3), keyed by claim cid. A claim with no
+/// entry needs no authority, or names nothing GitHub could attest.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FeedAuthority {
+    by_cid: BTreeMap<String, Authority>,
+}
+
+impl FeedAuthority {
+    pub fn new(judged: impl IntoIterator<Item = (Cid, Authority)>) -> Self {
+        Self {
+            by_cid: judged
+                .into_iter()
+                .map(|(cid, authority)| (cid.0, authority))
+                .collect(),
+        }
+    }
+
+    /// Who `row`'s author is to its subject, to this reader.
+    pub fn of(&self, row: &ScoringFeedRow) -> Option<Authority> {
+        self.by_cid.get(&row.claim.cid.0).copied()
+    }
+}
+
+/// Judge a scoring feed's authority from what this reader holds locally: the
+/// latest identity-link checks and repo observations. READ-only: nothing is
+/// asked, checked or recorded (`authority_readers_hold_no_write_handle`).
+pub trait FeedAuthorityReadPort {
+    fn feed_authority(&self, feed: &[ScoringFeedRow]) -> Result<FeedAuthority, String>;
 }
 
 // -----------------------------------------------------------------------------
