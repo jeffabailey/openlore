@@ -310,6 +310,61 @@ async fn an_authority_file_that_is_not_a_small_utf8_file_grants_nothing() {
     }
 }
 
+/// The authority-file reply GitHub's contents API gives for `text`.
+fn file_body(text: &[u8]) -> serde_json::Value {
+    use base64::Engine as _;
+    serde_json::json!({"type": "file", "encoding": "base64", "size": text.len(),
+        "content": base64::engine::general_purpose::STANDARD.encode(text)})
+}
+
+#[tokio::test]
+async fn an_authority_file_lists_its_uncommented_dids_byte_for_byte() {
+    const MAINTAINER: &str = "did:plc:openloreexamplemaintainer01";
+    let at_limit = format!(
+        "{MAINTAINER}\n{}",
+        "#".repeat(4 * 1024 - MAINTAINER.len() - 1)
+    );
+    assert_eq!(at_limit.len(), 4096);
+    let present =
+        |dids: &[&str]| AuthorityFile::Present(dids.iter().map(|did| (*did).to_string()).collect());
+    let rows = [
+        ("exactly 4 KiB", at_limit, present(&[MAINTAINER])),
+        (
+            "comment lines",
+            format!("# {MAINTAINER}\n#{MAINTAINER}\n  # did:web:x.example\n"),
+            present(&[]),
+        ),
+        (
+            "a trailing comment",
+            format!("{MAINTAINER} # the release key\n"),
+            present(&[MAINTAINER]),
+        ),
+        (
+            "case kept",
+            "did:plc:OpenLoreExampleMaintainer01\nDID:PLC:OPENLOREEXAMPLEMAINTAINER01\n"
+                .to_string(),
+            present(&["did:plc:OpenLoreExampleMaintainer01"]),
+        ),
+        (
+            "prefix and extension kept",
+            "did:plc:openloreexample\ndid:plc:openloreexamplemaintainer01x\n".to_string(),
+            present(&[
+                "did:plc:openloreexample",
+                "did:plc:openloreexamplemaintainer01x",
+            ]),
+        ),
+    ];
+    for (row, text, expected) in rows {
+        let mut case = recorded("authority_file");
+        case.file_reply().body = file_body(text.as_bytes());
+
+        let (observed, asked) = observe(case).await;
+
+        assert_eq!(observed, Ok(found(GITIGNORE, expected)), "{row}");
+        assert_eq!(asked.len(), 2, "{row}");
+    }
+}
+
 #[tokio::test]
 async fn a_shape_error_or_a_rate_limit_is_no_observation() {
     let mut no_file_type = recorded("authority_file");

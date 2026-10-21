@@ -195,7 +195,6 @@ fn jeff_imports_anything_public_but_signing_what_he_cannot_attest_is_refused_wit
 ///     | Jeff's identity listed only in a file on a branch other than the main one | refused: the organization has not listed him    |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-3: pending DELIVER"]
 fn an_organization_repo_is_signed_only_by_a_did_its_authority_file_lists_exactly() {
     let mine = format!("{MY_DID}\n");
     let rows: Vec<(&str, AuthorityFile, Option<Refusal>)> = vec![
@@ -591,7 +590,6 @@ fn after_jeff_renames_his_repo_he_signs_only_under_the_name_github_serves_now() 
 ///   Then Rachel's claim still reads "repo-listed"
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-9: pending DELIVER"]
 fn a_listed_identity_stays_listed_whoever_observed_the_repo_last() {
     let mut world = authority_world();
     the_repo_holds_authority_file(&world, ANVIL, listing(&[RACHEL_DID]));
