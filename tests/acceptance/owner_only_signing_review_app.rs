@@ -40,7 +40,6 @@ const NOT_COUNTED_LINE: &str = "not counted: authority not proven";
 ///   And nothing has been posted
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing SA-1: pending DELIVER (slice 4; ruling P-OOS-2)"]
 fn priyas_share_post_names_only_claims_about_repos_she_still_owns() {
     let world = rra_world();
     let mut browser = given_owner_verified(&world, Account::Priyaraman);

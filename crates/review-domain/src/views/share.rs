@@ -22,6 +22,7 @@ pub const SHARE_LIMIT_NOTICE: &str = "You have shared 5 times today, the most a 
 /// The share preview: the editable text, the profile link it carries, and
 /// the one button that posts. `notice` explains why an earlier press did
 /// not post (too long, refused by the PDS); the owner's text is kept.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SharePreview<'a> {
     pub plan_id: &'a str,
@@ -33,6 +34,16 @@ pub struct SharePreview<'a> {
 }
 
 pub fn share_preview_page(view: &SharePreview<'_>) -> String {
+    share_preview_page_listing(view, &[])
+}
+
+/// The share preview listing `not_counted`: the published claims the draft
+/// does not quote, the owner's authority over their repo not proven in this
+/// request (P-OOS-2).
+pub fn share_preview_page_listing(
+    view: &SharePreview<'_>,
+    not_counted: &[PublishedClaim],
+) -> String {
     page(
         "Share on Bluesky",
         html! {
@@ -45,6 +56,17 @@ pub fn share_preview_page(view: &SharePreview<'_>) -> String {
                  Bluesky only when you press " (POST_LABEL) "."
             }
             p { "Your post links to your profile: " a href=(view.profile_url) { (view.profile_url) } }
+            @if !not_counted.is_empty() {
+                ul {
+                    @for claim in not_counted {
+                        li {
+                            (claim.subject.trim_start_matches("github:")) " — "
+                            (claim.object.rsplit('.').next().unwrap_or(&claim.object)) ": "
+                            (crate::share::NOT_COUNTED)
+                        }
+                    }
+                }
+            }
             form method="post" action="/share" {
                 (csrf_field(view.csrf_token))
                 input type="hidden" name="plan" value=(view.plan_id);

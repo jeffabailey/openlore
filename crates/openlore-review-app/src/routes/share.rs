@@ -7,18 +7,23 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use std::collections::BTreeSet;
+
 use hyper::StatusCode;
+use ports::claim_domain::authority::{SigningPermit, SigningRefusal};
 use ports::{PlanKind, ResolvedIdentity};
 use review_domain::plans::{plan_expires_at, rfc3339_utc};
-use review_domain::share::{compose_post, restore_share_plan, share_post_plan, SharePostPlan};
-use review_domain::views::{self, ProfileContent, SharePreview};
+use review_domain::share::{
+    compose_post, quote_permitted, restore_share_plan, SharePostPlan, ShareQuote,
+};
+use review_domain::views::{self, ProfileContent, PublishedClaim, SharePreview};
 
 use crate::executor::execute_share;
 use crate::http::{App, PageRequest, Reply};
 use crate::limiter::unix_now_secs;
 use crate::routes::confirm::{take_confirmed_plan, ConfirmedPlan};
 use crate::routes::profile::read_published;
-use crate::routes::review::not_found;
+use crate::routes::review::{not_found, PublishChecks};
 use crate::routes::signin::{csrf_token_for, current_session, field, random_token, to_landing};
 use crate::wiring::{observe, LogEvent};
 
@@ -52,7 +57,9 @@ pub(crate) async fn share_preview(app: &App, request: &PageRequest) -> Reply {
             views::PDS_UNREACHABLE_NOTICE,
         );
     };
-    let plan = match share_post_plan(&profile_url(app, &identity), &published) {
+    let mut checks = PublishChecks::new(app, &identity.did);
+    let quote = quote_now(&published, &mut checks).await;
+    let plan = match quote.plan(&profile_url(app, &identity)) {
         Ok(plan) => plan,
         Err(refusal) => return unavailable(StatusCode::OK, &refusal.message()),
     };
@@ -74,7 +81,37 @@ pub(crate) async fn share_preview(app: &App, request: &PageRequest) -> Reply {
             text: plan.draft().text(),
         },
         None,
+        quote.not_counted(),
     )
+}
+
+/// Whether the owner may sign about one subject NOW: the same fresh reads
+/// publish makes (ADR-089 §4, `may_sign`), within the page allowance.
+pub(crate) trait AuthorityNow {
+    async fn permit(&mut self, subject: &str) -> Result<SigningPermit, SigningRefusal>;
+}
+
+impl AuthorityNow for PublishChecks<'_> {
+    async fn permit(&mut self, subject: &str) -> Result<SigningPermit, SigningRefusal> {
+        PublishChecks::permit(self, subject).await
+    }
+}
+
+/// The share quote (P-OOS-2): each distinct repo of `published` checked
+/// once, in this request; a claim is quoted only under a permit, so a read
+/// GitHub could not answer leaves it not counted.
+async fn quote_now(published: &[PublishedClaim], authority: &mut impl AuthorityNow) -> ShareQuote {
+    let subjects: BTreeSet<&str> = published
+        .iter()
+        .map(|claim| claim.subject.as_str())
+        .collect();
+    let mut permits = Vec::new();
+    for subject in subjects {
+        if let Ok(permit) = authority.permit(subject).await {
+            permits.push(permit);
+        }
+    }
+    quote_permitted(published, &permits)
 }
 
 /// "Post to Bluesky": post exactly the confirmed text of a previewed plan.
@@ -162,6 +199,7 @@ impl Share<'_> {
                 text: self.text,
             },
             Some(notice),
+            &[],
         )
     }
 }
@@ -178,17 +216,21 @@ fn preview(
     plan: &SharePostPlan,
     state: &SharePreviewState<'_>,
     notice: Option<&str>,
+    not_counted: &[PublishedClaim],
 ) -> Reply {
     Reply::page(
         status,
-        views::share_preview_page(&SharePreview {
-            plan_id: state.plan_id,
-            csrf_token: state.csrf_token,
-            text: state.text,
-            profile_url: plan.profile_url(),
-            profile_path: &profile_path(plan),
-            notice,
-        }),
+        views::share_preview_page_listing(
+            &SharePreview {
+                plan_id: state.plan_id,
+                csrf_token: state.csrf_token,
+                text: state.text,
+                profile_url: plan.profile_url(),
+                profile_path: &profile_path(plan),
+                notice,
+            },
+            not_counted,
+        ),
     )
 }
 
@@ -211,4 +253,115 @@ fn profile_path(plan: &SharePostPlan) -> String {
         .rfind("/@")
         .map(|at| plan.profile_url()[at..].to_string())
         .unwrap_or_else(|| "/review".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Ruling L1 (P-OOS-2): a quoted repo whose repo or bio read GitHub
+    //! could not finish is listed "not counted", never quoted, and nothing
+    //! is posted (the preview holds no write).
+    use std::collections::BTreeMap;
+
+    use super::{quote_now, AuthorityNow};
+    use ports::claim_domain::authority::{
+        may_sign, OwnerBioRead, RepoRead, SigningPermit, SigningRefusal,
+    };
+    use ports::{RepoFacts, RepoOwnerKind};
+    use review_domain::share::NOT_COUNTED;
+    use review_domain::views::{self, PublishedClaim, SharePreview};
+
+    const OWNER: &str = "did:plc:priyaraman7777777777777777";
+    const OWNER_ACCOUNT: u64 = 4_210_001;
+    const PROFILE: &str = "https://app.example/@priyaraman.bsky.social";
+
+    /// What GitHub answers in this request, per repo: the repo read and
+    /// its owner's bio read.
+    #[derive(Clone, Copy)]
+    enum Answer {
+        Holds,
+        RepoUnfinished,
+        BioUnfinished,
+    }
+
+    struct GithubNow {
+        answers: BTreeMap<&'static str, Answer>,
+        asked: Vec<String>,
+    }
+
+    impl AuthorityNow for GithubNow {
+        async fn permit(&mut self, subject: &str) -> Result<SigningPermit, SigningRefusal> {
+            self.asked.push(subject.to_string());
+            let facts = RepoFacts {
+                repo_id: 1,
+                full_name: subject.trim_start_matches("github:").to_string(),
+                owner_id: OWNER_ACCOUNT,
+                owner_login: "priyaraman".to_string(),
+                owner_kind: RepoOwnerKind::User,
+                fork: false,
+                archived: false,
+            };
+            let (repo, bio) = match self.answers[subject] {
+                Answer::Holds => (RepoRead::Found(&facts), OwnerBioRead::Bio(Some(OWNER))),
+                Answer::RepoUnfinished => (RepoRead::Unfinished, OwnerBioRead::Bio(Some(OWNER))),
+                Answer::BioUnfinished => (RepoRead::Found(&facts), OwnerBioRead::Unfinished),
+            };
+            may_sign(OWNER, subject, &[OWNER_ACCOUNT], repo, bio)
+        }
+    }
+
+    fn claim(repo: &str, slug: &str) -> PublishedClaim {
+        PublishedClaim {
+            subject: format!("github:{repo}"),
+            object: format!("org.openlore.philosophy.{slug}"),
+            confidence_bp: 2500,
+            rkey: format!("baf{slug}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn share_preview_lists_a_claim_as_not_counted_when_github_cannot_answer() {
+        let tidepool = claim("priyaraman/tidepool", "test-driven");
+        let kelp = claim("priyaraman/kelp", "dependency-pinning");
+        let reef = claim("priyaraman/reef", "memory-safety");
+        let published = vec![
+            tidepool.clone(),
+            kelp.clone(),
+            reef.clone(),
+            tidepool.clone(),
+        ];
+        let mut github = GithubNow {
+            answers: BTreeMap::from([
+                ("github:priyaraman/tidepool", Answer::Holds),
+                ("github:priyaraman/kelp", Answer::RepoUnfinished),
+                ("github:priyaraman/reef", Answer::BioUnfinished),
+            ]),
+            asked: Vec::new(),
+        };
+
+        let quote = quote_now(&published, &mut github).await;
+
+        assert_eq!(github.asked.len(), 3, "one check per distinct repo");
+        assert_eq!(quote.quoted(), [tidepool.clone(), tidepool]);
+        assert_eq!(quote.not_counted(), [kelp, reef]);
+        let plan = quote.plan(PROFILE).expect("a draft is offered");
+        let draft = plan.draft().text();
+        assert!(draft.contains("test-driven"), "{draft}");
+        assert!(!draft.contains("dependency-pinning"), "{draft}");
+        assert!(!draft.contains("memory-safety"), "{draft}");
+        let page = views::share_preview_page_listing(
+            &SharePreview {
+                plan_id: "p1",
+                csrf_token: "csrf",
+                text: draft,
+                profile_url: plan.profile_url(),
+                profile_path: "/@priyaraman.bsky.social",
+                notice: None,
+            },
+            quote.not_counted(),
+        );
+        for repo in ["priyaraman/kelp", "priyaraman/reef"] {
+            assert!(page.contains(&format!("{repo} — ")), "{repo}: {page}");
+        }
+        assert_eq!(page.matches(NOT_COUNTED).count(), 2, "{page}");
+    }
 }

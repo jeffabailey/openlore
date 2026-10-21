@@ -10,6 +10,7 @@
 //!   whose `byteStart`/`byteEnd` are UTF-8 BYTE offsets (SPIKE-1), never
 //!   char or grapheme counts.
 
+use ports::claim_domain::authority::SigningPermit;
 use ports::{PlanKind, StoredPublishPlan, SuggestionKey};
 use serde_json::{json, Value};
 use unicode_segmentation::UnicodeSegmentation;
@@ -183,6 +184,55 @@ pub fn share_draft(
         .find_map(Result::ok)
         .map_or(shortest, Ok)
         .map(|draft| SharePostPlan { draft })
+}
+
+/// The owner's live published claims split by whether the owner tier holds
+/// for their repo NOW (P-OOS-2): only a claim a permit of this request
+/// covers is quoted; every other is listed "not counted".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareQuote {
+    quoted: Vec<PublishedClaim>,
+    not_counted: Vec<PublishedClaim>,
+}
+
+impl ShareQuote {
+    /// The claims the draft may name.
+    pub fn quoted(&self) -> &[PublishedClaim] {
+        &self.quoted
+    }
+
+    /// The claims whose authority was not proven in this request.
+    pub fn not_counted(&self) -> &[PublishedClaim] {
+        &self.not_counted
+    }
+
+    /// The share plan, linking `profile_url`: offered when the owner has
+    /// any live published claim, naming only the quoted ones. Pure.
+    pub fn plan(&self, profile_url: &str) -> Result<SharePostPlan, ShareRefusal> {
+        if self.quoted.is_empty() && self.not_counted.is_empty() {
+            return Err(ShareRefusal::NothingPublished);
+        }
+        share_draft(profile_url, &self.quoted)
+    }
+}
+
+/// The line a claim the draft does not quote is listed with.
+pub const NOT_COUNTED: &str = "not counted: authority not proven";
+
+/// Quote each of the owner's `published` claims only when one of the
+/// owner's `permits` (minted in this request through ADR-089 `may_sign`)
+/// covers its subject; never from any stored status. Pure.
+pub fn quote_permitted(published: &[PublishedClaim], permits: &[SigningPermit]) -> ShareQuote {
+    let permitted = |claim: &PublishedClaim| {
+        permits
+            .iter()
+            .any(|permit| permit.subject() == claim.subject)
+    };
+    let (quoted, not_counted) = published.iter().cloned().partition(permitted);
+    ShareQuote {
+        quoted,
+        not_counted,
+    }
 }
 
 /// Restore a stored share plan for `owner_did`: only a share plan of that
