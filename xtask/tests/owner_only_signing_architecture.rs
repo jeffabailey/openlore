@@ -9,14 +9,17 @@
 //! sign outside `sign_permitted` is a finding (philosophy records allowlisted);
 //! the real tree passes. Step 02-09 deleted the transitional T1 entry and its
 //! rule. Step 02-11: the same rule holds `publish_signed_claim` to a
-//! `&SigningPermit` parameter.
+//! `&SigningPermit` parameter. Step 03-05 (C-OOS-8): the indexer reaching
+//! `adapter-github` is a capability-boundary violation.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use xtask::check_arch::{
-    classify_authority_evidence, classify_repo_authority_checks_literal,
-    classify_sign_only_with_permit, scan_authority_evidence_only_from_adapters,
-    scan_repo_authority_checks_insert_only, scan_sign_only_with_permit,
+    check_indexer_capability_boundary, classify_authority_evidence,
+    classify_repo_authority_checks_literal, classify_sign_only_with_permit,
+    scan_authority_evidence_only_from_adapters, scan_repo_authority_checks_insert_only,
+    scan_sign_only_with_permit,
 };
 
 const FABRICATED_PERSON_EVIDENCE: &str = "
@@ -278,4 +281,35 @@ fn the_single_publish_path_without_a_permit_parameter_is_a_finding() {
 fn the_real_tree_signs_only_through_sign_permitted() {
     let findings = scan_sign_only_with_permit(&root()).expect("scan");
     assert!(findings.is_empty(), "{findings:#?}");
+}
+
+/// A workspace where the indexer reaches GitHub only through `via`.
+fn indexer_reaching_github_via(via: &[&str]) -> xtask::check_arch::Workspace {
+    let mut deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut chain = vec!["openlore-indexer"];
+    chain.extend_from_slice(via);
+    chain.push("adapter-github");
+    for pair in chain.windows(2) {
+        deps.entry(pair[0].to_string())
+            .or_default()
+            .insert(pair[1].to_string());
+    }
+    deps.entry("adapter-github".to_string()).or_default();
+    xtask::check_arch::Workspace {
+        members: deps.keys().cloned().collect(),
+        deps,
+    }
+}
+
+#[test]
+fn the_indexer_reaching_github_directly_or_transitively_is_a_violation() {
+    for via in [&[][..], &["appview-domain"][..]] {
+        let findings = check_indexer_capability_boundary(&indexer_reaching_github_via(via));
+        assert!(
+            findings
+                .iter()
+                .any(|v| v.package == "openlore-indexer" && v.forbidden == "adapter-github"),
+            "openlore-indexer -> {via:?} -> adapter-github is a violation (C-OOS-8): {findings:?}"
+        );
+    }
 }

@@ -1323,9 +1323,11 @@ fn network_search_leaves_a_github_row_that_is_not_a_link_unlabelled() {
         "Sven's row is listed;\n{}",
         found.stdout
     );
+    // owner-only-signing RD-7 supersedes this guard: every github: assertion
+    // row is labelled, and Jeff holds no check of rust-lang/regex.
     assert!(
-        svens.iter().all(|l| !l.contains(SEARCH_LABEL)),
-        "a github row that is not a link carries no `{SEARCH_LABEL}` label (U-7);\n{}",
+        svens.iter().any(|l| l.contains(SEARCH_LABEL)),
+        "a github assertion row Jeff has not checked reads `{SEARCH_LABEL}` (RD-7);\n{}",
         found.stdout
     );
 }

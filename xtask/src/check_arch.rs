@@ -620,7 +620,10 @@ const INDEXER_ROOT: &str = "openlore-indexer";
 /// / ADR-023): the user's local store (`StoragePort` impl) + any PDS-write
 /// surface. `adapter-atproto-did` is intentionally NOT here — the indexer wires
 /// it ONLY for the verify-only `IdentityResolvePort` (resolve/verify-only).
-const INDEXER_FORBIDDEN_DEPS: &[&str] = &["adapter-duckdb", "adapter-atproto-pds"];
+/// `adapter-github` too (C-OOS-8, UC-7): the indexer never asks GitHub and
+/// never judges authority — each reader labels index rows from its own checks.
+const INDEXER_FORBIDDEN_DEPS: &[&str] =
+    &["adapter-duckdb", "adapter-atproto-pds", "adapter-github"];
 
 /// Indexer-side adapters the `cli` composition root MUST NOT link (I-3 second
 /// axis): the HTTP query server + the indexer's store/ingest crates. The CLI
@@ -649,7 +652,8 @@ pub fn check_indexer_capability_boundary(workspace: &Workspace) -> Vec<Violation
                     package: INDEXER_ROOT.to_string(),
                     forbidden: (*forbidden).to_string(),
                     rule: "openlore-indexer MUST NOT depend on the signing identity / \
-                           local store / PDS-write surface (I-AV-5 / ADR-023)",
+                           local store / PDS-write surface / GitHub (I-AV-5 / ADR-023 / \
+                           C-OOS-8)",
                 });
             }
         }

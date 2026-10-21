@@ -430,7 +430,6 @@ fn jeffs_viewer_weighs_and_labels_claims_exactly_as_his_terminal_does() {
 ///     | Priya's claim about acme-tools/anvil      | anvil's file lists Priya and Jeff re-checked anvil           | acme-tools/anvil        | repo-listed                 |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RD-7: pending DELIVER (supersedes GDL IR-16b)"]
 fn network_search_labels_every_github_claim_using_jeffs_own_check_when_he_has_one() {
     let regex = Subject::Repo(REGEX);
     let anvil = Subject::Repo(ANVIL);

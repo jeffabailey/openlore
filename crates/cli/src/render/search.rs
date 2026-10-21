@@ -1,6 +1,7 @@
 //! `openlore search` — network discovery results, verification, share links.
 
 use super::*;
+use claim_domain::authority::Authority;
 
 /// Content-frozen public-data-only banner for `search` (KPI-AV-5 / I-AV-4).
 /// Printed BEFORE network results so the user is reassured discovery indexes
@@ -37,6 +38,24 @@ pub const LINK_AUTHORITY_NOT_CHECKED_LABEL: &str = "authority not checked here";
 pub(crate) fn network_row_link_label(predicate: &str) -> Option<&'static str> {
     claim_domain::identity_link::is_reserved_predicate(predicate)
         .then_some(LINK_AUTHORITY_NOT_CHECKED_LABEL)
+}
+
+/// The authority line of one index row (UC-7, ADR-087 §8). `judged` is this
+/// reader's OWN judgment over its local checks — never anything the row or
+/// its author asserts: `whose word:` with its label when a local check
+/// decides it, or `authority not checked here` when none does; a row that
+/// needs no authority keeps the identity-link label (or none).
+pub(crate) fn network_row_authority_line(
+    predicate: &str,
+    judged: Option<Authority>,
+) -> Option<String> {
+    match judged {
+        Some(Authority::NotChecked) => {
+            Some(format!("whose word: {LINK_AUTHORITY_NOT_CHECKED_LABEL}"))
+        }
+        Some(authority) => Some(format!("whose word: {}", authority.label())),
+        None => network_row_link_label(predicate).map(str::to_string),
+    }
 }
 
 /// The marker line of one network row: `[verified]`, plus `[self-attested]` for
@@ -112,6 +131,18 @@ pub fn render_network_search_result(
     result: &NetworkSearchResultRaw,
     relationship_for: &dyn Fn(&str) -> AuthorRelationship,
 ) -> String {
+    render_labelled_network_search_result(dimension, result, &[], relationship_for)
+}
+
+/// [`render_network_search_result`] with this reader's own judgment of each
+/// row's authority: `local_authority[i]` judges `result.results[i]` (a row
+/// past its end was not judged here). Pure.
+pub fn render_labelled_network_search_result(
+    dimension: SearchDimension,
+    result: &NetworkSearchResultRaw,
+    local_authority: &[Option<Authority>],
+    relationship_for: &dyn Fn(&str) -> AuthorRelationship,
+) -> String {
     let mut out = String::new();
     // The public-data banner ALWAYS precedes the results (KPI-AV-5 / I-AV-4).
     out.push_str(&format!("{SEARCH_PUBLIC_DATA_BANNER}\n\n"));
@@ -141,15 +172,20 @@ pub fn render_network_search_result(
 
     // Group the FLAT attributed rows per author (first-seen author order — stable,
     // hash-randomization-free). NEVER collapses two authors onto one row.
-    for (author_did, rows) in &group_network_rows_by_author(&result.results) {
+    let judged_rows = result
+        .results
+        .iter()
+        .enumerate()
+        .map(|(position, row)| (row, local_authority.get(position).copied().flatten()));
+    for (author_did, rows) in &group_by_author(judged_rows, |(row, _)| row.author_did.0.clone()) {
         let relationship = relationship_for(author_did);
         out.push_str(&format!(
             "author: {} {}\n",
             author_did,
             search_relationship_annotation(relationship)
         ));
-        for row in rows {
-            out.push_str(&render_one_network_row(row, &counters));
+        for (row, judged) in rows {
+            out.push_str(&render_one_network_row(row, *judged, &counters));
         }
         // The discovery→federation funnel affordance — ONLY for unfollowed authors
         // (a subscribed peer already followed; I-AV-7).
@@ -217,6 +253,7 @@ pub(crate) fn render_contributor_network_trail_footer(rows: &[NetworkResultRowRa
 /// the countered claim is SHOWN with its counter, never filtered.
 pub(crate) fn render_one_network_row(
     row: &NetworkResultRowRaw,
+    judged: Option<Authority>,
     counters: &[NetworkCounterRelationship],
 ) -> String {
     let mut out = String::new();
@@ -234,8 +271,8 @@ pub(crate) fn render_one_network_row(
     ));
     out.push_str(&format!("    cid:        {}\n", row.cid.0));
     out.push_str(&format!("    {}\n", network_row_markers(row.provenance)));
-    if let Some(label) = network_row_link_label(&row.predicate) {
-        out.push_str(&format!("    {label}\n"));
+    if let Some(line) = network_row_authority_line(&row.predicate, judged) {
+        out.push_str(&format!("    {line}\n"));
     }
     // OD-AV-7: the counter annotation(s) for THIS row (it is countered by K).
     for annotation in network_counter_annotations_for(&row.cid.0, counters) {
@@ -311,19 +348,16 @@ pub(crate) fn network_counter_annotations_for(
 /// order (stable output). Each row lands under ITS OWN `author_did` — two
 /// identical-content rows by distinct authors land in DISTINCT groups (anti-
 /// merging, I-AV-2). Pure helper.
-pub(crate) fn group_network_rows_by_author(
-    rows: &[NetworkResultRowRaw],
-) -> Vec<(String, Vec<&NetworkResultRowRaw>)> {
-    let mut order: Vec<String> = Vec::new();
-    let mut grouped: Vec<(String, Vec<&NetworkResultRowRaw>)> = Vec::new();
-    for row in rows {
-        let did = row.author_did.0.clone();
-        match order.iter().position(|d| d == &did) {
-            Some(pos) => grouped[pos].1.push(row),
-            None => {
-                order.push(did.clone());
-                grouped.push((did, vec![row]));
-            }
+fn group_by_author<T>(
+    items: impl IntoIterator<Item = T>,
+    author_of: impl Fn(&T) -> String,
+) -> Vec<(String, Vec<T>)> {
+    let mut grouped: Vec<(String, Vec<T>)> = Vec::new();
+    for item in items {
+        let did = author_of(&item);
+        match grouped.iter().position(|(d, _)| d == &did) {
+            Some(pos) => grouped[pos].1.push(item),
+            None => grouped.push((did, vec![item])),
         }
     }
     grouped
