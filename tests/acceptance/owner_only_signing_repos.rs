@@ -378,6 +378,52 @@ fn rechecking_authority_labels_each_peers_repo_claims_and_records_one_observatio
     guardrail_store_unchanged("--mine", &before_mine, &world.env);
 }
 
+/// RA-4b (chained on RA-4's Given; U-OOS-D7)
+/// ```gherkin
+/// @driving_port @real-io @adr-087-6 @c-oos-3 @kpi-oos-4 @s-oos-5 @contract-shape:bounded-change
+/// Scenario: Re-checking authority looks at a repo once, however many claims are about it
+///   Given acme-tools/anvil's authority file lists Rachel's identity
+///   And Rachel published two claims about acme-tools/anvil, and Jeff pulled both
+///   When Jeff re-checks authority
+///   Then both her anvil claims read "repo-listed"
+///   And GitHub was asked once for anvil and once for its authority file
+/// ```
+#[test]
+fn rechecking_authority_looks_at_a_repo_once_however_many_claims_are_about_it() {
+    let mut world = authority_world();
+    the_repo_holds_authority_file(&world, ANVIL, listing(&[RACHEL_DID]));
+    let anvil = Subject::Repo(ANVIL);
+    given_rachel_published(
+        &mut world,
+        vec![
+            peer_claim_about(anvil),
+            PeerClaimSpec {
+                confidence: 0.9,
+                ..peer_claim_about(anvil)
+            },
+        ],
+    );
+
+    let verified = when_jeff_verifies_authority(&world, &[], Some(CHECK_PLUS_2_DAYS));
+
+    assert_eq!(
+        verified.status, 0,
+        "{}\n{}",
+        verified.stdout, verified.stderr
+    );
+    assert_labelled(&verified, RACHEL_DID, anvil, Authority::RepoListed);
+    assert_eq!(
+        world.github.repo_facts_reads_of(&ANVIL.full()),
+        1,
+        "one look at anvil for both claims"
+    );
+    assert_eq!(
+        world.github.authority_file_reads_of(&ANVIL.full()),
+        1,
+        "one read of anvil's authority file for both claims"
+    );
+}
+
 /// RA-5 (table over how GitHub fails; chained on RA-4's Given)
 /// ```gherkin
 /// @driving_port @real-io @infrastructure-failure @security @c7a @adr-087-4 @s-oos-5 @contract-shape:unbounded-preservation
@@ -1050,6 +1096,93 @@ fn jeffs_identity_link_checks_carry_over_when_his_store_gains_owner_only_signing
             "[{now}] guardrail: v8 recorded once"
         );
     }
+}
+
+/// RA-12c (table over which record the store can no longer keep; U-OOS-D6)
+/// ```gherkin
+/// @driving_port @real-io @infrastructure-failure @c4a @adr-085-7 @adr-087-5 @s-oos-6 @contract-shape:unbounded-preservation
+/// Scenario Outline: A store that can no longer keep <records> refuses to start and says which
+///   Given Jeff linked "jeffbailey"
+///   And his store can no longer keep <records>
+///   When Jeff lists his linked identities
+///   Then openlore refuses to start, naming <records> as what it cannot keep
+///   And nothing is listed
+///   Examples:
+///     | records                     |
+///     | identity-link checks        |
+///     | repo authority checks       |
+///     | imported candidates         |
+/// ```
+#[test]
+fn a_store_that_can_no_longer_keep_its_records_refuses_to_start_and_says_which() {
+    // (row, the records the store keeps, the reason it refuses with)
+    let rows: [(&str, &str, &str); 3] = [
+        (
+            "identity-link checks",
+            "identity_link_checks",
+            "StorageIdentityLinkCheckHistoryUnreliable",
+        ),
+        (
+            "repo authority checks",
+            "repo_authority_checks",
+            "StorageRepoAuthorityCheckHistoryUnreliable",
+        ),
+        (
+            "imported candidates",
+            "imported_candidates",
+            "StorageImportedCandidatesUnreliable",
+        ),
+    ];
+    for (row, records, reason) in rows {
+        let world = authority_world();
+        given_jeff_linked_his_account(&world);
+        his_store_can_no_longer_keep(&world, records);
+
+        let listed = when_i_list(&world, Some(CHECK_PLUS_2_DAYS));
+
+        assert_eq!(
+            listed.status, 2,
+            "[{row}] openlore refuses to start;\n{}\n{}",
+            listed.stdout, listed.stderr
+        );
+        let refused = startup_refusal(&listed)
+            .unwrap_or_else(|| panic!("[{row}] a startup refusal is reported;\n{}", listed.stderr));
+        assert_eq!(
+            (refused["adapter"].as_str(), refused["reason"].as_str()),
+            (Some(records), Some(reason)),
+            "[{row}] the refusal names what the store cannot keep;\n{}",
+            listed.stderr
+        );
+        assert!(
+            listed
+                .stderr
+                .contains(&format!("refusing to start — {records}")),
+            "[{row}] Jeff is told which records failed;\n{}",
+            listed.stderr
+        );
+        assert!(
+            listed.stdout.trim().is_empty(),
+            "[{row}] nothing is listed;\n{}",
+            listed.stdout
+        );
+    }
+}
+
+/// GIVEN: the records `table` keeps are gone from Jeff's store (it can no
+/// longer keep them), everything else intact.
+fn his_store_can_no_longer_keep(world: &LinkWorld, table: &str) {
+    duckdb::Connection::open(world.env.duckdb_path())
+        .and_then(|conn| conn.execute_batch(&format!("DROP TABLE {table}")))
+        .unwrap_or_else(|e| panic!("break {table}: {e}"));
+}
+
+/// The structured startup refusal (`health.startup.refused`) on stderr, if any.
+fn startup_refusal(outcome: &CliOutcome) -> Option<serde_json::Value> {
+    outcome
+        .stderr
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "health.startup.refused")
 }
 
 /// Fixture regenerator for RA-12b — NOT a scenario. Writes

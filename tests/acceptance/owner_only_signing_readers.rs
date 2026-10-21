@@ -106,59 +106,88 @@ fn every_claim_about_a_repo_is_shown_with_whose_word_it_is() {
 // Weight (ADR-086 §8, KPI-OOS-2)
 // =============================================================================
 
-/// RD-2 (chained on RD-1)
+/// RD-2 (chained on RD-1; table over how the left-out claims split, U-OOS-D24)
 /// ```gherkin
 /// @driving_port @real-io @kpi-oos-2 @c-oos-6 @oos-d9 @adr-022 @s-oos-7 @contract-shape:unbounded-preservation
-/// Scenario: The weighted view counts only attested claims and says what it left out
+/// Scenario Outline: The weighted view counts only attested claims and says what it left out
 ///   Given the store of RD-1
+///   And <more claims>
 ///   When Jeff asks for the weighted view of memory-safety, explaining tidepool's weight
 ///   Then tidepool and anvil are weighted, and kelp is not
 ///   And tidepool's weight is built from Jeff's claim alone
-///   And he is told "2 claims not counted: 1 third-party, 1 authority not checked" with the command to re-check
+///   And he is told "<left out>" with the command to re-check
+///   Examples:
+///     | more claims                                            | left out                                                     |
+///     | nothing more                                           | 2 claims not counted: 1 third-party, 1 authority not checked |
+///     | Rachel published a second claim about tidepool         | 3 claims not counted: 2 third-party, 1 authority not checked |
 /// ```
 #[test]
 fn the_weighted_view_counts_only_attested_claims_and_says_what_it_left_out() {
-    let world = labelled_store();
+    let second_tidepool_claim = PeerClaimSpec {
+        confidence: 0.9,
+        ..peer_claim_about(Subject::Repo(TIDEPOOL))
+    };
+    let rows: [(&str, Vec<PeerClaimSpec>, &str); 2] = [
+        (
+            "nothing more",
+            vec![],
+            "2 claims not counted: 1 third-party, 1 authority not checked",
+        ),
+        (
+            "second tidepool claim",
+            vec![second_tidepool_claim],
+            "3 claims not counted: 2 third-party, 1 authority not checked",
+        ),
+    ];
     let tidepool = TIDEPOOL.subject();
+    for (row, more_claims, left_out) in rows {
+        let mut world = labelled_store();
+        if !more_claims.is_empty() {
+            given_rachel_published(&mut world, more_claims);
+        }
 
-    let weighted = when_jeff_reads_philosophy(
-        &world,
-        MEMORY_SAFETY,
-        &["--weighted", "--explain", &tidepool],
-        Some(CHECK_PLUS_2_DAYS),
-    );
+        let weighted = when_jeff_reads_philosophy(
+            &world,
+            MEMORY_SAFETY,
+            &["--weighted", "--explain", &tidepool],
+            Some(CHECK_PLUS_2_DAYS),
+        );
 
-    assert_eq!(
-        weighted.status, 0,
-        "{}\n{}",
-        weighted.stdout, weighted.stderr
-    );
-    assert!(!weighted_rows_about(&weighted.stdout, Subject::Repo(TIDEPOOL)).is_empty());
-    assert!(!weighted_rows_about(&weighted.stdout, Subject::Repo(ANVIL)).is_empty());
-    assert!(
-        weighted_rows_about(&weighted.stdout, Subject::Repo(KELP)).is_empty(),
-        "kelp is not weighted;\n{}",
-        weighted.stdout
-    );
-    assert!(
-        weighted.stdout.contains(&format!("Contribution: {MY_DID}"))
-            && !weighted
-                .stdout
-                .contains(&format!("Contribution: {RACHEL_DID}")),
-        "tidepool's weight is Jeff's claim alone (the --explain breakdown);\n{}",
-        weighted.stdout
-    );
-    for phrase in [
-        "2 claims not counted",
-        "1 third-party",
-        "1 authority not checked",
-        "openlore authority verify",
-    ] {
+        assert_eq!(
+            weighted.status, 0,
+            "[{row}] {}\n{}",
+            weighted.stdout, weighted.stderr
+        );
         assert!(
-            weighted.stdout.contains(phrase),
-            "the footer says `{phrase}`;\n{}",
+            !weighted_rows_about(&weighted.stdout, Subject::Repo(TIDEPOOL)).is_empty(),
+            "[{row}] tidepool is weighted;\n{}",
             weighted.stdout
         );
+        assert!(
+            !weighted_rows_about(&weighted.stdout, Subject::Repo(ANVIL)).is_empty(),
+            "[{row}] anvil is weighted;\n{}",
+            weighted.stdout
+        );
+        assert!(
+            weighted_rows_about(&weighted.stdout, Subject::Repo(KELP)).is_empty(),
+            "[{row}] kelp is not weighted;\n{}",
+            weighted.stdout
+        );
+        assert!(
+            weighted.stdout.contains(&format!("Contribution: {MY_DID}"))
+                && !weighted
+                    .stdout
+                    .contains(&format!("Contribution: {RACHEL_DID}")),
+            "[{row}] tidepool's weight is Jeff's claim alone (the --explain breakdown);\n{}",
+            weighted.stdout
+        );
+        for phrase in [left_out, "openlore authority verify"] {
+            assert!(
+                weighted.stdout.contains(phrase),
+                "[{row}] the footer says `{phrase}`;\n{}",
+                weighted.stdout
+            );
+        }
     }
 }
 
@@ -238,18 +267,20 @@ fn jeff_can_see_the_claims_left_out_per_author_without_changing_the_weight() {
 ///     | a link from her identity to her GitHub account                           |
 ///     | a claim about anvil, which its authority file does not list her for     |
 ///     | a withdrawal of Jeff's claim (only its author may withdraw it)           |
+///     | a dispute of Jeff's claim, once anvil's authority file lists her too     |
 /// ```
 #[test]
 fn nothing_but_an_attested_claim_moves_the_weight() {
     use claim_domain::ReferenceType;
     let anvil = Subject::Repo(ANVIL);
-    let rows: [&str; 6] = [
+    let rows: [&str; 7] = [
         "dispute",
         "spoofed dispute",
         "withdrawn",
         "link",
         "unattested",
         "foreign withdrawal",
+        "listed dispute",
     ];
     for row in rows {
         let mut world = authority_world();
@@ -295,6 +326,15 @@ fn nothing_but_an_attested_claim_moves_the_weight() {
             }
             "link" => {
                 given_rachel_published(&mut world, vec![link_spec(RACHEL_DID, RACHEL_GH)]);
+            }
+            // U-OOS-D18: her dispute would read "repo-listed" if it were taken
+            // for an assertion, so only its dispute marking keeps it unweighted.
+            "listed dispute" => {
+                the_repo_holds_authority_file(&world, ANVIL, listing(&[MY_DID, RACHEL_DID]));
+                given_rachel_published(
+                    &mut world,
+                    vec![rachels_claim.marking(ReferenceType::Counters, &jeffs)],
+                );
             }
             _ => {
                 given_rachel_published(&mut world, vec![rachels_claim]);
