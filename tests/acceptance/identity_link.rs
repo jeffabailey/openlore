@@ -750,9 +750,10 @@ fn opening_a_store_made_before_identity_links_keeps_everything_already_in_it() {
         pre_v7_golden_claims(),
         "prior claims read as before"
     );
-    // Later additive migrations follow v7, each once (v8: owner-only-signing).
+    // Later additive migrations follow v7, each once (v8, v9:
+    // owner-only-signing).
     let mut expected_versions = versions_before.clone();
-    expected_versions.extend([7, 8]);
+    expected_versions.extend([7, 8, 9]);
     assert_eq!(
         schema_versions(&world.env),
         expected_versions,

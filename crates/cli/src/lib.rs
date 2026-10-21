@@ -90,6 +90,10 @@ pub enum Command {
     /// ADR-086/087).
     #[command(subcommand)]
     Authority(AuthorityCommand),
+    /// Candidates kept from imports (owner-only-signing slice 5): review
+    /// them offline. Never signed, published or weighed.
+    #[command(subcommand)]
+    Candidates(CandidatesCommand),
     /// Search the NETWORK index — slice-05 (ADR-027). A NEW top-level verb
     /// (WD-113): `graph query` stays unambiguously LOCAL; `search` is the only
     /// NETWORK verb. Queries the self-hosted indexer over HTTP/XRPC along one
@@ -401,6 +405,18 @@ pub enum AuthorityCommand {
         /// Re-check only your own claims.
         #[arg(long)]
         mine: bool,
+    },
+}
+
+/// Imported-candidate verbs (owner-only-signing slice 5, OOS-D12 B).
+#[derive(Debug, Subcommand)]
+pub enum CandidatesCommand {
+    /// List the candidates your imports kept locally (offline; GitHub is not
+    /// asked). Sign one by importing again with `--sign`.
+    List {
+        /// Show only the candidates about this repo (`github:<owner>/<repo>`).
+        #[arg(long)]
+        subject: Option<String>,
     },
 }
 
@@ -900,6 +916,10 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
             }
         }
+        Command::Candidates(CandidatesCommand::List { subject }) => print_verb_stdout(
+            "candidates list",
+            verbs::candidates::run(wiring.imported_candidates.as_ref(), subject.as_deref()),
+        ),
         Command::Identity(IdentityCommand::Forget { did }) => print_verb_stdout(
             "identity forget",
             verbs::identity_forget::run(wiring.identity_link_check_purge.as_ref(), &did),

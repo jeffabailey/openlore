@@ -43,7 +43,8 @@ use anyhow::{anyhow, Result};
 use claim_domain::bare_did;
 use claim_domain::identity_link::{check_on_profile, RecheckScope};
 use ports::{
-    CandidateClaim, GithubError, LinkFilter, RepoAuthorityCheck, RepoSubjectKey, TargetKind,
+    CandidateClaim, CandidateImport, GithubError, ImportedCandidate, LinkFilter,
+    RepoAuthorityCheck, RepoSubjectKey, TargetKind,
 };
 use scraper_domain::{
     contributor_count_for, derive_candidates, load_mapping, new_inferred_candidate_count,
@@ -256,6 +257,9 @@ fn scrape_repo(
     let inference_before = read_inference_report(wiring, &InferenceFilter::default())?;
     // (3)-(4) Harvest, record the top-N human contributors, derive.
     let scraped = scrape_repo_into_store(wiring, runtime, target)?;
+    // (4a) Keep what this import derived, locally (OOS-D12 B, C-OOS-7):
+    // never signed, published or weighed; `candidates list` reads it offline.
+    keep_imported_candidates(wiring, &scraped.candidates)?;
     out.push_str(&format!(
         "Harvesting public signals ... {} signal{}\n",
         scraped.signal_count,
@@ -326,6 +330,22 @@ fn scrape_repo(
         exit_code: outcome.exit_code,
         stdout: outcome.stdout,
     })
+}
+
+/// Keep every candidate this import derived as one import, stamped now. An
+/// import that derived nothing keeps nothing.
+fn keep_imported_candidates(wiring: &Wiring, candidates: &[CandidateClaim]) -> Result<()> {
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let import = CandidateImport {
+        imported_at: wiring.clock.now_utc(),
+        candidates: candidates.iter().map(ImportedCandidate::from).collect(),
+    };
+    wiring
+        .imported_candidate_writes
+        .record_import(&import)
+        .map_err(|e| anyhow!("keeping the imported candidates: {e}"))
 }
 
 /// What scraping one repo produced, before any rendering or signing.

@@ -10,7 +10,10 @@
 //! the real tree passes. Step 02-09 deleted the transitional T1 entry and its
 //! rule. Step 02-11: the same rule holds `publish_signed_claim` to a
 //! `&SigningPermit` parameter. Step 03-05 (C-OOS-8): the indexer reaching
-//! `adapter-github` is a capability-boundary violation.
+//! `adapter-github` is a capability-boundary violation. Step 05-01 (C-OOS-7):
+//! `imported_candidates_not_in_scoring_or_inference` — scoring reading the
+//! kept candidates, inference naming their port, rewriting them, or
+//! `candidates list` holding GitHub is a finding; the real tree passes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -18,7 +21,8 @@ use std::path::{Path, PathBuf};
 use xtask::check_arch::{
     check_indexer_capability_boundary, classify_authority_evidence,
     classify_repo_authority_checks_literal, classify_sign_only_with_permit,
-    scan_authority_evidence_only_from_adapters, scan_repo_authority_checks_insert_only,
+    scan_authority_evidence_only_from_adapters,
+    scan_imported_candidates_not_in_scoring_or_inference, scan_repo_authority_checks_insert_only,
     scan_sign_only_with_permit,
 };
 
@@ -312,4 +316,84 @@ fn the_indexer_reaching_github_directly_or_transitively_is_a_violation() {
             "openlore-indexer -> {via:?} -> adapter-github is a violation (C-OOS-8): {findings:?}"
         );
     }
+}
+
+fn write_source(root: &Path, rel_path: &str, source: &str) {
+    let path = root.join(rel_path);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(path, source).expect("write");
+}
+
+#[test]
+fn scoring_or_inference_reading_imported_candidates_is_a_finding_and_the_real_tree_passes() {
+    let violating = tempfile::tempdir().expect("tempdir");
+    let tree = violating.path();
+    // Synthetic violation: scoring reads the kept candidates.
+    write_source(
+        tree,
+        "crates/scoring/src/feed.rs",
+        "const FEED: &str = \"SELECT object FROM imported_candidates\";\n",
+    );
+    // Inference holding the read port.
+    write_source(
+        tree,
+        "crates/cli/src/verbs/infer_people.rs",
+        "fn people(kept: &dyn ImportedCandidateReadPort) {}\n",
+    );
+    // The adapter may read and insert, never rewrite.
+    write_source(
+        tree,
+        "crates/adapter-duckdb/src/imported_candidates.rs",
+        "const LIST: &str = \"SELECT object FROM imported_candidates\";\n\
+         const KEEP: &str = \"INSERT INTO imported_candidates (object) VALUES (?)\";\n\
+         const FORGET: &str = \"DELETE FROM imported_candidates WHERE import_id = ?\";\n",
+    );
+    // A probe label naming the table is no SQL.
+    write_source(
+        tree,
+        "crates/cli/src/wiring.rs",
+        "fn gauntlet() { check_probe(\"imported_candidates\", probe()); }\n",
+    );
+    // The offline list asking GitHub.
+    write_source(
+        tree,
+        "crates/cli/src/verbs/candidates.rs",
+        "fn run(github: &dyn GithubPort) {}\n",
+    );
+
+    let findings = scan_imported_candidates_not_in_scoring_or_inference(tree).expect("scan");
+    let reported = |file: &str, needle: &str| {
+        findings
+            .iter()
+            .any(|f| f.contains(file) && f.contains(needle))
+    };
+    assert!(
+        reported(
+            "scoring/src/feed.rs",
+            "SELECT object FROM imported_candidates"
+        ),
+        "{findings:#?}"
+    );
+    assert!(
+        reported("infer_people.rs", "ImportedCandidateReadPort"),
+        "{findings:#?}"
+    );
+    assert!(
+        reported("adapter-duckdb/src/imported_candidates.rs", "DELETE"),
+        "{findings:#?}"
+    );
+    assert!(reported("candidates.rs", "GithubPort"), "{findings:#?}");
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.contains("wiring.rs")
+                || (f.contains("adapter-duckdb") && !f.contains("DELETE"))),
+        "the adapter's reads and inserts and a probe label are allowed: {findings:#?}"
+    );
+
+    assert_eq!(
+        scan_imported_candidates_not_in_scoring_or_inference(&root()).expect("scan real tree"),
+        Vec::<String>::new(),
+        "imported candidates never reach scoring or inference in the real tree"
+    );
 }

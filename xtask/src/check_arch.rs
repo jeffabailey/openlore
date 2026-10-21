@@ -2012,6 +2012,167 @@ pub fn scan_authority_readers_hold_no_write_handle(
 }
 
 // -----------------------------------------------------------------------------
+// Imported candidates (owner-only-signing slice 5, OOS-D12 B, C-OOS-7)
+// -----------------------------------------------------------------------------
+//
+// * `imported_candidates_not_in_scoring_or_inference`: what imports derived is
+//   a local, insert-only record that never weighs and never feeds inference.
+//   (a) No production SQL outside the imported-candidate adapter and its
+//   migration reads or writes `imported_candidates`; (b) no production SQL
+//   anywhere updates, deletes or truncates it; (c) the scoring and inference
+//   sources name none of its ports, types, wiring slots or the table; (d)
+//   `candidates list` holds the read port only — no write port, store, signer
+//   or GitHub.
+
+/// The kept-candidates table.
+const IMPORTED_CANDIDATES_TABLE: &str = "imported_candidates";
+
+/// The only sources whose SQL may name the table.
+const IMPORTED_CANDIDATES_HOMES: &[&str] = &[
+    "crates/adapter-duckdb/src/imported_candidates.rs",
+    "crates/adapter-duckdb/src/schema_v9.rs",
+];
+
+/// Words that make a literal SQL (any case).
+const SQL_STATEMENT_KEYWORDS: &[&str] = &[
+    "SELECT", "FROM", "JOIN", "INSERT", "INTO", "UPDATE", "DELETE", "TRUNCATE",
+];
+
+/// The scoring and inference sources (a file or a tree; missing ones skipped).
+const SCORING_AND_INFERENCE_SOURCES: &[&str] = &[
+    "crates/scoring/src",
+    "crates/scraper-domain/src",
+    "crates/cli/src/verbs/infer_people.rs",
+    "crates/cli/src/verbs/graph_query.rs",
+    "crates/adapter-http-viewer/src",
+];
+
+/// What scoring and inference may not name.
+const IMPORTED_CANDIDATE_TOKENS: &[&str] = &[
+    IMPORTED_CANDIDATES_TABLE,
+    "ImportedCandidateReadPort",
+    "ImportedCandidateWritePort",
+    "ImportedCandidate",
+    "KeptCandidate",
+    "CandidateImport",
+    "DuckDbImportedCandidateAdapter",
+    "imported_candidate_adapter",
+    "imported_candidate_writes",
+];
+
+/// The `candidates list` verb and what it may not name.
+const CANDIDATES_LIST_SOURCE: &str = "crates/cli/src/verbs/candidates.rs";
+const CANDIDATES_LIST_FORBIDDEN_TOKENS: &[&str] = &[
+    "ImportedCandidateWritePort",
+    "imported_candidate_writes",
+    "record_import",
+    "StoragePort",
+    "DuckDbStorageAdapter",
+    "IdentityPort",
+    "GithubPort",
+    "Wiring",
+];
+
+fn holds_sql_keyword(literal: &str) -> bool {
+    literal
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .map(str::to_ascii_uppercase)
+        .any(|word| SQL_STATEMENT_KEYWORDS.contains(&word.as_str()))
+}
+
+/// Pure rule over one production SQL literal of `rel_path`: why it breaks
+/// (a) or (b), if it does. A literal naming the table without SQL (a probe
+/// label) is no statement.
+pub fn classify_imported_candidates_literal(rel_path: &str, literal: &str) -> Option<String> {
+    if !contains_word(literal, IMPORTED_CANDIDATES_TABLE) {
+        return None;
+    }
+    if holds_rewriting_keyword(literal) {
+        return Some(format!(
+            "SQL updates, deletes or truncates `imported_candidates`, which is insert-only: {}",
+            excerpt_of(literal)
+        ));
+    }
+    let at_home = IMPORTED_CANDIDATES_HOMES.contains(&rel_path);
+    (!at_home && holds_sql_keyword(literal)).then(|| {
+        format!(
+            "SQL names `imported_candidates` outside its adapter — scoring and inference never \
+             read imported candidates: {}",
+            excerpt_of(literal)
+        )
+    })
+}
+
+fn relative_display(workspace_root: &Path, path: &Path) -> String {
+    path.strip_prefix(workspace_root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+fn sources_at(workspace_root: &Path, rel_path: &str) -> Vec<PathBuf> {
+    let path = workspace_root.join(rel_path);
+    if path.is_file() {
+        vec![path]
+    } else {
+        rust_sources_under(&path)
+    }
+}
+
+/// Effect shell for `imported_candidates_not_in_scoring_or_inference`.
+pub fn scan_imported_candidates_not_in_scoring_or_inference(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<String>> {
+    const RULE: &str = "imported_candidates_not_in_scoring_or_inference, C-OOS-7";
+    let mut findings = Vec::new();
+    for path in rust_sources_under(&workspace_root.join("crates")) {
+        if !path.components().any(|c| c.as_os_str() == "src") {
+            continue;
+        }
+        let rel_path = relative_display(workspace_root, &path);
+        let literals = production_literals(&path)?.literals;
+        findings.extend(
+            literals
+                .iter()
+                .filter_map(|literal| classify_imported_candidates_literal(&rel_path, literal))
+                .map(|finding| format!("{rel_path}: {finding} ({RULE})")),
+        );
+    }
+    for path in SCORING_AND_INFERENCE_SOURCES
+        .iter()
+        .flat_map(|rel_path| sources_at(workspace_root, rel_path))
+    {
+        let rel_path = relative_display(workspace_root, &path);
+        let source = std::fs::read_to_string(&path)?;
+        findings.extend(
+            classify_forbidden_words(&source, IMPORTED_CANDIDATE_TOKENS)
+                .into_iter()
+                .map(|finding| {
+                    format!(
+                        "{rel_path}: {finding} — scoring and inference never read imported \
+                         candidates ({RULE})"
+                    )
+                }),
+        );
+    }
+    let candidates_list = workspace_root.join(CANDIDATES_LIST_SOURCE);
+    if candidates_list.is_file() {
+        let source = std::fs::read_to_string(&candidates_list)?;
+        findings.extend(
+            reader_findings(&source, CANDIDATES_LIST_FORBIDDEN_TOKENS)
+                .into_iter()
+                .map(|finding| {
+                    format!(
+                        "{CANDIDATES_LIST_SOURCE}: {finding} — `candidates list` holds the read \
+                         port only: no write port, store, signer or GitHub ({RULE})"
+                    )
+                }),
+        );
+    }
+    Ok(findings)
+}
+
+// -----------------------------------------------------------------------------
 // Scoring callers (owner-only-signing, ADR-086 §8)
 // -----------------------------------------------------------------------------
 //
@@ -4001,6 +4162,8 @@ pub fn run() -> anyhow::Result<i32> {
     let identity_link_reader_findings =
         scan_identity_link_readers_hold_no_write_handle(&workspace_root)?;
     let authority_reader_findings = scan_authority_readers_hold_no_write_handle(&workspace_root)?;
+    let imported_candidate_findings =
+        scan_imported_candidates_not_in_scoring_or_inference(&workspace_root)?;
     let identity_link_compose_findings =
         scan_identity_link_compose_only_via_proven_link(&workspace_root)?;
     let identity_link_purge_findings =
@@ -4038,6 +4201,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(repo_authority_checks_findings);
     rendered.extend(identity_link_reader_findings);
     rendered.extend(authority_reader_findings);
+    rendered.extend(imported_candidate_findings);
     rendered.extend(identity_link_compose_findings);
     rendered.extend(identity_link_purge_findings);
     rendered.extend(identity_verify_findings);

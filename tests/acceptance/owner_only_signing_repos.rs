@@ -1253,7 +1253,6 @@ fn when_githubs_budget_is_gone_rechecking_says_so_records_nothing_and_never_show
 ///   And GitHub is not asked anything
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing IC-1: pending DELIVER (slice 5)"]
 fn jeff_reviews_what_he_imported_offline_one_repo_at_a_time() {
     let world = authority_world();
     given_jeff_imported(&world, ANVIL, LINKED_AT);
@@ -1289,7 +1288,6 @@ fn jeff_reviews_what_he_imported_offline_one_repo_at_a_time() {
 ///   And his weighted view of dependency-pinning is unchanged
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing IC-2: pending DELIVER (slice 5)"]
 fn importing_a_repo_keeps_its_candidates_locally_and_nowhere_else() {
     let anvil = Subject::Repo(ANVIL);
     let mut world = authority_world();
@@ -1352,7 +1350,6 @@ fn importing_a_repo_keeps_its_candidates_locally_and_nowhere_else() {
 ///   And what he sees about acme-tools/anvil is unchanged
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing IC-3: pending DELIVER (slice 5)"]
 fn with_nothing_imported_the_list_says_so() {
     let world = authority_world();
     let anvil = Subject::Repo(ANVIL);

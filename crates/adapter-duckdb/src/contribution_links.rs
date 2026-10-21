@@ -368,10 +368,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        // v5 applied exactly once; later additive migrations (v6-v8) follow it.
+        // v5 applied exactly once; later additive migrations (v6-v9) follow it.
         assert_eq!(
             (schema_version(&db), v5_rows),
-            (crate::schema_v8::REPO_AUTHORITY_CHECKS_VERSION, 1)
+            (crate::schema_v9::IMPORTED_CANDIDATES_VERSION, 1)
         );
     }
 

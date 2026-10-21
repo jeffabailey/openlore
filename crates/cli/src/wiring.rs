@@ -42,8 +42,9 @@ use claim_domain::authority::{
 use ports::{
     ClockPort, ContributionLinkPort, FeedAuthority, FeedAuthorityReadPort, GithubPort,
     IdentityLinkCheckPurgePort, IdentityLinkCheckReadPort, IdentityLinkCheckWritePort,
-    IdentityPort, IndexQueryPort, InstanceReadPort, LinkCandidateReadPort, LinkLineageReadPort,
-    PdsPort, PeerStoragePort, ProbeOutcome, ProbeRefused, PublishPort, RepoAuthorityCheckReadPort,
+    IdentityPort, ImportedCandidateReadPort, ImportedCandidateWritePort, IndexQueryPort,
+    InstanceReadPort, LinkCandidateReadPort, LinkLineageReadPort, PdsPort, PeerStoragePort,
+    ProbeOutcome, ProbeRefused, PublishPort, RepoAuthorityCheckReadPort,
     RepoAuthorityCheckWritePort, RepoSubjectKey, ScoringFeedRow, StoragePort, StoreReadPort,
 };
 
@@ -86,6 +87,14 @@ pub struct Wiring {
     /// `scrape person`); readers are never handed it (check-arch
     /// `authority_readers_hold_no_write_handle`).
     pub repo_authority_check_writes: Box<dyn RepoAuthorityCheckWritePort>,
+    /// owner-only-signing slice 5 (OOS-D12 B, C-OOS-7): the READ side of the
+    /// candidates imports kept locally, held by `candidates list`. Its live
+    /// probe refuses startup when the store cannot keep an import. Never
+    /// handed to scoring or inference (check-arch
+    /// `imported_candidates_not_in_scoring_or_inference`).
+    pub imported_candidates: Box<dyn ImportedCandidateReadPort>,
+    /// The WRITE side (insert only), used by `scrape github` alone.
+    pub imported_candidate_writes: Box<dyn ImportedCandidateWritePort>,
     /// The stored claims carrying the identity-link predicate — candidates the
     /// pure projection decides on (Q-RM-5). Read-only.
     pub link_candidates: Box<dyn LinkCandidateReadPort>,
@@ -223,6 +232,10 @@ impl Wiring {
             Box::new(storage.repo_authority_check_adapter());
         let repo_authority_check_writes: Box<dyn RepoAuthorityCheckWritePort> =
             Box::new(storage.repo_authority_check_adapter());
+        let imported_candidates: Box<dyn ImportedCandidateReadPort> =
+            Box::new(storage.imported_candidate_adapter());
+        let imported_candidate_writes: Box<dyn ImportedCandidateWritePort> =
+            Box::new(storage.imported_candidate_adapter());
         let link_candidates: Box<dyn LinkCandidateReadPort> =
             Box::new(storage.identity_link_check_adapter());
         let link_lineage: Box<dyn LinkLineageReadPort> = Box::new(storage.link_lineage_adapter());
@@ -249,6 +262,8 @@ impl Wiring {
             identity_link_check_purge,
             repo_authority_checks,
             repo_authority_check_writes,
+            imported_candidates,
+            imported_candidate_writes,
             link_candidates,
             link_lineage,
             store_read,
@@ -275,6 +290,9 @@ impl Wiring {
         // ADR-087 Earned Trust: LIVE two-observations sentinel (rolled back) —
         // a store that cannot keep a repo's observation history refuses startup.
         check_probe("repo_authority_checks", self.repo_authority_checks.probe())?;
+        // OOS-D12 B: LIVE sentinel import (rolled back) — a store that cannot
+        // keep an import's candidates refuses startup.
+        check_probe("imported_candidates", self.imported_candidates.probe())?;
         // Slice-03 peer-storage probe entry. The adapter binding exists
         // (`self.peer_storage`) and the gauntlet has its slot, but the
         // `DuckDbPeerStorageAdapter::probe()` body is still a RED scaffold

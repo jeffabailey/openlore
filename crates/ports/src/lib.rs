@@ -155,6 +155,15 @@ pub use repo_authority_check::{
     RepoAuthorityCheckReadPort, RepoAuthorityCheckWritePort, RepoObservation, RepoSubjectKey,
 };
 
+// owner-only-signing slice 5 (OOS-D12 B, C-OOS-7): the candidates an import
+// derived, kept locally (insert only, never federated, never scored or
+// inferred from), split into read and write ports.
+mod imported_candidate;
+pub use imported_candidate::{
+    CandidateImport, ImportedCandidate, ImportedCandidateError, ImportedCandidateReadPort,
+    ImportedCandidateWritePort, KeptCandidate,
+};
+
 // github-did-identity-link slice 4 (D-VL-3): the one lineage read of active
 // links over those read ports, shared by `identity list`, the person views and
 // the viewer.
