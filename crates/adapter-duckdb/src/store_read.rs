@@ -64,6 +64,18 @@ pub struct DuckDbStoreReadAdapter {
     peer_claims_root: PathBuf,
 }
 
+/// One counter row of the ADR-046 step-A read, before its artifact's reason
+/// is read in step B.
+struct StagedCounter {
+    author_did: String,
+    cid: String,
+    confidence: f64,
+    composed_at: DateTime<Utc>,
+    fetched_from_pds: String,
+    artifact_path: String,
+    source_table: String,
+}
+
 impl DuckDbStoreReadAdapter {
     /// Construct from a shared connection handle (cloned `Arc`) + the storage
     /// root's `peer_claims` directory (for resolving peer artifact paths in the
@@ -818,47 +830,28 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
             })?;
         let row_iter = stmt
             .query_map(duckdb::params![target_cid, target_cid], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, f64>(2)?,
-                    row.get::<_, DateTime<Utc>>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                ))
+                Ok(StagedCounter {
+                    author_did: row.get(0)?,
+                    cid: row.get(1)?,
+                    confidence: row.get(2)?,
+                    composed_at: row.get(3)?,
+                    fetched_from_pds: row.get(4)?,
+                    artifact_path: row.get(5)?,
+                    source_table: row.get(6)?,
+                })
             })
             .map_err(|err| StoreReadError::QueryFailed {
                 detail: format!("query_map query_counter_claims: {err}"),
             })?;
 
-        // Decode step A into intermediate tuples FIRST (releasing the statement
-        // borrow) so step B's per-row artifact reads do not hold the prepared
-        // statement open across the filesystem reads.
-        let mut staged: Vec<(String, String, f64, DateTime<Utc>, String, (String, String))> =
-            Vec::new();
-        for row in row_iter {
-            let (
-                author_did,
-                cid,
-                confidence,
-                composed_at,
-                fetched_from_pds,
-                artifact_path,
-                source_table,
-            ) = row.map_err(|err| StoreReadError::QueryFailed {
+        // Decode step A FIRST (releasing the statement borrow) so step B's
+        // per-row artifact reads do not hold the prepared statement open
+        // across the filesystem reads.
+        let staged = row_iter
+            .collect::<Result<Vec<StagedCounter>, _>>()
+            .map_err(|err| StoreReadError::QueryFailed {
                 detail: format!("row decode query_counter_claims: {err}"),
             })?;
-            let reason = (source_table, artifact_path);
-            staged.push((
-                author_did,
-                cid,
-                confidence,
-                composed_at,
-                fetched_from_pds,
-                reason,
-            ));
-        }
         drop(stmt);
         drop(conn);
 
@@ -870,10 +863,17 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         // `cid`. A blank `author_did` (defensive, bypassing the slice-03 CHECK)
         // projects to `Unknown` so the viewer labels rather than drops it.
         let mut counters = Vec::with_capacity(staged.len());
-        for (author_did, cid, confidence, composed_at, fetched_from_pds, (source_table, path)) in
-            staged
+        for StagedCounter {
+            author_did,
+            cid,
+            confidence,
+            composed_at,
+            fetched_from_pds,
+            artifact_path,
+            source_table,
+        } in staged
         {
-            let reason = self.read_reason_at(&source_table, &cid, &path);
+            let reason = self.read_reason_at(&source_table, &cid, &artifact_path);
             let origin = peer_origin(&author_did, fetched_from_pds);
             counters.push(CounterClaimRow {
                 author_did,
