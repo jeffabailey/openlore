@@ -65,7 +65,6 @@ use support::*;
 ///   And GitHub was asked once for tidepool's authority file
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RA-1: activated in 03-02 — its 'reads owner' Then needs graph query reader labels (U-OOS-D15)"]
 fn jeff_imports_his_own_repo_and_signs_what_it_shows() {
     let world = authority_world();
     given_jeff_linked_his_account(&world);

@@ -1,6 +1,22 @@
 //! Single signed-claim block rendering (verbatim fields + evidence + confidence).
 
 use super::*;
+use claim_domain::authority::Authority;
+
+/// Who each `github:` assertion's author is to its subject, to this reader,
+/// by claim cid (ADR-086 §8). A cid with no entry needs no authority — a
+/// dispute, a withdrawal, an identity link or a claim not about GitHub — and
+/// carries no label.
+pub type AuthorityByCid = std::collections::BTreeMap<String, Authority>;
+
+/// The `whose word:` line of the claim `cid` — the one reader label
+/// ([`Authority::label`]) — or nothing when the claim needs no authority. A
+/// label never hides a claim: it only sits beside it.
+pub(crate) fn render_whose_word_line(cid: &str, labels: &AuthorityByCid) -> String {
+    labels.get(cid).map_or_else(String::new, |authority| {
+        format!("whose word:  {}\n", authority.label())
+    })
+}
 
 /// Compute the `is_retracted` flag for one CID given the back-reference
 /// list `StoragePort::query_referencing` returns. Pure helper kept here

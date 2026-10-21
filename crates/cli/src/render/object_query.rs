@@ -105,6 +105,18 @@ pub fn render_object_query_grouped_by_subject(
     claims: &[AttributedClaim],
     suggestion: Option<&str>,
 ) -> String {
+    render_labelled_object_query(object, claims, suggestion, &AuthorityByCid::new())
+}
+
+/// [`render_object_query_grouped_by_subject`] with each `github:` assertion
+/// labelled by whose word it is (`labels`, ADR-086 §8). Every claim is
+/// listed, labelled or not: a label never hides one.
+pub fn render_labelled_object_query(
+    object: &str,
+    claims: &[AttributedClaim],
+    suggestion: Option<&str>,
+    labels: &AuthorityByCid,
+) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "Claims embodying {object} (grouped by subject):\n\n"
@@ -121,7 +133,7 @@ pub fn render_object_query_grouped_by_subject(
     for (subject, subject_claims) in &group_by_subject(claims) {
         out.push_str(&format!("subject: {subject}\n"));
         for claim in subject_claims {
-            out.push_str(&render_one_attributed_claim(claim));
+            out.push_str(&render_one_attributed_claim(claim, labels));
         }
         out.push('\n');
     }
@@ -157,7 +169,10 @@ pub(crate) fn group_by_subject<'a>(
 /// (with its relationship annotation), the numeric confidence + display-only
 /// bucket, and the cid. Every value is independently attributable (anti-merging
 /// behavioral layer). Pure helper.
-pub(crate) fn render_one_attributed_claim(claim: &AttributedClaim) -> String {
+pub(crate) fn render_one_attributed_claim(
+    claim: &AttributedClaim,
+    labels: &AuthorityByCid,
+) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "  author_did: {} {}\n",
@@ -170,6 +185,9 @@ pub(crate) fn render_one_attributed_claim(claim: &AttributedClaim) -> String {
         confidence_bucket_label(claim.confidence)
     ));
     out.push_str(&format!("    cid:        {}\n", claim.cid.0));
+    for line in render_whose_word_line(&claim.cid.0, labels).lines() {
+        out.push_str(&format!("    {line}\n"));
+    }
     out
 }
 

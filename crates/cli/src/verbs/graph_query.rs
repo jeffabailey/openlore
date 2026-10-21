@@ -60,8 +60,8 @@ use ports::FeedAuthorityReadPort;
 
 use crate::orientation::{self, OrientationMilestone};
 use crate::render::{
-    is_retracted_by, render_annotated_graph_query_result, render_federated_query_result,
-    AnnotatedClaim,
+    is_retracted_by, render_annotated_graph_query_result, render_labelled_federated_query_result,
+    AnnotatedClaim, AuthorityByCid,
 };
 use crate::wiring::Wiring;
 
@@ -246,8 +246,14 @@ fn run_federated(wiring: &Wiring, subject: &str) -> Result<GraphQueryOutcome> {
     // FQ-6 / WD-39: prepend the one-time orientation (empty after the first
     // invocation) ahead of the rendered result. Gating + the non-fatal state
     // write live in the helper; the federated read itself is unaffected.
+    let labels = labels_here(
+        wiring,
+        &ports::ScoringFilter::BySubject {
+            subject: subject.to_string(),
+        },
+    )?;
     let orientation_block = maybe_emit_first_federated_query_orientation(wiring);
-    let rendered = render_federated_query_result(&rows);
+    let rendered = render_labelled_federated_query_result(&rows, &labels);
     let stdout = format!("{orientation_block}{rendered}");
 
     Ok(GraphQueryOutcome {
@@ -383,10 +389,17 @@ fn run_object_dimension(wiring: &Wiring, object: &str) -> Result<GraphQueryOutco
         None
     };
 
-    let stdout = crate::render::render_object_query_grouped_by_subject(
+    let labels = labels_here(
+        wiring,
+        &ports::ScoringFilter::ByObject {
+            object: object.to_string(),
+        },
+    )?;
+    let stdout = crate::render::render_labelled_object_query(
         object,
         &claims,
         suggestion.as_deref(),
+        &labels,
     );
 
     Ok(GraphQueryOutcome {
@@ -682,6 +695,30 @@ fn annotate_claims(
         });
     }
     Ok(annotated)
+}
+
+/// Who each `github:` assertion in `filter`'s feed is the word of, to this
+/// reader: the same judge the weighted view uses ([`score_attested_here`]),
+/// over the latest local checks (check READ ports only). Claims that need no
+/// authority (disputes, withdrawals, identity links, non-GitHub subjects)
+/// carry no entry.
+fn labels_here(wiring: &Wiring, filter: &ports::ScoringFilter) -> Result<AuthorityByCid> {
+    let feed = wiring
+        .storage
+        .query_attributed_for_scoring(filter)
+        .context("reading the claims to label")?;
+    let authority = wiring
+        .feed_authority_reads()
+        .feed_authority(&feed)
+        .map_err(|message| anyhow::anyhow!("reading this reader's authority checks: {message}"))?;
+    Ok(feed
+        .iter()
+        .filter_map(|row| {
+            authority
+                .of(row)
+                .map(|judged| (row.claim.cid.0.clone(), judged))
+        })
+        .collect())
 }
 
 /// The weighted view of `feed` for this reader: [`scoring::score_attested`]

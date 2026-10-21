@@ -75,7 +75,6 @@ fn labelled_store() -> LinkWorld {
 ///   And no claim is hidden
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RD-1: pending DELIVER"]
 fn every_claim_about_a_repo_is_shown_with_whose_word_it_is() {
     let world = labelled_store();
 
@@ -336,7 +335,6 @@ fn nothing_but_an_attested_claim_moves_the_weight() {
 ///   And it carries no authority label
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RD-5: pending DELIVER (Given needs `authority verify`; re-checked for activation in review iteration 1)"]
 fn a_claim_marked_as_a_dispute_is_shown_as_a_dispute() {
     let anvil = Subject::Repo(ANVIL);
     let mut world = authority_world();
@@ -495,7 +493,6 @@ fn network_search_labels_every_github_claim_using_jeffs_own_check_when_he_has_on
 ///   Then both claims are still shown, and both read "third-party"
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RD-8: pending DELIVER"]
 fn claims_made_before_owner_only_signing_are_judged_by_the_same_rule() {
     let world = frozen_store_world();
     given_jeff_verified_authority(&world, CHECK_PLUS_2_DAYS);
@@ -566,7 +563,6 @@ fn inferred_people_show_the_authority_of_each_repo_claim_they_rest_on() {
 ///   And nothing was withdrawn from his published repo
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RD-10: pending DELIVER"]
 fn after_jeff_renames_his_account_his_claim_about_the_old_login_reads_third_party() {
     let world = authority_world();
     given_jeff_linked_his_account(&world);

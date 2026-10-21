@@ -22,6 +22,16 @@ use super::*;
 ///   content-frozen [`NO_MERGE_FOOTER_LITERAL`] (ADR-013). No row is ever
 ///   labeled "merged" / "consensus" / "aggregate".
 pub fn render_federated_query_result(rows: &[FederatedRow]) -> String {
+    render_labelled_federated_query_result(rows, &AuthorityByCid::new())
+}
+
+/// [`render_federated_query_result`] with each `github:` assertion labelled
+/// by whose word it is (`labels`, ADR-086 §8), on a `whose word:` line
+/// ahead of any dispute annotation; a dispute carries none.
+pub fn render_labelled_federated_query_result(
+    rows: &[FederatedRow],
+    labels: &AuthorityByCid,
+) -> String {
     let groups = group_by_author(rows);
 
     // FQ-5 (US-FED-003 AC #8): the bidirectional counter relationships over
@@ -42,7 +52,9 @@ pub fn render_federated_query_result(rows: &[FederatedRow]) -> String {
             if idx > 0 {
                 out.push('\n');
             }
-            out.push_str(&render_one_federated_row(author_did, row, &counters));
+            out.push_str(&render_one_federated_row(
+                author_did, row, &counters, labels,
+            ));
             if retracted.contains(row.claim.cid().0.as_str()) {
                 out.push_str("  retracted by author\n");
             }
@@ -243,10 +255,15 @@ pub(crate) fn render_one_federated_row(
     author_did: &str,
     row: &FederatedRow,
     counters: &[CounterRelationship],
+    labels: &AuthorityByCid,
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!("  author_did:  {author_did}\n"));
-    for line in render_claim_record(&row.claim).lines() {
+    let whose_word = render_whose_word_line(&row.claim.cid().0, labels);
+    for line in render_claim_record(&row.claim)
+        .lines()
+        .chain(whose_word.lines())
+    {
         out.push_str(&format!("  {line}\n"));
     }
     for annotation in counter_annotations_for(&row.claim.cid().0, counters) {
