@@ -1349,9 +1349,33 @@ fn table_exists(conn: &duckdb::Connection, table: &str) -> bool {
     .unwrap_or_else(|e| panic!("look up table {table}: {e}"))
 }
 
+/// Has the store recorded schema `version` (its migration ran)?
+fn store_records_version(conn: &duckdb::Connection, version: i64) -> bool {
+    table_exists(conn, "schema_version")
+        && conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM schema_version WHERE version = ?",
+                duckdb::params![version],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|e| panic!("read schema_version {version}: {e}"))
+}
+
+/// A guardrail table is absent only in a store that predates the migration
+/// creating it; once the store records that version the table must exist,
+/// so a "records nothing" guardrail never passes over a missing table.
+fn table_present_once_migrated(conn: &duckdb::Connection, table: &str, version: i64) -> bool {
+    let present = table_exists(conn, table);
+    assert!(
+        present || !store_records_version(conn, version),
+        "guardrail: the store records schema v{version} but its `{table}` table is missing"
+    );
+    present
+}
+
 /// GUARDRAIL read: every recorded repo observation, sorted (empty only when
-/// the store or the v8 table does not exist yet; any other read failure
-/// panics).
+/// there is no store yet, or the store predates the v8 table; a v8 store
+/// without the table, or any other read failure, panics).
 pub fn repo_checks(env: &TestEnv) -> Vec<RepoCheckRow> {
     let path = env.duckdb_path();
     if !path.exists() {
@@ -1359,7 +1383,7 @@ pub fn repo_checks(env: &TestEnv) -> Vec<RepoCheckRow> {
     }
     let conn = duckdb::Connection::open(&path)
         .unwrap_or_else(|e| panic!("open DuckDB for repo authority checks: {e}"));
-    if !table_exists(&conn, "repo_authority_checks") {
+    if !table_present_once_migrated(&conn, "repo_authority_checks", 8) {
         return Vec::new();
     }
     let mut stmt = conn
@@ -1391,15 +1415,16 @@ pub fn repo_checks(env: &TestEnv) -> Vec<RepoCheckRow> {
     rows
 }
 
-/// GUARDRAIL read: number of imported candidates kept locally (0 before
-/// slice 5's table exists).
+/// GUARDRAIL read: number of imported candidates kept locally (0 when there
+/// is no store yet, or the store predates the v9 table; a v9 store without
+/// the table panics).
 pub fn imported_candidate_count(env: &TestEnv) -> i64 {
     let path = env.duckdb_path();
     if !path.exists() {
         return 0;
     }
     let conn = duckdb::Connection::open(&path).expect("open DuckDB");
-    if !table_exists(&conn, "imported_candidates") {
+    if !table_present_once_migrated(&conn, "imported_candidates", 9) {
         return 0;
     }
     conn.query_row("SELECT COUNT(*) FROM imported_candidates", [], |row| {

@@ -457,6 +457,11 @@ fn a_claim_marked_as_a_dispute_is_shown_as_a_dispute() {
         read.stdout
     );
     let rachels = rows_about(&read.stdout, RACHEL_DID, &anvil.uri()).join("\n");
+    assert!(
+        !rachels.is_empty(),
+        "Rachel's dispute is shown;\n{}",
+        read.stdout
+    );
     for label in [
         Authority::Owner,
         Authority::RepoListed,

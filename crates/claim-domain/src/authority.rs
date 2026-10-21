@@ -1238,14 +1238,23 @@ mod gate_from_checks_tests {
             let never_checked = links
                 .iter()
                 .any(|l| current_check(l).is_none() && same(&l.linked_login));
+            // The owner the signer stands on: the most recently checked
+            // (the first such link, on a tie).
+            let latest_owner = owners
+                .iter()
+                .map(|(_, at)| *at)
+                .max()
+                .and_then(|latest| owners.iter().find(|(_, at)| *at == latest))
+                .map(|(id, _)| *id);
             match may_sign_from_checks(JEFF, &person(&subject), &links, now()) {
                 Ok(permit) => {
-                    prop_assert!(
-                        matches!(permit.basis(), PermitBasis::Owner(id) if fresh.contains(&id)),
-                        "{links:?}"
+                    prop_assert!(!fresh.is_empty(), "{links:?}");
+                    let expected_owner = latest_owner.expect("a permit rests on an owner");
+                    prop_assert_eq!(
+                        (permit.signer(), permit.subject(), permit.basis()),
+                        (JEFF, subject.as_str(), PermitBasis::Owner(expected_owner)),
+                        "{:?}", links
                     );
-                    prop_assert_eq!(permit.subject(), subject.as_str());
-                    prop_assert_eq!(permit.signer(), JEFF);
                 }
                 Err(refusal) => {
                     prop_assert!(fresh.is_empty(), "{links:?}");
@@ -1406,6 +1415,20 @@ mod gate_from_checks_tests {
         }
     }
 
+    // bypass: of two owner links (a contested account, UC-2), the signer
+    // stands on the most recently checked — pinned by example as well as by
+    // the property, which reaches this shape only rarely.
+    #[test]
+    fn the_permit_rests_on_the_most_recently_checked_owner_link() {
+        let verified = Some(("jeffbailey", CheckVerdict::Verified));
+        let links = [
+            checked(1, "jeffbailey", verified, now() - Duration::days(3)),
+            checked(2, "jeffbailey", verified, now() - Duration::days(1)),
+        ];
+        let permit = may_sign_from_checks(JEFF, &person("github:jeffbailey"), &links, now());
+        assert_eq!(permit.map(|p| p.basis()), Ok(PermitBasis::Owner(2)));
+    }
+
     // bypass: the renamed account signs only under its new login (G-2).
     #[test]
     fn a_renamed_account_signs_under_the_login_its_latest_check_saw() {
@@ -1419,10 +1442,8 @@ mod gate_from_checks_tests {
     }
 
     proptest! {
-        /// A claim needing no authority — a dispute, a withdrawal, an
-        /// identity link, a subject off GitHub — gets an exempt permit for
-        /// its own subject and signer, whatever the subject; an assertion
-        /// about a GitHub account or repo never does.
+        /// Every exempt permit is for its claim's own subject and signer,
+        /// with the Exempt basis, whatever the subject.
         #[test]
         fn exempt_permits_follow_the_requirement(
             subject in prop_oneof![
@@ -1439,16 +1460,66 @@ mod gate_from_checks_tests {
             predicate in prop_oneof![Just("adheresToPhilosophy"), Just("sameAs")],
         ) {
             let claim = ClaimShape { subject: &subject, predicate, reference_types: &references };
-            let needed = requirement(claim);
-
-            let exempt = exempt_permit(JEFF, claim);
-            prop_assert_eq!(exempt.is_some(), needed == Requirement::Exempt);
-            if let Some(permit) = exempt {
+            // Which claims get a permit is stated by example in
+            // `exempt_permits_go_to_claims_needing_no_authority`; this states
+            // the permit's shape.
+            if let Some(permit) = exempt_permit(JEFF, claim) {
                 prop_assert_eq!(
                     (permit.signer(), permit.subject(), permit.basis()),
                     (JEFF, subject.as_str(), PermitBasis::Exempt)
                 );
             }
+        }
+    }
+
+    // bypass: which claims get an exempt permit, stated by example rather
+    // than restated through `requirement` (review: that property was
+    // tautological).
+    #[test]
+    fn exempt_permits_go_to_claims_needing_no_authority() {
+        let link = crate::identity_link::link_predicate();
+        let cases: [(&str, &str, &[ReferenceType], bool); 9] = [
+            ("github:jeffbailey", "adheresToPhilosophy", &[], false),
+            (
+                "github:jeffbailey/tidepool",
+                "embodiesPhilosophy",
+                &[],
+                false,
+            ),
+            ("GitHub:jeffbailey", "adheresToPhilosophy", &[], false),
+            ("github:a/b/c", "embodiesPhilosophy", &[], false),
+            (
+                "github:jeffbailey",
+                "adheresToPhilosophy",
+                &[ReferenceType::Supersedes],
+                false,
+            ),
+            (
+                "github:jeffbailey",
+                "adheresToPhilosophy",
+                &[ReferenceType::Counters],
+                true,
+            ),
+            (
+                "github:jeffbailey/tidepool",
+                "embodiesPhilosophy",
+                &[ReferenceType::Retracts],
+                true,
+            ),
+            ("github:jeffbailey", link, &[], true),
+            ("https:example.com", "embodiesPhilosophy", &[], true),
+        ];
+        for (subject, predicate, reference_types, exempt) in cases {
+            let claim = ClaimShape {
+                subject,
+                predicate,
+                reference_types,
+            };
+            assert_eq!(
+                exempt_permit(JEFF, claim).is_some(),
+                exempt,
+                "{subject} {predicate} {reference_types:?}"
+            );
         }
     }
 

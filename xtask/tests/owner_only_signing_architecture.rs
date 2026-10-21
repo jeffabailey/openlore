@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use xtask::check_arch::{
     check_indexer_capability_boundary, classify_authority_evidence,
-    classify_repo_authority_checks_literal, classify_sign_only_with_permit,
+    classify_repo_authority_checks_literal, classify_sign_only_with_permit, crate_sources,
     scan_authority_evidence_only_from_adapters,
     scan_imported_candidates_not_in_scoring_or_inference, scan_repo_authority_checks_insert_only,
     scan_sign_only_with_permit,
@@ -40,6 +40,29 @@ fn stored(row: &Row) -> LinkedAccountEvidence {
         }),
     }
 }";
+
+/// A real-tree scan with no findings proves something only if it read the
+/// files the rule is about: the production sources it walks, as paths
+/// relative to the workspace, must include each of `targets`.
+fn assert_scanned(targets: &[&str]) {
+    let root = root();
+    let scanned: Vec<String> = crate_sources(&root)
+        .iter()
+        .map(|path| {
+            path.strip_prefix(&root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    assert!(!scanned.is_empty(), "the rule scanned no files");
+    for target in targets {
+        assert!(
+            scanned.iter().any(|path| path == target),
+            "the rule never read {target}"
+        );
+    }
+}
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -176,6 +199,10 @@ fn decoded_repo_evidence_built_in_cli_code_is_a_finding_but_matching_it_is_not()
 #[test]
 fn the_real_tree_builds_person_evidence_only_in_adapters() {
     let findings = scan_authority_evidence_only_from_adapters(&root()).expect("scan");
+    assert_scanned(&[
+        "crates/adapter-duckdb/src/repo_authority_checks.rs",
+        "crates/claim-domain/src/authority.rs",
+    ]);
     assert!(findings.is_empty(), "{findings:#?}");
 }
 
@@ -247,6 +274,7 @@ fn a_production_update_or_delete_of_repo_observations_is_reported_anywhere_and_t
         "{findings:?}"
     );
 
+    assert_scanned(&["crates/adapter-duckdb/src/repo_authority_checks.rs"]);
     assert_eq!(
         scan_repo_authority_checks_insert_only(&root()).expect("scan real tree"),
         Vec::<String>::new(),
@@ -351,6 +379,10 @@ fn the_single_publish_path_without_a_permit_parameter_is_a_finding() {
 #[test]
 fn the_real_tree_signs_only_through_sign_permitted() {
     let findings = scan_sign_only_with_permit(&root()).expect("scan");
+    assert_scanned(&[
+        "crates/cli/src/verbs/sign_permitted.rs",
+        "crates/cli/src/verbs/claim_publish.rs",
+    ]);
     assert!(findings.is_empty(), "{findings:#?}");
 }
 

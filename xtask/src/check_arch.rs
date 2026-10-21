@@ -2975,8 +2975,9 @@ pub fn classify_authority_evidence(rel_path: &str, source: &str) -> Vec<String> 
         .collect()
 }
 
-/// Every production source under `crates/*/src`.
-fn crate_sources(workspace_root: &Path) -> Vec<PathBuf> {
+/// Every production source under `crates/*/src` — what the source-scanning
+/// rules read (public so a test can show a rule scanned something).
+pub fn crate_sources(workspace_root: &Path) -> Vec<PathBuf> {
     rust_sources_under(&workspace_root.join("crates"))
         .into_iter()
         .filter(|path| path.components().any(|c| c.as_os_str() == "src"))

@@ -21,13 +21,13 @@
 //!
 //! Every property calls a `sut_*` binding that makes ONE call into the
 //! production function and maps its ADTs onto the view types here (the view
-//! types are the observable contract). `kind`, `requirement`, `classify`,
-//! `score_attested` do not exist yet, and the shipped
-//! `claim_domain::authority::may_sign` is the review app's same-request owner
-//! gate (ADR-089 §2, different inputs) — so every binding is `todo!()`: RED,
-//! not BROKEN, and the file compiles today. The oracle's right-hand side of
-//! CORE-OOS-5 calls the REAL `scoring::score`. DELIVER binds one property per
-//! step and may move it into `crates/claim-domain/tests` (RRA DWD-RRA-7).
+//! types are the observable contract). Every binding is live: `kind`,
+//! `requirement`, `classify` and the CLI gates `may_sign_from_checks` /
+//! `may_sign_repo_from_checks` in `claim_domain::authority`, and
+//! `score_attested` in `scoring` (the shipped `claim_domain::authority::may_sign`
+//! is the review app's same-request owner gate, ADR-089 §2, with different
+//! inputs). The oracle's right-hand side of CORE-OOS-5 calls the REAL
+//! `scoring::score`.
 //!
 //! ## Layer-2 CM-A exception (Mandate 1, documented)
 //!
@@ -91,8 +91,16 @@ struct ClaimView {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RequirementView {
     Exempt,
-    Person { login: String },
-    Repo { owner: String, name: String },
+    Person {
+        login: String,
+    },
+    Repo {
+        owner: String,
+        name: String,
+    },
+    /// A `github:` assertion naming no account or repo: needs authority no
+    /// one can hold (fail closed, DWD-OOS-7).
+    Malformed,
 }
 
 /// One identity link of a DID to a GitHub account (the login it was linked
@@ -232,10 +240,7 @@ fn sut_requirement(claim: &ClaimView) -> RequirementView {
             login: person.login().to_string(),
         },
         Requirement::Repo { owner, name } => RequirementView::Repo { owner, name },
-        // The view has no malformed row: its contract is only "never Exempt".
-        Requirement::Malformed => RequirementView::Person {
-            login: claim.subject.clone(),
-        },
+        Requirement::Malformed => RequirementView::Malformed,
     }
 }
 
@@ -697,7 +702,7 @@ fn is_fresh(age_minutes: i64) -> bool {
 fn oracle_gate_row(claim: &ClaimView, ev: &EvidenceView) -> GateRow {
     match oracle_requirement(claim) {
         Some(RequirementView::Exempt) => GateRow::G1Exempt,
-        None => GateRow::G2Malformed,
+        None | Some(RequirementView::Malformed) => GateRow::G2Malformed,
         Some(RequirementView::Person { login }) => {
             let e = oracle_person(&claim.author, &login, ev);
             if e.owner_ids.is_empty() {
@@ -1040,7 +1045,7 @@ proptest! {
         let got = sut_requirement(&claim);
         match oracle_requirement(&claim) {
             Some(expected) => prop_assert_eq!(got, expected, "{:?}", claim),
-            None => prop_assert_ne!(got, RequirementView::Exempt, "fail closed: {:?}", claim),
+            None => prop_assert_eq!(got, RequirementView::Malformed, "fail closed: {:?}", claim),
         }
     }
 
