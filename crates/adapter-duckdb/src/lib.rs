@@ -50,6 +50,7 @@ use ports::{
     SignedPhilosophy, SourceTable, StorageError, StoragePort, TraversalBound, TraversalResult,
 };
 
+mod artifact_paths;
 mod conn;
 mod contribution_links;
 mod graph_query;
@@ -222,7 +223,11 @@ impl DuckDbStorageAdapter {
     /// read-only `StoreReadPort` surface (no write/sign method), so the
     /// `openlore ui` viewer that holds it is structurally read-only (I-VIEW-1).
     pub fn read_adapter(&self) -> DuckDbStoreReadAdapter {
-        DuckDbStoreReadAdapter::from_shared(self.conn.clone(), self.peer_claims_root.clone())
+        DuckDbStoreReadAdapter::from_shared(
+            self.conn.clone(),
+            self.claims_dir.clone(),
+            self.peer_claims_root.clone(),
+        )
     }
 
     /// Construct a `DuckDbContributionLinkAdapter` SHARING this adapter's
@@ -265,9 +270,10 @@ impl DuckDbStorageAdapter {
         DuckDbLinkLineageAdapter::from_shared(self.conn.clone())
     }
 
-    /// Construct the artifact path for a CID: `<claims_dir>/<cid>.json`.
-    fn artifact_path(&self, cid: &Cid) -> PathBuf {
-        self.claims_dir.join(format!("{}.json", cid.0))
+    /// The artifact path for a CID, `<claims_dir>/<cid>.json`, or `None`
+    /// when `cid` is not a plain CID token (D17).
+    fn artifact_path(&self, cid: &Cid) -> Option<PathBuf> {
+        artifact_paths::own_artifact(&self.claims_dir, &cid.0)
     }
 
     /// Construct the minted-philosophy artifact path for a CID:
@@ -307,15 +313,12 @@ impl DuckDbStorageAdapter {
         Ok(dids)
     }
 
-    /// Read the authoritative `SignedClaim` from an on-disk artifact path.
-    /// Own-claim rows store an ABSOLUTE path under `claims/`; peer-claim
-    /// rows store a path RELATIVE to the storage root
-    /// (`peer_claims/<encoded_did>/<cid>.json`). A relative `peer_claims/`
-    /// path is resolved under `peer_claims_root` (which already points at
-    /// `<root>/peer_claims`), matching `DuckDbPeerStorageAdapter`'s own
-    /// `get_peer_claim_by_cid` resolution.
-    fn read_artifact_at(&self, artifact_path: &str) -> Result<SignedClaim, StorageError> {
-        let (resolved, bytes) = self.read_artifact_bytes(artifact_path)?;
+    /// Read a federated row's authoritative `SignedClaim` from its artifact.
+    fn read_artifact_at(
+        &self,
+        projection: &FederatedProjection,
+    ) -> Result<SignedClaim, StorageError> {
+        let (resolved, bytes) = self.read_artifact_bytes(projection)?;
         serde_json::from_slice(&bytes).map_err(|err| StorageError::QueryFailed {
             message: format!(
                 "deserialize federated artifact {}: {err}",
@@ -329,15 +332,14 @@ impl DuckDbStorageAdapter {
     /// artifact is the `UnsignedClaim` shape, re-paired with its CID.
     fn read_claim_record_at(
         &self,
-        artifact_path: &str,
-        provenance: &str,
+        projection: &FederatedProjection,
     ) -> Result<claim_domain::ClaimRecord, StorageError> {
-        if provenance != SELF_ATTESTED {
+        if projection.provenance != SELF_ATTESTED {
             return self
-                .read_artifact_at(artifact_path)
+                .read_artifact_at(projection)
                 .map(claim_domain::ClaimRecord::AppSigned);
         }
-        let (resolved, bytes) = self.read_artifact_bytes(artifact_path)?;
+        let (resolved, bytes) = self.read_artifact_bytes(projection)?;
         let failed = |detail: String| StorageError::QueryFailed {
             message: format!("self-attested artifact {}: {detail}", resolved.display()),
         };
@@ -348,11 +350,28 @@ impl DuckDbStorageAdapter {
             .map_err(|err| failed(err.to_string()))
     }
 
-    fn read_artifact_bytes(&self, artifact_path: &str) -> Result<(PathBuf, Vec<u8>), StorageError> {
-        let resolved: PathBuf = match artifact_path.strip_prefix("peer_claims/") {
-            Some(relative) => self.peer_claims_root.join(relative),
-            None => PathBuf::from(artifact_path),
-        };
+    /// The bytes of a federated row's artifact, read where this store keeps
+    /// it ([`artifact_paths::stored_artifact`]): an own claim by its CID
+    /// under `claims/` (never the absolute path recorded at write time, so a
+    /// moved store still reads), a pulled claim under `peer_claims/`. A CID
+    /// or recorded path that is not plain is refused, never joined (D17).
+    fn read_artifact_bytes(
+        &self,
+        projection: &FederatedProjection,
+    ) -> Result<(PathBuf, Vec<u8>), StorageError> {
+        let resolved = artifact_paths::stored_artifact(
+            &self.claims_dir,
+            &self.peer_claims_root,
+            &projection.source_table,
+            &projection.cid,
+            &projection.artifact_path,
+        )
+        .ok_or_else(|| StorageError::QueryFailed {
+            message: format!(
+                "refusing to read the artifact of {} claim {:?}: not a plain CID or path",
+                projection.source_table, projection.cid
+            ),
+        })?;
         let bytes = fs::read(&resolved).map_err(|err| StorageError::QueryFailed {
             message: format!("read federated artifact {}: {err}", resolved.display()),
         })?;
@@ -365,6 +384,7 @@ impl DuckDbStorageAdapter {
 /// the artifact afterward so the returned row is byte-faithful.
 struct FederatedProjection {
     author_did: String,
+    cid: String,
     source_table: String,
     artifact_path: String,
     provenance: String,
@@ -394,7 +414,12 @@ impl StoragePort for DuckDbStorageAdapter {
 
     fn write_signed_claim(&self, signed: &SignedClaim) -> Result<(), StorageError> {
         let cid = &signed.signature.signed_cid;
-        let artifact = self.artifact_path(cid);
+        let artifact = self
+            .artifact_path(cid)
+            .ok_or_else(|| StorageError::WriteFailed {
+                cid: cid.clone(),
+                message: "not a plain CID token".to_string(),
+            })?;
         let artifact_tmp = artifact.with_extension("json.tmp");
 
         // Step 1: serialize the SignedClaim once. Both the file write
@@ -636,7 +661,12 @@ impl StoragePort for DuckDbStorageAdapter {
         // The artifact is read where this store keeps it (`<claims_dir>/<cid>.json`,
         // where `write_signed_claim` put it), not at the absolute path recorded
         // then: a store restored or moved to another home still reads its claims.
-        let artifact_path = self.artifact_path(cid);
+        let artifact_path = self
+            .artifact_path(cid)
+            .ok_or_else(|| StorageError::ReadFailed {
+                cid: cid.clone(),
+                message: "refusing to read the artifact: not a plain CID token".to_string(),
+            })?;
         let bytes = fs::read(&artifact_path).map_err(|err| StorageError::ReadFailed {
             cid: cid.clone(),
             message: format!("read artifact {}: {err}", artifact_path.display()),
@@ -833,6 +863,7 @@ impl StoragePort for DuckDbStorageAdapter {
                 .query_map(duckdb::params![subject, subject], |row| {
                     Ok(FederatedProjection {
                         author_did: row.get::<_, String>(0)?,
+                        cid: row.get::<_, String>(1)?,
                         source_table: row.get::<_, String>(2)?,
                         artifact_path: row.get::<_, String>(3)?,
                         provenance: row.get::<_, String>(4)?,
@@ -889,8 +920,7 @@ impl StoragePort for DuckDbStorageAdapter {
                 }
             };
 
-            let claim =
-                self.read_claim_record_at(&projection.artifact_path, &projection.provenance)?;
+            let claim = self.read_claim_record_at(&projection)?;
 
             results.push(FederatedRow {
                 author_did: claim_domain::Did(author_did),
@@ -1019,6 +1049,7 @@ impl<T> OptionalExtension<T> for Result<T, duckdb::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::artifact_paths::is_plain_cid;
     use claim_domain::{Confidence, Did, SignatureBlock, UnsignedClaim};
     use ports::{AuthorRelationship, PeerStoragePort, SourceTable, StoreReadPort};
     use tempfile::tempdir;
@@ -1543,5 +1574,111 @@ mod tests {
                 .is_empty(),
             "an empty `peer_claims` table must yield the EMPTY cached author set"
         );
+    }
+
+    /// D17: every read of an own claim's artifact (by CID, the federated read,
+    /// a counter's reason) finds it under this store's `claims/`, not at the
+    /// absolute path recorded when it was written — a moved store still reads.
+    #[test]
+    fn a_moved_store_still_reads_its_own_claims_and_counter_reasons() {
+        let home = tempdir().expect("tempdir");
+        let subject = "github:rust-lang/cargo";
+        let author = "did:plc:test-jeff";
+        let target_cid = "bafytargetcid000000000000000000000000000000000";
+        let counter_cid = "bafycountercid00000000000000000000000000000000";
+        {
+            let storage = DuckDbStorageAdapter::open(&home.path().join("before/openlore.duckdb"))
+                .expect("open");
+            let target = signed_claim(author, subject, "org.openlore.philosophy.x", target_cid);
+            storage.write_signed_claim(&target).expect("write target");
+            let mut counter =
+                signed_claim(author, subject, "org.openlore.philosophy.y", counter_cid);
+            counter.unsigned.references = vec![claim_domain::ClaimReference {
+                ref_type: claim_domain::ReferenceType::Counters,
+                cid: Cid(target_cid.to_string()),
+            }];
+            counter.unsigned.reason = Some("no lockfile".to_string());
+            storage.write_signed_claim(&counter).expect("write counter");
+        }
+        std::fs::rename(home.path().join("before"), home.path().join("after")).expect("move");
+
+        let storage = DuckDbStorageAdapter::open(&home.path().join("after/openlore.duckdb"))
+            .expect("reopen moved store");
+
+        assert!(storage
+            .read_signed_claim(&Cid(target_cid.to_string()))
+            .expect("read by cid")
+            .is_some());
+        let federated = storage
+            .query_federated_by_subject(subject)
+            .expect("the federated read finds the moved artifacts");
+        assert_eq!(federated.len(), 2);
+        let counters = storage
+            .read_adapter()
+            .query_counter_claims(target_cid)
+            .expect("counter read");
+        assert_eq!(
+            counters
+                .iter()
+                .map(|c| c.reason.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("no lockfile")]
+        );
+    }
+
+    /// D17: a stored CID that is not a plain CID token (here one climbing out
+    /// of `claims/`) is never joined onto a path: the read is refused, the
+    /// file outside the store is not read.
+    #[test]
+    fn a_path_traversal_cid_is_refused() {
+        let (dir, storage) = open_tmp();
+        let outside = signed_claim(
+            "did:plc:x",
+            "github:a/b",
+            "org.openlore.philosophy.x",
+            "../outside",
+        );
+        std::fs::write(
+            dir.path().join("outside.json"),
+            serde_json::to_vec(&outside).expect("serialize"),
+        )
+        .expect("plant a file outside claims/");
+        {
+            let conn = storage.conn.lock().expect("lock");
+            conn.execute(
+                "INSERT INTO claims (cid, subject, predicate, object, confidence, \
+                 author_did, composed_at, artifact_path) \
+                 VALUES ('../outside', 'github:a/b', 'embodiesPhilosophy', \
+                 'org.openlore.philosophy.x', 0.5, 'did:plc:x', '2026-05-22 09:18:44', ?)",
+                duckdb::params![dir.path().join("outside.json").display().to_string()],
+            )
+            .expect("insert a hostile row");
+        }
+
+        assert!(
+            storage
+                .read_signed_claim(&Cid("../outside".to_string()))
+                .is_err(),
+            "a traversal CID is refused, not read"
+        );
+        assert!(
+            storage.query_federated_by_subject("github:a/b").is_err(),
+            "the federated read refuses it too"
+        );
+    }
+
+    #[test]
+    fn a_plain_cid_token_is_letters_digits_hyphens_and_underscores() {
+        for plain in [
+            "bafyreigh2akiscaildc",
+            "bafy-claim",
+            "bafy_maria_001",
+            "QmYwAPJzv5CZsnA",
+        ] {
+            assert!(is_plain_cid(plain), "{plain}");
+        }
+        for hostile in ["", "../x", "a/b", "a\\b", "a.json", "a\0b", ".."] {
+            assert!(!is_plain_cid(hostile), "{hostile:?}");
+        }
     }
 }

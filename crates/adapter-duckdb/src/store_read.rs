@@ -55,11 +55,12 @@ use crate::bare_did;
 /// no-mutation trait, so the threat it would guard against is not reachable.
 pub struct DuckDbStoreReadAdapter {
     conn: SharedConn,
+    /// The storage root's `claims` directory, where an own counter's
+    /// artifact is read by its CID (D17).
+    claims_dir: PathBuf,
     /// The storage root's `peer_claims` directory — used to resolve a peer
     /// counter's RELATIVE `signed_record_path` (`peer_claims/<encoded_did>/<cid>.json`)
     /// when reading its artifact for the free-text `reason` (the ADR-046 step-B read).
-    /// Mirrors `DuckDbStorageAdapter::read_artifact_at`'s resolution so own-claim
-    /// (absolute) and peer-claim (relative) artifact paths both resolve correctly.
     peer_claims_root: PathBuf,
 }
 
@@ -68,20 +69,25 @@ impl DuckDbStoreReadAdapter {
     /// root's `peer_claims` directory (for resolving peer artifact paths in the
     /// counter-thread step-B read). Private to the crate — only
     /// [`crate::DuckDbStorageAdapter::read_adapter`] builds it.
-    pub(crate) fn from_shared(conn: SharedConn, peer_claims_root: PathBuf) -> Self {
+    pub(crate) fn from_shared(
+        conn: SharedConn,
+        claims_dir: PathBuf,
+        peer_claims_root: PathBuf,
+    ) -> Self {
         Self {
             conn,
+            claims_dir,
             peer_claims_root,
         }
     }
 
     /// Read one counter's free-text `reason` from its on-disk `SignedClaim`
     /// artifact — the ADR-046 step-B read (the reason is NOT a DB column; it lives
-    /// in the artifact, ADR-015). Own-counter rows store an ABSOLUTE path under
-    /// `claims/`; peer-counter rows store a path RELATIVE to the storage root
-    /// (`peer_claims/<encoded_did>/<cid>.json`) resolved under `peer_claims_root`
-    /// — mirroring `DuckDbStorageAdapter::read_artifact_at`. READ-ONLY: a plain
-    /// `fs::read`, LOCAL only, no network.
+    /// in the artifact, ADR-015), located as every stored artifact is
+    /// ([`crate::artifact_paths::stored_artifact`]): an own counter by its CID
+    /// under `claims/`, a pulled one under `peer_claims/`; a CID or recorded
+    /// path that is not plain is never read. READ-ONLY: a plain `fs::read`,
+    /// LOCAL only, no network.
     ///
     /// BEST-EFFORT (graceful degradation, review D2): the counter entry itself is
     /// authoritative from the Step-A DB ref lookup (its `author_did` + `cid` are
@@ -93,11 +99,14 @@ impl DuckDbStoreReadAdapter {
     /// `query_counter_claims` call (which would 5xx the `/claims/{cid}` detail page).
     /// Only the per-row artifact/reason read is best-effort; genuine DB / Step-A
     /// errors are still surfaced by the caller.
-    fn read_reason_at(&self, artifact_path: &str) -> Option<String> {
-        let resolved: PathBuf = match artifact_path.strip_prefix("peer_claims/") {
-            Some(relative) => self.peer_claims_root.join(relative),
-            None => PathBuf::from(artifact_path),
-        };
+    fn read_reason_at(&self, source_table: &str, cid: &str, artifact_path: &str) -> Option<String> {
+        let resolved = crate::artifact_paths::stored_artifact(
+            &self.claims_dir,
+            &self.peer_claims_root,
+            source_table,
+            cid,
+            artifact_path,
+        )?;
         // fs read error (missing / unreadable) -> None (degrade, do not error).
         let bytes = fs::read(&resolved).ok()?;
         // deserialize error (corrupt / unexpected shape) -> None (degrade).
@@ -826,7 +835,8 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         // Decode step A into intermediate tuples FIRST (releasing the statement
         // borrow) so step B's per-row artifact reads do not hold the prepared
         // statement open across the filesystem reads.
-        let mut staged: Vec<(String, String, f64, DateTime<Utc>, String, String)> = Vec::new();
+        let mut staged: Vec<(String, String, f64, DateTime<Utc>, String, (String, String))> =
+            Vec::new();
         for row in row_iter {
             let (
                 author_did,
@@ -839,14 +849,14 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
             ) = row.map_err(|err| StoreReadError::QueryFailed {
                 detail: format!("row decode query_counter_claims: {err}"),
             })?;
-            let _ = source_table;
+            let reason = (source_table, artifact_path);
             staged.push((
                 author_did,
                 cid,
                 confidence,
                 composed_at,
                 fetched_from_pds,
-                artifact_path,
+                reason,
             ));
         }
         drop(stmt);
@@ -860,8 +870,10 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         // `cid`. A blank `author_did` (defensive, bypassing the slice-03 CHECK)
         // projects to `Unknown` so the viewer labels rather than drops it.
         let mut counters = Vec::with_capacity(staged.len());
-        for (author_did, cid, confidence, composed_at, fetched_from_pds, artifact_path) in staged {
-            let reason = self.read_reason_at(&artifact_path);
+        for (author_did, cid, confidence, composed_at, fetched_from_pds, (source_table, path)) in
+            staged
+        {
+            let reason = self.read_reason_at(&source_table, &cid, &path);
             let origin = peer_origin(&author_did, fetched_from_pds);
             counters.push(CounterClaimRow {
                 author_did,
