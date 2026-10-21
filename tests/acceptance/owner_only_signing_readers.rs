@@ -381,7 +381,6 @@ fn a_claim_marked_as_a_dispute_is_shown_as_a_dispute() {
 ///   And tidepool's page labels Jeff's claim "owner" and Rachel's "third-party"
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RD-6: pending DELIVER"]
 fn jeffs_viewer_weighs_and_labels_claims_exactly_as_his_terminal_does() {
     let world = labelled_store();
     let viewer = ViewerServer::start(&world.env);
@@ -518,7 +517,6 @@ fn claims_made_before_owner_only_signing_are_judged_by_the_same_rule() {
 ///   And nothing in his store or published repo changed
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing RD-9: pending DELIVER"]
 fn inferred_people_show_the_authority_of_each_repo_claim_they_rest_on() {
     let anvil = Subject::Repo(ANVIL);
     let mut world = authority_world();

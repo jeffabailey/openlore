@@ -101,6 +101,46 @@ pub struct EdgeRow {
     /// the deduped contributor list, or any confidence/bucket (shown-never-applied,
     /// I-CF-2 / I-CF-9).
     pub is_countered: bool,
+    /// Whose word this edge's claim is to this reader (ADR-086 §8) — the SAME
+    /// judgement the terminal labels with, set by [`TraversalView::with_authority`];
+    /// `None` for a claim that needs no authority or was not judged. A label sits
+    /// beside the edge; it never hides it.
+    pub authority: Option<claim_domain::authority::Authority>,
+}
+
+impl TraversalView {
+    /// Label each edge with whose word its claim is, by CID (ADR-086 §8). PURE and
+    /// additive: no edge is added, dropped, re-grouped or re-ordered.
+    pub fn with_authority(
+        self,
+        judged: &std::collections::BTreeMap<String, claim_domain::authority::Authority>,
+    ) -> Self {
+        match self {
+            TraversalView::Found {
+                entity,
+                groups,
+                contributors,
+            } => TraversalView::Found {
+                entity,
+                groups: groups
+                    .into_iter()
+                    .map(|group| EdgeGroup {
+                        edges: group
+                            .edges
+                            .into_iter()
+                            .map(|edge| EdgeRow {
+                                authority: judged.get(&edge.cid).copied(),
+                                ..edge
+                            })
+                            .collect(),
+                        ..group
+                    })
+                    .collect(),
+                contributors,
+            },
+            no_claims @ TraversalView::NoClaims { .. } => no_claims,
+        }
+    }
 }
 
 /// Group a project survey's flat [`SurveyRow`]s into a [`TraversalView`] (PURE,
@@ -187,6 +227,7 @@ fn group_by(
             // built so it never re-orders/re-groups (the key + push above are unchanged).
             is_countered: presence.contains(&row.cid),
             cid: row.cid.clone(),
+            authority: None,
         });
         if !contributors.contains(&row.author_did) {
             contributors.push(row.author_did.clone());
@@ -400,6 +441,9 @@ fn render_edge_row(edge: &EdgeRow) -> Markup {
         tr {
             td {
                 a href=(href_score(&edge.author_did)) { (edge.author_did) }
+                @if let Some(authority) = edge.authority {
+                    " " span class="whose-word" { (authority.label()) }
+                }
             }
             td { (render_confidence(edge.confidence)) }
             td { (render_confidence_bucket(edge.confidence)) }

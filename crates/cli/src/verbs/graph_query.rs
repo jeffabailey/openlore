@@ -331,6 +331,18 @@ fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutc
         if let Some(object) = args.object.as_deref() {
             return run_weighted_object(wiring, object, args.include_unattested);
         }
+        // RD-6 (owner-only-signing): one contributor's weighted view — the
+        // terminal twin of the viewer's `/score?contributor=` page.
+        if let Some(contributor) = args.contributor.as_deref() {
+            return run_weighted(
+                wiring,
+                &ports::ScoringFilter::ByContributor {
+                    author_did: claim_domain::Did(contributor.to_string()),
+                },
+                contributor,
+                args.include_unattested,
+            );
+        }
     }
 
     // GQE-16 (US-GRAPH-005 happy; Gate 1 + Gate 2): the `--object <philosophy>
@@ -475,16 +487,28 @@ fn run_weighted_object(
     let filter = ports::ScoringFilter::ByObject {
         object: object.to_string(),
     };
+    run_weighted(wiring, &filter, object, include_unattested)
+}
+
+/// The weighted view over any scoring filter, headed by `heading` (the
+/// philosophy or the contributor DID): read the attributed feed, weigh it in
+/// the pure core over the rows this reader can weigh, name what was left out.
+fn run_weighted(
+    wiring: &Wiring,
+    filter: &ports::ScoringFilter,
+    heading: &str,
+    include_unattested: bool,
+) -> Result<GraphQueryOutcome> {
     let feed = wiring
         .storage
-        .query_attributed_for_scoring(&filter)
-        .with_context(|| format!("reading the scoring feed for object {object}"))?;
+        .query_attributed_for_scoring(filter)
+        .with_context(|| format!("reading the scoring feed for {heading}"))?;
 
     // The aggregation happens HERE, in the pure core — never in SQL — over the
     // rows this reader can weigh (ADR-086 §8).
     let weighed = weigh_here(wiring, &feed)?;
 
-    let mut stdout = crate::render::render_weighted_view(object, &weighed.view);
+    let mut stdout = crate::render::render_weighted_view(heading, &weighed.view);
     stdout.push_str(&crate::render::render_not_counted_footer(
         &scoring::not_counted(&weighed.left_out),
     ));
@@ -728,7 +752,10 @@ fn annotate_claims(
 /// over the latest local checks (check READ ports only). Claims that need no
 /// authority (disputes, withdrawals, identity links, non-GitHub subjects)
 /// carry no entry.
-fn labels_here(wiring: &Wiring, filter: &ports::ScoringFilter) -> Result<AuthorityByCid> {
+pub(crate) fn labels_here(
+    wiring: &Wiring,
+    filter: &ports::ScoringFilter,
+) -> Result<AuthorityByCid> {
     let feed = wiring
         .storage
         .query_attributed_for_scoring(filter)

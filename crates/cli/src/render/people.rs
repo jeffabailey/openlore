@@ -9,6 +9,7 @@ use claim_domain::identity_link::ListedLink;
 use ports::ContributionLink;
 
 use super::authority::hand_off;
+use super::claim::AuthorityByCid;
 use super::common::plural_suffix;
 use super::identity::render_linked_identities;
 use scraper_domain::{
@@ -68,18 +69,21 @@ pub fn render_flagged_inference_report(
         renames,
         &PersonLinkLines::default(),
         &BTreeMap::new(),
+        &AuthorityByCid::new(),
     )
 }
 
 /// [`render_flagged_inference_report`] with each candidate's published
 /// identity links (as this reader last checked them) under its block
 /// (ADR-085 §6): the same lines `identity list` shows. Each candidate in
-/// `signers` also says who can sign it (UC-9, ADR-086 §10).
+/// `signers` also says who can sign it (UC-9, ADR-086 §10). Each source repo
+/// claim in `labels` carries its authority label (ADR-086 §8).
 pub fn render_linked_inference_report(
     report: &InferenceReport,
     renames: &BTreeMap<String, Vec<String>>,
     links: &PersonLinkLines,
     signers: &BTreeMap<String, CandidateSigner>,
+    labels: &AuthorityByCid,
 ) -> String {
     let mut out = if report.candidates.is_empty() && !report.already_signed.is_empty() {
         "No new inferred candidates (every inference here is already signed).\n".to_string()
@@ -90,6 +94,7 @@ pub fn render_linked_inference_report(
             renames,
             links,
             signers,
+            labels,
         )
     };
     for already in &report.already_signed {
@@ -126,6 +131,7 @@ pub fn render_person_candidates(
     renames: &BTreeMap<String, Vec<String>>,
     links: &PersonLinkLines,
     signers: &BTreeMap<String, CandidateSigner>,
+    labels: &AuthorityByCid,
 ) -> String {
     if candidates.is_empty() {
         return "No inferred candidates (no signed repo claims about recorded contributors).\n"
@@ -135,7 +141,12 @@ pub fn render_person_candidates(
         "Inferred person candidates (speculative — derived from signed repo claims, not as truth):\n",
     );
     for (index, candidate) in candidates.iter().enumerate() {
-        out.push_str(&render_person_candidate(index + 1, candidate, weakened));
+        out.push_str(&render_person_candidate(
+            index + 1,
+            candidate,
+            weakened,
+            labels,
+        ));
         let person = candidate.candidate.person_subject();
         out.push_str(&render_candidate_signer(signers.get(person)));
         let others = renames.get(person);
@@ -157,6 +168,7 @@ fn render_person_candidate(
     number: usize,
     numbered: &NumberedCandidate,
     weakened: &[WeakenedClaim],
+    labels: &AuthorityByCid,
 ) -> String {
     let candidate = &numbered.candidate;
     let mut block = format!(
@@ -177,12 +189,13 @@ fn render_person_candidate(
     for repo in candidate.support() {
         for claim in &repo.claims {
             block.push_str(&format!(
-                "        {} (#{}) — claim {} by {} at {}\n",
+                "        {} (#{}) — claim {} by {} at {}{}\n",
                 repo.repo_subject,
                 repo.rank,
                 claim.cited.cid,
                 claim.cited.author_did,
-                claim.confidence
+                claim.confidence,
+                authority_suffix(&claim.cited.cid, labels)
             ));
         }
     }
@@ -195,6 +208,14 @@ fn render_person_candidate(
         )
     ));
     block
+}
+
+/// ` — <label>` for a source claim this reader judged (the one reader label,
+/// [`claim_domain::authority::Authority::label`]); nothing for one it did not.
+fn authority_suffix(cid: &str, labels: &AuthorityByCid) -> String {
+    labels
+        .get(cid)
+        .map_or_else(String::new, |authority| format!(" — {}", authority.label()))
 }
 
 /// Who can sign one candidate, as an indented line; nothing when unknown.

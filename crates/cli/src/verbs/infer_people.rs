@@ -36,7 +36,10 @@ use scraper_domain::{
     NumberedCandidate, OwnClaim, PersonSubject, RepoClaim, ADHERES_TO_PHILOSOPHY,
 };
 
-use crate::render::{render_linked_inference_report, render_person_derived_from, PersonLinkLines};
+use crate::render::{
+    render_linked_inference_report, render_person_derived_from, AuthorityByCid, PersonLinkLines,
+};
+use crate::verbs::graph_query::labels_here;
 use crate::verbs::sign_batch::{self, SignableCandidate};
 use crate::wiring::Wiring;
 
@@ -76,6 +79,7 @@ pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome
         .collect();
     let identity_links = read_person_link_lines(wiring, people, &links)?;
     let signers = read_candidate_signers(wiring, &report)?;
+    let labels = read_source_claim_labels(wiring, &links)?;
     let outcome = sign_batch::list_or_sign(
         wiring,
         &person_signables(&report),
@@ -85,6 +89,7 @@ pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome
             &candidate_renames(&report, &links),
             &identity_links,
             &signers,
+            &labels,
         ),
     )?;
     Ok(InferPeopleOutcome {
@@ -243,8 +248,7 @@ fn person_key(person_subject: &str, contribution_links: &[ContributionLink]) -> 
 /// every spelling of a linked repo, then reads each one. Distinct spellings
 /// are disjoint exact-match reads, so no row is read twice.
 fn read_linked_repo_claims(wiring: &Wiring, links: &[ContributionLink]) -> Result<Vec<RepoClaim>> {
-    let stored = stored_claim_subjects(wiring)?;
-    repo_subjects_to_read(links, stored.iter().map(String::as_str))
+    linked_repo_subjects(wiring, links)?
         .iter()
         .try_fold(Vec::new(), |mut claims, subject| {
             let rows = wiring
@@ -254,6 +258,31 @@ fn read_linked_repo_claims(wiring: &Wiring, links: &[ContributionLink]) -> Resul
             claims.extend(rows.iter().map(RepoClaim::from));
             Ok(claims)
         })
+}
+
+/// Every stored spelling of every linked repo subject (DDD-6 / UC-6).
+fn linked_repo_subjects(wiring: &Wiring, links: &[ContributionLink]) -> Result<BTreeSet<String>> {
+    let stored = stored_claim_subjects(wiring)?;
+    Ok(repo_subjects_to_read(
+        links,
+        stored.iter().map(String::as_str),
+    ))
+}
+
+/// Whose word each source repo claim is, by CID (ADR-086 §8): the SAME
+/// reader-side judgement `graph query` labels with, over this reader's latest
+/// local checks (check READ ports only — nothing is checked or written).
+fn read_source_claim_labels(wiring: &Wiring, links: &[ContributionLink]) -> Result<AuthorityByCid> {
+    linked_repo_subjects(wiring, links)?.into_iter().try_fold(
+        AuthorityByCid::new(),
+        |mut labels, subject| {
+            labels.extend(labels_here(
+                wiring,
+                &ports::ScoringFilter::BySubject { subject },
+            )?);
+            Ok(labels)
+        },
+    )
 }
 
 /// My own adherence claims, with their references, in the shape the pure

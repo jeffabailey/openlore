@@ -485,7 +485,13 @@ async fn route(
         // `viewer-domain::group_project` core (anti-merging, never SQL — I-GT-3), and
         // renders the `#traversal-results` region. Forks by `Shape` (ADR-033). Holds
         // NO signing key (a read + pure compute); renders NO write/sign/follow control.
-        PROJECT_URL => project_page(store.as_ref(), link_reads.as_ref(), query.as_deref(), shape),
+        PROJECT_URL => project_page(
+            store.as_ref(),
+            link_reads.as_ref(),
+            feed_authority.as_deref(),
+            query.as_deref(),
+            shape,
+        ),
         // `GET /philosophy?object=<uri>` — the SYMMETRIC philosophy graph-traversal survey
         // (slice-10; ADR-042/043/044/045 / US-GT-003). Mirrors the `/project` route, swapping
         // subject↔object: reads the philosophy's LOCAL attributed survey over the read-only
@@ -1067,10 +1073,18 @@ fn resolve_score_state(
 fn project_page(
     store: &dyn StoreReadPort,
     link_reads: Option<&LinkReads>,
+    feed_authority: Option<&(dyn FeedAuthorityReadPort + Send + Sync)>,
     query: Option<&str>,
     shape: Shape,
 ) -> Response<Full<Bytes>> {
     let view = resolve_project_view(store, query);
+    let view = match feed_authority {
+        Some(reads) => {
+            let judged = survey_authority(store, reads, &view);
+            view.with_authority(&judged)
+        }
+        None => view,
+    };
     // The GitHub person's linked identities (slice 4; D-VL-6): standings are
     // decided over every active link (C-VL-3), THEN `links_of_person` selects
     // this person's lines by last-seen login; any other subject is no one.
@@ -1109,6 +1123,50 @@ fn resolve_project_view(store: &dyn StoreReadPort, query: Option<&str>) -> Trave
         // subject — never a blank region, never a leaked stack trace (I-GT-4).
         Err(_) => TraversalView::NoClaims { entity: subject },
     }
+}
+
+/// Whose word each edge of a survey is, by CID (ADR-086 §8): every edge
+/// author's attributed scoring feed (the rows the `/score` page reads, with
+/// their reference types), narrowed to the survey's claims and judged by the
+/// SAME reader-side authority the terminal labels with (check READ ports only).
+/// A read failure leaves the edges unlabelled — never a 5xx, never hidden.
+fn survey_authority(
+    store: &dyn StoreReadPort,
+    reads: &(dyn FeedAuthorityReadPort + Send + Sync),
+    view: &TraversalView,
+) -> std::collections::BTreeMap<String, claim_domain::authority::Authority> {
+    let TraversalView::Found {
+        groups,
+        contributors,
+        ..
+    } = view
+    else {
+        return std::collections::BTreeMap::new();
+    };
+    let cids: std::collections::BTreeSet<&str> = groups
+        .iter()
+        .flat_map(|group| group.edges.iter().map(|edge| edge.cid.as_str()))
+        .collect();
+    let feed: Vec<ports::ScoringFeedRow> = contributors
+        .iter()
+        .filter_map(|author| {
+            store
+                .query_contributor_scoring_feed(&Did(author.clone()))
+                .ok()
+        })
+        .flatten()
+        .filter(|row| cids.contains(row.claim.cid.0.as_str()))
+        .collect();
+    let Ok(authority) = reads.feed_authority(&feed) else {
+        return std::collections::BTreeMap::new();
+    };
+    feed.iter()
+        .filter_map(|row| {
+            authority
+                .of(row)
+                .map(|judged| (row.claim.cid.0.clone(), judged))
+        })
+        .collect()
 }
 
 /// Read the per-edge counter PRESENCE for a WHOLE traversal survey in ONE aggregate
