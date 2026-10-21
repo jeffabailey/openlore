@@ -102,8 +102,8 @@ pub use federated_row::{
 // `GraphEdge`, are the I-GRAPH-2 / I-GRAPH-5 type-level anti-merging defenses.
 
 pub use graph::{
-    AttributedClaim, FeedAuthority, FeedAuthorityReadPort, GraphEdge, GraphNode, ScoringFeedRow,
-    ScoringFilter, TraversalBound, TraversalResult,
+    index_rows_authority, AttributedClaim, FeedAuthority, FeedAuthorityReadPort, GraphEdge,
+    GraphNode, ScoringFeedRow, ScoringFilter, TraversalBound, TraversalResult,
 };
 pub use peer_storage::{
     plan_add_subscription, AddSubscriptionOutcome, AddSubscriptionPlan, HardPurgeOutcome,

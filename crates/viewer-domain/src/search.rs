@@ -502,12 +502,20 @@ fn render_search_footer(dimension: appview_domain::SearchDimension) -> Markup {
 /// CLI's `LINK_AUTHORITY_NOT_CHECKED_LABEL`. Do NOT paraphrase.
 pub const SEARCH_LINK_AUTHORITY_NOT_CHECKED_LABEL: &str = "authority not checked here";
 
-/// The label of one network row: `Some` for an identity-link row (selected
-/// through the claim-domain link API, never a predicate literal), `None` for
-/// every other row.
-fn link_row_label(predicate: &str) -> Option<&'static str> {
-    claim_domain::identity_link::is_reserved_predicate(predicate)
-        .then_some(SEARCH_LINK_AUTHORITY_NOT_CHECKED_LABEL)
+/// The label of one network row, as the terminal's search shows it: this
+/// reader's own judgment of whose word it is (`authority not checked here`
+/// when no local check decides it), else for an identity-link row (selected
+/// through the claim-domain link API, never a predicate literal) the
+/// not-checked label, else none.
+fn row_authority_label(row: &appview_domain::NetworkResultRow) -> Option<&'static str> {
+    match row.authority {
+        Some(claim_domain::authority::Authority::NotChecked) => {
+            Some(SEARCH_LINK_AUTHORITY_NOT_CHECKED_LABEL)
+        }
+        Some(authority) => Some(authority.label()),
+        None => claim_domain::identity_link::is_reserved_predicate(&row.predicate)
+            .then_some(SEARCH_LINK_AUTHORITY_NOT_CHECKED_LABEL),
+    }
 }
 
 /// Render one network-search result row (a verified, attributed claim). Carries the
@@ -525,9 +533,9 @@ fn render_search_result_row(row: &appview_domain::NetworkResultRow) -> Markup {
             span { (row.author_did.0) }
             " "
             span { (row.subject) " " (row.predicate) " " (row.object) }
-            @if let Some(label) = link_row_label(&row.predicate) {
+            @if let Some(label) = row_authority_label(row) {
                 " "
-                span { (label) }
+                span class="whose-word" { (label) }
             }
             " "
             span { (render_confidence(row.confidence)) }

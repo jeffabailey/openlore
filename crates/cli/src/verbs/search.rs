@@ -32,10 +32,9 @@
 use adapter_index_query::HttpIndexQueryAdapter;
 use anyhow::Result;
 use claim_domain::authority::Authority;
-use claim_domain::{Cid, Did};
 use ports::{
-    AttributedClaim, AuthorRelationship, IndexQueryError, IndexQueryPort, NetworkResultRowRaw,
-    NetworkSearchResultRaw, ScoringFeedRow, SearchDimension,
+    AuthorRelationship, IndexQueryError, IndexQueryPort, NetworkResultRowRaw,
+    NetworkSearchResultRaw, SearchDimension,
 };
 
 use crate::render;
@@ -344,41 +343,14 @@ fn render_network_result(
 }
 
 /// This reader's own judgment of each index row's authority (UC-7, ADR-087
-/// §8), position for position: the same judge `graph query` uses, over the
-/// reader's latest LOCAL checks (check READ ports only). Nothing the index
-/// or a row's author says decides it.
+/// §8), position for position: the judge `graph query` and the viewer use,
+/// over the reader's latest LOCAL checks (check READ ports only).
 fn local_authority_of(
     wiring: &Wiring,
     rows: &[NetworkResultRowRaw],
 ) -> Result<Vec<Option<Authority>>> {
-    let feed: Vec<ScoringFeedRow> = rows
-        .iter()
-        .enumerate()
-        .map(|(position, row)| index_row_as_feed_row(position, row))
-        .collect();
-    let authority = wiring.feed_authority_reads().judged(&feed)?;
-    Ok(feed.iter().map(|row| authority.of(row)).collect())
-}
-
-/// An index row as the judge reads it: its bare author DID and its own
-/// subject, predicate and reference types, keyed by its POSITION in the
-/// result rather than its cid — two rows sharing a cid never share a label.
-fn index_row_as_feed_row(position: usize, row: &NetworkResultRowRaw) -> ScoringFeedRow {
-    ScoringFeedRow {
-        claim: AttributedClaim {
-            author_did: Did(claim_domain::bare_did(&row.author_did.0).to_string()),
-            cid: Cid(position.to_string()),
-            subject: row.subject.clone(),
-            predicate: row.predicate.clone(),
-            object: row.object.clone(),
-            confidence: row.confidence,
-            composed_at: row.composed_at,
-            relationship: AuthorRelationship::NetworkUnfollowed,
-        },
-        reference_types: row.references.iter().map(|r| r.ref_type).collect(),
-        // Labels only: the judge never reads whether a row was withdrawn.
-        withdrawn_by_its_author: false,
-    }
+    ports::index_rows_authority(&wiring.feed_authority_reads(), rows)
+        .map_err(|message| anyhow::anyhow!("reading this reader's authority checks: {message}"))
 }
 
 /// Resolve the relationship label for one author DID against the user's

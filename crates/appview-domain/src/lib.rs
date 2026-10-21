@@ -152,6 +152,10 @@ pub struct NetworkResultRow {
     pub relationship: AuthorRelationship,
     /// OD-AV-7: shown, never applied.
     pub counter_annotation: Option<CounterRef>,
+    /// Whose word the row is, to THIS reader (ADR-087 §8, UC-7): set by the
+    /// reader's shell from its own local checks, never from the index or the
+    /// row's author. `None`: not judged, or the claim needs no authority.
+    pub authority: Option<claim_domain::authority::Authority>,
 }
 
 /// The per-author-grouped search result. `by_author` carries each author's rows
@@ -168,4 +172,29 @@ pub struct NetworkSearchResult {
     pub total_claims: u32,
     /// Near-match suggestion for an empty result (US-AV-002 Ex 4).
     pub suggestion: Option<String>,
+}
+
+impl NetworkSearchResult {
+    /// The same result with each row's [`NetworkResultRow::authority`] set to
+    /// this reader's judgment `of` it. Grouping and order are unchanged.
+    pub fn with_authority(
+        self,
+        of: impl Fn(&NetworkResultRow) -> Option<claim_domain::authority::Authority>,
+    ) -> Self {
+        let by_author = self
+            .by_author
+            .into_iter()
+            .map(|(author, rows)| {
+                let rows = rows
+                    .into_iter()
+                    .map(|row| NetworkResultRow {
+                        authority: of(&row),
+                        ..row
+                    })
+                    .collect();
+                (author, rows)
+            })
+            .collect();
+        Self { by_author, ..self }
+    }
 }

@@ -452,6 +452,7 @@ async fn route(
             index_query.as_deref(),
             store.as_ref(),
             link_reads.as_ref(),
+            feed_authority.as_deref(),
             query.as_deref(),
             shape,
         )
@@ -1430,10 +1431,11 @@ async fn search_page(
     index_query: Option<&dyn IndexQueryPort>,
     store: &dyn StoreReadPort,
     link_reads: Option<&LinkReads>,
+    feed_authority: Option<&(dyn FeedAuthorityReadPort + Send + Sync)>,
     query: Option<&str>,
     shape: Shape,
 ) -> Response<Full<Bytes>> {
-    let state = resolve_search_state(index_query, store, query).await;
+    let state = resolve_search_state(index_query, store, feed_authority, query).await;
     // The authors' linked identities (slice 4; D-VL-10): ONE link read per
     // request, shared by every author group, and only when there are groups —
     // the lines come from this reader's local checks, never from the index.
@@ -1459,6 +1461,7 @@ async fn search_page(
 async fn resolve_search_state(
     index_query: Option<&dyn IndexQueryPort>,
     store: &dyn StoreReadPort,
+    feed_authority: Option<&(dyn FeedAuthorityReadPort + Send + Sync)>,
     query: Option<&str>,
 ) -> SearchState {
     let Some((dimension, query_value, display_value)) = parse_search_dimension(query) else {
@@ -1522,12 +1525,18 @@ async fn resolve_search_state(
                 // `dimension` is carried into the state so the renderer adds the
                 // dimension-specific honest-framing footer (CONTRIBUTOR → "not a
                 // community consensus", US-NS-003 / AC-003.2).
+                let judged = search_authority(feed_authority, &partition.survivors);
                 let claims = partition
                     .survivors
                     .into_iter()
                     .map(|row| to_indexed_claim(row, &own, &active, &cached))
                     .collect();
-                let result: NetworkSearchResult = compose_results(claims, dimension);
+                let result: NetworkSearchResult = compose_results(claims, dimension)
+                    .with_authority(|row| {
+                        judged
+                            .get(&(bare_did(&row.author_did.0).to_string(), row.cid.0.clone()))
+                            .copied()
+                    });
                 if partition.hidden_count >= 1 {
                     // ≥1 survivor AND ≥1 hidden EVENT ⇒ survivors + the disclosure
                     // notice (RF-V1/V3/V5). A zero count stays `Results` (no misleading
@@ -1551,6 +1560,31 @@ async fn resolve_search_state(
         | Err(IndexQueryError::BadResponse { .. })
         | Err(IndexQueryError::NotFound { .. }) => SearchState::Unavailable,
     }
+}
+
+/// Whose word each network row is, to this reader (ADR-087 §8, UC-7), keyed
+/// by its bare author DID and cid: the SAME judge the terminal's `search`
+/// uses ([`ports::index_rows_authority`]) over this reader's local checks. A
+/// read failure (or no judge wired) leaves the rows unlabelled — never a 5xx.
+fn search_authority(
+    feed_authority: Option<&(dyn FeedAuthorityReadPort + Send + Sync)>,
+    rows: &[NetworkResultRowRaw],
+) -> std::collections::BTreeMap<(String, String), claim_domain::authority::Authority> {
+    let Some(reads) = feed_authority else {
+        return std::collections::BTreeMap::new();
+    };
+    let reads: &dyn FeedAuthorityReadPort = reads;
+    ports::index_rows_authority(reads, rows)
+        .map(|judged| {
+            rows.iter()
+                .zip(judged)
+                .filter_map(|(row, authority)| {
+                    let key = (bare_did(&row.author_did.0).to_string(), row.cid.0.clone());
+                    authority.map(|authority| (key, authority))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Parse the search dimension from the `/search` query string, returning a triple

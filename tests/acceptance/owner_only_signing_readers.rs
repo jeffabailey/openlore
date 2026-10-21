@@ -578,6 +578,70 @@ fn network_search_labels_every_github_claim_using_jeffs_own_check_when_he_has_on
     }
 }
 
+/// RD-7b (crafter-owned regression, DELIVER review D27)
+/// ```gherkin
+/// @driving_port @real-io @security @uc-7 @oos-d27 @c-oos-8 @contract-shape:unbounded-preservation
+/// Scenario Outline: Network search labels every GitHub claim alike on the terminal and in the viewer
+///   Given the network index holds <claim>
+///   And <local>
+///   When Jeff searches the network for <subject> on the terminal and in his viewer
+///   Then both rows read "<label>"
+///   Examples:
+///     | claim                                  | local                                              | subject             | label                       |
+///     | Sven's claim about github:tobiasw      | Jeff holds no identity link of Sven's              | tobiasw             | authority not checked here  |
+///     | Priya's claim about acme-tools/anvil   | anvil's file lists Priya and Jeff re-checked anvil | acme-tools/anvil    | repo-listed                 |
+/// ```
+#[test]
+fn network_search_labels_every_github_claim_alike_on_the_terminal_and_in_the_viewer() {
+    let anvil = Subject::Repo(ANVIL);
+    let tobias = Subject::Person(TOBIAS_GH);
+    let rows: [(&str, &str, Subject, &str); 2] = [
+        (
+            "person, no link evidence",
+            openlore_test_support::SVEN_DID,
+            tobias,
+            NOT_CHECKED_HERE,
+        ),
+        (
+            "repo, local check",
+            openlore_test_support::PRIYA_DID,
+            anvil,
+            Authority::RepoListed.label(),
+        ),
+    ];
+    for (row, author, subject, label) in rows {
+        let world = authority_world();
+        if subject == anvil {
+            the_repo_holds_authority_file(&world, ANVIL, listing(&[author]));
+            given_jeff_verified_authority_of(&world, subject, LINKED_AT);
+        }
+        let indexer =
+            seed_network_index_from_specs(&world.env, vec![index_claim_about(author, subject)]);
+        let uri = subject.uri();
+
+        let found = run_openlore_search(&world.env, &["search", "--subject", &uri], &indexer);
+        let viewer = ViewerServer::start_with_indexer(&world.env, indexer);
+        let page = viewer.get(&format!("/search?subject={uri}"));
+
+        assert_eq!(
+            found.status, 0,
+            "[{row}] {}\n{}",
+            found.stdout, found.stderr
+        );
+        let lines = rows_about(&found.stdout, author, &uri);
+        assert!(
+            !lines.is_empty() && lines.iter().any(|l| l.contains(label)),
+            "[{row}] the terminal row reads `{label}`;\n{}",
+            found.stdout
+        );
+        assert!(
+            page.body.contains(author) && page.body.contains(label),
+            "[{row}] the viewer row reads `{label}`;\n{}",
+            page.body
+        );
+    }
+}
+
 // =============================================================================
 // Grandfathering (ADR-086 §7) and inference sources
 // =============================================================================

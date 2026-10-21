@@ -125,6 +125,7 @@ fn to_result_row(claim: IndexedClaim, counters: &BTreeMap<String, CounterRef>) -
         verified_against: claim.verified_against,
         relationship: claim.relationship,
         counter_annotation,
+        authority: None,
     }
 }
 

@@ -2560,6 +2560,7 @@ fn search_row(author: &str, cid: &str, object: &str, confidence: f64) -> Network
         verified_against: ports::claim_domain::KeyId(format!("{author}#org.openlore.application")),
         relationship: AuthorRelationship::NetworkUnfollowed,
         counter_annotation: None,
+        authority: None,
     }
 }
 

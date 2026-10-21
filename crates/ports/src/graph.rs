@@ -129,6 +129,44 @@ pub trait FeedAuthorityReadPort {
     fn feed_authority(&self, feed: &[ScoringFeedRow]) -> Result<FeedAuthority, String>;
 }
 
+/// This reader's own judgment of each network index row's authority (UC-7,
+/// ADR-087 §8), position for position — the one judge the terminal's and
+/// the viewer's network search share. Nothing the index or a row's author
+/// says decides it.
+pub fn index_rows_authority(
+    reads: &dyn FeedAuthorityReadPort,
+    rows: &[crate::NetworkResultRowRaw],
+) -> Result<Vec<Option<Authority>>, String> {
+    let feed: Vec<ScoringFeedRow> = rows
+        .iter()
+        .enumerate()
+        .map(|(position, row)| index_row_as_feed_row(position, row))
+        .collect();
+    let authority = reads.feed_authority(&feed)?;
+    Ok(feed.iter().map(|row| authority.of(row)).collect())
+}
+
+/// An index row as the judge reads it: its bare author DID and its own
+/// subject, predicate and reference types, keyed by its POSITION in the
+/// result rather than its cid — two rows sharing a cid never share a label.
+/// Labels only: whether a row was withdrawn is never read.
+fn index_row_as_feed_row(position: usize, row: &crate::NetworkResultRowRaw) -> ScoringFeedRow {
+    ScoringFeedRow {
+        claim: AttributedClaim {
+            author_did: Did(claim_domain::bare_did(&row.author_did.0).to_string()),
+            cid: Cid(position.to_string()),
+            subject: row.subject.clone(),
+            predicate: row.predicate.clone(),
+            object: row.object.clone(),
+            confidence: row.confidence,
+            composed_at: row.composed_at,
+            relationship: AuthorRelationship::NetworkUnfollowed,
+        },
+        reference_types: row.references.iter().map(|r| r.ref_type).collect(),
+        withdrawn_by_its_author: false,
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Query filters / graph nodes — the read-method inputs
 // -----------------------------------------------------------------------------
