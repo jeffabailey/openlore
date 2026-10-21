@@ -35,14 +35,16 @@
 
 use anyhow::{anyhow, Context};
 use claim_domain::authority::{
-    exempt_permit, may_sign_from_checks, may_sign_repo_from_checks, republish_permit, requirement,
-    AuthorityRefusal, Requirement, SigningPermit,
+    exempt_permit, may_sign_from_checks, may_sign_repo_as_served, republish_permit, requirement,
+    Requirement, SigningPermit,
 };
 use claim_domain::{Cid, SignedClaim};
 use ports::PdsError;
 
 use crate::errors::render_pds_error;
-use crate::render::{render_signing_refused, render_unattestable_subject, NOT_PUBLISHED};
+use crate::render::{
+    render_repo_signing_refused, render_signing_refused, render_unattestable_subject, NOT_PUBLISHED,
+};
 use crate::verbs::sign_permitted::{reference_types, shape_of};
 use crate::wiring::Wiring;
 
@@ -170,7 +172,9 @@ pub fn run(
 /// idempotently, needing no fresh authority. A claim never published
 /// (`published_at IS NULL`) needs what signing it would need now, judged from
 /// this reader's local checks only — GitHub is not asked: a person's owner,
-/// or for a repo its owner or a DID its authority file lists.
+/// or for a repo its owner or a DID its authority file lists, and only under
+/// the name GitHub served the repo as then (a renamed or transferred repo's
+/// old name is refused with its new one, ADR-087 §2).
 fn publish_permit(
     wiring: &Wiring,
     signed: &SignedClaim,
@@ -200,14 +204,15 @@ fn publish_permit(
         Requirement::Person(person) => {
             let links = signer_links(wiring, now)?;
             may_sign_from_checks(&signer, &person, &links, now)
+                .map_err(|refusal| render_signing_refused(&refusal))
         }
         Requirement::Repo { .. } => {
             let links = signer_links(wiring, now)?;
             let repo = wiring
                 .latest_repo_observation(&unsigned.subject, now)
                 .map_err(PublishError::Other)?;
-            let observed = repo.as_ref().map(|served| &served.latest);
-            may_sign_repo_from_checks(&signer, &unsigned.subject, &links, observed, now)
+            may_sign_repo_as_served(&signer, &unsigned.subject, &links, repo.as_ref(), now)
+                .map_err(|refusal| render_repo_signing_refused(&refusal))
         }
     };
     Ok(permitted_or_refused(decided))
@@ -222,13 +227,12 @@ fn signer_links(
         .map_err(PublishError::Other)
 }
 
-/// The permit the gate minted, or `None` once its refusal is shown on stderr.
+/// The permit the gate minted, or `None` once its rendered refusal is shown
+/// on stderr.
 fn permitted_or_refused(
-    decided: std::result::Result<SigningPermit, AuthorityRefusal>,
+    decided: std::result::Result<SigningPermit, String>,
 ) -> Option<SigningPermit> {
-    decided
-        .map_err(|refusal| eprint!("{}", render_signing_refused(&refusal)))
-        .ok()
+    decided.map_err(|refusal| eprint!("{refusal}")).ok()
 }
 
 /// Publish a `SignedClaim` to the configured PDS and record publication

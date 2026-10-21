@@ -902,7 +902,7 @@ fn a_claim_jeff_signed_about_someone_elses_repo_before_owner_only_signing_is_nev
 ///   Examples:
 ///     | history                                                                    | outcome                                                     |
 ///     | he signed a claim about tidepool without publishing it                     | it reaches his published repo                               |
-///     | he signed it without publishing, then transferred tidepool and re-checked  | refused: the organization has not listed him; nothing published |
+///     | he signed it without publishing, then transferred tidepool and re-checked  | refused: GitHub serves it as acme-tools/tidepool; nothing published |
 ///     | he signed and published it, then transferred tidepool and re-checked       | succeeds again, and his published repo is unchanged         |
 /// ```
 #[test]
@@ -953,12 +953,16 @@ fn publishing_a_stored_claim_later_asks_for_authority_only_if_it_was_never_publi
                 );
             }
             History::UnpublishedThenTransferred => {
+                // EXPECTATION change (DELIVER review, fix 1): publish now
+                // judges the name GitHub serves the repo as, like `claim
+                // add`; a transfer serves it under acme-tools/tidepool, so
+                // the refusal names that name (was: OrgOwnedNotListed).
                 assert_signing_refused(
                     &outcome,
                     tidepool,
-                    Refusal::OrgOwnedNotListed,
-                    Some(CanSign::ListedDid),
+                    Refusal::Renamed,
                     None,
+                    Some(&TIDEPOOL_AT_ACME.full()),
                     "transferred",
                 );
                 assert_eq!(published_after, published_before, "nothing published");
@@ -969,6 +973,44 @@ fn publishing_a_stored_claim_later_asks_for_authority_only_if_it_was_never_publi
             }
         }
     }
+}
+
+/// RA-11c (crafter-owned regression, DELIVER review: publish ignored a rename)
+/// ```gherkin
+/// @driving_port @real-io @edge @security @a-10 @adr-087-2 @adr-086-4 @contract-shape:bounded-change
+/// Scenario: A claim signed under a repo's old name is never published after the rename
+///   Given Jeff linked "jeffbailey" and re-checked tidepool's authority on 1 October
+///   And he signed a claim about jeffbailey/tidepool without publishing it
+///   And then he renamed it to jeffbailey/tidepool-rs and re-checked jeffbailey/tidepool
+///   When Jeff publishes that claim on 8 October
+///   Then it is refused, naming jeffbailey/tidepool-rs, and nothing is published
+/// ```
+#[test]
+fn a_claim_signed_under_a_repos_old_name_is_never_published_after_the_rename() {
+    let tidepool = Subject::Repo(TIDEPOOL);
+    let world = authority_world();
+    given_jeff_linked_his_account(&world);
+    given_jeff_verified_authority_of(&world, tidepool, LINKED_AT);
+    let cid = given_jeff_signed_unpublished(&world, tidepool, CHECK_PLUS_2_DAYS);
+    jeff_renames_tidepool(&world);
+    given_jeff_verified_authority_of(&world, tidepool, CHECK_PLUS_2_DAYS);
+    let published_before = pds_bodies(&world.env);
+
+    let outcome = when_jeff_publishes(&world, &cid, CHECK_PLUS_7_DAYS);
+
+    assert_signing_refused(
+        &outcome,
+        tidepool,
+        Refusal::Renamed,
+        None,
+        Some(&TIDEPOOL_RENAMED.full()),
+        "renamed before publish",
+    );
+    assert_eq!(
+        pds_bodies(&world.env),
+        published_before,
+        "nothing published"
+    );
 }
 
 /// RA-12 (upgrade; ruling R1: CLI behaviour is the primary evidence)
