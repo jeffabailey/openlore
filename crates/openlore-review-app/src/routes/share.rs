@@ -10,7 +10,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::BTreeSet;
 
 use hyper::StatusCode;
-use ports::claim_domain::authority::{SigningPermit, SigningRefusal};
 use ports::{PlanKind, ResolvedIdentity};
 use review_domain::plans::{plan_expires_at, rfc3339_utc};
 use review_domain::share::{
@@ -23,7 +22,7 @@ use crate::http::{App, PageRequest, Reply};
 use crate::limiter::unix_now_secs;
 use crate::routes::confirm::{take_confirmed_plan, ConfirmedPlan};
 use crate::routes::profile::read_published;
-use crate::routes::review::{not_found, PublishChecks};
+use crate::routes::review::{not_found, AuthorityNow, PublishChecks};
 use crate::routes::signin::{csrf_token_for, current_session, field, random_token, to_landing};
 use crate::wiring::{observe, LogEvent};
 
@@ -85,21 +84,10 @@ pub(crate) async fn share_preview(app: &App, request: &PageRequest) -> Reply {
     )
 }
 
-/// Whether the owner may sign about one subject NOW: the same fresh reads
-/// publish makes (ADR-089 §4, `may_sign`), within the page allowance.
-pub(crate) trait AuthorityNow {
-    async fn permit(&mut self, subject: &str) -> Result<SigningPermit, SigningRefusal>;
-}
-
-impl AuthorityNow for PublishChecks<'_> {
-    async fn permit(&mut self, subject: &str) -> Result<SigningPermit, SigningRefusal> {
-        PublishChecks::permit(self, subject).await
-    }
-}
-
 /// The share quote (P-OOS-2): each distinct repo of `published` checked
 /// once, in this request; a claim is quoted only under a permit, so a read
-/// GitHub could not answer leaves it not counted.
+/// GitHub could not answer leaves it not counted. A preview publishes
+/// nothing, so no decision is recorded as a publish check (U-OOS-D34).
 async fn quote_now(published: &[PublishedClaim], authority: &mut impl AuthorityNow) -> ShareQuote {
     let subjects: BTreeSet<&str> = published
         .iter()
@@ -107,7 +95,7 @@ async fn quote_now(published: &[PublishedClaim], authority: &mut impl AuthorityN
         .collect();
     let mut permits = Vec::new();
     for subject in subjects {
-        if let Ok(permit) = authority.permit(subject).await {
+        if let Ok(permit) = authority.decide(subject).await {
             permits.push(permit);
         }
     }
@@ -286,10 +274,15 @@ mod tests {
     struct GithubNow {
         answers: BTreeMap<&'static str, Answer>,
         asked: Vec<String>,
+        recorded: std::cell::Cell<usize>,
     }
 
     impl AuthorityNow for GithubNow {
-        async fn permit(&mut self, subject: &str) -> Result<SigningPermit, SigningRefusal> {
+        fn record(&self, _checked: &Result<SigningPermit, SigningRefusal>) {
+            self.recorded.set(self.recorded.get() + 1);
+        }
+
+        async fn decide(&mut self, subject: &str) -> Result<SigningPermit, SigningRefusal> {
             self.asked.push(subject.to_string());
             let facts = RepoFacts {
                 repo_id: 1,
@@ -336,6 +329,7 @@ mod tests {
                 ("github:priyaraman/reef", Answer::BioUnfinished),
             ]),
             asked: Vec::new(),
+            recorded: std::cell::Cell::new(0),
         };
 
         let quote = quote_now(&published, &mut github).await;
@@ -363,5 +357,29 @@ mod tests {
             assert!(page.contains(&format!("{repo} — ")), "{repo}: {page}");
         }
         assert_eq!(page.matches(NOT_COUNTED).count(), 2, "{page}");
+    }
+
+    /// U-OOS-D34: the share preview decides each repo's permit but records
+    /// no publish check: nothing is published, so nothing is audited as one.
+    #[tokio::test]
+    async fn share_preview_records_no_publish_check() {
+        let published = vec![
+            claim("priyaraman/tidepool", "test-driven"),
+            claim("priyaraman/kelp", "dependency-pinning"),
+        ];
+        let mut github = GithubNow {
+            answers: BTreeMap::from([
+                ("github:priyaraman/tidepool", Answer::Holds),
+                ("github:priyaraman/kelp", Answer::RepoUnfinished),
+            ]),
+            asked: Vec::new(),
+            recorded: std::cell::Cell::new(0),
+        };
+
+        let quote = quote_now(&published, &mut github).await;
+
+        assert_eq!(github.asked.len(), 2, "each repo is decided");
+        assert_eq!(quote.quoted().len(), 1, "the permitted claim is quoted");
+        assert_eq!(github.recorded.get(), 0, "no publish check is recorded");
     }
 }

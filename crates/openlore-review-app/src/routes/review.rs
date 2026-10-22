@@ -460,6 +460,31 @@ impl BioAnswer {
     }
 }
 
+/// Whether the owner may sign about one subject NOW: the same fresh reads
+/// publish makes (ADR-089 §4, `may_sign`), within the page allowance —
+/// and, apart, the audit of a decision as a publish check (KPI-RRA-4), which
+/// only a publish makes (U-OOS-D34: a share preview decides, recording
+/// nothing).
+pub(crate) trait AuthorityNow {
+    /// The decision for `subject`, recording nothing.
+    async fn decide(&mut self, subject: &str) -> Result<SigningPermit, SigningRefusal>;
+    /// Audit a decision as a publish check: passed, or refused and why.
+    fn record(&self, checked: &Result<SigningPermit, SigningRefusal>);
+}
+
+impl AuthorityNow for PublishChecks<'_> {
+    async fn decide(&mut self, subject: &str) -> Result<SigningPermit, SigningRefusal> {
+        self.read_and_decide(subject).await
+    }
+
+    fn record(&self, checked: &Result<SigningPermit, SigningRefusal>) {
+        emit(match checked {
+            Ok(_) => LogEvent::PublishCheckPassed,
+            Err(refusal) => LogEvent::PublishCheckRefused(refusal.clone()),
+        });
+    }
+}
+
 impl<'a> PublishChecks<'a> {
     pub(crate) fn new(app: &'a App, owner_did: &'a str) -> Self {
         let accounts = app.links.github_accounts(owner_did).unwrap_or_default();
@@ -480,24 +505,27 @@ impl<'a> PublishChecks<'a> {
     /// A permit for `subject` from this request's reads, or why not; each
     /// check is audited before anything can be written (KPI-RRA-4).
     pub(crate) async fn permit(&mut self, subject: &str) -> Result<SigningPermit, SigningRefusal> {
+        let checked = self.read_and_decide(subject).await;
+        self.record(&checked);
+        checked
+    }
+
+    /// A permit for `subject` from this request's reads, or why not,
+    /// recording nothing.
+    async fn read_and_decide(&mut self, subject: &str) -> Result<SigningPermit, SigningRefusal> {
         let repo = self.repo(subject).await;
         let bio = match owner_to_read(&self.listed, repo.as_read()) {
             Some(owner_id) => self.bio(owner_id).await,
             None => BioAnswer::Unfinished,
         };
-        let checked = may_sign(
+        may_sign(
             self.owner_did,
             subject,
             &self.listed,
             repo.as_read(),
             bio.as_read(),
         )
-        .map_err(|refusal| refusal_to_explain(refusal, &self.listed, repo.as_read()));
-        emit(match &checked {
-            Ok(_) => LogEvent::PublishCheckPassed,
-            Err(refusal) => LogEvent::PublishCheckRefused(refusal.clone()),
-        });
-        checked
+        .map_err(|refusal| refusal_to_explain(refusal, &self.listed, repo.as_read()))
     }
 
     /// A publish landed under `permit`: its listed owner account's bio, read
