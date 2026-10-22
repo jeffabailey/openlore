@@ -139,6 +139,16 @@ Facts that shape the decision:
     owner login after `openlore identity link github <login>`, or "a DID listed in the repo's
     `.github/openlore-authority`") and the exact command they would run.
 
+*Amendment 2026-10-21 (user decision D30, U-OOS-D30)*: `openlore publish push` is gated like
+`claim publish`. At push time each claim gets a fresh permit from the same stored-check gate
+(§4): a claim this store already published re-publishes; exempt kinds (counters, retractions,
+identity links, non-`github:` subjects) push; a `github:` assertion needs the person or repo
+authority signing it would need now, from local checks only (GitHub is not asked), and a
+malformed `github:` subject is refused. A refused claim is not pushed: the push report lists it
+as `Not pushed (authority): <subject> — <refusal>`, with the same refusal and hand-off as `claim
+publish`, and the push exits 1. Permitted claims push as before; the push path takes the permit
+(`sign_only_with_permit` holds `push_one` to a `&SigningPermit`).
+
 ## Alternatives Considered
 
 | Alternative | Evaluation | Verdict |

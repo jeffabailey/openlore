@@ -212,6 +212,10 @@ readers one evidence path, and composers one sign-time gate (D9, D20).
 
 ## Deferred
 
+- **Resolved after finalize:** U-OOS-D30 in 5ada65b (`publish push` takes a
+  permit per claim, re-checked like `claim publish`; user decision), U-OOS-D31
+  in 28d8613, U-OOS-D32 in a321e0f, U-OOS-D34 in 89213d5. The entries below
+  for them are kept as first recorded.
 - **U-OOS-D30, `openlore publish push` has no permit:** `publish push` sends
   every signed claim in your own store to an instance, with no
   `SigningPermit` or fresh authority check (`crates/cli/src/verbs/publish.rs`).
