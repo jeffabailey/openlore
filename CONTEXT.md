@@ -1,7 +1,7 @@
 # OpenLore — Resume Context
 
 ## Current Task
-owner-only-signing delivered and finalized (`docs/evolution/owner-only-signing-evolution.md`): on main, NOT pushed, not deployed. Follow-ups D30 (publish push gated, 5ada65b), D31, D32, D34 done after finalize. All 25 steps pass DES integrity; review revised once; mutation 100% (176/176).
+owner-only-signing delivered and finalized (`docs/evolution/owner-only-signing-evolution.md`): pushed (fed4495, CI + publish contract green) and review app deployed 2026-10-22 (sha256:e5c5a143…, commit 3532e13). Follow-ups D30 (publish push gated, 5ada65b), D31, D32, D34 done after finalize. All 25 steps pass DES integrity; review revised once; mutation 100% (176/176).
 
 ## Key Decisions
 - Only an account's owner (verified link) or a DID listed in a repo's `.github/openlore-authority` (or the repo owner) can sign about it; anyone can import unsigned candidates (ADR-086/087). Readers label and don't weigh third-party / unchecked claims.
@@ -10,5 +10,5 @@ owner-only-signing delivered and finalized (`docs/evolution/owner-only-signing-e
 
 ## Next Steps
 - Still deferred: U-OOS-D35 (`scrape person` records no candidates, needs a DISTILL row) and U-OOS-D13 (docs/feature/owner-only-signing/deliver/upstream-issues.md).
-- On "push": push main, watch CI, then deploy the review app (store goes v8/v9 via migration).
-- Remove worktree ../openlore-oos (branch oos-deliver) once pushed; older backlog in memory `openlore-follow-up-backlog.md`.
+- `cli.sh` header example still uses `claim add --subject github:rust-lang/rust`, now refused for a dev identity; switch it to a non-github subject.
+- Older backlog in memory `openlore-follow-up-backlog.md`.
