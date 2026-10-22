@@ -186,11 +186,15 @@ mkdir -p "${OPENLORE_HOME}"
 "${OPENLORE_BIN}" init --handle contract.test --app-password contract-unused \
   || fail "openlore init"
 
+# The subject is not a `github:` one: since owner-only-signing (ADR-086) only
+# an account's owner may sign about `github:<login>` / `github:<owner>/<repo>`,
+# and this throwaway fixture identity owns none. The contract under test is
+# the transport (CIDs, idempotency, auth, card), not subject authority.
 seeded_cids=()
 for confidence in "${GOLD_CONFIDENCES[@]}"; do
   # Enter = sign locally; N = do not publish to a PDS (local-only claim).
   added="$(printf '\nN\n' | "${OPENLORE_BIN}" claim add \
-    --subject github:rust-lang/rust \
+    --subject https://www.rust-lang.org/ \
     --predicate embodiesPhilosophy \
     --object org.openlore.philosophy.memory-safety \
     --evidence https://www.rust-lang.org/ \
@@ -287,7 +291,7 @@ echo "contract-roundtrip: card lists all ${expected_total} pushed claims, each a
 # 5a. Re-push of an already-complete set pushes nothing and adds no entry.
 repush_out="$("${OPENLORE_BIN}" publish push)" || fail "re-push: ${repush_out}"
 echo "${repush_out}"
-grep -qx "pushed: 0, skipped: ${expected_total}, verified: 0/0" <<<"${repush_out}" \
+grep -qx "pushed: 0, skipped: ${expected_total}, verified: 0/0, not pushed (authority): 0" <<<"${repush_out}" \
   || fail "re-push did not report 'pushed: 0, skipped: ${expected_total}'"
 
 # 5b. Raw re-PUTs of a committed CID — with the commit header, without it, and
@@ -337,7 +341,7 @@ second_author() {
 mkdir -p "${WORK_DIR}/home-second"
 second_author init --handle second.test --app-password contract-unused || fail "second author: openlore init"
 second_added="$(printf '\nN\n' | second_author claim add \
-  --subject github:rust-lang/rust \
+  --subject https://www.rust-lang.org/ \
   --predicate embodiesPhilosophy \
   --object org.openlore.philosophy.memory-safety \
   --evidence https://www.rust-lang.org/ \
