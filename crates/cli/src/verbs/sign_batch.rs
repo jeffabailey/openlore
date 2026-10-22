@@ -13,11 +13,13 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 use anyhow::{anyhow, Result};
-use claim_domain::authority::{ClaimShape, SigningPermit};
-use claim_domain::{reference_rules_validate, ClaimLookup, ClaimReference, ReferenceType};
+use claim_domain::authority::{withdrawn_claims, ClaimShape, SigningPermit};
+use claim_domain::{
+    bare_did, reference_rules_validate, Cid, ClaimLookup, ClaimReference, ReferenceType,
+};
 
 use crate::io::prompt_line;
-use crate::render::render_import_signing_refused;
+use crate::render::{render_foreign_withdrawal_refused, render_import_signing_refused};
 use crate::verbs::claim_add::{
     build_unsigned_claim, render_compose_preview, sign_time_permit, ComposedClaim,
 };
@@ -461,6 +463,13 @@ fn permit_or_refusal(
         predicate,
         references,
     } = *composed;
+    if let Some(withdrawn) = unowned_withdrawal(wiring, references)? {
+        eprint!(
+            "{}",
+            render_foreign_withdrawal_refused(subject, &withdrawn.0)
+        );
+        return Ok(None);
+    }
     let reference_types: Vec<ReferenceType> = references.iter().map(|r| r.ref_type).collect();
     let claim = ClaimShape {
         subject,
@@ -477,6 +486,27 @@ fn permit_or_refusal(
             );
         })
         .ok())
+}
+
+/// The first claim a candidate withdraws (`retracts`) that is not a claim
+/// the signer signed in this store (same bare DID), if any (U-OOS-D32): a
+/// withdrawal needs no authority only because it withdraws the signer's
+/// own claim — an unknown CID or another author's claim is not one.
+fn unowned_withdrawal<'a>(
+    wiring: &Wiring,
+    references: &'a [ClaimReference],
+) -> Result<Option<&'a Cid>> {
+    let signer = bare_did(&wiring.identity.author_did().0);
+    for withdrawn in withdrawn_claims(references) {
+        let signers_own = wiring
+            .storage
+            .read_signed_claim(withdrawn)?
+            .is_some_and(|claim| bare_did(&claim.unsigned.author_did.0) == signer);
+        if !signers_own {
+            return Ok(Some(withdrawn));
+        }
+    }
+    Ok(None)
 }
 
 /// Whether the sign-prompt answer is the SKIP gesture: the literal `skip` /
@@ -548,6 +578,108 @@ fn parse_confidence(raw: &str) -> Result<f64, String> {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    /// U-OOS-D32: a wiring over a fresh local store signed into as Jeff,
+    /// holding one claim Jeff signed and one Maria signed, both about
+    /// `rachelk` — the store and the two claims' CIDs.
+    fn store_with_claims_by_jeff_and_maria(
+        home: &std::path::Path,
+    ) -> (Wiring, claim_domain::Cid, claim_domain::Cid) {
+        use claim_domain::{
+            canonicalize, compute_cid, Confidence, Did, SignedClaim, UnsignedClaim,
+        };
+        use openlore_test_support::{FakeIdentity, FakePds};
+        use ports::IdentityPort;
+
+        let signed_by = |identity: &FakeIdentity| {
+            let unsigned = UnsignedClaim {
+                subject: "github:rachelk".to_string(),
+                predicate: "embodiesPhilosophy".to_string(),
+                object: "org.openlore.philosophy.memory-safety".to_string(),
+                evidence: Vec::new(),
+                confidence: Confidence::try_new(0.55).expect("confidence"),
+                author_did: Did(identity.author_did().0.clone()),
+                composed_at: "2026-10-01T09:00:00+00:00".to_string(),
+                references: Vec::new(),
+                reason: None,
+            };
+            let cid = compute_cid(&canonicalize(&unsigned).expect("canonical"));
+            SignedClaim {
+                signature: identity.sign(&cid).expect("sign"),
+                unsigned,
+            }
+        };
+        let jeff = FakeIdentity::jeff();
+        let jeffs = signed_by(&jeff);
+        let marias = signed_by(&FakeIdentity::maria());
+        let paths = crate::paths::OpenLorePaths {
+            config_dir: home.join("config"),
+            data_dir: home.join("data"),
+        };
+        let pds = FakePds::for_did(jeff.author_did().0.clone());
+        let wiring = Wiring::over_local_store(
+            paths,
+            Box::new(jeff),
+            Box::new(pds),
+            Box::new(adapter_system_clock::SystemClockAdapter::new()),
+            Box::new(adapter_github::GithubAdapter::from_env()),
+        )
+        .expect("wiring over a fresh local store");
+        for signed in [&jeffs, &marias] {
+            wiring.storage.write_signed_claim(signed).expect("stored");
+        }
+        (
+            wiring,
+            jeffs.signature.signed_cid,
+            marias.signature.signed_cid,
+        )
+    }
+
+    /// The permit a candidate about `rachelk` withdrawing `withdrawn` is
+    /// signed under, if any.
+    fn permit_to_withdraw(wiring: &Wiring, withdrawn: &claim_domain::Cid) -> Option<SigningPermit> {
+        let references = [ClaimReference {
+            ref_type: ReferenceType::Retracts,
+            cid: withdrawn.clone(),
+        }];
+        let candidate = ComposedShape {
+            subject: "github:rachelk",
+            predicate: "embodiesPhilosophy",
+            references: &references,
+        };
+        permit_or_refusal(wiring, &candidate, &UnansweredRepos::default())
+            .expect("a refusal is an outcome, not an error")
+    }
+
+    /// U-OOS-D32: a candidate that withdraws a claim the signer did not
+    /// sign — another author's, or one this store does not hold — gets no
+    /// permit, so nothing is signed (a `retracts` reference does not buy an
+    /// assertion about a GitHub account exempt precedence).
+    #[test]
+    fn a_candidate_withdrawing_a_claim_the_signer_did_not_sign_is_refused() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let (wiring, _, marias) = store_with_claims_by_jeff_and_maria(home.path());
+        let unknown = claim_domain::Cid("bafyreinotinthisstore".to_string());
+
+        assert_eq!(permit_to_withdraw(&wiring, &marias), None, "Maria's claim");
+        assert_eq!(
+            permit_to_withdraw(&wiring, &unknown),
+            None,
+            "an unknown CID"
+        );
+    }
+
+    /// U-OOS-D32: withdrawing the signer's own claim still needs no
+    /// authority over its subject.
+    #[test]
+    fn a_candidate_withdrawing_the_signers_own_claim_is_permitted() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let (wiring, jeffs, _) = store_with_claims_by_jeff_and_maria(home.path());
+
+        let permit = permit_to_withdraw(&wiring, &jeffs).expect("Jeff withdraws his own claim");
+
+        assert_eq!(permit.subject(), "github:rachelk");
+    }
 
     fn candidate_numbered(number: usize) -> SignableCandidate {
         SignableCandidate {

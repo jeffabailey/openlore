@@ -71,6 +71,15 @@ pub const NOT_SIGNED: &str = "Not signed";
 /// What did not happen to a refused stored claim: it was not published.
 pub const NOT_PUBLISHED: &str = "Not published";
 
+/// Render a refused candidate about `subject` that withdraws `withdrawn`, a
+/// claim the signer did not sign in this store (U-OOS-D32): nothing signed.
+pub fn render_foreign_withdrawal_refused(subject: &str, withdrawn: &str) -> String {
+    format!(
+        "{NOT_SIGNED}: the claim about {subject} withdraws {withdrawn}, which is not a claim \
+         you signed. Only your own claims can be withdrawn.\n"
+    )
+}
+
 /// Render a refused claim whose `github:` subject names no account or repo
 /// (fail closed); `outcome` is what did not happen to it.
 pub fn render_unattestable_subject(outcome: &str, subject: &str) -> String {

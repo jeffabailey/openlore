@@ -23,7 +23,7 @@ use chrono::{DateTime, Utc};
 
 use crate::identity_link::{bio_verdict, is_did_shaped, link_predicate, BioVerdict, CheckVerdict};
 use crate::references::ReferenceStance;
-use crate::ReferenceType;
+use crate::{Cid, ClaimReference, ReferenceType};
 
 /// Who owns a repo, as GitHub's `owner.type` says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -381,6 +381,16 @@ pub fn kind(claim: ClaimShape<'_>) -> ClaimKind {
     } else {
         ClaimKind::Assertion
     }
+}
+
+/// The claims `references` withdraw: a withdrawal is exempt only as the
+/// author's withdrawal of their own claim, which the caller checks against
+/// its store (U-OOS-D32).
+pub fn withdrawn_claims(references: &[ClaimReference]) -> impl Iterator<Item = &Cid> {
+    references
+        .iter()
+        .filter(|reference| reference.ref_type.stance() == ReferenceStance::Withdraws)
+        .map(|reference| &reference.cid)
 }
 
 /// Which authority `claim` needs. Only an assertion about a `github:`
@@ -1924,6 +1934,25 @@ mod gate_from_checks_tests {
             Some((JEFF, subject, PermitBasis::Exempt))
         );
         assert_eq!(republish_permit(JEFF, subject, "bafyone", None), None);
+    }
+
+    // bypass (U-OOS-D32): only `retracts` references withdraw a claim.
+    #[test]
+    fn only_retracts_references_withdraw_a_claim() {
+        let reference = |ref_type, cid: &str| ClaimReference {
+            ref_type,
+            cid: Cid(cid.to_string()),
+        };
+        let references = [
+            reference(ReferenceType::Supersedes, "bafysuper"),
+            reference(ReferenceType::Retracts, "bafyretracted"),
+            reference(ReferenceType::Counters, "bafycountered"),
+            reference(ReferenceType::Corrects, "bafycorrected"),
+        ];
+        let withdrawn: Vec<&str> = withdrawn_claims(&references)
+            .map(|cid| cid.0.as_str())
+            .collect();
+        assert_eq!(withdrawn, ["bafyretracted"]);
     }
 
     // bypass (U-OOS-D31): a re-publish permit covers the one claim it was

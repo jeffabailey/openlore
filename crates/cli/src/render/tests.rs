@@ -1080,3 +1080,17 @@ proptest! {
         }
     }
 }
+
+/// U-OOS-D32: a candidate withdrawing a claim the signer did not sign is
+/// refused naming its subject and the withdrawn CID; nothing is signed.
+#[test]
+fn a_foreign_withdrawal_refusal_names_the_subject_and_the_withdrawn_claim() {
+    let line = render_foreign_withdrawal_refused("github:rachelk", "bafyreimaria");
+    assert!(line.starts_with("Not signed: "), "{line}");
+    assert!(line.contains("github:rachelk"), "{line}");
+    assert!(line.contains("bafyreimaria"), "{line}");
+    assert!(
+        line.contains("Only your own claims can be withdrawn."),
+        "{line}"
+    );
+}
