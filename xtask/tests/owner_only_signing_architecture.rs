@@ -376,12 +376,46 @@ fn the_single_publish_path_without_a_permit_parameter_is_a_finding() {
     );
 }
 
+const PUSHES_UNDER_A_PERMIT: &str = "
+fn push_one(
+    instance: &dyn PublishPort,
+    permit: &SigningPermit,
+    signed: &SignedClaim,
+) -> anyhow::Result<PushResult> {}";
+
+const PUSHES_WITHOUT_A_PERMIT: &str = "
+fn push_one(instance: &dyn PublishPort, signed: &SignedClaim) -> anyhow::Result<PushResult> {}
+fn helper(permit: &SigningPermit) {}";
+
+/// U-OOS-D30: the instance push path is held to the same rule as the PDS
+/// publish path — `publish push` writes a record only under a permit.
+#[test]
+fn the_instance_push_path_without_a_permit_parameter_is_a_finding() {
+    let push = "crates/cli/src/verbs/publish.rs";
+    assert!(
+        classify_sign_only_with_permit(push, PUSHES_UNDER_A_PERMIT).is_empty(),
+        "pushing under `&SigningPermit` passes"
+    );
+    for (source, why) in [
+        (PUSHES_WITHOUT_A_PERMIT, "no permit parameter"),
+        ("fn helper() {}", "no push path"),
+    ] {
+        let findings = classify_sign_only_with_permit(push, source);
+        assert_eq!(findings.len(), 1, "{why}: {findings:?}");
+        assert!(
+            findings[0].contains("sign_only_with_permit") && findings[0].contains("push_one"),
+            "{why}: {findings:?}"
+        );
+    }
+}
+
 #[test]
 fn the_real_tree_signs_only_through_sign_permitted() {
     let findings = scan_sign_only_with_permit(&root()).expect("scan");
     assert_scanned(&[
         "crates/cli/src/verbs/sign_permitted.rs",
         "crates/cli/src/verbs/claim_publish.rs",
+        "crates/cli/src/verbs/publish.rs",
     ]);
     assert!(findings.is_empty(), "{findings:#?}");
 }

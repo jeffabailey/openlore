@@ -34,6 +34,7 @@
 use anyhow::{anyhow, Context};
 use std::collections::HashMap;
 
+use claim_domain::authority::SigningPermit;
 use claim_domain::{Cid, SignedClaim};
 use ports::{ClaimRow, InstanceReadPort, PageRequest, PublishPort, RecordBytes, RoundTripVerdict};
 use publish_domain::{ForeignRecord, LocalClaim, PulledRecord, Reconciled, RecordIdentity};
@@ -42,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use crate::render::{
     render_publish_init, render_publish_pull, render_publish_push, render_publish_status,
 };
+use crate::verbs::claim_publish::{refuse_a_permit_for_another_claim, stored_claim_permit};
 use crate::wiring::{self, ProbeRefusal, Wiring};
 
 /// Env seam: the publish target used when none has been registered via
@@ -89,12 +91,24 @@ pub enum PushResult {
     Rejected { cid: Cid, detail: String },
 }
 
-/// The result of `publish push`: one result per claim the plan sent, plus
-/// how many local claims the instance's manifest already listed (skipped).
+/// A claim `publish push` did not send: the stored-check gate `claim
+/// publish` uses minted no permit for it (U-OOS-D30, ADR-086 §4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorityRefused {
+    pub cid: Cid,
+    pub subject: String,
+    /// The refusal as `claim publish` renders it (why, and who can sign).
+    pub refusal: String,
+}
+
+/// The result of `publish push`: one result per claim the plan sent, the
+/// claims refused for want of authority (never sent), plus how many local
+/// claims the instance's manifest already listed (skipped).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushReport {
     pub instance_url: String,
     pub results: Vec<PushResult>,
+    pub refused: Vec<AuthorityRefused>,
     pub skipped: usize,
 }
 
@@ -107,8 +121,10 @@ impl PushReport {
             .count()
     }
 
+    /// Every claim the plan held was sent and committed: none refused for
+    /// want of authority, none rejected on read-back.
     fn all_committed(&self) -> bool {
-        self.committed_count() == self.results.len()
+        self.refused.is_empty() && self.committed_count() == self.results.len()
     }
 }
 
@@ -200,14 +216,23 @@ fn push(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
         &own_claim_cids(wiring)?,
         &publish_domain::manifest_cids(&manifest),
     );
-    let results = plan
-        .to_push
-        .iter()
-        .map(|cid| push_one(instance.as_ref(), &own_signed_claim(wiring, cid)?))
-        .collect::<anyhow::Result<Vec<_>>>()?;
+    let mut results = Vec::new();
+    let mut refused = Vec::new();
+    for cid in &plan.to_push {
+        let signed = own_signed_claim(wiring, cid)?;
+        match stored_claim_permit(wiring, &signed)? {
+            Ok(permit) => results.push(push_one(instance.as_ref(), &permit, &signed)?),
+            Err(refusal) => refused.push(AuthorityRefused {
+                cid: cid.clone(),
+                subject: signed.unsigned.subject,
+                refusal,
+            }),
+        }
+    }
     let report = PushReport {
         instance_url,
         results,
+        refused,
         skipped: plan.skipped.len(),
     };
     Ok(PublishOutcome {
@@ -275,9 +300,16 @@ fn exit_code_for(success: bool) -> i32 {
 // -----------------------------------------------------------------------------
 
 /// Stage → read back → recompute → commit only on a verified, verbatim
-/// read-back. A mismatch never reaches the manifest (the store has no
-/// DELETE; manifest append = commit), so nothing is silently stored.
-fn push_one(instance: &dyn PublishPort, signed: &SignedClaim) -> anyhow::Result<PushResult> {
+/// read-back, under a [`SigningPermit`] covering `signed` (U-OOS-D30: a
+/// permit for another claim stores nothing). A mismatch never reaches the
+/// manifest (the store has no DELETE; manifest append = commit), so nothing
+/// is silently stored.
+fn push_one(
+    instance: &dyn PublishPort,
+    permit: &SigningPermit,
+    signed: &SignedClaim,
+) -> anyhow::Result<PushResult> {
+    refuse_a_permit_for_another_claim(permit, signed)?;
     let cid = signed.signature.signed_cid.clone();
     let record = publish_domain::record_bytes_of(signed);
     instance

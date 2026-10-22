@@ -684,3 +684,153 @@ fn after_jeff_renames_his_github_account_he_signs_only_under_the_new_login() {
 
 /// One PS-2 refusal row: label, Given, subject account, expected refusal.
 type RefusalRow = (&'static str, fn(&LinkWorld), Account, Refusal);
+
+// =============================================================================
+// U-OOS-D30 — `publish push` takes a permit per claim, like `claim publish`
+// =============================================================================
+
+/// GIVEN: Jeff registered `instance` as his publish target (`publish init`).
+fn given_jeff_registered_his_instance(world: &LinkWorld, instance: &FakeInstance) {
+    let init = run_openlore_publish(&world.env, &["init", instance.endpoint_url()], instance);
+    assert_eq!(
+        init.status,
+        0,
+        "precondition: Jeff registers his instance;{}",
+        shown(&init)
+    );
+}
+
+/// WHEN: Jeff pushes his whole store to his registered instance at `now`.
+fn when_jeff_pushes(world: &LinkWorld, now: &str) -> CliOutcome {
+    openlore_with(
+        &world.env,
+        &["publish", "push"],
+        Invocation {
+            now: Some(now),
+            ..Default::default()
+        },
+    )
+}
+
+/// The run's exit, stdout and stderr, for a failing assertion.
+fn shown(outcome: &CliOutcome) -> String {
+    format!(
+        "\n--- exit {} ---\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.status, outcome.stdout, outcome.stderr
+    )
+}
+
+/// The instance's committed CIDs, sorted.
+fn instance_cids(instance: &FakeInstance) -> Vec<String> {
+    let mut cids = instance.stored_cids();
+    cids.sort();
+    cids
+}
+
+/// PS-D30a (crafter-owned regression, user decision D30)
+/// ```gherkin
+/// @driving_port @real-io @security @u-oos-d30 @adr-086-4 @contract-shape:bounded-change
+/// Scenario: Pushing my store sends what I may publish and refuses the rest, like claim publish
+///   Given Jeff linked "jeffbailey" and signed a claim about himself without publishing it
+///   And his store holds a claim about rachelk signed before owner-only signing
+///   And he disputed Rachel's claim about rachelk/kelp
+///   When Jeff pushes his store to his instance
+///   Then his own claim, his link and his dispute reach the instance
+///   And the claim about rachelk does not, naming rachelk and why
+///   And the push exits 1
+/// ```
+#[test]
+fn pushing_my_store_sends_what_i_may_publish_and_refuses_a_claim_about_someone_else() {
+    let mut world = authority_world();
+    given_jeff_linked_his_account(&world);
+    given_jeff_signed_unpublished(&world, Subject::Person(JEFF_GH), CHECK_PLUS_2_DAYS);
+    let rachels = given_rachel_published(&mut world, vec![peer_claim_about(Subject::Repo(KELP))]);
+    let about_rachel = Subject::Person(RACHEL_GH);
+    let pre_gate = seed_local_claim_about(
+        &world.env,
+        &about_rachel.uri(),
+        "org.openlore.philosophy.memory-safety",
+    );
+    let disputed = when_jeff_counters(&world, &rachels[0], CHECK_PLUS_2_DAYS);
+    assert_eq!(
+        disputed.status,
+        0,
+        "precondition: Jeff may dispute Rachel's claim;{}",
+        shown(&disputed)
+    );
+    let instance = FakeInstance::fresh();
+    given_jeff_registered_his_instance(&world, &instance);
+
+    let outcome = when_jeff_pushes(&world, CHECK_PLUS_2_DAYS);
+
+    assert_eq!(
+        outcome.status,
+        1,
+        "a refused claim fails the push;{}",
+        shown(&outcome)
+    );
+    assert_refused(
+        &outcome,
+        about_rachel,
+        Refusal::NoLink,
+        Some(CanSign::Login(RACHEL_GH.login)),
+        None,
+        "push about rachelk",
+    );
+    assert!(
+        outcome
+            .stdout
+            .contains(&format!("Not pushed (authority): {}", about_rachel.uri())),
+        "the push report lists the refused claim;{}",
+        shown(&outcome)
+    );
+    let expected: Vec<String> = local_claim_cids(&world.env)
+        .into_iter()
+        .filter(|cid| *cid != pre_gate)
+        .collect();
+    assert_eq!(expected.len(), 3, "his link, his own claim and his dispute");
+    assert_eq!(
+        instance_cids(&instance),
+        expected,
+        "the instance holds exactly what Jeff may publish"
+    );
+}
+
+/// PS-D30b (crafter-owned regression, user decision D30, ADR-087 §2)
+/// ```gherkin
+/// @driving_port @real-io @edge @security @u-oos-d30 @adr-087-2 @contract-shape:bounded-change
+/// Scenario: A claim signed under a repo's old name is not pushed after the rename
+///   Given Jeff linked "jeffbailey" and re-checked tidepool's authority on 1 October
+///   And he signed a claim about jeffbailey/tidepool without publishing it
+///   And then he renamed it to jeffbailey/tidepool-rs and re-checked jeffbailey/tidepool
+///   When Jeff pushes his store on 8 October
+///   Then the claim is refused, naming jeffbailey/tidepool-rs, and the instance does not hold it
+/// ```
+#[test]
+fn a_claim_signed_under_a_repos_old_name_is_not_pushed_after_the_rename() {
+    let tidepool = Subject::Repo(TIDEPOOL);
+    let world = authority_world();
+    given_jeff_linked_his_account(&world);
+    given_jeff_verified_authority_of(&world, tidepool, LINKED_AT);
+    let cid = given_jeff_signed_unpublished(&world, tidepool, CHECK_PLUS_2_DAYS);
+    jeff_renames_tidepool(&world);
+    given_jeff_verified_authority_of(&world, tidepool, CHECK_PLUS_2_DAYS);
+    let instance = FakeInstance::fresh();
+    given_jeff_registered_his_instance(&world, &instance);
+
+    let outcome = when_jeff_pushes(&world, CHECK_PLUS_7_DAYS);
+
+    assert_signing_refused(
+        &outcome,
+        tidepool,
+        Refusal::Renamed,
+        None,
+        Some(&TIDEPOOL_RENAMED.full()),
+        "renamed before push",
+    );
+    assert!(
+        !instance_cids(&instance).contains(&cid),
+        "the claim under the old name is not on the instance;{}",
+        shown(&outcome)
+    );
+}

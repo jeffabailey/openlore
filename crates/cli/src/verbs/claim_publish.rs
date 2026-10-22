@@ -168,68 +168,65 @@ pub fn run(
 }
 
 /// The permit to publish a stored claim, or `None` once its refusal is shown
-/// on stderr (ADR-086 §4). A claim this store already published re-publishes
-/// idempotently, needing no fresh authority. A claim never published
-/// (`published_at IS NULL`) needs what signing it would need now, judged from
-/// this reader's local checks only — GitHub is not asked: a person's owner,
-/// or for a repo its owner or a DID its authority file lists, and only under
-/// the name GitHub served the repo as then (a renamed or transferred repo's
-/// old name is refused with its new one, ADR-087 §2).
+/// on stderr (ADR-086 §4) — [`stored_claim_permit`]'s decision.
 fn publish_permit(
     wiring: &Wiring,
     signed: &SignedClaim,
 ) -> std::result::Result<Option<SigningPermit>, PublishError> {
+    let decided = stored_claim_permit(wiring, signed).map_err(PublishError::Other)?;
+    Ok(permitted_or_refused(decided))
+}
+
+/// The stored-check gate for publishing a stored claim anywhere (`claim
+/// publish` to the PDS, `publish push` to the user's instance — U-OOS-D30):
+/// its permit, or its rendered refusal (ADR-086 §4). A claim this store
+/// already published re-publishes idempotently, needing no fresh authority. A
+/// claim never published (`published_at IS NULL`) needs what signing it would
+/// need now, judged from this reader's local checks only — GitHub is not
+/// asked: a person's owner, or for a repo its owner or a DID its authority
+/// file lists, and only under the name GitHub served the repo as then (a
+/// renamed or transferred repo's old name is refused with its new one,
+/// ADR-087 §2).
+pub(crate) fn stored_claim_permit(
+    wiring: &Wiring,
+    signed: &SignedClaim,
+) -> anyhow::Result<std::result::Result<SigningPermit, String>> {
     let signer = wiring.identity.author_did().0.clone();
     let unsigned = &signed.unsigned;
     let published_at = wiring
         .storage
         .published_at(&signed.signature.signed_cid)
-        .context("reading whether the claim was published")
-        .map_err(PublishError::Other)?;
+        .context("reading whether the claim was published")?;
     if let Some(permit) = republish_permit(
         &signer,
         &unsigned.subject,
         &signed.signature.signed_cid.0,
         published_at,
     ) {
-        return Ok(Some(permit));
+        return Ok(Ok(permit));
     }
     let references = reference_types(unsigned);
     let claim = shape_of(unsigned, &references);
     let now = wiring.clock.now_utc();
-    let decided = match requirement(claim) {
-        Requirement::Exempt => return Ok(exempt_permit(&signer, claim)),
-        Requirement::Malformed => {
-            eprint!(
-                "{}",
-                render_unattestable_subject(NOT_PUBLISHED, &unsigned.subject)
-            );
-            return Ok(None);
-        }
+    Ok(match requirement(claim) {
+        // An exempt claim always mints an exempt permit.
+        Requirement::Exempt => exempt_permit(&signer, claim).ok_or_else(String::new),
+        Requirement::Malformed => Err(render_unattestable_subject(
+            NOT_PUBLISHED,
+            &unsigned.subject,
+        )),
         Requirement::Person(person) => {
-            let links = signer_links(wiring, now)?;
+            let links = wiring.signer_linked_accounts(now)?;
             may_sign_from_checks(&signer, &person, &links, now)
                 .map_err(|refusal| render_signing_refused(&refusal))
         }
         Requirement::Repo { .. } => {
-            let links = signer_links(wiring, now)?;
-            let repo = wiring
-                .latest_repo_observation(&unsigned.subject, now)
-                .map_err(PublishError::Other)?;
+            let links = wiring.signer_linked_accounts(now)?;
+            let repo = wiring.latest_repo_observation(&unsigned.subject, now)?;
             may_sign_repo_as_served(&signer, &unsigned.subject, &links, repo.as_ref(), now)
                 .map_err(|refusal| render_repo_signing_refused(&refusal))
         }
-    };
-    Ok(permitted_or_refused(decided))
-}
-
-fn signer_links(
-    wiring: &Wiring,
-    now: chrono::DateTime<chrono::Utc>,
-) -> std::result::Result<Vec<claim_domain::authority::LinkedAccountEvidence>, PublishError> {
-    wiring
-        .signer_linked_accounts(now)
-        .map_err(PublishError::Other)
+    })
 }
 
 /// The permit the gate minted, or `None` once its rendered refusal is shown
@@ -314,7 +311,7 @@ pub fn publish_signed_claim(
 /// A permit that does not cover `signed` publishes nothing
 /// ([`SigningPermit::covers`]: another subject, signer or claim, or an
 /// exempt permit for a claim needing authority).
-fn refuse_a_permit_for_another_claim(
+pub(crate) fn refuse_a_permit_for_another_claim(
     permit: &SigningPermit,
     signed: &SignedClaim,
 ) -> anyhow::Result<()> {

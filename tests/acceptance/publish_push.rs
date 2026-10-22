@@ -39,6 +39,9 @@ fn publish_push_sends_only_new_claims_additive_and_cid_verified() {
     // already holds 1 of them (a prior push).
     let env = TestEnv::initialized_as(FakeIdentity::maria());
     let local_cids = local_graph_of(&env, 42);
+    // And every repo her claims are about lists her as a signer, re-checked
+    // here: `publish push` takes a permit per claim (U-OOS-D30).
+    given_every_repo_lists_its_claim_authors(&env);
     let already_pushed = local_cids[17].clone();
     let instance = instance_already_holding(&env, std::slice::from_ref(&already_pushed));
     let before = capture_push_universe(&env, &instance, "");
@@ -153,6 +156,9 @@ fn publish_push_resumes_after_interruption_without_duplicates() {
     // was interrupted after committing 20 of them to her instance.
     let env = TestEnv::initialized_as(FakeIdentity::maria());
     let local_cids = local_graph_of(&env, 41);
+    // And every repo her claims are about lists her as a signer, re-checked
+    // here: `publish push` takes a permit per claim (U-OOS-D30).
+    given_every_repo_lists_its_claim_authors(&env);
     let instance = instance_already_holding(&env, &local_cids[..20]);
     let before = capture_push_universe(&env, &instance, "");
 
@@ -198,6 +204,9 @@ fn publish_push_never_mutates_the_local_store() {
     // Given Maria's local graph of 5 signed claims and her empty instance.
     let env = TestEnv::initialized_as(FakeIdentity::maria());
     local_graph_of(&env, 5);
+    // And every repo her claims are about lists her as a signer, re-checked
+    // here: `publish push` takes a permit per claim (U-OOS-D30).
+    given_every_repo_lists_its_claim_authors(&env);
     let instance = FakeInstance::fresh();
     let before = capture_local_claims_universe(&env);
 
@@ -240,6 +249,9 @@ fn publish_push_requires_the_owner_write_token_and_is_refused_without_it() {
     let owner_token = "pp5-owner-write-token-9f3c1e7a";
     let env = TestEnv::initialized_as(FakeIdentity::maria());
     let local_cids = local_graph_of(&env, 5);
+    // And every repo her claims are about lists her as a signer, re-checked
+    // here: `publish push` takes a permit per claim (U-OOS-D30).
+    given_every_repo_lists_its_claim_authors(&env);
     let instance = FakeInstance::requiring_write_token(owner_token);
     let before = capture_push_universe(&env, &instance, "");
 

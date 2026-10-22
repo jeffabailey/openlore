@@ -3,7 +3,7 @@
 use ports::{RoundTripVerdict, REASON_CID_ROUNDTRIP_FAILED};
 use publish_domain::{ForeignRecord, Reconciled};
 
-use crate::verbs::publish::{InsertResult, PullReport, PushReport, PushResult};
+use crate::verbs::publish::{AuthorityRefused, InsertResult, PullReport, PushReport, PushResult};
 
 /// `publish init` success: the registered instance, the UNCHANGED signing
 /// identity, the derived public card URL, and the ownership confirmation —
@@ -19,17 +19,39 @@ pub fn render_publish_init(instance_url: &str, author_did: &str, card_url: &str)
     )
 }
 
-/// `publish push`: one line per claim sent, the committed tally, and the
-/// `pushed: P, skipped: S, verified: V/T` summary (skipped = already listed
-/// in the instance's manifest, so never sent).
+/// `publish push`: one line per claim sent, one `Not pushed (authority)`
+/// block per claim refused for want of authority (U-OOS-D30), the committed
+/// tally, and the `pushed: P, skipped: S, verified: V/T, not pushed
+/// (authority): R` summary (skipped = already listed in the instance's
+/// manifest, so never sent).
 pub fn render_publish_push(report: &PushReport) -> String {
     let lines: String = report.results.iter().map(render_push_result).collect();
+    let refused: String = report
+        .refused
+        .iter()
+        .map(render_authority_refused)
+        .collect();
     let committed = report.committed_count();
     let sent = report.results.len();
     format!(
-        "Pushing to {}\n{lines}{committed}/{sent} claims pushed and CID-verified\n\
-         pushed: {committed}, skipped: {}, verified: {committed}/{sent}\n",
-        report.instance_url, report.skipped
+        "Pushing to {}\n{lines}{refused}{committed}/{sent} claims pushed and CID-verified\n\
+         pushed: {committed}, skipped: {}, verified: {committed}/{sent}, \
+         not pushed (authority): {}\n",
+        report.instance_url,
+        report.skipped,
+        report.refused.len()
+    )
+}
+
+/// `  Not pushed (authority): <subject> — <refusal>`, the refusal's further
+/// lines (its hand-off) indented beneath it.
+fn render_authority_refused(refused: &AuthorityRefused) -> String {
+    let mut lines = refused.refusal.lines();
+    let why = lines.next().unwrap_or_default();
+    let hand_off: String = lines.map(|line| format!("    {line}\n")).collect();
+    format!(
+        "  Not pushed (authority): {} — {why}\n{hand_off}",
+        refused.subject
     )
 }
 

@@ -43,6 +43,9 @@ fn public_card_renders_only_pushed_claims_each_attributed_to_its_author_did() {
     // projection the card renders from.
     let env = TestEnv::initialized_as(FakeIdentity::maria());
     let pushed_cids = local_graph_of(&env, 3);
+    // And every repo her claims are about lists her as a signer, re-checked
+    // here: `publish push` takes a permit per claim (U-OOS-D30).
+    given_every_repo_lists_its_claim_authors(&env);
     let instance = FakeInstance::fresh();
     let push = run_openlore_publish(&env, &["push"], &instance);
     assert_eq!(
@@ -118,6 +121,9 @@ fn public_card_omits_a_local_claim_that_was_never_pushed() {
     // locally that she has NEVER pushed.
     let env = TestEnv::initialized_as(FakeIdentity::maria());
     let pushed_cids = local_graph_of(&env, 2);
+    // And every repo her claims are about lists her as a signer, re-checked
+    // here: `publish push` takes a permit per claim (U-OOS-D30).
+    given_every_repo_lists_its_claim_authors(&env);
     let instance = FakeInstance::fresh();
     let push = run_openlore_publish(&env, &["push"], &instance);
     assert_eq!(
@@ -169,6 +175,9 @@ fn public_card_offers_no_authoring_or_write_control_and_holds_no_signing_key() {
     // `publish push`.
     let env = TestEnv::initialized_as(FakeIdentity::maria());
     local_graph_of(&env, 2);
+    // And every repo her claims are about lists her as a signer, re-checked
+    // here: `publish push` takes a permit per claim (U-OOS-D30).
+    given_every_repo_lists_its_claim_authors(&env);
     let instance = FakeInstance::fresh();
     let push = run_openlore_publish(&env, &["push"], &instance);
     assert_eq!(
@@ -217,6 +226,10 @@ fn public_card_shows_two_authors_identical_claim_as_two_attributed_rows_never_on
     let object = "org.openlore.philosophy.rough-consensus";
     let maria_cid = seed_local_claim_about(&maria, subject, object);
     let jeff_cid = seed_local_claim_about(&jeff, subject, object);
+    // And each re-checked that ietf/rfc7282 lists them as a signer: `publish
+    // push` takes a permit per claim (U-OOS-D30).
+    given_every_repo_lists_its_claim_authors(&maria);
+    given_every_repo_lists_its_claim_authors(&jeff);
     let instance = FakeInstance::fresh();
     for (author, env) in [("maria", &maria), ("jeff", &jeff)] {
         let push = run_openlore_publish(env, &["push"], &instance);
@@ -269,6 +282,9 @@ fn public_card_and_manifest_reads_require_no_token() {
     let owner_token = "maria-owner-write-token-9f3c";
     let env = TestEnv::initialized_as(FakeIdentity::maria());
     let pushed_cids = local_graph_of(&env, 1);
+    // And every repo her claims are about lists her as a signer, re-checked
+    // here: `publish push` takes a permit per claim (U-OOS-D30).
+    given_every_repo_lists_its_claim_authors(&env);
     let instance = FakeInstance::requiring_write_token(owner_token);
     let push = run_openlore_publish_with_token(&env, &["push"], &instance, Some(owner_token));
     assert_eq!(
