@@ -81,12 +81,46 @@ pub enum PermitBasis {
 /// The signer may publish a claim about `subject`. Minted only in this
 /// module ([`may_sign`], [`may_sign_from_checks`],
 /// [`may_sign_repo_from_checks`], [`exempt_permit`], [`republish_permit`]);
-/// never serialized, never stored.
+/// never serialized, never stored. What it authorises is bound into it
+/// (U-OOS-D31): its signer and subject always, the one claim (by CID) for a
+/// re-publish, and for an exempt permit only claims needing no authority —
+/// [`SigningPermit::covers`] is the check every consumer makes.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SigningPermit {
     signer: String,
     subject: String,
     basis: PermitBasis,
+    /// The CID of the one claim the permit is for (a re-publish); `None`:
+    /// any claim its signer, subject and basis cover.
+    claim: Option<String>,
+}
+
+/// Why a permit does not cover a claim (U-OOS-D31).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermitMismatch {
+    /// The claim is by another author than the permit's signer.
+    OtherSigner { permitted: String },
+    /// The claim is about another subject than the permit's.
+    OtherSubject { permitted: String },
+    /// The permit is for one claim (by CID) and this is another.
+    OtherClaim { permitted: String },
+    /// An exempt permit, and this claim needs authority over its subject.
+    NeedsAuthority,
+}
+
+impl std::fmt::Display for PermitMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OtherSigner { permitted } => write!(f, "the permit is for claims by {permitted}"),
+            Self::OtherSubject { permitted } => {
+                write!(f, "the permit is for claims about {permitted}")
+            }
+            Self::OtherClaim { permitted } => write!(f, "the permit is for claim {permitted}"),
+            Self::NeedsAuthority => {
+                write!(f, "the permit is for claims needing no authority")
+            }
+        }
+    }
 }
 
 impl SigningPermit {
@@ -100,6 +134,42 @@ impl SigningPermit {
 
     pub fn basis(&self) -> PermitBasis {
         self.basis
+    }
+
+    /// The CID of the one claim this permit is for, if it is bound to one.
+    pub fn claim(&self) -> Option<&str> {
+        self.claim.as_deref()
+    }
+
+    /// Does this permit cover `claim`, authored by `author`, whose CID is
+    /// `cid`? Its signer and subject must be the claim's; a permit bound to
+    /// a claim covers only that CID; an exempt permit covers only a claim
+    /// that needs no authority.
+    pub fn covers(
+        &self,
+        author: &str,
+        claim: ClaimShape<'_>,
+        cid: &str,
+    ) -> Result<(), PermitMismatch> {
+        if self.signer != author {
+            return Err(PermitMismatch::OtherSigner {
+                permitted: self.signer.clone(),
+            });
+        }
+        if self.subject != claim.subject {
+            return Err(PermitMismatch::OtherSubject {
+                permitted: self.subject.clone(),
+            });
+        }
+        match (&self.claim, self.basis) {
+            (Some(permitted), _) if permitted != cid => Err(PermitMismatch::OtherClaim {
+                permitted: permitted.clone(),
+            }),
+            (None, PermitBasis::Exempt) if requirement(claim) != Requirement::Exempt => {
+                Err(PermitMismatch::NeedsAuthority)
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -144,11 +214,7 @@ pub fn may_sign(
     match owner_bio {
         OwnerBioRead::Unfinished => Err(SigningRefusal::Unfinished),
         OwnerBioRead::Bio(bio) => match bio_verdict(bio, signer) {
-            BioVerdict::Verified => Ok(SigningPermit {
-                signer: signer.to_string(),
-                subject: subject.to_string(),
-                basis: PermitBasis::Owner(owner_id),
-            }),
+            BioVerdict::Verified => Ok(permit(signer, subject, PermitBasis::Owner(owner_id))),
             _ => Err(SigningRefusal::BioNoLongerHolds(owner_id)),
         },
     }
@@ -544,11 +610,9 @@ pub fn may_sign_from_checks(
         PersonAuthority::Attested {
             github_id,
             checked_at,
-        } if within_signing_window(checked_at, now) => Ok(SigningPermit {
-            signer: signer.to_string(),
-            subject,
-            basis: PermitBasis::Owner(github_id),
-        }),
+        } if within_signing_window(checked_at, now) => {
+            Ok(permit(signer, &subject, PermitBasis::Owner(github_id)))
+        }
         PersonAuthority::Attested { checked_at, .. } => Err(AuthorityRefusal::Recheck {
             subject,
             last_checked: Some(checked_at),
@@ -759,16 +823,21 @@ pub fn exempt_permit(signer: &str, claim: ClaimShape<'_>) -> Option<SigningPermi
         .then(|| permit(signer, claim.subject, PermitBasis::Exempt))
 }
 
-/// A permit to re-publish a claim this store already published
+/// A permit to re-publish the claim `cid` this store already published
 /// (`published_at`: its first publication here; `None`: never published).
 /// Re-publishing is idempotent and needs no fresh authority (ADR-086 §4); a
 /// claim never published gets no permit here — it goes through the gate.
+/// The permit covers that one claim only (U-OOS-D31).
 pub fn republish_permit(
     signer: &str,
     subject: &str,
+    cid: &str,
     published_at: Option<DateTime<Utc>>,
 ) -> Option<SigningPermit> {
-    published_at.map(|_| permit(signer, subject, PermitBasis::Exempt))
+    published_at.map(|_| SigningPermit {
+        claim: Some(cid.to_string()),
+        ..permit(signer, subject, PermitBasis::Exempt)
+    })
 }
 
 fn permit(signer: &str, subject: &str, basis: PermitBasis) -> SigningPermit {
@@ -776,6 +845,7 @@ fn permit(signer: &str, subject: &str, basis: PermitBasis) -> SigningPermit {
         signer: signer.to_string(),
         subject: subject.to_string(),
         basis,
+        claim: None,
     }
 }
 
@@ -1846,14 +1916,82 @@ mod gate_from_checks_tests {
     #[test]
     fn only_a_claim_already_published_here_gets_a_republish_permit() {
         let subject = "github:jeffbailey/tidepool";
-        let permit = republish_permit(JEFF, subject, Some(now()));
+        let permit = republish_permit(JEFF, subject, "bafyone", Some(now()));
         assert_eq!(
             permit
                 .as_ref()
                 .map(|p| (p.signer(), p.subject(), p.basis())),
             Some((JEFF, subject, PermitBasis::Exempt))
         );
-        assert_eq!(republish_permit(JEFF, subject, None), None);
+        assert_eq!(republish_permit(JEFF, subject, "bafyone", None), None);
+    }
+
+    // bypass (U-OOS-D31): a re-publish permit covers the one claim it was
+    // minted for, by CID, and no other claim about the same subject.
+    #[test]
+    fn a_republish_permit_covers_only_the_claim_it_was_minted_for() {
+        let subject = "github:jeffbailey/tidepool";
+        let permit = republish_permit(JEFF, subject, "bafyone", Some(now())).expect("published");
+        assert_eq!(permit.claim(), Some("bafyone"));
+        assert_eq!(
+            permit.covers(JEFF, assertion_about(subject), "bafyone"),
+            Ok(())
+        );
+        assert_eq!(
+            permit.covers(JEFF, assertion_about(subject), "bafytwo"),
+            Err(PermitMismatch::OtherClaim {
+                permitted: "bafyone".to_string()
+            })
+        );
+    }
+
+    // bypass (U-OOS-D31): an exempt permit minted for a claim that needs no
+    // authority covers no assertion about a GitHub subject.
+    #[test]
+    fn an_exempt_permit_covers_no_assertion_needing_authority() {
+        let subject = "github:jeffbailey";
+        let withdrawal = ClaimShape {
+            subject,
+            predicate: "adheresToPhilosophy",
+            reference_types: &[ReferenceType::Retracts],
+        };
+        let permit = exempt_permit(JEFF, withdrawal).expect("a withdrawal is exempt");
+        assert_eq!(permit.claim(), None);
+        assert_eq!(permit.covers(JEFF, withdrawal, "bafyany"), Ok(()));
+        assert_eq!(
+            permit.covers(JEFF, assertion_about(subject), "bafyany"),
+            Err(PermitMismatch::NeedsAuthority)
+        );
+    }
+
+    // bypass (U-OOS-D31): every permit covers only its own signer and subject.
+    #[test]
+    fn a_permit_covers_only_its_signer_and_subject() {
+        let permit = may_sign_from_checks(
+            JEFF,
+            &person("github:jeffbailey"),
+            &[link(
+                7,
+                "jeffbailey",
+                Some(("jeffbailey", CheckVerdict::Verified)),
+            )],
+            now(),
+        )
+        .expect("the owner may sign");
+        let about_jeff = assertion_about("github:jeffbailey");
+        assert_eq!(permit.covers(JEFF, about_jeff, "bafyany"), Ok(()));
+        assert_eq!(
+            permit.covers("did:plc:maria", about_jeff, "bafyany"),
+            Err(PermitMismatch::OtherSigner {
+                permitted: JEFF.to_string()
+            })
+        );
+        assert_eq!(
+            permit.covers(JEFF, assertion_about("github:rachelk"), "bafyany"),
+            Err(PermitMismatch::OtherSubject {
+                permitted: "github:jeffbailey".to_string()
+            })
+        );
     }
 
     // bypass: the reader labels are spelled once, here.

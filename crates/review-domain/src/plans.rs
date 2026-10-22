@@ -7,7 +7,7 @@
 //! points (ADR-070), and its record key is the claim's canonical CID
 //! (claim-domain's one canonicalizer) — the SPIKE-1 wire shape.
 
-use ports::claim_domain::authority::SigningPermit;
+use ports::claim_domain::authority::{ClaimShape, SigningPermit};
 use ports::claim_domain::identity_link::is_reserved_predicate;
 use ports::claim_domain::{
     decode_claim_record, Cid, ClaimError, ClaimRecord, ClaimReference, Confidence, Did,
@@ -139,11 +139,32 @@ pub fn publish_edited_plan(
         references: Vec::new(),
         reason: None,
     };
+    let claim = SelfAttestedClaim::new(unsigned)?;
+    refuse_uncovered_claim(permit, &claim)?;
     Ok(PublishPlan {
         owner_did: owner_did.to_string(),
         key: draft.key.clone(),
-        claim: SelfAttestedClaim::new(unsigned)?,
+        claim,
     })
+}
+
+/// A plan is built only for a claim its permit covers (U-OOS-D31): a permit
+/// bound to another claim, or an exempt one, builds no publish of an
+/// assertion.
+fn refuse_uncovered_claim(
+    permit: &SigningPermit,
+    claim: &SelfAttestedClaim,
+) -> Result<(), PlanError> {
+    let unsigned = claim.unsigned();
+    let reference_types: Vec<_> = unsigned.references.iter().map(|r| r.ref_type).collect();
+    let shape = ClaimShape {
+        subject: &unsigned.subject,
+        predicate: &unsigned.predicate,
+        reference_types: &reference_types,
+    };
+    permit
+        .covers(&unsigned.author_did.0, shape, &claim.cid().0)
+        .map_err(|_| PlanError::NotPermitted)
 }
 
 /// A plan is built only for the subject its permit was minted for.
@@ -183,6 +204,7 @@ pub fn restore_plan(
     if !claim.unsigned().references.is_empty() {
         return Err(PlanError::NotTheOwnersRecord);
     }
+    refuse_uncovered_claim(permit, &claim)?;
     Ok(PublishPlan {
         owner_did: owner_did.to_string(),
         key: stored.key.clone(),
@@ -502,6 +524,34 @@ mod tests {
             prop_assert_eq!(publish_edited_plan(&elsewhere, &draft, &edit, "2026-10-04T15:02:11Z"), Err(PlanError::NotPermitted));
             let stored = publish_plan(&test_permit(&did, &draft.key.subject), &draft, "2026-10-04T15:02:11Z").expect("plan").stored();
             prop_assert_eq!(restore_plan(&elsewhere, &stored), Err(PlanError::NotPermitted));
+        }
+
+        /// U-OOS-D31: a permit for the plan's subject that does not cover
+        /// its claim — a re-publish permit bound to another claim, or an
+        /// exempt permit minted for a withdrawal — builds, edits and
+        /// restores no plan.
+        #[test]
+        fn a_permit_that_does_not_cover_the_claim_builds_no_plan(
+            (did, draft) in arb_draft()
+        ) {
+            use ports::claim_domain::authority::{exempt_permit, republish_permit, ClaimShape};
+            use ports::claim_domain::ReferenceType;
+            let subject = draft.key.subject.as_str();
+            let stored = publish_plan(&test_permit(&did, subject), &draft, "2026-10-04T15:02:11Z").expect("plan").stored();
+            let other_claim = republish_permit(&did, subject, "bafyanotherclaim", Some(Default::default()))
+                .expect("a published claim re-publishes");
+            let withdrawal = exempt_permit(&did, ClaimShape {
+                subject,
+                predicate: &draft.key.predicate,
+                reference_types: &[ReferenceType::Retracts],
+            })
+            .expect("a withdrawal is exempt");
+            let edit = ClaimEdit { object: draft.key.object.clone(), confidence_bp: draft.confidence_bp };
+            for permit in [&other_claim, &withdrawal] {
+                prop_assert_eq!(publish_plan(permit, &draft, "2026-10-04T15:02:11Z"), Err(PlanError::NotPermitted));
+                prop_assert_eq!(publish_edited_plan(permit, &draft, &edit, "2026-10-04T15:02:11Z"), Err(PlanError::NotPermitted));
+                prop_assert_eq!(restore_plan(permit, &stored), Err(PlanError::NotPermitted));
+            }
         }
 
         /// A stored plan is never executed for someone else, nor after its

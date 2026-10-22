@@ -186,7 +186,12 @@ fn publish_permit(
         .published_at(&signed.signature.signed_cid)
         .context("reading whether the claim was published")
         .map_err(PublishError::Other)?;
-    if let Some(permit) = republish_permit(&signer, &unsigned.subject, published_at) {
+    if let Some(permit) = republish_permit(
+        &signer,
+        &unsigned.subject,
+        &signed.signature.signed_cid.0,
+        published_at,
+    ) {
         return Ok(Some(permit));
     }
     let references = reference_types(unsigned);
@@ -306,22 +311,29 @@ pub fn publish_signed_claim(
     })
 }
 
-/// A permit for another subject or signer than `signed`'s publishes nothing.
+/// A permit that does not cover `signed` publishes nothing
+/// ([`SigningPermit::covers`]: another subject, signer or claim, or an
+/// exempt permit for a claim needing authority).
 fn refuse_a_permit_for_another_claim(
     permit: &SigningPermit,
     signed: &SignedClaim,
 ) -> anyhow::Result<()> {
     let claim = &signed.unsigned;
-    if permit.subject() != claim.subject || permit.signer() != claim.author_did.0 {
-        return Err(anyhow!(
-            "the publishing permit is for {} by {}, not for {} by {}",
-            permit.subject(),
-            permit.signer(),
-            claim.subject,
-            claim.author_did.0
-        ));
-    }
-    Ok(())
+    let references = reference_types(claim);
+    permit
+        .covers(
+            &claim.author_did.0,
+            shape_of(claim, &references),
+            &signed.signature.signed_cid.0,
+        )
+        .map_err(|mismatch| {
+            anyhow!(
+                "the publishing permit does not cover claim {} about {} by {}: {mismatch}",
+                signed.signature.signed_cid.0,
+                claim.subject,
+                claim.author_did.0
+            )
+        })
 }
 
 /// Pure function: render the post-publish success block.
@@ -466,6 +478,84 @@ mod tests {
                 .expect("read publication"),
             None,
             "the claim stays never published"
+        );
+    }
+
+    /// U-OOS-D31: a re-publish permit is bound to the claim it was minted
+    /// for. A permit for Jeff's published claim about `rachelk` does not
+    /// publish another claim of his about `rachelk` that was never
+    /// published (and that he holds no authority to publish): nothing
+    /// reaches his PDS and the other claim stays never published.
+    #[test]
+    fn a_republish_permit_for_one_claim_publishes_no_other_claim() {
+        use claim_domain::{canonicalize, compute_cid, Confidence, Did, UnsignedClaim};
+        use openlore_test_support::{FakeIdentity, FakePds};
+        use ports::IdentityPort;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let paths = crate::paths::OpenLorePaths {
+            config_dir: home.path().join("config"),
+            data_dir: home.path().join("data"),
+        };
+        let identity = FakeIdentity::jeff();
+        let signed_about_rachel = |object: &str| {
+            let unsigned = UnsignedClaim {
+                subject: "github:rachelk".to_string(),
+                predicate: "embodiesPhilosophy".to_string(),
+                object: object.to_string(),
+                evidence: Vec::new(),
+                confidence: Confidence::try_new(0.55).expect("confidence"),
+                author_did: Did(identity.author_did().0.clone()),
+                composed_at: "2026-10-01T09:00:00+00:00".to_string(),
+                references: Vec::new(),
+                reason: None,
+            };
+            let cid = compute_cid(&canonicalize(&unsigned).expect("canonical"));
+            SignedClaim {
+                signature: identity.sign(&cid).expect("sign"),
+                unsigned,
+            }
+        };
+        let published = signed_about_rachel("org.openlore.philosophy.memory-safety");
+        let never_published = signed_about_rachel("org.openlore.philosophy.test-driven");
+        let pds = FakePds::for_did(identity.author_did().0.clone());
+        let wiring = Wiring::over_local_store(
+            paths,
+            Box::new(identity),
+            Box::new(pds.clone()),
+            Box::new(adapter_system_clock::SystemClockAdapter::new()),
+            Box::new(adapter_github::GithubAdapter::from_env()),
+        )
+        .expect("wiring over a fresh local store");
+        for signed in [&published, &never_published] {
+            wiring.storage.write_signed_claim(signed).expect("stored");
+        }
+        wiring
+            .storage
+            .record_publication(
+                &published.signature.signed_cid,
+                "at://did:plc:test-jeff/org.openlore.claim/published",
+                chrono::Utc::now(),
+            )
+            .expect("recorded as published");
+        let permit = publish_permit(&wiring, &published)
+            .expect("the permit decision")
+            .expect("a published claim re-publishes");
+
+        let outcome = publish_signed_claim(&wiring, &permit, &never_published);
+
+        assert!(
+            outcome.is_err(),
+            "a permit for another claim publishes nothing"
+        );
+        assert_eq!(pds.record_count(), 0, "nothing reaches Jeff's PDS");
+        assert_eq!(
+            wiring
+                .storage
+                .published_at(&never_published.signature.signed_cid)
+                .expect("read publication"),
+            None,
+            "the other claim stays never published"
         );
     }
 }

@@ -12,31 +12,35 @@ use claim_domain::{canonicalize, compute_cid, ReferenceType, SignedClaim, Unsign
 use ports::IdentityPort;
 
 /// Sign `unsigned` under `permit`: canonicalize, compute its CID and sign it
-/// with `identity`. Refuses, before anything is signed, a permit for another
-/// subject or another signer than the draft's.
+/// with `identity`. Refuses, before anything is signed, a permit that does
+/// not cover the draft ([`SigningPermit::covers`]: another subject, another
+/// signer, another claim, or an exempt permit for a claim needing
+/// authority), and a draft the key does not author.
 pub(crate) fn sign_permitted(
     identity: &dyn IdentityPort,
     permit: &SigningPermit,
     unsigned: UnsignedClaim,
 ) -> Result<SignedClaim> {
-    if permit.subject() != unsigned.subject {
-        bail!(
-            "the signing permit is for {}, not for {}",
-            permit.subject(),
-            unsigned.subject
-        );
-    }
     let signer = &identity.author_did().0;
-    if permit.signer() != signer || unsigned.author_did.0 != *signer {
+    if unsigned.author_did.0 != *signer {
         bail!(
-            "the signing permit is for {}, the draft is by {} and the key is {}",
-            permit.signer(),
+            "the draft is by {}, the key is {}",
             unsigned.author_did.0,
             signer
         );
     }
     let canonical = canonicalize(&unsigned).map_err(|e| anyhow!("canonicalizing: {e}"))?;
-    let signature = identity.sign(&compute_cid(&canonical))?;
+    let cid = compute_cid(&canonical);
+    let references = reference_types(&unsigned);
+    permit
+        .covers(signer, shape_of(&unsigned, &references), &cid.0)
+        .map_err(|mismatch| {
+            anyhow!(
+                "the signing permit does not cover this draft about {}: {mismatch}",
+                unsigned.subject
+            )
+        })?;
+    let signature = identity.sign(&cid)?;
     Ok(SignedClaim {
         unsigned,
         signature,
@@ -113,6 +117,26 @@ mod tests {
 
     fn exempt(signer: &str, subject: &str) -> SigningPermit {
         exempt_permit(signer, shape_of(&draft(subject, signer), &[])).expect("exempt subject")
+    }
+
+    /// U-OOS-D31: an exempt permit minted for a withdrawal about a GitHub
+    /// account does not sign an assertion about that account (which needs
+    /// its owner's authority): refused, nothing signed.
+    #[test]
+    fn an_exempt_permit_signs_no_assertion_needing_authority() {
+        let identity = CountingIdentity {
+            inner: FakeIdentity::jeff(),
+            signed: Cell::new(0),
+        };
+        let jeff = identity.author_did().0.clone();
+        let about_rachel = draft("github:rachelk", &jeff);
+        let withdrawal = shape_of(&about_rachel, &[ReferenceType::Retracts]);
+        let permit = exempt_permit(&jeff, withdrawal).expect("a withdrawal is exempt");
+
+        let signed = sign_permitted(&identity, &permit, draft("github:rachelk", &jeff));
+
+        assert!(signed.is_err(), "the assertion is refused");
+        assert_eq!(identity.signed.get(), 0, "nothing is signed");
     }
 
     proptest! {
