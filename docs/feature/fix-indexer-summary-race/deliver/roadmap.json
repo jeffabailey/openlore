@@ -1,0 +1,80 @@
+{
+  "roadmap": {
+    "project_id": "fix-indexer-summary-race",
+    "created_at": "2026-10-23T00:00:00Z",
+    "total_steps": 2,
+    "source": "docs/feature/fix-indexer-summary-race/rca.md",
+    "paradigm": "functional (ADR-007)",
+    "out_of_scope": "No sleeps or larger timeouts as the fix. No change to serve's pass logic, exit codes, or summary shape. No push: commit locally until the user says push."
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Correlate each trigger with its own pass summary",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "trigger reports the pass_id it completed",
+          "description": "control.rs: TriggerOutcome::Completed carries pass_id (trigger_outcome_of keeps it instead of discarding it at :121). report() prints {\"event\":\"indexer.trigger.completed\",\"pass_id\":...,\"exit_code\":...} on stdout for a completed pass. Exit codes are unchanged; coalesced and unreachable outputs are unchanged. Update the existing proptests (around :368 and :444) and add the new event to docs/architecture/indexer-deployment/data-models.md (event table near :95), plus a short dated note in ADR-080.",
+          "criteria": [
+            "A completed trigger prints exactly one indexer.trigger.completed line whose pass_id and exit_code equal the reply's",
+            "Trigger exit codes are unchanged for completed, coalesced and unreachable",
+            "The event's fields are within STRUCTURAL_EVENT_FIELDS (the event-field guard at indexer_live.rs:907 still passes)"
+          ],
+          "estimated_hours": 1,
+          "dependencies": [],
+          "files_to_modify": [
+            "crates/openlore-indexer/src/control.rs",
+            "docs/architecture/indexer-deployment/data-models.md",
+            "docs/adrs/ADR-080-indexer-serve-owns-the-index-and-runs-triggered-passes.md"
+          ],
+          "test_file": "crates/openlore-indexer/src/control.rs",
+          "scenario_name": "trigger completed report carries pass_id (unit/proptest)",
+          "test_command": "cargo test -p openlore-indexer"
+        },
+        {
+          "id": "01-02",
+          "name": "Harness waits for the summary of the pass it triggered",
+          "description": "tests/acceptance/support/indexer_live.rs: assert_one_summary_matching (and given_a_pass_indexed, and any helper that reads summaries right after a trigger) takes the pass_id from the trigger's indexer.trigger.completed line. It waits on the collected lines (up to TRIGGER_CEILING; condvar or short poll on the collector, never a fixed sleep) until a summary with that pass_id exists. It then asserts exactly one summary for that pass_id and that its exit_code equals the trigger's. Coalesced and unreachable triggers do not wait. Regression proof: add a test-only way to slow the stdout line collector (e.g. a per-line delay in spawn_line_collector set by a LiveIndex builder option or a harness env var such as OPENLORE_TEST_COLLECTOR_LAG_MS). Add one acceptance test in indexer_deployment_did_list.rs that runs the purge-fails scenario (exit 0, then 2, then 0) with a 150 ms lag. It must fail on the current harness and pass after the fix. Any event read right after a trigger in did_list (:139, :414, :555, :581, :644) happens after the summary has been awaited.",
+          "criteria": [
+            "The lagged regression test fails before the harness change (record the RED) and passes after",
+            "All indexer_deployment_* acceptance tests pass, and still pass with OPENLORE_TEST_COLLECTOR_LAG_MS=150 (or the equivalent knob) applied to the whole binary",
+            "No assertion is removed or weakened; exit-code and one-summary-per-pass checks stay"
+          ],
+          "estimated_hours": 2,
+          "dependencies": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/support/indexer_live.rs",
+            "tests/acceptance/indexer_deployment_did_list.rs",
+            "tests/acceptance/indexer_deployment_passes.rs",
+            "tests/acceptance/indexer_deployment_public_surface.rs",
+            "tests/acceptance/indexer_deployment_walking_skeleton.rs"
+          ],
+          "test_file": "tests/acceptance/indexer_deployment_did_list.rs",
+          "scenario_name": "a lagged summary stream still checks the triggered pass's own summary (new regression)",
+          "test_command": "cargo nextest run -p cli --test indexer_deployment_did_list --test indexer_deployment_passes --test indexer_deployment_public_surface --test indexer_deployment_walking_skeleton"
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/openlore-indexer/src/",
+      "docs/adrs/",
+      "docs/architecture/indexer-deployment/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator; RCA approved by user 2026-10-23 (match by pass_id)",
+    "approved_at": "2026-10-23"
+  }
+}
