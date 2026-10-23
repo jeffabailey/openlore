@@ -9,6 +9,6 @@ owner-only-signing delivered and finalized (`docs/evolution/owner-only-signing-e
 - Push only when told, over SSH (`git push git@github.com:jeffabailey/openlore.git HEAD:main`); deploy with `deploy/ops.sh review-app deploy <40-hex sha>`.
 
 ## Next Steps
-- Still deferred: U-OOS-D35 (`scrape person` records no candidates, needs a DISTILL row) and U-OOS-D13 (docs/feature/owner-only-signing/deliver/upstream-issues.md).
-- `cli.sh` header example still uses `claim add --subject github:rust-lang/rust`, now refused for a dev identity; switch it to a non-github subject.
-- Older backlog in memory `openlore-follow-up-backlog.md`.
+- Owner-only-signing leftovers all closed (D13, D35 4757ebb, README/cli.sh examples 89da132); review app needs no redeploy for them (CLI only).
+- New flaky under load: indexer_deployment_did_list `a_purge_that_fails_ends_the_pass_with_exit_2...` (passed at -j 2).
+- Older backlog in memory `openlore-follow-up-backlog.md` (per-DID indexer fetch, release/Homebrew hygiene).
