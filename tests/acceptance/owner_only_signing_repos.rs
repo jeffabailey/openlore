@@ -1691,7 +1691,6 @@ fn imported_candidates_never_feed_jeffs_inferred_people() {
 ///     | rachelk    | rachelk/kelp        |
 /// ```
 #[test]
-#[ignore = "DISTILL owner-only-signing U-OOS-D35: scrape person records candidates — DELIVER pending"]
 fn reading_a_person_keeps_the_candidates_it_suggests_each_listed_once() {
     let rows: [(&str, Account, RepoRef); 2] = [
         ("jeff reads himself", JEFF_GH, TIDEPOOL),

@@ -15,8 +15,9 @@
 //!    (`scrape_repo_into_store`): signals, candidates, contributors recorded
 //!    as unsigned links, then one look at each repo and its authority file
 //!    recorded as a repo observation (nothing when GitHub cannot answer;
-//!    ADR-087 §6). A rate-limit refusal stops the loop; any other per-repo
-//!    refusal skips that repo;
+//!    ADR-087 §6), and the repo's candidates kept locally as one import,
+//!    unsigned (`keep_imported_candidates`, OOS-D35). A rate-limit refusal
+//!    stops the loop; any other per-repo refusal skips that repo;
 //! 5. WITH `--sign`: refresh the signer's OWN link to the person's account
 //!    (one fresh read; GitHub unable to answer records nothing, and the gate
 //!    falls back to the latest local check — OOS-D7, ruling R3);
@@ -42,8 +43,8 @@ use crate::render::{
 };
 use crate::verbs::claim_publish::build_tokio_runtime;
 use crate::verbs::scrape_github::{
-    person_view, refresh_own_link_before_signing, scrape_repo_into_store, ContributorsOutcome,
-    RepoTarget,
+    keep_imported_candidates, person_view, refresh_own_link_before_signing, scrape_repo_into_store,
+    ContributorsOutcome, RepoTarget,
 };
 use crate::wiring::Wiring;
 
@@ -107,12 +108,15 @@ pub fn run(wiring: &Wiring, args: &ScrapePersonArgs) -> Result<ScrapePersonOutco
             contributor_count: DEFAULT_CONTRIBUTOR_COUNT,
         };
         match scrape_repo_into_store(wiring, &runtime, &target) {
-            Ok(scraped) => emit(&render_person_repo_scrape(
-                &repo.full_name,
-                scraped.signal_count,
-                &scraped.candidates,
-                &contributors_note(&scraped.contributors),
-            )),
+            Ok(scraped) => {
+                keep_imported_candidates(wiring, &scraped.candidates)?;
+                emit(&render_person_repo_scrape(
+                    &repo.full_name,
+                    scraped.signal_count,
+                    &scraped.candidates,
+                    &contributors_note(&scraped.contributors),
+                ));
+            }
             Err(err) if is_rate_limited(&err) => {
                 emit(&format!(
                     "Stopped: GitHub's rate limit was reached after {done} of {} repos. \

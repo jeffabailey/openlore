@@ -339,8 +339,12 @@ pub(crate) fn refresh_own_link_before_signing(wiring: &Wiring, login: &str) -> R
 }
 
 /// Keep every candidate this import derived as one import, stamped now. An
-/// import that derived nothing keeps nothing.
-fn keep_imported_candidates(wiring: &Wiring, candidates: &[CandidateClaim]) -> Result<()> {
+/// import that derived nothing keeps nothing. `scrape github` and `scrape
+/// person` alike (OOS-D35): reading records candidates whoever owns the repo.
+pub(crate) fn keep_imported_candidates(
+    wiring: &Wiring,
+    candidates: &[CandidateClaim],
+) -> Result<()> {
     if candidates.is_empty() {
         return Ok(());
     }
