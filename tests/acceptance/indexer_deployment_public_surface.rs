@@ -188,7 +188,7 @@ fn a_search_matching_more_than_1000_claims_returns_1000_and_logs_the_cut_without
             .all(|r| r["author_did"] == Author::Priya.did()),
         "attributed rows only"
     );
-    let cut = live.events_named("indexer.search.truncated");
+    let cut = live.await_events_named("indexer.search.truncated", Duration::from_secs(10));
     assert_eq!(cut.len(), 1, "{}", live.dump());
     assert_eq!(cut[0]["cap"].as_u64(), Some(1000), "{}", cut[0]);
     assert_eq!(cut[0]["dimension"], "object", "{}", cut[0]);

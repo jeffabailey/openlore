@@ -192,6 +192,21 @@ const TRIGGER_CEILING: Duration = Duration::from_secs(150);
 /// Time `serve` has to report it is listening (or exit refusing).
 const READY_CEILING: Duration = Duration::from_secs(30);
 
+/// TEST-ONLY harness knob: delay every line of `serve`'s stdout by this many
+/// milliseconds before the harness sees it (the stale-summary regression
+/// proof; set it to run a whole suite lagged). A deployment's own
+/// [`Deployment::with_collector_lag`] wins over it.
+pub const COLLECTOR_LAG_MS: &str = "OPENLORE_TEST_COLLECTOR_LAG_MS";
+
+/// The stdout lag from [`COLLECTOR_LAG_MS`] (absent or unparsable = none).
+fn collector_lag_from_env() -> Duration {
+    std::env::var(COLLECTOR_LAG_MS)
+        .ok()
+        .and_then(|ms| ms.trim().parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::ZERO)
+}
+
 // =============================================================================
 // The operator's deployment choices
 // =============================================================================
@@ -208,6 +223,8 @@ pub struct Deployment {
     pub settings: Vec<(String, String)>,
     /// The TEST-ONLY fault, if any.
     pub fault: Option<Fault>,
+    /// The harness's own delay per stdout line (`None` = [`COLLECTOR_LAG_MS`]).
+    pub collector_lag: Option<Duration>,
 }
 
 impl Deployment {
@@ -218,6 +235,7 @@ impl Deployment {
             purge_unlisted: true,
             settings: Vec::new(),
             fault: None,
+            collector_lag: None,
         }
     }
 
@@ -252,6 +270,13 @@ impl Deployment {
         self.fault = Some(fault);
         self
     }
+
+    /// The harness sees every stdout line of `serve` `lag` late (a slow
+    /// collector thread, as on a heavily loaded host).
+    pub fn with_collector_lag(mut self, lag: Duration) -> Self {
+        self.collector_lag = Some(lag);
+        self
+    }
 }
 
 // =============================================================================
@@ -269,6 +294,7 @@ pub struct LiveIndex {
     _socket_dir: Arc<tempfile::TempDir>,
     stdout: Arc<Mutex<Vec<String>>>,
     stderr: Arc<Mutex<Vec<String>>>,
+    collector_lag: Duration,
 }
 
 /// What happened when the operator started `serve`.
@@ -282,19 +308,22 @@ pub fn list_file_of(config_dir: &Path) -> PathBuf {
     config_dir.join("repo-dids")
 }
 
+/// Copy `stream`'s lines into `sink`, each `lag` late; ends at EOF.
 fn spawn_line_collector<R: std::io::Read + Send + 'static>(
     stream: R,
     sink: Arc<Mutex<Vec<String>>>,
-) {
+    lag: Duration,
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let reader = BufReader::new(stream);
         for line in reader.lines() {
-            match line {
-                Ok(l) => sink.lock().expect("collector lock").push(l),
-                Err(_) => break,
+            let Ok(line) = line else { break };
+            if !lag.is_zero() {
+                std::thread::sleep(lag);
             }
+            sink.lock().expect("collector lock").push(line);
         }
-    });
+    })
 }
 
 fn events_of(lines: &[String]) -> Vec<serde_json::Value> {
@@ -303,6 +332,58 @@ fn events_of(lines: &[String]) -> Vec<serde_json::Value> {
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l.trim()).ok())
         .filter(|v| v.get("event").is_some())
         .collect()
+}
+
+/// The event `serve` writes at the end of every pass, before it answers `trigger`.
+const PASS_SUMMARY: &str = "indexer.ingest.pass_summary";
+/// How often a wait looks at the collected lines again.
+const COLLECTOR_POLL: Duration = Duration::from_millis(10);
+
+/// The `pass_id` this `trigger` reports it completed (`None`: it coalesced
+/// into a running pass, could not reach `serve`, or printed no report).
+pub fn completed_pass_id(trigger: &PassReport) -> Option<String> {
+    trigger
+        .events_named("indexer.trigger.completed")
+        .into_iter()
+        .find_map(|e| e["pass_id"].as_str().map(str::to_string))
+}
+
+/// The pass summaries among `lines` that carry `pass_id`.
+fn summaries_of_pass(lines: &[String], pass_id: &str) -> Vec<serde_json::Value> {
+    events_of(lines)
+        .into_iter()
+        .filter(|e| e["event"] == PASS_SUMMARY && e["pass_id"] == pass_id)
+        .collect()
+}
+
+/// Wait until the collected stdout holds a summary for `pass_id` (or
+/// `ceiling` passed), then return that pass's summaries. `serve` writes the
+/// summary before it replies to `trigger`, but the collector thread is not
+/// ordered against `trigger` exiting; this waits for the named event, never
+/// for a fixed time.
+fn await_summaries_of_pass(
+    stdout: &Mutex<Vec<String>>,
+    pass_id: &str,
+    ceiling: Duration,
+) -> Vec<serde_json::Value> {
+    let deadline = Instant::now() + ceiling;
+    loop {
+        let found = summaries_of_pass(&stdout.lock().expect("lock"), pass_id);
+        if !found.is_empty() || Instant::now() >= deadline {
+            return found;
+        }
+        std::thread::sleep(COLLECTOR_POLL);
+    }
+}
+
+/// `trigger`, returned only once the summary of the pass it completed was
+/// collected (a coalesced or unreachable `trigger` returns at once), so every
+/// read of `serve`'s events after a pass sees that whole pass.
+fn after_its_summary(stdout: &Mutex<Vec<String>>, trigger: PassReport) -> PassReport {
+    if let Some(pass_id) = completed_pass_id(&trigger) {
+        await_summaries_of_pass(stdout, &pass_id, TRIGGER_CEILING);
+    }
+    trigger
 }
 
 impl LiveIndex {
@@ -329,7 +410,10 @@ impl LiveIndex {
         let socket_dir = Arc::new(short_socket_dir());
         let socket = socket_dir.path().join("openlore-indexer.sock");
         let env = Self::production_env(world, &deployment, &config_dir, &socket);
-        Self::spawn(env, config_dir, socket, socket_dir)
+        let lag = deployment
+            .collector_lag
+            .unwrap_or_else(collector_lag_from_env);
+        Self::spawn(env, config_dir, socket, socket_dir, lag)
     }
 
     fn production_env(
@@ -381,6 +465,7 @@ impl LiveIndex {
         config_dir: PathBuf,
         socket: PathBuf,
         socket_dir: Arc<tempfile::TempDir>,
+        collector_lag: Duration,
     ) -> Startup {
         let bin = support::resolve_workspace_bin("openlore-indexer");
         let mut cmd = Command::new(&bin);
@@ -397,8 +482,18 @@ impl LiveIndex {
             .unwrap_or_else(|e| panic!("spawn openlore-indexer serve: {e}"));
         let stdout = Arc::new(Mutex::new(Vec::new()));
         let stderr = Arc::new(Mutex::new(Vec::new()));
-        spawn_line_collector(child.stdout.take().expect("serve stdout"), stdout.clone());
-        spawn_line_collector(child.stderr.take().expect("serve stderr"), stderr.clone());
+        let collectors = [
+            spawn_line_collector(
+                child.stdout.take().expect("serve stdout"),
+                stdout.clone(),
+                collector_lag,
+            ),
+            spawn_line_collector(
+                child.stderr.take().expect("serve stderr"),
+                stderr.clone(),
+                Duration::ZERO,
+            ),
+        ];
 
         loop {
             let listening = events_of(&stdout.lock().expect("lock"))
@@ -415,6 +510,7 @@ impl LiveIndex {
                     _socket_dir: socket_dir,
                     stdout,
                     stderr,
+                    collector_lag,
                 });
             }
             let exited = child.try_wait().ok().flatten();
@@ -423,7 +519,10 @@ impl LiveIndex {
                     let _ = child.kill();
                 }
                 let status = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
-                std::thread::sleep(Duration::from_millis(100)); // let the collectors drain
+                // serve is gone: both pipes reach EOF, so the collectors drain and end.
+                for collector in collectors {
+                    let _ = collector.join();
+                }
                 let report = PassReport {
                     status,
                     stdout: stdout.lock().expect("lock").join("\n"),
@@ -482,7 +581,8 @@ impl LiveIndex {
     /// WHEN the host timer fires: `docker exec … openlore-indexer trigger`
     /// (the exec inherits the container's environment).
     pub fn timer_fires(&self) -> PassReport {
-        run_bounded(self.trigger_command(&self.env), TRIGGER_CEILING)
+        let trigger = run_bounded(self.trigger_command(&self.env), TRIGGER_CEILING);
+        after_its_summary(&self.stdout, trigger)
     }
 
     /// WHEN the timer fires while the scenario keeps acting (the pass runs in
@@ -491,6 +591,7 @@ impl LiveIndex {
         let cmd = self.trigger_command(&self.env);
         PendingPass {
             join: std::thread::spawn(move || run_bounded(cmd, TRIGGER_CEILING)),
+            stdout: self.stdout.clone(),
         }
     }
 
@@ -500,7 +601,8 @@ impl LiveIndex {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        run_bounded(self.trigger_command(&owned), TRIGGER_CEILING)
+        let trigger = run_bounded(self.trigger_command(&owned), TRIGGER_CEILING);
+        after_its_summary(&self.stdout, trigger)
     }
 
     fn trigger_command(&self, env: &[(String, String)]) -> Command {
@@ -628,6 +730,7 @@ impl LiveIndex {
             config_dir: self.config_dir.clone(),
             socket: self.socket.clone(),
             socket_dir: self._socket_dir.clone(),
+            collector_lag: self.collector_lag,
         };
         drop(self);
         restart
@@ -655,9 +758,32 @@ impl LiveIndex {
             .collect()
     }
 
+    /// The events named `name`, waiting up to `timeout` for the first one
+    /// (for an event `serve` writes before it answers a request: the
+    /// collector thread may not have copied it yet when the answer arrives).
+    pub fn await_events_named(&self, name: &str, timeout: Duration) -> Vec<serde_json::Value> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let found = self.events_named(name);
+            if !found.is_empty() || Instant::now() >= deadline {
+                return found;
+            }
+            std::thread::sleep(COLLECTOR_POLL);
+        }
+    }
+
     /// Every `indexer.ingest.pass_summary` so far, in order.
     pub fn pass_summaries(&self) -> Vec<serde_json::Value> {
-        self.events_named("indexer.ingest.pass_summary")
+        self.events_named(PASS_SUMMARY)
+    }
+
+    /// The summaries of pass `pass_id`, waiting up to `ceiling` for the first.
+    pub fn await_summaries_of_pass(
+        &self,
+        pass_id: &str,
+        ceiling: Duration,
+    ) -> Vec<serde_json::Value> {
+        await_summaries_of_pass(&self.stdout, pass_id, ceiling)
     }
 
     /// The events of one pass (those carrying its `pass_id`).
@@ -726,12 +852,19 @@ pub struct RestartableIndex {
     config_dir: PathBuf,
     socket: PathBuf,
     socket_dir: Arc<tempfile::TempDir>,
+    collector_lag: Duration,
 }
 
 impl RestartableIndex {
     /// WHEN the container runtime restarts `serve`.
     pub fn restarts(self) -> Startup {
-        LiveIndex::spawn(self.env, self.config_dir, self.socket, self.socket_dir)
+        LiveIndex::spawn(
+            self.env,
+            self.config_dir,
+            self.socket,
+            self.socket_dir,
+            self.collector_lag,
+        )
     }
 
     /// GIVEN a regular file (not a socket) sits at the socket path, as after a crash.
@@ -759,12 +892,16 @@ pub fn timer_fires_with(env: &[(String, String)]) -> PassReport {
 /// A pass the timer started in the background.
 pub struct PendingPass {
     join: std::thread::JoinHandle<PassReport>,
+    /// `serve`'s collected stdout, to await the summary of the pass.
+    stdout: Arc<Mutex<Vec<String>>>,
 }
 
 impl PendingPass {
-    /// Wait for the `trigger` client to exit.
+    /// Wait for the `trigger` client to exit (and for the summary of the pass
+    /// it completed, as [`LiveIndex::timer_fires`]).
     pub fn finish(self) -> PassReport {
-        self.join.join().expect("trigger thread")
+        let trigger = self.join.join().expect("trigger thread");
+        after_its_summary(&self.stdout, trigger)
     }
 
     pub fn is_finished(&self) -> bool {
@@ -805,8 +942,8 @@ fn short_socket_dir() -> tempfile::TempDir {
 // Observable checks shared by the suites
 // =============================================================================
 
-/// THEN exactly one `pass_summary` exists for every pass this `trigger` ran,
-/// and it agrees with the `trigger` exit code (B4).
+/// THEN exactly one `pass_summary` exists for the pass this `trigger` ran (the
+/// `pass_id` it reported), and it agrees with the `trigger` exit code (B4).
 pub fn assert_one_summary_matching(
     live: &LiveIndex,
     trigger: &PassReport,
@@ -819,34 +956,36 @@ pub fn assert_one_summary_matching(
         trigger.dump(),
         live.dump()
     );
-    let summaries = live.pass_summaries();
-    let last = summaries.last().cloned().unwrap_or_else(|| {
+    let pass_id = completed_pass_id(trigger).unwrap_or_else(|| {
         panic!(
-            "MISSING_FUNCTIONALITY: no indexer.ingest.pass_summary from serve\n{}\n{}",
+            "MISSING_FUNCTIONALITY: trigger named no completed pass \
+             (no indexer.trigger.completed with a pass_id)\n{}\n{}",
             trigger.dump(),
             live.dump()
         )
     });
-    let pass_id = last["pass_id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("pass_summary carries a pass_id: {last}"))
-        .to_string();
+    let summaries = live.await_summaries_of_pass(&pass_id, TRIGGER_CEILING);
+    let summary = summaries.first().cloned().unwrap_or_else(|| {
+        panic!(
+            "MISSING_FUNCTIONALITY: no indexer.ingest.pass_summary for pass_id {pass_id} \
+             within the {TRIGGER_CEILING:?} ceiling\n{}\n{}",
+            trigger.dump(),
+            live.dump()
+        )
+    });
     assert_eq!(
-        summaries
-            .iter()
-            .filter(|s| s["pass_id"] == pass_id.as_str())
-            .count(),
+        summaries.len(),
         1,
         "exactly one pass_summary for pass {pass_id}\n{}",
         live.dump()
     );
     assert_eq!(
-        last["exit_code"].as_i64(),
+        summary["exit_code"].as_i64(),
         Some(exit.code() as i64),
-        "the summary's exit_code\n{}",
+        "the summary's exit_code (pass {pass_id})\n{}",
         live.dump()
     );
-    last
+    summary
 }
 
 /// The fields a pass event may carry (data-models.md §4; WD-105 / I-IXD-4).

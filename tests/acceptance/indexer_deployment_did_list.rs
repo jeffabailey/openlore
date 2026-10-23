@@ -717,6 +717,43 @@ fn a_purge_that_fails_ends_the_pass_with_exit_2_and_finishes_on_the_next_pass() 
     then_maria_finds(&world, &live, Author::Priya, 2);
 }
 
+/// Regression (fix-indexer-summary-race, RCA 2026-10-23)
+/// ```gherkin
+/// @US-IXD-003 @US-IXD-004 @AC-004.2 @ADR-080 @regression @real-io @contract-shape:bounded-change
+/// Scenario: A lagged summary stream still checks the triggered pass's own summary (exit 0, 2, 0)
+///   Given the harness sees serve's stdout 150 ms late per line
+///   And the first pass indexed Priya, Dmitri and Jeff
+///   And the purge of the next pass will fail
+///   When Jeff removes Dmitri from the list and the timer fires
+///   Then trigger exits 2 and that pass's own summary says the purge failed
+///   And the following pass's own summary says it completed
+/// ```
+#[test]
+fn a_lagged_summary_stream_still_checks_the_triggered_pass_s_own_summary() {
+    let world = given_authors_publish_on_their_own_pdses();
+    let live = LiveIndex::deploy(
+        &world,
+        Deployment::listing(&dids(&LISTED))
+            .with_fault(Fault::PurgeFails)
+            .with_collector_lag(Duration::from_millis(150)),
+    );
+    given_a_pass_indexed(&live);
+    live.operator_saves_list(&dids(&[Author::Priya, Author::Jeff]));
+
+    let failed = live.timer_fires();
+
+    let summary = assert_one_summary_matching(&live, &failed, PassExit::Failed);
+    assert_eq!(
+        summary["cause"],
+        FailureCause::PurgeFailed.token(),
+        "{summary}"
+    );
+    let next = live.timer_fires();
+    assert_one_summary_matching(&live, &next, PassExit::Completed);
+    then_maria_finds(&world, &live, Author::Dmitri, 0);
+    then_maria_finds(&world, &live, Author::Priya, 2);
+}
+
 /// Every artifact file path under the index's `indexed_claims/` (relative).
 fn indexer_network_artifacts(world: &IndexerWorld) -> Vec<String> {
     let root = support::index_duckdb_path(&world.env)
