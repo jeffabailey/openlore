@@ -9,11 +9,11 @@
 #
 # Examples:
 #   ./cli.sh init --handle local-dev.openlore --app-password local-dev-password
-#   ./cli.sh claim add --subject github:rust-lang/rust \
+#   ./cli.sh claim add --subject https://www.rust-lang.org/ \
 #       --predicate embodiesPhilosophy \
 #       --object org.openlore.philosophy.memory-safety --confidence 0.85
 #   ./cli.sh claim --help
-#   ./cli.sh graph query --subject github:rust-lang/rust
+#   ./cli.sh graph query --subject https://www.rust-lang.org/
 #
 # Environment (optional — same defaults as run.sh, so they share one store):
 #   OPENLORE_HOME           Data/config root (default: ./.openlore-home).

@@ -74,14 +74,16 @@ the built `target/debug/openlore` directly.
 
 # 3. Make your first claim: "rust embodies memory-safety" (confidence 0.85).
 #    A preview is shown; press Enter at the prompt to sign locally.
+#    (A `github:` subject needs authority: only the account's owner, or a DID
+#    the repo's .github/openlore-authority file lists, may sign about it.)
 ./cli.sh claim add \
-    --subject github:rust-lang/rust \
+    --subject https://www.rust-lang.org/ \
     --predicate embodiesPhilosophy \
     --object org.openlore.philosophy.memory-safety \
     --confidence 0.85
 
 # 4. Query your local graph.
-./cli.sh graph query --subject github:rust-lang/rust
+./cli.sh graph query --subject https://www.rust-lang.org/
 
 # 5. Browse everything in the read-only web viewer.
 ./run.sh --seed        # open http://127.0.0.1:8788
