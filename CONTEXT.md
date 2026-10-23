@@ -10,5 +10,5 @@ owner-only-signing delivered and finalized (`docs/evolution/owner-only-signing-e
 
 ## Next Steps
 - Owner-only-signing leftovers all closed (D13, D35 4757ebb, README/cli.sh examples 89da132); review app needs no redeploy for them (CLI only).
-- New flaky under load: indexer_deployment_did_list `a_purge_that_fails_ends_the_pass_with_exit_2...` (passed at -j 2).
+- Fixed: indexer acceptance summary race (fix-indexer-summary-race, d0860bb + 3f0493c); check new indexer ATs with OPENLORE_TEST_COLLECTOR_LAG_MS=150.
 - Older backlog in memory `openlore-follow-up-backlog.md` (per-DID indexer fetch, release/Homebrew hygiene).
