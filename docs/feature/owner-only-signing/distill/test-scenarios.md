@@ -30,7 +30,7 @@ The `.rs` files are the scenario SSOT; this is the map. Every scenario doc comme
 | File (`tests/acceptance/`) | Slice | Layer | Scenario fns (rows) | Registered in |
 |---|---|---|---|---|
 | `owner_only_signing.rs` | 1 — person gate, WS, exemptions (PS-3, PS-7 ACTIVE), offline window, sign-time GitHub failure, inference | 3 subprocess | 9 (20) | `crates/cli/Cargo.toml` |
-| `owner_only_signing_repos.rs` | 2 — repo authority, `authority verify`, `scrape --sign`, `claim publish`, upgrades (pre-v7, v7), budget; 5 — imported candidates (IC-5 ACTIVE) | 3 subprocess | 18 + 5 (50 + 5) + 1 fixture regenerator | `crates/cli/Cargo.toml` |
+| `owner_only_signing_repos.rs` | 2 — repo authority, `authority verify`, `scrape --sign`, `claim publish`, upgrades (pre-v7, v7), budget; 5 — imported candidates (IC-5 ACTIVE; IC-6 ignored, D35 addendum) | 3 subprocess | 18 + 6 (50 + 7) + 1 fixture regenerator | `crates/cli/Cargo.toml` |
 | `owner_only_signing_readers.rs` | 3 — labels, `score_attested`, `--include-unattested`, viewer, search | 3/4 subprocess + viewer + indexer | 11 (17) | `crates/cli/Cargo.toml` |
 | `owner_only_signing_core.rs` | 1-3 pure core | 2 proptest (256 cases) | 5 properties + 1 example | `crates/cli/Cargo.toml` |
 | `owner_only_signing_review_app.rs` | 4 remainder — share draft (UC-21, P-OOS-2) | 4 HTTP | 1 (1) | `crates/openlore-review-app/Cargo.toml` |
@@ -54,7 +54,7 @@ Fixture (revision 1): `tests/fixtures/owner-only-signing-v7-store/` — frozen v
 | S-OOS-6 A never-published claim publishes only with a permit; upgrades keep everything | RA-11a, RA-11b, RA-12, RA-12b |
 | S-OOS-7 Readers label every `github:` assertion and weigh only attested ones | RD-1..RD-11, CORE-OOS-5 |
 | S-OOS-8 The review app quotes and publishes only claims whose authority holds | SA-1; publish half already shipped (ruling R8): `review_app_repos_and_accounts_several.rs` AP-1/AP-2/AP-4, `review_app_publish_permit_alone.rs`, `no_request_publishes_a_suggestion_about_a_repo_the_owner_doesnt_own` (`crates/openlore-review-app/tests`); link prompt = GDL slice 3 `review_app_identity_link.rs` |
-| S-OOS-9 Imported candidates are kept locally, never federated, never weighed, never inferred from | IC-1..IC-5 |
+| S-OOS-9 Imported candidates are kept locally, never federated, never weighed, never inferred from | IC-1..IC-6 |
 
 ## 4. Traceability — scenario → decision (elevator pitch = test name in words)
 
@@ -92,6 +92,7 @@ Fixture (revision 1): `tests/fixtures/owner-only-signing-v7-store/` — frozen v
 | IC-3 | With nothing imported, the list says so | C1a |
 | IC-4 | Importing the same repo twice lists each candidate once, as last imported | P-OOS-3 |
 | IC-5 | Imported candidates never feed Jeff's inferred people (ACTIVE) | C-OOS-7, review PO F-05 |
+| IC-6 | Reading a person keeps the candidates it suggests, each listed once (2 rows; ignored, DELIVER pending — addendum 2026-10-23) | user decision D35, U-OOS-D35, C-OOS-7, P-OOS-3 |
 | RD-1 | Every claim about a repo is shown with whose word it is | ADR-086 §8 |
 | RD-2 | The weighted view counts only attested claims and says what it left out | OOS-D9, KPI-OOS-2 |
 | RD-3 | Jeff can see the claims left out, per author, without changing the weight | OOS-D9 |
@@ -129,14 +130,14 @@ Layer-2 CM-A exception: these call the pure core directly (Mandate 9 layer 2; AD
 | `openlore` CLI — `scrape github <owner/repo> --sign`, `scrape person --sign` | RA-1, RA-2, RA-3, RA-6, RA-13, PS-9 |
 | `openlore` CLI — `infer people [--sign]` | PS-5, PS-6, RD-9, IC-5 |
 | `openlore` CLI — `authority verify [--subject]` (NEW) | RA-4, RA-5, RA-7, RA-9, RA-14, RA-15, RA-16 |
-| `openlore` CLI — `candidates list [--subject]` (NEW, slice 5) | IC-1, IC-2, IC-3, IC-4 |
+| `openlore` CLI — `candidates list [--subject]` (NEW, slice 5) | IC-1, IC-2, IC-3, IC-4, IC-6 |
 | `openlore` CLI — `graph query [--weighted] [--include-unattested] [--explain]`, `search`, `identity list` | RD-1..RD-5, RD-7, RD-8, RD-11, RA-12, RA-12b, every `WhatJeffSees` observation |
 | viewer `/score`, `/project` | RD-6 |
 | review app share preview | SA-1 |
 | `adapter-github` `read_repo_authority` (+ redirect policy; exact policy pinned by the recorded-fixture test, U-OOS-8) | RA-1, RA-3, RA-4, RA-5, RA-8, RA-16 |
 | `adapter-github` sign-time link refresh failing (rate limit / unreachable) | PS-9, RA-13 |
 | `adapter-duckdb` v8 `repo_authority_checks` | RA-1, RA-4, RA-6, RA-10, RA-12, RA-12b |
-| `adapter-duckdb` v8 `imported_candidates` | IC-1..IC-5 |
+| `adapter-duckdb` v8 `imported_candidates` | IC-1..IC-6 |
 | `adapter-duckdb` v7 `identity_link_checks` (read; write via `--sign` refresh) | PS-4, PS-9, RA-12b, RA-13 |
 | single publish path (`FakePds`) | WS-OOS-1, PS-3, RA-1, RA-11b |
 
@@ -642,6 +643,24 @@ Scenario: Imported candidates never feed Jeff's inferred people
   When Jeff lists his inferred people
   Then BurntSushi is proposed for memory-safety, from Rachel's signed claim
   And no one is proposed for dependency-pinning
+```
+
+**IC-6 (addendum 2026-10-23, user decision D35; resolves U-OOS-D35)** — `reading_a_person_keeps_the_candidates_it_suggests_each_listed_once` — `#[ignore]`, DELIVER pending. RED today: `candidates list` prints "No imported candidates." after `scrape person jeffbailey` (row "jeff reads himself", 0 lines listed, 1 expected).
+
+```gherkin
+@driving_port @driving_adapter @real-io @c-oos-7 @p-oos-3 @oos-d35 @s-oos-9 @contract-shape:bounded-change
+Scenario Outline: Reading a person keeps the candidates it suggests, each listed once
+  Given <person> owns <repo>, which pins its dependencies
+  When Jeff reads <person> as a person on 1 October
+  Then his imported candidates list <repo>'s dependency-pinning candidate once, unsigned
+  And nothing reached his published repo, and he signed nothing about <repo>
+  When Jeff reads <person> as a person again on 3 October
+  Then <repo>'s dependency-pinning candidate is still listed once, from the 3 October read
+  And no one is proposed for dependency-pinning among his inferred people
+  Examples:
+    | person     | repo                |
+    | jeffbailey | jeffbailey/tidepool |
+    | rachelk    | rachelk/kelp        |
 ```
 
 ### `owner_only_signing_readers.rs`

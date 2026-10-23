@@ -801,6 +801,16 @@ pub fn when_jeff_imports_and_signs(world: &LinkWorld, repo: RepoRef, now: &str) 
     )
 }
 
+/// WHEN: Jeff reads `account` as a person at `now` — `scrape person
+/// <login>`, nothing signed.
+pub fn when_jeff_scrapes_person(world: &LinkWorld, account: Account, now: &str) -> CliOutcome {
+    openlore_with(
+        &world.env,
+        &["scrape", "person", account.login],
+        on_github(world, "", Some(now)),
+    )
+}
+
 /// WHEN: Jeff reads `account` as a person and signs person candidate 1 —
 /// `scrape person <login> --sign 1`.
 pub fn when_jeff_scrapes_person_and_signs(

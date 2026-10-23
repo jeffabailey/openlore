@@ -214,3 +214,11 @@ Iteration 2 (re-review of ed27d3d, with design a600ad3, stories 680f56b, rulings
   is the nature of a preservation scenario, recorded as a known exception, not fixed.
 
 Mandate-8 waiver ACKNOWLEDGED by the user (2026-10-20); Sentinel condition met. Handoff to DELIVER: ready.
+
+## Addendum 2026-10-23 — user decision D35 (`scrape person` records imported candidates)
+
+- **Decision (user, 2026-10-23)**: `scrape person` keeps the unsigned candidates it suggests in the imported-candidates store exactly as `scrape github` does (step 05-01; store v9 `imported_candidates`, insert-only; `candidates list` lists each candidate once, P-OOS-3). Resolves U-OOS-D35 (the D29 behaviour half, deferred).
+- **Scenario**: IC-6 `reading_a_person_keeps_the_candidates_it_suggests_each_listed_once` in `tests/acceptance/owner_only_signing_repos.rs`, 2 rows (Jeff reads himself / Jeff reads Rachel: keeping candidates is not owner-only, only signing is). `#[ignore]` until DELIVER. Layer 3 subprocess, example-only (Mandate 9). Primary Thens: `candidates list` output (once, "not signed", latest read date), nothing signed or published, `infer people` proposes no one for dependency-pinning; secondary guardrails `imported_candidate_count` > 0 and `guardrail_nothing_signed`.
+- **New step**: `when_jeff_scrapes_person` (`scrape person <login>`, nothing signed) in `support/authority.rs`.
+- **RED classification**: MISSING_FUNCTIONALITY — `scrape person jeffbailey` succeeds and derives the tidepool dependency-pinning candidate, but `candidates list --subject github:jeffbailey/tidepool` prints "No imported candidates." (listed 0, expected 1).
+- Reconciliation passed — 0 contradictions (D35 extends C-OOS-7 / OOS-D12 B to the second import verb; no DESIGN/DEVOPS decision limits keeping candidates to `scrape github`).

@@ -1671,6 +1671,111 @@ fn imported_candidates_never_feed_jeffs_inferred_people() {
     );
 }
 
+/// IC-6 (user decision D35, 2026-10-23; resolves U-OOS-D35 / the D29
+/// behaviour half). Rows: Jeff reads himself, Jeff reads Rachel — reading a
+/// person records candidates whoever owns the repos (only signing is
+/// owner-only).
+/// ```gherkin
+/// @driving_port @driving_adapter @real-io @c-oos-7 @p-oos-3 @oos-d35 @s-oos-9 @contract-shape:bounded-change
+/// Scenario Outline: Reading a person keeps the candidates it suggests, each listed once
+///   Given <person> owns <repo>, which pins its dependencies
+///   When Jeff reads <person> as a person on 1 October
+///   Then his imported candidates list <repo>'s dependency-pinning candidate once, unsigned
+///   And nothing reached his published repo, and he signed nothing about <repo>
+///   When Jeff reads <person> as a person again on 3 October
+///   Then <repo>'s dependency-pinning candidate is still listed once, from the 3 October read
+///   And no one is proposed for dependency-pinning among his inferred people
+///   Examples:
+///     | person     | repo                |
+///     | jeffbailey | jeffbailey/tidepool |
+///     | rachelk    | rachelk/kelp        |
+/// ```
+#[test]
+#[ignore = "DISTILL owner-only-signing U-OOS-D35: scrape person records candidates — DELIVER pending"]
+fn reading_a_person_keeps_the_candidates_it_suggests_each_listed_once() {
+    let rows: [(&str, Account, RepoRef); 2] = [
+        ("jeff reads himself", JEFF_GH, TIDEPOOL),
+        ("jeff reads rachel", RACHEL_GH, KELP),
+    ];
+    for (row, person, repo) in rows {
+        let world = authority_world();
+        let subject = Subject::Repo(repo);
+        let seen = what_jeff_sees(&world, subject);
+        let before = capture_authority_universe(&world.env);
+        let listed_once = |listed: &CliOutcome| {
+            listed
+                .stdout
+                .lines()
+                .filter(|l| {
+                    l.contains(&repo.subject()) && l.contains(short_name(DEPENDENCY_PINNING))
+                })
+                .count()
+        };
+
+        let read = when_jeff_scrapes_person(&world, person, LINKED_AT);
+
+        assert_eq!(read.status, 0, "[{row}] {}\n{}", read.stdout, read.stderr);
+        let listed = when_jeff_lists_imported_candidates(&world, &["--subject", &repo.subject()]);
+        assert_eq!(
+            listed.status, 0,
+            "[{row}] {}\n{}",
+            listed.stdout, listed.stderr
+        );
+        assert_eq!(
+            listed_once(&listed),
+            1,
+            "[{row}] his imported candidates list {}'s dependency-pinning candidate once;\n{}",
+            repo.full(),
+            listed.stdout
+        );
+        assert!(
+            listed.stdout.contains("not signed"),
+            "[{row}] the candidate is shown as imported and unsigned;\n{}",
+            listed.stdout
+        );
+        assert_nothing_signed_or_published(row, &seen, &world, subject);
+        // SECONDARY guardrails.
+        assert!(
+            imported_candidate_count(&world.env) > 0,
+            "[{row}] guardrail: the imported candidates are kept"
+        );
+        guardrail_nothing_signed(row, &before, &world.env);
+
+        let again = when_jeff_scrapes_person(&world, person, CHECK_PLUS_2_DAYS);
+
+        assert_eq!(
+            again.status, 0,
+            "[{row}] {}\n{}",
+            again.stdout, again.stderr
+        );
+        let relisted = when_jeff_lists_imported_candidates(&world, &[]);
+        assert_eq!(
+            listed_once(&relisted),
+            1,
+            "[{row}] reading the person again lists the candidate still once;\n{}",
+            relisted.stdout
+        );
+        assert!(
+            relisted.stdout.contains("2026-10-03"),
+            "[{row}] shown as of the latest read (3 October);\n{}",
+            relisted.stdout
+        );
+        assert_nothing_signed_or_published(row, &seen, &world, subject);
+        guardrail_nothing_signed(row, &before, &world.env);
+        let inferred = when_jeff_lists_inferred_people(&world);
+        assert_eq!(
+            inferred.status, 0,
+            "[{row}] {}\n{}",
+            inferred.stdout, inferred.stderr
+        );
+        assert!(
+            !inferred.stdout.contains(short_name(DEPENDENCY_PINNING)),
+            "[{row}] no one is proposed for dependency-pinning (imported candidates never feed inference);\n{}",
+            inferred.stdout
+        );
+    }
+}
+
 /// One RA-10 row: label, Given, repo, sign time, expected refusal (None = signed).
 type WindowRow = (
     &'static str,
