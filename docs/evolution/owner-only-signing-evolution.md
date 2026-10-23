@@ -216,6 +216,10 @@ readers one evidence path, and composers one sign-time gate (D9, D20).
   permit per claim, re-checked like `claim publish`; user decision), U-OOS-D31
   in 28d8613, U-OOS-D32 in a321e0f, U-OOS-D34 in 89213d5. The entries below
   for them are kept as first recorded.
+- **Resolved: U-OOS-D35** in 4757ebb (user decision 2026-10-23: record
+  them). `scrape person` now keeps each repo's candidates as `scrape github`
+  does: unsigned, listed once, never weighed. This finishes the behaviour half
+  of D29.
 - **U-OOS-D30, `openlore publish push` has no permit:** `publish push` sends
   every signed claim in your own store to an instance, with no
   `SigningPermit` or fresh authority check (`crates/cli/src/verbs/publish.rs`).
