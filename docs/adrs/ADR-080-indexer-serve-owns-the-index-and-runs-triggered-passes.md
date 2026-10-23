@@ -61,6 +61,10 @@ Facts from the code (2026-10-06):
      `indexer.trigger.coalesced`.
    - **unreachable**: no socket, or the connection was refused or reset (serve is down or was
      restarted mid-pass). The verb exits **4** with `indexer.trigger.unreachable`.
+   - *Amendment 2026-10-23 (fix-indexer-summary-race):* for a pass it started, the verb prints
+     `indexer.trigger.completed {pass_id, exit_code}` to stdout, with the `pass_id` and `exit_code`
+     from serve's reply. A caller can then match the trigger to that pass's `pass_summary` by
+     `pass_id`. Exit codes do not change, and the coalesced and unreachable lines do not change.
 5. **Single-flight is structural.** The runner holds at most one pass. systemd also never overlaps
    activations of one oneshot unit, so FR-IXD-4 holds at two independent layers.
 6. **Search latency guarantee.**

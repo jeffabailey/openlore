@@ -123,9 +123,9 @@ fn serve_answers_the_probe_and_a_trigger_gets_the_pass_s_own_exit_code() {
         scope.spawn(move || answer_triggers(&listener, &answering, stop_ref));
 
         probe_round_trip(&socket).expect("serve answers its own probe");
-        assert_eq!(
+        assert!(matches!(
             request_one_pass(socket.to_str().expect("utf-8 path")),
-            TriggerOutcome::Completed { exit_code: 3 }
-        );
+            TriggerOutcome::Completed { exit_code: 3, ref pass_id } if !pass_id.is_empty()
+        ));
     });
 }

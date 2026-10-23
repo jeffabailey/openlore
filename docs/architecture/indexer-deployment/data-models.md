@@ -92,6 +92,7 @@ time in RFC3339 plus a sequence number).
 | `indexer.serve.listening` | existing | unchanged |
 | `indexer.search.truncated` **new** | `dimension`, `cap` | A search hit the row cap. No query value is logged. |
 | `indexer.search.store_error` **new** | `dimension` | A search could not read the index and was answered 500. No query value and no store error text are logged. For diagnosis; it pages nothing (A3 sees the 500 through the host's canned search). |
+| `indexer.trigger.completed` **new** (trigger stdout) | `pass_id`, `exit_code` | The pass this trigger started ended. `pass_id` and `exit_code` are the reply's, so a caller can match the trigger to that pass's `pass_summary`. Exits with `exit_code`. *Added 2026-10-23 (fix-indexer-summary-race).* |
 | `indexer.trigger.coalesced` **new** (trigger stdout) | `running_pass_id` | A pass was already running. Exit 0. |
 | `indexer.trigger.unreachable` **new** (trigger stderr) | `socket`, `cause` | Exit 4 |
 | `health.startup.refused` | existing | unchanged |

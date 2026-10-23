@@ -13,6 +13,11 @@
 //!   reply    `{"reply":"completed","pass_id":…,"exit_code":0|2|3}`
 //!            `{"reply":"busy","running_pass_id":…}` | `{"reply":"ready"}`
 //!
+//! `trigger` prints its own event line: `indexer.trigger.completed` (with the
+//! reply's `pass_id` and `exit_code`, so a caller can match the trigger to
+//! that pass's summary), `indexer.trigger.coalesced`, or, on stderr,
+//! `indexer.trigger.unreachable`.
+//!
 //! The encoding, decoding and the trigger's exit-code mapping are pure; the
 //! socket I/O sits in the shell functions below them.
 
@@ -95,8 +100,8 @@ impl Unreachable {
 /// How one `trigger` run ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerOutcome {
-    /// The pass this trigger started ended with `exit_code`.
-    Completed { exit_code: i32 },
+    /// The pass this trigger started, `pass_id`, ended with `exit_code`.
+    Completed { pass_id: String, exit_code: i32 },
     /// It joined the running pass.
     Coalesced { running_pass_id: String },
     /// `serve` could not be reached; no pass ran.
@@ -108,7 +113,7 @@ pub enum TriggerOutcome {
 #[must_use]
 pub fn trigger_exit_code(outcome: &TriggerOutcome) -> i32 {
     match outcome {
-        TriggerOutcome::Completed { exit_code } => *exit_code,
+        TriggerOutcome::Completed { exit_code, .. } => *exit_code,
         TriggerOutcome::Coalesced { .. } => EXIT_COALESCED,
         TriggerOutcome::Unreachable(_) => EXIT_SERVE_UNREACHABLE,
     }
@@ -118,7 +123,9 @@ pub fn trigger_exit_code(outcome: &TriggerOutcome) -> i32 {
 #[must_use]
 pub fn trigger_outcome_of(reply: Option<ControlReply>) -> TriggerOutcome {
     match reply {
-        Some(ControlReply::Completed { exit_code, .. }) => TriggerOutcome::Completed { exit_code },
+        Some(ControlReply::Completed { pass_id, exit_code }) => {
+            TriggerOutcome::Completed { pass_id, exit_code }
+        }
         Some(ControlReply::Busy { running_pass_id }) => {
             TriggerOutcome::Coalesced { running_pass_id }
         }
@@ -310,25 +317,50 @@ fn request_one_pass(socket: &str) -> TriggerOutcome {
     }
 }
 
-/// The trigger's own event: `coalesced` on stdout, `unreachable` on stderr.
-fn report(socket: &str, outcome: &TriggerOutcome) {
+/// Where the trigger writes its own event line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportStream {
+    Stdout,
+    Stderr,
+}
+
+/// The trigger's own event line and the stream it goes to: `completed`
+/// (naming the pass it completed) and `coalesced` on stdout, `unreachable`
+/// on stderr.
+#[must_use]
+pub fn trigger_report(socket: &str, outcome: &TriggerOutcome) -> (ReportStream, Value) {
     match outcome {
-        TriggerOutcome::Completed { .. } => {}
-        TriggerOutcome::Coalesced { running_pass_id } => println!(
-            "{}",
+        TriggerOutcome::Completed { pass_id, exit_code } => (
+            ReportStream::Stdout,
+            json!({
+                "event": "indexer.trigger.completed",
+                "pass_id": pass_id,
+                "exit_code": exit_code,
+            }),
+        ),
+        TriggerOutcome::Coalesced { running_pass_id } => (
+            ReportStream::Stdout,
             json!({
                 "event": "indexer.trigger.coalesced",
                 "running_pass_id": running_pass_id,
-            })
+            }),
         ),
-        TriggerOutcome::Unreachable(cause) => eprintln!(
-            "{}",
+        TriggerOutcome::Unreachable(cause) => (
+            ReportStream::Stderr,
             json!({
                 "event": "indexer.trigger.unreachable",
                 "socket": socket,
                 "cause": cause.token(),
-            })
+            }),
         ),
+    }
+}
+
+/// Print the trigger's own event line.
+fn report(socket: &str, outcome: &TriggerOutcome) {
+    match trigger_report(socket, outcome) {
+        (ReportStream::Stdout, line) => println!("{line}"),
+        (ReportStream::Stderr, line) => eprintln!("{line}"),
     }
 }
 
@@ -456,6 +488,53 @@ mod tests {
                 trigger_exit_code(&TriggerOutcome::Unreachable(cause)),
                 EXIT_SERVE_UNREACHABLE
             );
+        }
+
+        /// A completed trigger prints one stdout line naming the pass it
+        /// completed, so a caller can match the trigger to that pass's
+        /// summary; coalesced and unreachable keep their lines.
+        #[test]
+        fn the_trigger_reports_the_pass_it_completed(
+            reply in proptest::option::of(arb_reply()),
+            socket in "/[a-z]{1,12}\\.sock",
+        ) {
+            let outcome = trigger_outcome_of(reply.clone());
+            let expected = match reply {
+                Some(ControlReply::Completed { pass_id, exit_code }) => (
+                    ReportStream::Stdout,
+                    json!({
+                        "event": "indexer.trigger.completed",
+                        "pass_id": pass_id,
+                        "exit_code": exit_code,
+                    }),
+                ),
+                Some(ControlReply::Busy { running_pass_id }) => (
+                    ReportStream::Stdout,
+                    json!({
+                        "event": "indexer.trigger.coalesced",
+                        "running_pass_id": running_pass_id,
+                    }),
+                ),
+                Some(ControlReply::Ready) => (
+                    ReportStream::Stderr,
+                    json!({
+                        "event": "indexer.trigger.unreachable",
+                        "socket": socket,
+                        "cause": "unexpected_reply",
+                    }),
+                ),
+                None => (
+                    ReportStream::Stderr,
+                    json!({
+                        "event": "indexer.trigger.unreachable",
+                        "socket": socket,
+                        "cause": "connection_lost",
+                    }),
+                ),
+            };
+            let report = trigger_report(&socket, &outcome);
+            prop_assert_eq!(report.1.to_string().matches('\n').count(), 0);
+            prop_assert_eq!(report, expected);
         }
     }
 }
