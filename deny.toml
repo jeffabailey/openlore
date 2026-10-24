@@ -100,7 +100,13 @@ yanked = "warn"
 # Unmaintained crates: scan all (cargo-deny v0.19 schema: enum, not severity).
 # Severity is reported as "warn" by default for unmaintained advisories.
 unmaintained = "all"
-ignore = []
+ignore = [
+  # crypto-bigint 0.5.5 constant-time gaps (fixed only in 0.7.6+). Reached only through the review
+  # app's OAuth client: atrium-oauth 0.1.7 / jose-jwk 0.1.2 -> p256 0.13 -> elliptic-curve 0.13.
+  # Both are the latest releases, so no upgrade exists yet. Accepted 2026-10-24; recheck by
+  # 2026-11-24 (cargo update; drop this entry once p256 0.14 is reachable).
+  { id = "RUSTSEC-2026-0387", reason = "no fixed crypto-bigint reachable via atrium-oauth/p256 0.13; recheck 2026-11-24" },
+]
 
 [sources]
 # Restrict to crates.io. Git deps require explicit allowlist if added later.
