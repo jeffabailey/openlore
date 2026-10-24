@@ -186,7 +186,7 @@ jobs:
         run: cargo build --release -p openlore-review-app
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-cyclonedx
+          tool: cargo-cyclonedx@0.5.9
       - name: Stage binary + CycloneDX SBOM
         shell: bash
         run: |
@@ -338,7 +338,7 @@ jobs:
         run: cargo build --release -p openlore-indexer
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-cyclonedx
+          tool: cargo-cyclonedx@0.5.9
       - name: Stage binary + CycloneDX SBOM
         shell: bash
         run: |
