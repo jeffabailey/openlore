@@ -9,6 +9,6 @@ owner-only-signing delivered and finalized (`docs/evolution/owner-only-signing-e
 - Push only when told, over SSH (`git push git@github.com:jeffabailey/openlore.git HEAD:main`); deploy with `deploy/ops.sh review-app deploy <40-hex sha>`.
 
 ## Next Steps
-- Owner-only-signing leftovers all closed (D13, D35 4757ebb, README/cli.sh examples 89da132); review app needs no redeploy for them (CLI only).
-- Fixed: indexer acceptance summary race (fix-indexer-summary-race, d0860bb + 3f0493c); check new indexer ATs with OPENLORE_TEST_COLLECTOR_LAG_MS=150.
-- Older backlog in memory `openlore-follow-up-backlog.md` (per-DID indexer fetch, release/Homebrew hygiene).
+- Local, unpushed: e540f54 (ci cyclonedx pin), 2c057be..7a0cd92 (fix-search-references-n-plus-1: batched references read, AS-53 index_busy). Push when told; then confirm CI green.
+- Possible new flake: indexer_ingest `indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam` failed once in 0.5 s (passed at -j 2). Check new indexer ATs with OPENLORE_TEST_COLLECTOR_LAG_MS=150.
+- Backlog in memory `openlore-follow-up-backlog.md` (GitHub request budget; bump-formula unverified until next GA tag; SBOM is cli-only).
