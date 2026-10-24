@@ -2014,7 +2014,7 @@ mod batched_references {
     }
 
     #[test]
-    fn a_1001_row_search_costs_less_than_three_times_a_101_row_search() {
+    fn a_1001_row_search_costs_less_than_five_times_a_101_row_search() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = IndexStoreAdapter::open(&dir.path().join("index.duckdb")).expect("open");
         seed(&store, "small", 101);
@@ -2023,9 +2023,11 @@ mod batched_references {
         let small = best_of_three(&store, "small", 101);
         let large = best_of_three(&store, "large", SEARCH_ROWS_READ);
 
+        // One statement per row measured ~9.7x; the batched read ~2.6x in a debug build (the row
+        // query itself still grows a little). 5 sits between them with room for a loaded host.
         let ratio = large.as_secs_f64() / small.as_secs_f64();
         assert!(
-            ratio < 3.0,
+            ratio < 5.0,
             "a 1001-row search took {large:?}, {ratio:.1}x the 101-row search ({small:?}): \
              the references read grows with one statement per row"
         );
