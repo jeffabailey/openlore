@@ -1,0 +1,56 @@
+{
+  "roadmap": {
+    "project_id": "fix-search-references-n-plus-1",
+    "created_at": "2026-10-24T00:00:00Z",
+    "total_steps": 1,
+    "source": "docs/feature/fix-search-references-n-plus-1/rca.md",
+    "paradigm": "functional (ADR-007)",
+    "out_of_scope": "No change to REQUEST_TIMEOUT (5 s), the 503 index_busy response, the 1001-row cap, or any response shape. No push until the user says so."
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Search reads references in one batched query",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "One batched references read per search",
+          "description": "crates/adapter-index-store/src/lib.rs: select_rows stops calling references_for once per row. Under the same lock it runs one query: the references JOINed to the same WHERE/ORDER BY cid/LIMIT row set (the same predicate and cap as the row query; build it from one source so they cannot drift). A pure function then attaches the references to each claim, ordered by referenced_cid, ref_type within each claim; a claim with no references gets an empty Vec. Remove references_for if nothing else uses it, or keep it for get_by_cid only if that is simpler. Also crates/openlore-indexer/src/search_handler.rs flat_attributed_rows (about :182-200): replace the per-row linear search with a map lookup. Behaviour is unchanged.",
+          "criteria": [
+            "New store test: upsert claims on one object, some with 2+ references in mixed order. query_by_object returns, for each claim, exactly the references (and order) the per-row path returned, and empty for claims without references. The pure attach function gets a proptest.",
+            "New store test: the time for query_by_object over 1001 matching claims divided by the time over 101 is < 3 (best of 3 runs each, to cut noise). Fails today (about 10x). Record the RED.",
+            "AS-53 and all indexer_deployment_* acceptance tests pass; counter-annotation tests (AVC-6, OD-AV-7 and any test in the workspace touching references) pass"
+          ],
+          "estimated_hours": 2,
+          "dependencies": [],
+          "files_to_modify": [
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/adapter-index-store/tests/ (a new or existing test file)",
+            "crates/openlore-indexer/src/search_handler.rs"
+          ],
+          "test_file": "crates/adapter-index-store (new tests)",
+          "scenario_name": "a search reads references in one batched query (equivalence + scaling ratio)",
+          "test_command": "cargo test -p adapter-index-store && cargo nextest run -p cli -j 4 --test indexer_deployment_public_surface --test indexer_deployment_passes"
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/adapter-index-store/",
+      "crates/openlore-indexer/src/"
+    ],
+    "test_directories": [
+      "crates/adapter-index-store/",
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator; RCA approved by user 2026-10-24 (batch query, ratio test)",
+    "approved_at": "2026-10-24"
+  }
+}
