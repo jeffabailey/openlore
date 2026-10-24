@@ -10,6 +10,7 @@
 //! check-arch`'s `indexer_search_handler_read_only` rule keeps every
 //! write-capability name out of this module.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use adapter_index_store::SEARCH_ROW_CAP;
@@ -173,6 +174,15 @@ fn suggest_object(
     Ok(near_match_suggestion(object, &near))
 }
 
+/// The rows keyed by CID; the first row wins a repeated CID (as a scan would).
+fn rows_by_cid(rows: &[ports::IndexedClaim]) -> HashMap<&Cid, &ports::IndexedClaim> {
+    let mut by_cid = HashMap::with_capacity(rows.len());
+    for row in rows {
+        by_cid.entry(&row.cid).or_insert(row);
+    }
+    by_cid
+}
+
 /// Project the per-author `NetworkSearchResult` (the pure composition's stable
 /// author order + within-group cid order) into FLAT attributed wire rows, looking
 /// each row's full payload (composed_at, evidence) up from the original
@@ -182,10 +192,11 @@ fn flat_attributed_rows(
     composed: &NetworkSearchResult,
     rows: &[ports::IndexedClaim],
 ) -> Vec<SearchResultDto> {
+    let sources = rows_by_cid(rows);
     let mut out = Vec::new();
     for (_author, group) in &composed.by_author {
         for composed_row in group {
-            let source = rows.iter().find(|r| r.cid == composed_row.cid);
+            let source = sources.get(&composed_row.cid).copied();
             let composed_at = source
                 .map(|r| r.composed_at.to_rfc3339())
                 .unwrap_or_default();

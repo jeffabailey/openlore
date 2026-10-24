@@ -31,6 +31,7 @@
 #![allow(dead_code)]
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -288,11 +289,13 @@ impl IndexStoreAdapter {
     /// Run a per-claim attributed SELECT with an EXPLICIT `author_did` projection
     /// (anti-merging; NEVER an author-eliding aggregate) bound by one parameter.
     ///
-    /// Each returned row carries its typed `references` populated from the
-    /// `indexed_claim_references` child table (a SAME-store lookup keyed by the
-    /// row's own `referencing_cid`) so the PURE `appview_domain::compose_results`
-    /// counter/retract annotation (OD-AV-7 / AVC-6) can fire. This is NOT a
-    /// cross-store join and it NEVER elides `author_did`: each row keeps its own
+    /// Each returned row carries its typed `references` from the
+    /// `indexed_claim_references` child table (a SAME-store read keyed by the row's
+    /// own `referencing_cid`) so the PURE `appview_domain::compose_results`
+    /// counter/retract annotation (OD-AV-7 / AVC-6) can fire. The references of
+    /// the whole row set are read in ONE query over the SAME bounded row set
+    /// ([`bounded_row_set`]), never one query per row, then attached by the pure
+    /// [`attach_references`]. It NEVER elides `author_did`: each row keeps its own
     /// attribution; the reference rows only carry `(referenced_cid, ref_type)`.
     fn select_rows(
         &self,
@@ -300,35 +303,107 @@ impl IndexStoreAdapter {
         bind: &str,
     ) -> Result<Vec<IndexedClaim>, IndexStoreError> {
         let conn = self.lock()?;
-        let sql = format!(
-            "SELECT author_did, cid, subject, predicate, object, confidence, \
-                    composed_at, verified_against, COALESCE(provenance, 'app-signed') \
-             FROM indexed_claims WHERE {where_clause} \
-             ORDER BY cid LIMIT {SEARCH_ROWS_READ}"
-        );
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|err| IndexStoreError::QueryFailed {
-                message: format!("prepare index query: {err}"),
-            })?;
-        let rows = stmt
-            .query_map(duckdb::params![bind], row_to_indexed_claim)
-            .map_err(|err| IndexStoreError::QueryFailed {
-                message: format!("run index query: {err}"),
-            })?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row.map_err(|err| IndexStoreError::QueryFailed {
-                message: format!("decode index row: {err}"),
-            })?);
-        }
-        // Populate each row's typed references (OD-AV-7 same-store lookup). Done in
-        // a second pass so the base SELECT's borrow of `stmt` is released first.
-        for claim in &mut out {
-            claim.references = references_for(&conn, &claim.cid)?;
-        }
-        Ok(out)
+        let row_set = bounded_row_set(where_clause);
+        let claims = query_all(
+            &conn,
+            &format!(
+                "SELECT author_did, cid, subject, predicate, object, confidence, \
+                        composed_at, verified_against, COALESCE(provenance, 'app-signed') \
+                 {row_set}"
+            ),
+            bind,
+            "index",
+            row_to_indexed_claim,
+        )?;
+        let references = query_all(
+            &conn,
+            &format!(
+                "SELECT r.referencing_cid, r.referenced_cid, r.ref_type \
+                 FROM indexed_claim_references AS r \
+                 JOIN (SELECT cid {row_set}) AS matched ON r.referencing_cid = matched.cid"
+            ),
+            bind,
+            "references",
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )?;
+        let decoded = references
+            .into_iter()
+            .filter_map(|(referencing, referenced, token)| {
+                reference_type_from_wire(&token).map(|ref_type| {
+                    (
+                        Cid(referencing),
+                        ClaimReference {
+                            ref_type,
+                            cid: Cid(referenced),
+                        },
+                    )
+                })
+            });
+        Ok(attach_references(claims, decoded))
     }
+}
+
+/// The bounded row set one search reads: its predicate, its order and its cap.
+/// The ONE source both the row query and the references query select from, so
+/// the two can never read different rows.
+fn bounded_row_set(where_clause: &str) -> String {
+    format!("FROM indexed_claims WHERE {where_clause} ORDER BY cid LIMIT {SEARCH_ROWS_READ}")
+}
+
+/// Prepare `sql`, run it bound by `bind`, and decode every row; `what` names
+/// the query in the error.
+fn query_all<T>(
+    conn: &Connection,
+    sql: &str,
+    bind: &str,
+    what: &str,
+    decode: impl FnMut(&duckdb::Row<'_>) -> duckdb::Result<T>,
+) -> Result<Vec<T>, IndexStoreError> {
+    let failed = |step: &str, err: duckdb::Error| IndexStoreError::QueryFailed {
+        message: format!("{step} {what} query: {err}"),
+    };
+    let mut stmt = conn.prepare(sql).map_err(|err| failed("prepare", err))?;
+    let rows = stmt
+        .query_map(duckdb::params![bind], decode)
+        .map_err(|err| failed("run", err))?;
+    rows.collect::<duckdb::Result<Vec<T>>>()
+        .map_err(|err| failed("decode", err))
+}
+
+/// PURE: give each claim the references whose `referencing_cid` is its own CID,
+/// ordered by `referenced_cid` then `ref_type` (the wire token, as the column
+/// sorts); a claim nothing references from gets an empty list. Claims keep
+/// their order; a reference whose claim is not among them is dropped.
+fn attach_references(
+    claims: Vec<IndexedClaim>,
+    references: impl IntoIterator<Item = (Cid, ClaimReference)>,
+) -> Vec<IndexedClaim> {
+    let mut by_claim: HashMap<Cid, Vec<ClaimReference>> = HashMap::new();
+    for (referencing, reference) in references {
+        by_claim.entry(referencing).or_default().push(reference);
+    }
+    claims
+        .into_iter()
+        .map(|claim| {
+            let mut references = by_claim.remove(&claim.cid).unwrap_or_default();
+            references.sort_by(|a, b| reference_order(a).cmp(&reference_order(b)));
+            IndexedClaim {
+                references,
+                ..claim
+            }
+        })
+        .collect()
+}
+
+/// The order references take within one claim: `referenced_cid`, then `ref_type`.
+fn reference_order(reference: &ClaimReference) -> (&str, &'static str) {
+    (&reference.cid.0, reference_type_wire(reference.ref_type))
 }
 
 /// Apply each set cap to the freshly opened connection (B9).
@@ -348,44 +423,6 @@ fn apply_caps(conn: &Connection, caps: DuckDbCaps) -> Result<(), IndexStoreError
             })?;
     }
     Ok(())
-}
-
-/// The typed `references` a claim carries, read from the `indexed_claim_references`
-/// child table by the claim's OWN `referencing_cid` (a SAME-store lookup — NOT a
-/// cross-store join). Each reference is `ClaimReference { ref_type, cid:
-/// referenced_cid }`; the countering claim K's row therefore carries a `Counters`
-/// reference to the countered claim C's CID, which the pure compose core reads to
-/// annotate C (OD-AV-7 / AVC-6). Anti-merging is preserved: this lookup touches
-/// only the reference rows; the claim's `author_did` is untouched.
-fn references_for(conn: &Connection, cid: &Cid) -> Result<Vec<ClaimReference>, IndexStoreError> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT referenced_cid, ref_type FROM indexed_claim_references \
-             WHERE referencing_cid = ? ORDER BY referenced_cid, ref_type",
-        )
-        .map_err(|err| IndexStoreError::QueryFailed {
-            message: format!("prepare references query: {err}"),
-        })?;
-    let rows = stmt
-        .query_map(duckdb::params![cid.0], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(|err| IndexStoreError::QueryFailed {
-            message: format!("run references query: {err}"),
-        })?;
-    let mut out = Vec::new();
-    for row in rows {
-        let (referenced_cid, ref_type) = row.map_err(|err| IndexStoreError::QueryFailed {
-            message: format!("decode reference row: {err}"),
-        })?;
-        if let Some(ref_type) = reference_type_from_wire(&ref_type) {
-            out.push(ClaimReference {
-                ref_type,
-                cid: Cid(referenced_cid),
-            });
-        }
-    }
-    Ok(out)
 }
 
 /// Parse a `ref_type` wire token (the `indexed_claim_references` CHECK domain) back
@@ -1786,5 +1823,211 @@ mod near_object_properties {
             .objects_near("com.example.unrelated", SUGGESTION_MAX_DISTANCE)
             .expect("near")
             .is_empty());
+    }
+}
+
+#[cfg(test)]
+mod batched_references {
+    //! fix-search-references-n-plus-1: a search reads every row's references in
+    //! ONE batched query over the same bounded row set, instead of one query per
+    //! row. The answer must be exactly what the per-row lookup gave, and the cost
+    //! of a 1001-row search must not grow with one statement per row.
+
+    use super::tests::sample_claim;
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    const OBJECT: &str = "org.openlore.philosophy.reproducible-builds";
+
+    fn reference(ref_type: ReferenceType, cid: &str) -> ClaimReference {
+        ClaimReference {
+            ref_type,
+            cid: Cid(cid.to_string()),
+        }
+    }
+
+    /// The per-row path this fix replaces, run as the oracle over a raw
+    /// connection: one `referencing_cid = ?` lookup per claim.
+    fn per_row_references(conn: &Connection, cid: &Cid) -> Vec<ClaimReference> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT referenced_cid, ref_type FROM indexed_claim_references \
+                 WHERE referencing_cid = ? ORDER BY referenced_cid, ref_type",
+            )
+            .expect("prepare per-row lookup");
+        stmt.query_map(duckdb::params![cid.0], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .expect("run per-row lookup")
+        .map(|row| row.expect("decode per-row lookup"))
+        .filter_map(|(referenced, token)| {
+            reference_type_from_wire(&token).map(|ref_type| reference(ref_type, &referenced))
+        })
+        .collect()
+    }
+
+    #[test]
+    fn a_search_returns_each_claims_references_exactly_as_the_per_row_lookup_did() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("index.duckdb");
+        let store = IndexStoreAdapter::open(&db_path).expect("open index store");
+        let claims = [
+            ("bafyeq1", vec![]),
+            (
+                "bafyeq2",
+                vec![
+                    reference(ReferenceType::Supersedes, "bafytarget-b"),
+                    reference(ReferenceType::Counters, "bafytarget-b"),
+                    reference(ReferenceType::Retracts, "bafytarget-a"),
+                ],
+            ),
+            ("bafyeq3", vec![]),
+            (
+                "bafyeq4",
+                vec![
+                    reference(ReferenceType::Corrects, "bafytarget-z"),
+                    reference(ReferenceType::Counters, "bafyeq2"),
+                ],
+            ),
+            (
+                "bafyeq5",
+                vec![reference(ReferenceType::Counters, "bafyeq1")],
+            ),
+        ];
+        for (cid, references) in &claims {
+            store
+                .upsert(&IndexedClaim {
+                    cid: Cid((*cid).to_string()),
+                    references: references.clone(),
+                    ..sample_claim()
+                })
+                .expect("upsert");
+        }
+
+        let found = store.query_by_object(OBJECT).expect("query by object");
+        drop(store);
+
+        let conn = Connection::open(&db_path).expect("open oracle connection");
+        assert_eq!(found.len(), claims.len());
+        for claim in &found {
+            assert_eq!(
+                claim.references,
+                per_row_references(&conn, &claim.cid),
+                "references of {} differ from the per-row lookup",
+                claim.cid.0
+            );
+        }
+        let without: Vec<&str> = found
+            .iter()
+            .filter(|claim| claim.references.is_empty())
+            .map(|claim| claim.cid.0.as_str())
+            .collect();
+        assert_eq!(without, vec!["bafyeq1", "bafyeq3"]);
+        assert_eq!(
+            found
+                .iter()
+                .find(|claim| claim.cid.0 == "bafyeq2")
+                .expect("bafyeq2 found")
+                .references,
+            vec![
+                reference(ReferenceType::Retracts, "bafytarget-a"),
+                reference(ReferenceType::Counters, "bafytarget-b"),
+                reference(ReferenceType::Supersedes, "bafytarget-b"),
+            ]
+        );
+    }
+
+    const REF_TYPES: [ReferenceType; 4] = [
+        ReferenceType::Retracts,
+        ReferenceType::Corrects,
+        ReferenceType::Counters,
+        ReferenceType::Supersedes,
+    ];
+
+    proptest::proptest! {
+        /// Universe: a claim list (distinct CIDs, in query order) and reference
+        /// rows in any order, some naming a CID outside the list. Each claim gets
+        /// exactly the rows naming its CID, in `(referenced_cid, ref_type)` order;
+        /// the claim list itself (order, every other field) is unchanged.
+        #[test]
+        fn attaching_gives_each_claim_its_own_references_in_order(
+            claim_count in 0usize..6,
+            rows in proptest::collection::vec((0usize..8, 0usize..4, 0usize..REF_TYPES.len()), 0..24),
+        ) {
+            let claims: Vec<IndexedClaim> = (0..claim_count)
+                .map(|n| IndexedClaim { cid: Cid(format!("bafyc{n}")), ..sample_claim() })
+                .collect();
+            let references: Vec<(Cid, ClaimReference)> = rows
+                .iter()
+                .map(|(referencing, referenced, ref_type)| {
+                    (
+                        Cid(format!("bafyc{referencing}")),
+                        reference(REF_TYPES[*ref_type], &format!("bafyt{referenced}")),
+                    )
+                })
+                .collect();
+
+            let attached = attach_references(claims.clone(), references.clone());
+
+            proptest::prop_assert_eq!(attached.len(), claims.len());
+            for (claim, before) in attached.iter().zip(&claims) {
+                let mut expected: Vec<ClaimReference> = references
+                    .iter()
+                    .filter(|(referencing, _)| *referencing == before.cid)
+                    .map(|(_, reference)| reference.clone())
+                    .collect();
+                expected.sort_by_key(|r| (r.cid.0.clone(), reference_type_wire(r.ref_type)));
+                proptest::prop_assert_eq!(&claim.references, &expected);
+                proptest::prop_assert_eq!(
+                    &IndexedClaim { references: Vec::new(), ..claim.clone() },
+                    before
+                );
+            }
+        }
+    }
+
+    /// Seed `count` claims on `object`, each carrying one reference.
+    fn seed(store: &IndexStoreAdapter, object: &str, count: usize) {
+        for n in 0..count {
+            store
+                .upsert(&IndexedClaim {
+                    cid: Cid(format!("bafy{object}{n:05}")),
+                    object: object.to_string(),
+                    references: vec![reference(ReferenceType::Counters, "bafytarget")],
+                    ..sample_claim()
+                })
+                .expect("upsert");
+        }
+    }
+
+    fn best_of_three(store: &IndexStoreAdapter, object: &str, expected_rows: usize) -> Duration {
+        (0..3)
+            .map(|_| {
+                let started = Instant::now();
+                let rows = store.query_by_object(object).expect("query by object");
+                let elapsed = started.elapsed();
+                assert_eq!(rows.len(), expected_rows);
+                elapsed
+            })
+            .min()
+            .expect("three runs")
+    }
+
+    #[test]
+    fn a_1001_row_search_costs_less_than_three_times_a_101_row_search() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexStoreAdapter::open(&dir.path().join("index.duckdb")).expect("open");
+        seed(&store, "small", 101);
+        seed(&store, "large", SEARCH_ROWS_READ);
+
+        let small = best_of_three(&store, "small", 101);
+        let large = best_of_three(&store, "large", SEARCH_ROWS_READ);
+
+        let ratio = large.as_secs_f64() / small.as_secs_f64();
+        assert!(
+            ratio < 3.0,
+            "a 1001-row search took {large:?}, {ratio:.1}x the 101-row search ({small:?}): \
+             the references read grows with one statement per row"
+        );
     }
 }
