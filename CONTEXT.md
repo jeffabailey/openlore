@@ -9,6 +9,6 @@ owner-only-signing delivered and finalized (`docs/evolution/owner-only-signing-e
 - Push only when told, over SSH (`git push git@github.com:jeffabailey/openlore.git HEAD:main`); deploy with `deploy/ops.sh review-app deploy <40-hex sha>`.
 
 ## Next Steps
-- Local, unpushed: e540f54 (ci cyclonedx pin), 2c057be..7a0cd92 (fix-search-references-n-plus-1: batched references read, AS-53 index_busy). Push when told; then confirm CI green.
-- Possible new flake: indexer_ingest `indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam` failed once in 0.5 s (passed at -j 2). Check new indexer ATs with OPENLORE_TEST_COLLECTOR_LAG_MS=150.
-- Backlog in memory `openlore-follow-up-backlog.md` (GitHub request budget; bump-formula unverified until next GA tag; SBOM is cli-only).
+- 491b7ae (duckdb capped <1.20000: DuckDB 2.0 broke the arm64 release link) is CI-green and deployed: indexer sha256:df8a32e9… on 2026-10-25 (first pass exit 0), review app redeployed the same day. Moving to DuckDB 2.0 is a separate change.
+- RUSTSEC-2026-0387 ignored in deny.toml until 2026-11-24 recheck (crypto-bigint via atrium-oauth/p256 0.13). Search N+1 fix verified on CI (184d146).
+- Possible flake: indexer_ingest `indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam`. Backlog in memory `openlore-follow-up-backlog.md`.
