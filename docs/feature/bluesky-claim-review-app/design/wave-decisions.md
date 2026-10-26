@@ -46,7 +46,7 @@ Throwaway programs (scratchpad only, not in the repo) ran against `canzantest.bs
 | SPIKE-3 (bsky.social) | **Pass** | Granted scope `atproto repo:org.openlore.claim?action=create repo:app.bsky.feed.post?action=create`. A create in another collection was refused with 403 `ScopeMissingError`, and so was a `deleteRecord` on `org.openlore.claim` (needs `action=delete`). The `transition:generic` fallback is not needed on bsky.social. Not yet run on the OpenLore PDS. |
 | SPIKE-4a (Caddy) | **Pass** | An `import /etc/caddy/sites/*.caddy` that matches no files validates on `caddy:2`, `2-alpine` and `2.6.1`. Adding a site file later is picked up. |
 | SPIKE-4b (RSS) | **Pass (proxy)** | `openlore scrape person jeffabailey --repos 10`: peak RSS 71 MB in 19 s, giving 20 repo candidates (macOS arm64). Re-measure on t4g.micro during DEVOPS. |
-| SPIKE-6 (bring-your-own PDS, scale-to-zero) | Not run | Logged 2026-10-13 after the go-live memory gate. Run with `/nw-spike`. If it passes, SPIKE-1 and SPIKE-3 on the OpenLore PDS become moot, since both pass on bsky.social. |
+| SPIKE-6 (bring-your-own PDS, scale-to-zero) | **Search half: pass (2026-10-26)** | Indexer search on arm64 Lambda with the DuckDB index fetched from S3: cold 0.36-0.96 s and warm median 63-75 ms up to 100k claims; cold fails 3 s at 1M claims. Projected about $0.25/month. See `docs/feature/scale-to-zero-hosting/spike/findings.md`. Still open: bring-your-own PDS, the review app on Lambda, the pass Lambda. |
 
 Findings the design must absorb (input to DEVOPS and DELIVER):
 
