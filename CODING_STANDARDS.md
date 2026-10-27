@@ -7,8 +7,8 @@
 
 ## Tests
 
-- Every demoed behavior is backed by a committed, passing test, never an ad-hoc
-  one-off. A slice's acceptance suite, asserting exactly what the demo shows, counts.
+- Every demoed behavior is backed by a committed, passing test. A slice's acceptance
+  suite, asserting exactly what the demo shows, counts.
 - Delete temporary demo scaffolding (e.g. `println!`) before committing.
 - Mutation testing: per-feature, with the kill-rate gate in `CLAUDE.md`
   (Mutation Testing Strategy).
