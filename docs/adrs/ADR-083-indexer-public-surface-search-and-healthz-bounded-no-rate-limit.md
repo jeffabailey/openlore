@@ -2,6 +2,18 @@
 
 - **Status**: Accepted (2026-10-07) — implemented, not yet deployed; see `docs/evolution/indexer-deployment-evolution.md` (proposed 2026-10-06)
 - **Amended 2026-10-07 (DELIVER review H3, user decision)**: §4 "No per-IP rate limiting in v1" is **reversed**. Stock Caddy has no `rate_limit` module (a custom build would be a shared-module change), so the limit is enforced in the indexer binary: a per-client token bucket, 10 req/s, burst 50 (`OPENLORE_INDEXER_RATE_LIMIT_PER_SEC` 1..=1000, `_BURST` 1..=10000), 429 + Retry-After, `/healthz` exempt, at most 10 000 tracked clients. The client is the socket peer, or the rightmost X-Forwarded-For entry when the peer is a trusted proxy (loopback or `OPENLORE_INDEXER_TRUSTED_PROXIES`). The title and §4 below are kept as history. Commits `943c955`, `6f9c38b`.
+- **Amended 2026-10-26 (scale-to-zero-hosting, ADR-090; user decision)**: on AWS Lambda:
+  - **§1**: the edge layer is CloudFront, not Caddy. It has two behaviors (search, `GET /healthz`), and every other path gets 404 from a CloudFront Function. There is no OAC, so the raw Function URL is also public, with the same bounds.
+  - **Rate limit**: the per-client token bucket from the 2026-10-07 amendment is replaced by a **global cap**:
+    - search reserved concurrency 3 (throttles return 429);
+    - alarm A4 above 3,000 calls per 5 min;
+    - AWS Budgets alerts at $2 and $10;
+    - the kill switch `deploy.sh lambda stop`, which sets reserved concurrency to 0.
+
+    The bucket stays in self-hosted `serve`. It is not wired on Lambda, where each instance would start with an empty bucket.
+  - **§2**: `last_successful_pass_at` means **index published at**, read from the S3 object's metadata. Name and shape are unchanged, and it is `null` before the first publish.
+  - **§3**: the in-process bounds are unchanged. Both transports call one shared `dispatch`.
+  - **§5**: CloudFront may send `Server: CloudFront`, with no version information. The `x-amzn-*` headers are removed.
 - **Date**: 2026-10-06
 - **Deciders**: Morgan (nw-solution-architect); Jeff Bailey (public read-only search, 2026-10-06)
 - **Feature**: indexer-deployment (DESIGN). Resolves OQ-IXD-5 (public freshness) and OQ-IXD-7 (rate limiting),

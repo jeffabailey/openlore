@@ -1,6 +1,7 @@
 # ADR-080: `serve` Owns the Index Store and Runs Each Scheduled Pass In-Process, Triggered by the Host Timer
 
 - **Status**: Accepted (2026-10-07) — implemented, not yet deployed; see `docs/evolution/indexer-deployment-evolution.md` (proposed 2026-10-06)
+- **Amended 2026-10-26 (scale-to-zero-hosting, ADR-090)**: in production the indexer moves to AWS Lambda, so §1 ("`serve` is the only process that opens `index.duckdb`") and §2-§4 (in-process runner, control socket, `trigger`) no longer describe production. There, every search instance opens its own read copy of the index (one S3 object fetched to `/tmp`), and the **pass function is the only writer**. "Passes never overlap" (§5) now holds through reserved concurrency 1 plus `PutObject If-Match`; a 412 exits 2. The pass itself is unchanged: the same ADR-077/078 pass, one `pass_summary`, exit codes 0/2/3, §6 one-operation-at-a-time and the end checkpoint, and §7 robustness. The runner, socket and `trigger` remain for self-hosted `serve` and for the host during the ADR-090 trial.
 - **Date**: 2026-10-06
 - **Deciders**: Morgan (nw-solution-architect); Jeff Bailey to confirm at DESIGN review
 - **Feature**: indexer-deployment (DESIGN). Resolves OQ-IXD-1 (store sharing) and OQ-IXD-2 (container shape).

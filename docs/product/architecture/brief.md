@@ -44,7 +44,9 @@ Workspace layout — all crates live under `/Users/jeffbailey/Projects/foss/lead
 | `crates/adapter-index-store` | effect      | Implements `IndexStorePort` over a SEPARATE `index.duckdb`; non-`Option` `author_did` rows; `verified_against NOT NULL`; no merged/consensus schema | slice-05     |
 | `crates/adapter-xrpc-query-server` | effect | `hyper` HTTP server of the `org.openlore.appview.searchClaims` XRPC query method (per-result `author_did` always present) | slice-05     |
 | `crates/adapter-index-query` | effect      | CLI-side `IndexQueryPort` XRPC client (bounded timeouts); treats indexer-unreachable as a SOFT non-fatal outcome (graceful degradation) | slice-05     |
-| `crates/openlore-indexer`    | driver (binary) | The SECOND composition root (`serve`/`ingest`/`stats`, plus `trigger` per ADR-080); self-hostable network service; signing-incapable; holds no local store. In production, `serve` owns the index and runs triggered passes (indexer-deployment). | slice-05     |
+| `crates/openlore-indexer`    | driver (lib + binary) | The SECOND composition root (`serve`/`ingest`/`stats`, plus `trigger` per ADR-080); self-hostable network service; signing-incapable; holds no local store; AWS-free. Split into lib + bin by scale-to-zero-hosting (ADR-090) so the Lambda root reuses its wiring, pass and handlers. The bin's behaviour is unchanged. | slice-05     |
+| `crates/openlore-indexer-lambda` | driver (binary) | The FOURTH composition root (indexer family, ADR-090): modes `search` (lambda_http), `pass` and `probe` (lambda_runtime) on AWS Lambda; pure `decide` module (freshness, publish, liveness). Same capability boundary as the indexer. (designed, not built) | scale-to-zero-hosting |
+| `crates/adapter-s3-index-object` | effect   | `IndexObjectPort` over S3 (one index object: head, fetch, conditional publish, last-pass record) and `RepoDidListSourcePort` over SSM. The only adapter linking the AWS SDK. (designed, not built) | scale-to-zero-hosting |
 | `crates/review-domain`       | pure core   | Review/consent context: ownership verdict, suggestion lifecycle, reconcile, Publish/Retract/SharePost **plans**, budget arithmetic, maud views (ADR-072/076) | bluesky-claim-review-app |
 | `crates/adapter-atproto-oauth` | effect    | `OAuthPort` + create-only `UserRepoWritePort` over `atrium-oauth` (confidential client, DPoP) (ADR-073) | bluesky-claim-review-app |
 | `crates/adapter-review-store`| effect      | Owner-scoped private state + AEAD secret store over a SEPARATE `review-app.duckdb` (ADR-074) | bluesky-claim-review-app |
@@ -69,6 +71,27 @@ reports 21).**
 > finalize. The hexagonal/modular-monolith STYLE (above) is unchanged by these.
 
 Shipped slice extensions:
+
+- **scale-to-zero-hosting: DESIGNED (2026-10-26, ADR-090 proposed; not built).** It moves the indexer
+  off the PDS host onto AWS Lambda in us-east-1. The review app and PDS stay on the host. There are
+  no DISCUSS artifacts; the requirements are the SPIKE-6 criteria and the spike findings.
+  - **Shape**: three functions from one signed image:
+    - search: reserved concurrency 3, Function URL, behind CloudFront at
+      `index.openlore.jeffbailey.us`, no OAC;
+    - pass: every 15 min, reserved concurrency 1, the only writer;
+    - probe: every 5 min, feeds A3.
+  - **Index**: one S3 object, `index/index.duckdb`, versioned. The pass publishes with `If-Match`
+    only when the index fingerprint changed, and writes `last-pass.json` on every good pass.
+    Search instances fetch the object at init and recheck the ETag at most every 60 s.
+  - **Shared bounds**: a transport-free `dispatch` in `adapter-xrpc-query-server` serves both hyper
+    `serve` and Lambda, so the bounds are identical. `/healthz` `last_successful_pass_at` = index
+    published at.
+  - **Abuse guard**: a global cap replaces per-client 429s on Lambda: reserved concurrency 3, A4
+    above 3,000 calls per 5 min, Budgets at $2 and $10, kill switch `deploy.sh lambda stop`.
+  - **Self-host**: `openlore-indexer` becomes lib + bin with unchanged behaviour. It stays AWS-free
+    (xtask `aws_sdk_only_in_lambda_edge`). The two Lambda crates set `rust-version` 1.94.1 for the AWS SDK; the workspace stays 1.91.
+  - **Docs**: `docs/feature/scale-to-zero-hosting/feature-delta.md` and `design/wave-decisions.md`.
+    ADR-090 amends ADR-075 (indexer only), ADR-080 and ADR-083.
 
 - **indexer-deployment: IMPLEMENTED (designed 2026-10-06, delivered 2026-10-07; not yet deployed). IN-PLACE EXTENSION of the
   indexer root. ZERO new crates, ZERO schema migration, ZERO lexicon change.** It deploys
@@ -104,6 +127,9 @@ Shipped slice extensions:
     `indexer_search_handler_read_only`.
   - Platform: signed arm64 image (only from green commits), digest deploy with auto-rollback
     (`deploy/indexer/`), 15-minute host timer, 3 CloudWatch alarms (~$1/month).
+  - **Superseded in production by scale-to-zero-hosting (ADR-090, designed 2026-10-26)**. The host
+    container, Caddy site and timers run in parallel during the trial and are retired after 7 green
+    days. Self-hosted `serve` keeps everything above.
   - ADR-080..083 accepted (ADR-083 §4 reversed). See `docs/architecture/indexer-deployment/`
     (architecture-design.md, component-boundaries.md, data-models.md, technology-stack.md).
     History, open follow-ups and the go-live sequence: `docs/evolution/indexer-deployment-evolution.md`.
@@ -896,7 +922,65 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
   ticked; migration of a v1 file keeps every suggestion visible as before; purge leaves zero rows
   in every new table.
 
+### scale-to-zero-hosting (DESIGN 2026-10-26, ADR-090 proposed)
+
+- **Driving ports**:
+  - Search, `POST /xrpc/org.openlore.appview.searchClaims`, through CloudFront
+    (`index.openlore.jeffbailey.us`) and the raw Function URL, which must behave identically;
+  - `GET /healthz` on both hosts;
+  - the pass event (scheduler, or `deploy.sh lambda trigger`);
+  - the probe event.
+- **Pure seams for property tests**: `openlore_indexer_lambda::decide`:
+  - `freshness_due`;
+  - `reload_needed` (ETag cases: none, same, changed, head failed);
+  - `publish_decision` (exit 0/2/3 × fingerprint same or changed × store usable or not);
+  - `not_live`;
+  - `dids_copy_usable`.
+
+  Also `IndexFingerprint` equality under a re-upsert of the same claim.
+- **Doubles**: a fake `IndexObjectPort` (ETag versions, 404, 412 on a stale `If-Match`, transient
+  errors); a fake `RepoDidListSourcePort` (ok, malformed, failure); the existing `FakeIngestSource`
+  and fake PLC; a real DuckDB file in `/tmp`.
+- **Must-cover behaviors**:
+  - Bounds are identical on both transports: 8 KB ok, 9 KB 413, 513 B value 400, `createRecord`
+    404, `POST /healthz` 404, the 5 s timeout gives 503 `index_busy`, a store error gives 500 and
+    never an empty 200.
+  - A warm instance picks up a published change within TTL plus one call, and a failed `HEAD`
+    still answers from the current copy.
+  - A missing object gives an empty index, with `/healthz` 200 and `null`.
+  - An S3 failure at init gives `health.startup.refused`.
+  - Exactly one `pass_summary` per pass.
+  - No publish when nothing changed; publish on change for exit 0/2/3 with a usable store; never
+    publish on an unusable store; a 412 gives `publish_conflict` and exit 2.
+  - A DID edit is picked up on the next pass; an SSM failure on a cold pass refuses it (exit 2).
+  - The probe emits `not_live = 1` for each cause.
+  - The self-host `serve` behaves exactly as before (the existing suites stay green).
+
 ## For Software Crafter
+
+### scale-to-zero-hosting (DESIGN 2026-10-26, ADR-090 proposed)
+
+- **Lib split first.** `openlore-indexer` gains `src/lib.rs`, and `main.rs` stays thin. Change
+  `health_handler` to take a published-at reader closure. Self-host passes the runner's
+  `StatusReader`, so its behaviour is unchanged.
+- **Extract `dispatch`.** In `adapter-xrpc-query-server`, extract `dispatch` from the hyper
+  `serve`. The rate limit and connection cap stay in the hyper path only. Do not copy route or
+  bound logic into the Lambda root.
+- **Pure `decide` module.** Freshness, publish and liveness decisions are pure functions that take
+  `now`. The handlers only read, call and write.
+- **Search mode.** Hold the index in `RwLock<Arc<..>>` (std only, no new dependency). Download a
+  reload to a new path, open it with `open_capped`, swap, then delete the old file.
+- **AWS SDK.** Use `default-features = false` with `aws-smithy-http-client` `rustls-ring` (no
+  aws-lc, no openssl). Only `adapter-s3-index-object` and the Lambda root may link `aws-*` or
+  `lambda_*`. Add the xtask rule and extend the indexer rules to the new root.
+- **Pass mode.**
+  - Pass deadline 780 s.
+  - Verify the end-of-pass `CHECKPOINT` leaves no WAL before upload.
+  - Conditional `PutObject` with `If-Match` or `If-None-Match: *`.
+  - Metadata `published-at` and `pass-id`.
+  - Log `indexer.lambda.published {index_bytes, pass_id}` for A5.
+- **Image.** `WORKDIR /`, both binaries in one image. The host `serve-smoke` must stay green.
+- **MSRV.** Workspace stays 1.91; only `openlore-indexer-lambda` and `adapter-s3-index-object` set `rust-version = "1.94.1"`. Run `cargo deny check` after adding the crates.
 
 ### github-did-identity-link (DESIGN 2026-10-14, accepted)
 
@@ -1221,6 +1305,62 @@ C4Container
   Rel(ec2, ebs, "")
 ```
 
+### Indexer hosting (scale-to-zero-hosting, ADR-090, designed 2026-10-26)
+
+The indexer leaves the PDS host. The PDS and the review app stay there (ADR-075, unchanged for the
+app).
+
+- **Region and IaC**: us-east-1. New tofu root `deploy/tofu/environments/prod-indexer/` (state key
+  `openlore/indexer/prod.tfstate`, laptop apply). It reads the SNS topic and the indexer log group
+  from the prod root's outputs.
+- **Runtime**: Lambda arm64, three functions from one cosign-signed image digest that `deploy.sh`
+  copies from GHCR into ECR (`openlore-indexer`, immutable tags, last 5 kept):
+
+  | Function | Memory | Reserved concurrency | Trigger |
+  |---|---|---|---|
+  | search | 512 MB | 3 | Function URL `live` and `candidate` |
+  | pass | 512 MB | 1 | EventBridge `cron(0/15 * * * ? *)` |
+  | probe | 128 MB | 1 | every 5 min |
+
+- **Data**: a versioned S3 bucket holds `index/index.duckdb` (one writer, conditional PUT, publish on
+  change) and `index/last-pass.json`. The DID list is still the SSM String
+  `/openlore/prod/indexer/repo-dids`, read on every pass.
+- **Edge**: CloudFront (ACM us-east-1, no OAC) with a CloudFront Function 404 default. DNS is a
+  manual Cloudflare exact CNAME `index.openlore` → CloudFront, DNS-only, TTL 60.
+- **Alarms**: A1-A3 reused (A3 is fed by the probe). A4: more than 3,000 search calls per 5 min.
+  A5: index > 100 MB. Budgets alert at $2 and $10. Kill switch: `deploy.sh lambda stop`.
+- **Deploy**: CI green, cosign verify, `crane copy`, publish versions, post-check the `candidate`
+  alias, flip `live`. Rollback flips the alias back.
+- **Trial**: the host indexer runs in parallel, and Lambda logs to `/openlore/prod/indexer-lambda`.
+  Cut-over is the CNAME. Decommission after 7 green days.
+- **Cost**: about $0.36/month (about $0.30 with the Lambda free tier). The host bill is unchanged
+  until the host is retired.
+
+```mermaid
+C4Container
+  title OpenLore index (ADR-090) — Containers
+  Person(user, "Searcher (openlore CLI)")
+  Person(op, "Operator")
+  System_Boundary(aws, "AWS 091153021562 us-east-1") {
+    Container(cdn, "CloudFront", "", "index.openlore.jeffbailey.us")
+    Container(search, "search Lambda", "openlore-indexer-lambda search", "reserved 3")
+    Container(pass, "pass Lambda", "openlore-indexer-lambda pass", "every 15 min, reserved 1")
+    Container(probe, "probe Lambda", "openlore-indexer-lambda probe", "every 5 min")
+    ContainerDb(s3, "S3 index bucket", "versioned", "index.duckdb + last-pass.json")
+    ContainerDb(ssm, "SSM repo-dids", "", "")
+    ContainerDb(ecr, "ECR openlore-indexer", "", "signed digest copy")
+  }
+  System_Ext(pds, "Authors' PDSes / PLC")
+  Rel(user, cdn, "search / healthz")
+  Rel(cdn, search, "Function URL")
+  Rel(search, s3, "HEAD 60 s / GET")
+  Rel(pass, ssm, "DID list")
+  Rel(pass, pds, "pull")
+  Rel(pass, s3, "PUT If-Match")
+  Rel(probe, cdn, "probe")
+  Rel(op, ecr, "crane copy")
+```
+
 ## SSOT discipline
 
 - This brief is **cross-feature**. Add a row to **Component Inventory** when a
@@ -1268,6 +1408,7 @@ C4Container
   `docs/feature/github-release-binaries/environments.yaml`; ADR-011, ADR-012
 - Supply-chain policy: `deny.toml`
 - PDS hosting (shared module): `docs/feature/shared-pds-module/feature-delta.md`; ADR-066..069
+- Indexer scale-to-zero hosting (DESIGN, proposed): `docs/feature/scale-to-zero-hosting/`; ADR-090
 - GitHub ↔ DID identity link (DESIGN, accepted): `docs/feature/github-did-identity-link/design/`;
   ADR-084, ADR-085
 - Owner-only signing (DESIGN, accepted): `docs/feature/owner-only-signing/design/`; ADR-086,
