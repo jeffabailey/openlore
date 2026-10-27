@@ -1,0 +1,123 @@
+# environments.yaml: scale-to-zero-hosting (DEVOPS, 2026-10-27)
+# Consumed by DISTILL (Mandate 4, environmental realism). Design: feature-delta.md
+# "Wave: DEVOPS / [REF] Environment matrix" and "Coexistence matrix".
+
+target_environments:
+  - name: local
+    description: "Developer laptop. cargo nextest over the pure decide module, the handlers with in-memory fakes of IndexObjectPort and RepoDidListSourcePort, dispatch and fingerprint. No AWS credentials, no network."
+    platform: [macos, linux]
+    preconditions:
+      - "Rust stable per rust-toolchain.toml"
+      - "no AWS credentials needed or read"
+
+  - name: ci-commit
+    description: "GitHub Actions commit and acceptance stages on every push to main: fmt, clippy, deny, check-arch, check-probes, msrv (1.91.0 without the Lambda crates, 1.94.1 for them), then nextest workspace."
+    platform: [linux]
+    preconditions:
+      - "push to main (trunk-based)"
+      - "CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback in the msrv job (Cargo.lock is gitignored)"
+
+  - name: ci-image-lambda
+    description: "The single release image run as Lambda runs it: Runtime Interface Emulator mounted at run time, arbitrary uid (not 65532), read-only root, 512 MB /tmp tmpfs, 512 MB memory, moto standing in for S3 and SSM via AWS_ENDPOINT_URL, the production Lambda env from lambda-env.json."
+    platform: [linux-arm64]
+    preconditions:
+      - "main push; image built from indexer-build's two binaries"
+      - "aws-lambda-rie release pinned by version and sha256, never copied into the image"
+      - "moto server pinned (image digest or hashed pip install)"
+      - "empty bucket and one SSM parameter holding did:web:smoke.invalid"
+
+  - name: ci-image-self-host
+    description: "The existing serve-smoke, unchanged, on the same image now built with WORKDIR /."
+    platform: [linux-arm64]
+    preconditions:
+      - "production compose posture (read-only, 128m, init, cap-drop ALL)"
+
+  - name: prod-trial
+    description: "AWS us-east-1: search, pass and probe Lambdas (arm64), S3 index bucket, ECR, EventBridge Scheduler, CloudFront on its default domain, ACM. Real passes and publishes; probe targets the CloudFront domain. Logs to /openlore/prod/indexer-lambda with trial alarms. The host indexer still serves index.openlore.jeffbailey.us and keeps A1-A3."
+    platform: [aws-lambda-arm64]
+    preconditions:
+      - "prod-indexer tofu root applied (phase = trial); ACM validated through the manual Cloudflare record"
+      - "first deploy.sh lambda deploy done; first scheduled pass exit 0"
+      - "alarms test-fired, then lambda_alarms_enabled = true"
+      - "host indexer live and reading the same SSM DID list"
+
+  - name: prod-cutover-soak
+    description: "Cloudflare exact CNAME index.openlore -> CloudFront (DNS-only, TTL 60). Lambda logs to /openlore/prod/indexer; A1-A3 cover it; trial alarms removed. Host indexer on standby (timers and container stopped, files kept) as the rollback target."
+    platform: [aws-lambda-arm64]
+    preconditions:
+      - "7 green trial days (definition in feature-delta.md, cut-over runbook)"
+      - "lambda measure passed: 5 cold < 3 s, 20 warm < 200 ms, client side"
+      - "rollback drill N -> N-1 timed <= 2 min"
+      - "Caddy certificate for index.openlore valid for >= 14 more days"
+      - "tofu phase = cutover applied and lambda republish run"
+
+  - name: prod
+    description: "After decommission: Lambda only; the prod-root indexer resources imported into the prod-indexer root; the host runs the PDS and the review app only."
+    platform: [aws-lambda-arm64]
+    preconditions:
+      - "7 green soak days"
+      - "prod root removed blocks applied before the prod-indexer import blocks"
+
+  - name: self-host
+    description: "The unchanged openlore-indexer binary or image (serve, ingest, trigger), AWS-free, behaving exactly as before."
+    platform: [linux, linux-arm64, macos]
+    preconditions:
+      - "Rust 1.91 for a source build; no AWS SDK or Lambda crate in its graph"
+
+  - name: cli-client
+    description: "openlore search with OPENLORE_INDEXER_URL pointing at the public name, the CloudFront domain or the raw Function URL. Unchanged."
+    platform: [linux, macos, wsl]
+    preconditions: []
+
+coexistence_matrix:
+  - tool: "OpenLore PDS on the t4g.micro host (same account and region)"
+    must_not_break: true
+    notes: "Only the SNS topic is shared, read through remote state. The new root never plans the PDS module."
+  - tool: "Review app on the same host"
+    must_not_break: true
+    notes: "Host standby and decommission touch indexer units and the index. Caddy site only."
+  - tool: "Prod tofu root (deploy/tofu/environments/prod)"
+    must_not_break: true
+    notes: "Unchanged until decommission; then removed blocks (forget, not delete) so check-plan.sh passes."
+  - tool: "Bootstrap tofu root"
+    must_not_break: true
+    notes: "Unchanged until decommission; then indexer-iam.tf deleted (one inline policy)."
+  - tool: "Self-host openlore-indexer binary and image"
+    must_not_break: true
+    notes: "serve-smoke unchanged and blocking; xtask aws_sdk_only_in_lambda_edge plus an artifact string check; ENTRYPOINT and CMD unchanged. WORKDIR / affects only relative paths."
+  - tool: "openlore CLI (search)"
+    must_not_break: true
+    notes: "Same lexicon, bounds and status codes; throttling is a 429."
+  - tool: "Host indexer during the trial"
+    must_not_break: true
+    notes: "Separate log group and metric namespace; trial test-fires use synthetic lines, never the shared SSM DID list."
+  - tool: "Other workloads in AWS account 091153021562 (CloudFront distributions, ACM certificates, a CDK ECR repo, the Monthly Budget)"
+    must_not_break: true
+    notes: "Unique names; tag-filtered budget; account-level Errors/Throttles alarms must move to per-function dimensions if another Lambda function appears in us-east-1."
+  - tool: "deploy/ops.sh, release.yml, nightly.yml, publish-contract.yml, Homebrew formula"
+    must_not_break: true
+    notes: "No change needed; ops.sh passes 'indexer lambda ...' through."
+  - tool: "deploy/check-plan.sh"
+    must_not_break: true
+    notes: "Used for the new root too; it already refuses any aws_s3_bucket delete."
+
+platform_coverage:
+  AWS: ["Lambda container image, arm64, us-east-1", "CloudFront price class 100", "S3, ECR, EventBridge Scheduler, ACM, CloudWatch, SNS, Budgets in us-east-1"]
+  CI: ["GitHub Actions ubuntu-latest (commit, test, msrv)", "GitHub Actions ubuntu-24.04-arm (indexer-build, indexer-image)"]
+  Toolchains: ["Rust 1.91.0 (workspace MSRV)", "Rust 1.94.1 (openlore-indexer-lambda, adapter-s3-index-object)", "Rust stable, 1.99 today (clippy, test, image build)"]
+  Operator: ["macOS laptop with aws, gh, cosign, crane, jq, curl, tofu >= 1.10 (1.13.2 today)"]
+  SelfHost: ["Linux arm64 image", "source build on Linux or macOS with Rust 1.91"]
+
+deployment_assumptions:
+  - "Only CI-green main commits deploy, by digest, after cosign verification against GHCR; the same digest is copied to ECR with crane and its digest re-checked."
+  - "A digest without the Lambda root (WorkingDir / and the lambda-root label) is refused."
+  - "lambda deploy is idempotent: a digest already in ECR is not copied again; publish-version with an unchanged $LATEST returns the existing version."
+  - "Rollback is an alias flip to the prev= version and refuses a target whose image left ECR."
+  - "Tofu ignores image_uri, alias versions and search reserved concurrency; deploy.sh owns them."
+  - "A tofu change to versioned function configuration reaches live only through lambda republish."
+  - "Exactly one writer of index/index.duckdb: pass reserved concurrency 1 plus conditional PUT (If-Match / If-None-Match), backed by IAM conditions."
+  - "Pass and probe have 0 async retries; the pass returns success for exit 0/2/3."
+  - "The index bucket is never deleted by tofu (prevent_destroy and check-plan.sh); reset-index leaves versions for 7 days (at least 5)."
+  - "No secrets in the image or the Lambda environment; the budget email is read from SSM at plan time and kept in encrypted state."
+  - "Cloudflare records (ACM validation, the cut-over CNAME) are created and deleted by hand."
+  - "The host indexer and Lambda never write pass_summary or indexer.host.health lines into the same log group at the same time."
