@@ -1,16 +1,12 @@
 # AGENTS.md — Working Agreements for AI Agents
 
+Before writing code, tests, or a commit message, read `CODING_STANDARDS.md`.
+
 ## Version control: trunk-based development
 
 - **Commit directly to `main`; never branch for, suggest, or open a pull request.**
-- Keep commits small, conventional, and green (tests pass before commit).
 - Push only when the user explicitly says push, over SSH:
   `git push git@github.com:jeffabailey/openlore.git HEAD:main`.
-
-## Commit messages
-
-- Conventional Commits style (`feat(scope): …`, `fix(scope): …`, `docs(scope): …`, etc.).
-- During an nWave DELIVER step, include the `Step-ID: NN-NN` trailer.
 
 ## Scope of changes
 
@@ -25,10 +21,8 @@ waiting to be asked** — this is a standing instruction, not a per-slice prompt
 1. **Try it out.** Run a live demo of the shipped behavior against the real binary
    (e.g. spawn the real `ViewerServer` over a production-seeded store and exercise the
    new surface end-to-end).
-2. **Make it test-backed.** The demo must be backed by a committed, passing test — never
-   an ad-hoc one-off. The slice's acceptance suite (which asserts exactly what the demo
-   shows) satisfies this; if a behavior is demoed but not covered, add the test before
-   moving on. Do not leave temporary demo scaffolding (e.g. `println!`) in the tree.
+2. **Make it test-backed.** If a demoed behavior is not yet covered, add the test before
+   moving on.
 3. **Auto-advance to the next slice.** Immediately pick the strongest grounded next slice
    from the backlog (the open jobs in `docs/product/jobs.yaml`), state which one and why
    in one line, and start its full nWave pipeline. Do **not** stop to ask "ship another
