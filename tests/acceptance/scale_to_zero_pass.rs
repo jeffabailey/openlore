@@ -612,7 +612,6 @@ fn on_a_buckets_very_first_run_a_no_publish_run_leaves_only_the_write_check_mark
 ///   Then every instance starts, and the bucket holds one write-check marker
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (write probe at pass init)"]
 fn the_write_check_leaves_one_marker_in_a_buckets_life() {
     let world = LambdaWorld::listing(&[Author::Priya]);
 
@@ -1008,7 +1007,6 @@ fn a_pass_whose_record_cannot_be_written_reports_exit_2_and_its_index_stays_publ
 ///     | no pass has ever run against this bucket     |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (write probe at pass init)"]
 fn a_store_that_ignores_the_write_condition_is_refused_before_a_pass_can_trust_it() {
     each_row(["a later run", "the very first run"], |history| {
         let world = LambdaWorld::listing(&[Author::Priya]);

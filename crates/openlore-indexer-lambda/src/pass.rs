@@ -4,9 +4,8 @@
 //! under a version condition (D-STZ-6, D-STZ-7), write `last-pass.json`, then
 //! write the ONE `pass_summary`, with the exit `decide::final_exit` settles.
 //!
-//! Thin for now, each closed by a named step: init ignores what the write probe
-//! found (T5, 03-01); the pass ignores its event (T2, 03-02). A no-publish run
-//! will stop after the pass work: that arm is `no_publish::run_no_publish`, which
+//! Thin for now, closed by a named step: the pass ignores its event (T2, 03-02).
+//! A no-publish run will stop after the pass work: that arm is `no_publish::run_no_publish`, which
 //! takes the read port only, so it has no path to a write (D-STZ-44).
 
 use std::ffi::OsString;
@@ -25,10 +24,11 @@ use openlore_indexer::ingest_pass::{write_pass_summary, EndedPass};
 use openlore_indexer::run::Wired;
 use openlore_indexer::runner_contract::{BootNonce, PassLabel};
 use ports::{
-    IndexFingerprint, IndexObjectError, LastPass, ObjectVersion, PublishMetadata, PublishOutcome,
-    WriteCondition,
+    IndexFingerprint, IndexObjectError, LastPass, ObjectVersion, ProbeOutcome, ProbeRefused,
+    PublishMetadata, PublishOutcome, WriteCondition,
 };
 use serde_json::json;
+use tokio::task::JoinError;
 
 use crate::decide::{
     dids_copy_usable, final_exit, publish_decision, Publish, PublishStep, RecordStep,
@@ -98,8 +98,9 @@ pub struct PassFunction {
 
 impl PassFunction {
     /// Lambda init: read the configuration, then run the write probe, whose
-    /// marker the bucket keeps (D-STZ-39). The pass reads its list only from the
-    /// file it renders, so a configuration with no such file is refused.
+    /// marker the bucket keeps and whose two accepted writes refuse the pass
+    /// (D-STZ-39). The pass reads its list only from the file it renders, so a
+    /// configuration with no such file is refused.
     pub async fn init(env: &Environment, driven: PassDriven) -> Result<Self, InitRefused> {
         let config = env.indexer_config()?;
         let did_list_file = config.repo_dids_file.clone().ok_or_else(|| InitRefused {
@@ -268,15 +269,50 @@ impl PassFunction {
 }
 
 /// The write probe, off the async runtime: it is sync and blocks (D-STZ-39,
-/// UI-11). What it found is not acted on until 03-01 (T5).
+/// UI-11). A store that ignored the condition refuses the pass, and says so.
 async fn run_write_probe(driven: &PassDriven) -> Result<(), InitRefused> {
     let index_write = Arc::clone(&driven.index_write);
-    tokio::task::spawn_blocking(move || index_write.probe())
-        .await
-        .map(drop)
-        .map_err(|crashed| InitRefused {
-            reason: format!("write probe task: {crashed}"),
-        })
+    let answer = tokio::task::spawn_blocking(move || index_write.probe()).await;
+    write_probe_verdict(answer).map_err(|refused| {
+        events_through(driven.events.clone()).emit_flushed(&startup_refused_event(&refused));
+        InitRefused {
+            reason: refused.detail,
+        }
+    })
+}
+
+/// D-STZ-39, UI-17: the probe's own refusal is the only one. A probe that never
+/// answered says nothing about conditions, so that pass runs and reports through
+/// D-STZ-41.
+fn write_probe_verdict(answer: Result<ProbeOutcome, JoinError>) -> Result<(), ProbeRefused> {
+    match answer {
+        Ok(ProbeOutcome::Ok) => Ok(()),
+        Ok(ProbeOutcome::Refused {
+            reason,
+            detail,
+            structured,
+        }) => Err(ProbeRefused {
+            reason,
+            detail,
+            structured,
+        }),
+        Err(crashed) => {
+            eprintln!("openlore-indexer-lambda: write probe gave no answer: {crashed}");
+            Ok(())
+        }
+    }
+}
+
+/// The line the self-host indexer writes for a refused probe, from this root.
+fn startup_refused_event(refused: &ProbeRefused) -> serde_json::Value {
+    json!({
+        "event": "health.startup.refused",
+        "binary": "openlore-indexer-lambda",
+        "adapter": "index_object_write",
+        "reason": format!("{:?}", refused.reason),
+        "detail": refused.detail,
+        "structured": refused.structured,
+    })
 }
 
 /// One pass's work between two fingerprints, ending with the store closed. The
@@ -403,6 +439,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use chrono::TimeDelta;
+    use ports::ProbeRefusalReason;
     use proptest::prelude::*;
     use serde_json::Value;
 
@@ -489,6 +526,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    // bypass: the port's two answers and a crash are three fixed cases, not a
+    // range of inputs.
+    #[tokio::test]
+    async fn only_the_write_probes_own_refusal_refuses_a_pass() {
+        let refused = ProbeRefused {
+            reason: ProbeRefusalReason::IndexObjectWriteConditionIgnored,
+            detail: "both writes landed".to_string(),
+            structured: json!({}),
+        };
+        let crashed = tokio::spawn(async { panic!("the probe crashed") })
+            .await
+            .expect_err("a crashed task");
+
+        assert!(write_probe_verdict(Ok(ProbeOutcome::Ok)).is_ok());
+        assert!(write_probe_verdict(Err(crashed)).is_ok());
+        let verdict = write_probe_verdict(Ok(refused.into())).expect_err("a refusal");
+        assert_eq!(verdict.detail, "both writes landed");
     }
 
     // bypass: a file this instance never rendered and a clock that went back are
