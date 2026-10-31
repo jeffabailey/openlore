@@ -680,7 +680,6 @@ fn a_pass_never_overwrites_an_index_somebody_else_published_while_it_ran() {
 ///   And the pass record says exit 2, not published, seeing the 14:00 index
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (never publish an unusable store)"]
 fn a_pass_whose_store_became_unusable_never_publishes_it() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     given_the_first_pass_published_priyas_claim(&world);
@@ -721,7 +720,6 @@ fn a_pass_whose_store_became_unusable_never_publishes_it() {
 ///     | the parameter store has been unavailable for more than 2 hours         |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (no usable list → ADR-081 refusal)"]
 fn a_pass_with_no_usable_did_list_refuses_publishes_nothing_and_pages() {
     each_row(["cold", "copy too old"], |situation| {
         let world = LambdaWorld::listing(&[Author::Priya]);
@@ -762,7 +760,6 @@ fn a_pass_with_no_usable_did_list_refuses_publishes_nothing_and_pages() {
 ///   And nobody is purged and the index object is exactly the 14:00 one
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (list from the parameter store through the ADR-081 loader)"]
 fn a_pass_refuses_a_did_list_with_a_typo_and_keeps_the_index_as_it_was() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     given_the_first_pass_published_priyas_claim(&world);
@@ -857,7 +854,6 @@ fn a_pass_that_cannot_get_a_usable_starting_index_is_a_failed_pass() {
 ///   And the pass record says exit 2, not published
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (the reused in_serve_pass path turns a panic into exit 2, D-STZ-42)"]
 fn a_pass_that_panics_part_way_is_reported_as_a_failed_pass_and_publishes_nothing() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     given_the_first_pass_published_priyas_claim(&world);

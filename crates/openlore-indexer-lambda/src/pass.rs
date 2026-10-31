@@ -17,7 +17,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
-use appview_domain::ingest_pass::PassExit;
+use adapter_index_store::UnusableReason;
+use appview_domain::ingest_pass::{PassExit, PassFailure};
 use appview_domain::pass_runner::PassId;
 use chrono::{DateTime, SecondsFormat, Utc};
 use openlore_indexer::config::{IndexerConfig, REPO_DIDS_FILE_VAR};
@@ -40,6 +41,9 @@ use crate::no_publish::run_no_publish;
 use crate::{
     events_through, pass_wiring, Environment, EventSink, FunctionError, InitRefused, PassDriven,
 };
+
+/// How a pass whose work panicked ended (D-STZ-43).
+const PANICKED: PassExit = PassExit::Failed(PassFailure::PassPanicked);
 
 /// The plan value both arms read: the reused pass's work, and whether its store
 /// is to be published.
@@ -373,37 +377,53 @@ fn startup_refused_event(refused: &ProbeRefused) -> serde_json::Value {
     })
 }
 
+/// The line the self-host indexer writes for an unusable store, from this root.
+fn store_unusable_event(reason: UnusableReason) -> serde_json::Value {
+    json!({
+        "event": "indexer.store.unusable",
+        "adapter": "index_store",
+        "reason": reason.token(),
+    })
+}
+
 /// One pass's work between two fingerprints, ending with the store closed. The
 /// work carries the purge `Wired` lends it (ADR-082), so a purge shows as a
 /// changed fingerprint and reaches the bucket only through this publish. The
-/// store is checked closed, because a close is what could still fail to fold the
-/// log into the file (P-7).
+/// store's condition is read once, after the work, for the log and the publish
+/// (D-STZ-9). It is checked closed, because a close is what could still fail to
+/// fold the log into the file (P-7).
 fn work_on(wired: Wired, pass: PassLabel, started: Instant, index_path: &Path) -> WorkedPass {
     let store = Arc::clone(&wired.wiring.store_condition);
+    let events = wired.wiring.events.clone();
     let before = store.fingerprint().ok();
     let ended = wired.pass_work(pass, started);
     let after = store.fingerprint().ok();
-    let store_usable = store.unusable_reason().is_none();
+    let unusable = store.unusable_reason();
     drop(store);
+    if let Some(reason) = unusable {
+        events.emit_in_unchecked(Some(pass), store_unusable_event(reason));
+    }
     let publish = publish_on_change(
         ended.exit(),
         before,
         after,
-        ready_to_upload(store_usable, index_path),
+        ready_to_upload(unusable.is_none(), index_path),
     );
     WorkedPass { ended, publish }
 }
 
-/// `decide::publish_decision`, when both fingerprints could be read. A store that
-/// cannot say what it holds is never published.
+/// `decide::publish_decision`, when both fingerprints could be read and the work
+/// did not panic. A store that cannot say what it holds is never published, and a
+/// panic counts as a store not usable, whatever it left behind (D-STZ-43).
 fn publish_on_change(
     exit: PassExit,
     before: Option<IndexFingerprint>,
     after: Option<IndexFingerprint>,
     store_usable: bool,
 ) -> Publish {
+    let usable = store_usable && exit != PANICKED;
     before.zip(after).map_or(Publish::Skip, |(before, after)| {
-        publish_decision(exit, before, after, store_usable)
+        publish_decision(exit, before, after, usable)
     })
 }
 
@@ -530,7 +550,48 @@ mod tests {
             .collect()
     }
 
+    fn any_exit() -> impl Strategy<Value = PassExit> {
+        prop_oneof![
+            Just(PassExit::Completed),
+            Just(PassExit::TotalOutage),
+            Just(PassExit::Failed(PassFailure::PassPanicked)),
+            Just(PassExit::Failed(PassFailure::PurgeFailed)),
+            Just(PassExit::Failed(PassFailure::UpsertFailed)),
+            Just(PassExit::Failed(PassFailure::PassDeadlineExceeded)),
+        ]
+    }
+
+    /// A few claim counts, so equal fingerprints come up as often as changed ones.
+    fn any_fingerprint() -> impl Strategy<Value = Option<IndexFingerprint>> {
+        prop::option::of((0..3u64).prop_map(|claims| IndexFingerprint {
+            claims,
+            ..IndexFingerprint::default()
+        }))
+    }
+
     proptest! {
+        // D-STZ-7, D-STZ-9, D-STZ-43: only a changed store that is usable and
+        // came through a pass that did not panic goes out, whatever else the
+        // exit says. PA-E6's fault panics before any work, so its fingerprints
+        // match and only this property reaches a panic over a changed store.
+        #[test]
+        fn only_a_changed_usable_store_that_no_panic_touched_is_published(
+            exit in any_exit(),
+            before in any_fingerprint(),
+            after in any_fingerprint(),
+            store_usable in any::<bool>(),
+        ) {
+            let changed = before.is_some() && after.is_some() && before != after;
+            let panicked = exit == PassExit::Failed(PassFailure::PassPanicked);
+
+            let publish = publish_on_change(exit, before, after, store_usable);
+
+            prop_assert_eq!(
+                publish == Publish::Publish,
+                changed && store_usable && !panicked,
+            );
+        }
+
         // Any order of good and failed reads: the file is the last good list for
         // exactly two hours after that read, and only a good read restarts them.
         #[test]
