@@ -16,6 +16,9 @@
 //!     socket (ADR-080 §3). Dispatched BEFORE any configuration is parsed or
 //!     store opened: it reads only the socket variable (M4).
 //!
+//! The wiring, the pass and the handlers live in the library (D-STZ-2), so the
+//! Lambda root can reuse them. This binary is the clap surface and nothing else.
+//!
 //! Parses args with clap, then delegates to `run::run`, which does the
 //! wire → PROBE → use gate (refuse to start on any probe failure: emit
 //! `health.startup.refused` + exit 2) before dispatching the subcommand.
@@ -24,18 +27,8 @@
 
 #![forbid(unsafe_code)]
 
-use clap::{Parser, Subcommand};
-
-mod config;
-#[cfg(unix)]
-mod control;
-mod events;
-mod health;
-mod ingest_pass;
-mod pass_runner;
-mod probe_gauntlet;
-mod run;
-mod search_handler;
+use clap::Parser;
+use openlore_indexer::run::{run, trigger, Command};
 
 /// The `openlore-indexer` CLI surface (ADR-023 single-binary indexer).
 #[derive(Debug, Parser)]
@@ -49,46 +42,11 @@ pub struct IndexerCli {
     pub command: Command,
 }
 
-/// The indexer subcommands. `serve` is the long-running search server; `ingest`
-/// is a one-shot bounded PULL; `stats` reports coverage.
-#[derive(Debug, Subcommand)]
-pub enum Command {
-    /// Serve the search query surface over the index (ADR-027, ADR-080).
-    Serve,
-    /// Run a one-shot bounded PULL pass (ADR-024).
-    Ingest,
-    /// Report index coverage (claims indexed, distinct authors, ingest lag).
-    Stats,
-    /// Ask the running `serve` for one pass; exit with that pass's code
-    /// (0 also when it joined a running pass; 4 when `serve` is unreachable).
-    Trigger,
-}
-
 fn main() -> std::process::ExitCode {
     let parsed = IndexerCli::parse();
     let code = match parsed.command {
         Command::Trigger => trigger(),
-        command => run::run(command),
+        command => run(command),
     };
     std::process::ExitCode::from(u8::try_from(code & 0xFF).unwrap_or(1))
-}
-
-/// `trigger` reads ONLY the control-socket variable — no config, no probes, no
-/// store (M4: the client must never take the index lock from `serve`).
-#[cfg(unix)]
-fn trigger() -> i32 {
-    control::trigger(std::env::var(control::CONTROL_SOCKET_VAR).ok())
-}
-
-/// The control channel exists only on Unix: elsewhere `serve` is unreachable.
-#[cfg(not(unix))]
-fn trigger() -> i32 {
-    eprintln!(
-        "{}",
-        serde_json::json!({
-            "event": "indexer.trigger.unreachable",
-            "cause": "unsupported_platform",
-        })
-    );
-    4
 }

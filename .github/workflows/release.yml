@@ -87,8 +87,9 @@ jobs:
         # viewer_network_search, search_hide_retracted, …) spawn the `openlore`
         # and the CROSS-package `openlore-indexer` executables via the test-support
         # resolver, which locates them in target/debug. `nextest` builds test
-        # harnesses, NOT these `[[bin]]` targets (openlore-indexer is bin-only, so
-        # cli's dev-dependency on it is ignored) — so build them explicitly first.
+        # harnesses, NOT these `[[bin]]` targets, and cli has no dependency of any
+        # kind on openlore-indexer, dev edges included (D-STZ-45, enforced by XS-7
+        # and XS-8 in xtask) — so build them explicitly first.
         # The test files themselves document this "Build-before-run" requirement.
         # bluesky-claim-review-app (DWD-3): the cli review_app_walking_skeleton +
         # review_app_self_attested_readers suites spawn `openlore-review-app` from

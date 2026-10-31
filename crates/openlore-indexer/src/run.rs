@@ -27,6 +27,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use clap::Subcommand;
+
 use adapter_atproto_did::{AtProtoDidAdapter, IdentityLookup};
 use adapter_atproto_ingest::AtProtoIngestAdapter;
 use adapter_index_store::{DuckDbCaps, IndexStoreAdapter, UnusableReason};
@@ -54,7 +56,21 @@ use crate::probe_gauntlet::{
 use crate::search_handler::{
     search_handler, unreadable_index, SearchStoreError, SearchTruncated, SharedIndexReads,
 };
-use crate::Command;
+
+/// The indexer subcommands. `serve` is the long-running search server; `ingest`
+/// is a one-shot bounded PULL; `stats` reports coverage.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Serve the search query surface over the index (ADR-027, ADR-080).
+    Serve,
+    /// Run a one-shot bounded PULL pass (ADR-024).
+    Ingest,
+    /// Report index coverage (claims indexed, distinct authors, ingest lag).
+    Stats,
+    /// Ask the running `serve` for one pass; exit with that pass's code
+    /// (0 also when it joined a running pass; 4 when `serve` is unreachable).
+    Trigger,
+}
 
 /// The one shared index handle: read + write side, safe to share across the
 /// serve accept loop's tasks.
@@ -307,6 +323,26 @@ pub fn run(command: Command) -> i32 {
         // `trigger` is dispatched by `main` before any of the above (M4).
         Command::Trigger => EXIT_FATAL,
     }
+}
+
+/// `trigger` reads ONLY the control-socket variable — no config, no probes, no
+/// store (M4: the client must never take the index lock from `serve`).
+#[cfg(unix)]
+pub fn trigger() -> i32 {
+    crate::control::trigger(std::env::var(crate::control::CONTROL_SOCKET_VAR).ok())
+}
+
+/// The control channel exists only on Unix: elsewhere `serve` is unreachable.
+#[cfg(not(unix))]
+pub fn trigger() -> i32 {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "event": "indexer.trigger.unreachable",
+            "cause": "unsupported_platform",
+        })
+    );
+    4
 }
 
 /// `openlore-indexer serve` — serve the `org.openlore.appview.searchClaims`

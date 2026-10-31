@@ -368,7 +368,6 @@ fn the_clis_graph_does_not_reach_the_self_hosted_indexer_dev_edges_included() {
 ///   Then no dependency of any kind names openlore-indexer
 /// ```
 #[test]
-#[ignore = "RED: DELIVER drops the dev-dependency in the lib-split step (D-STZ-45)"]
 fn the_cli_no_longer_names_the_self_hosted_indexer_as_a_dependency() {
     let manifest =
         std::fs::read_to_string(root().join("crates/cli/Cargo.toml")).expect("the cli manifest");

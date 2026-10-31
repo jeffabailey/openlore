@@ -109,15 +109,10 @@ chrono = { workspace = true }
 # placeholder sigs per `fixtures_peer.rs`). Deterministic seeded keypair;
 # `default-features = false` keeps OS randomness off the test compile path.
 ed25519-dalek = { version = "2", default-features = false }
-# Step 01-05 (slice-05; DD-AV-13/DD-AV-14): the indexer_ingest + appview_search
-# acceptance harness spawns the REAL `openlore-indexer` binary via
-# `assert_cmd::cargo_bin("openlore-indexer")` (the SECOND composition root) over
-# an ephemeral localhost serve port (DEVOPS open-q 8 parallel-safety). Adding it
-# as a dev-dependency makes cargo build the binary for these test targets so
-# `cargo_bin` resolves it. The CLI's PRODUCTION dep graph still links ONLY the
-# index-query CLIENT (above) — never the indexer's server/store/ingest crates
-# (I-AV-3); this is a TEST-ONLY dependency on the sibling binary crate.
-openlore-indexer = { path = "../openlore-indexer" }
+# The indexer_ingest + appview_search harnesses spawn the REAL `openlore-indexer`
+# binary (the SECOND composition root) out of target/debug, so it is NOT a
+# dependency of any kind here (D-STZ-45, UI-7; dev edges count, I-3): run
+# `cargo build --bin openlore --bin openlore-indexer` first.
 # Slice-06 (htmx-scraper-viewer; DISTILL): the viewer acceptance harness
 # (`ViewerServer` in tests/acceptance/support) issues in-test HTTP GET/POST
 # against the long-running `openlore ui` process and asserts on the returned
