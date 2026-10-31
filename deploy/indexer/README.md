@@ -514,20 +514,21 @@ aws lambda update-alias --region us-east-1 --function-name $F --name live \
 
 ### A deploy failed during step 15
 
-Search has flipped. Pass or probe has not, and the deploy has no undo here. Its new versions passed
-their gates, so go forward.
+The deploy undoes it. Search and `candidate` go back to the version they replaced, each under the
+record it had, and so does the pass if it had flipped. The last line names the version each function
+ended on. If all three show the old version, find out why the flip failed, then run the deploy again.
 
-1. Run `deploy.sh lambda status`. Note which `live` still holds the old version.
-2. Read the new version number:
-   `aws lambda list-versions-by-function --region us-east-1 --function-name $F --query 'Versions[-1].Version'`
-3. Flip that function by hand, in the order pass, then probe. Use the record
-   `prev=<old version> <sha> <digest> <utc>`, where `<sha> <digest>` is the new version's
-   description. On the pass, append `idx=<pre-publish index id>`, which
-   is the index's current version id unless a pass has published since.
+If an undo failed too, the verb prints `could not move <function> back to version <n>` and the record
+that function held, and the last line shows it still on the new version:
 
-Do not run `lambda rollback`: a function that did not flip still records the version before it, so
-it would go back one too far. Do not rerun the deploy: Lambda returns the same version for unchanged
-code, and `prev=` would name the version it now holds.
+1. Flip each named function to `<n>` by hand, with the printed record as `--description`.
+2. If search was one of them, move `candidate` to its `<n>` too, with the command under
+   [You interrupted a deploy](#you-interrupted-a-deploy-during-the-edge-checks).
+3. Run `deploy.sh lambda status`. All three `live` must show the old version.
+
+Do not run `lambda rollback` before that: a function that did not flip still records the version
+before it, so it would go back one too far. Do not rerun the deploy either: it refuses with
+`nothing changed`, because a function still on the new version answers with the version it holds.
 
 ### A deploy or republish refused with `nothing changed`
 

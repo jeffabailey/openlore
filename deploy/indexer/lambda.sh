@@ -83,6 +83,8 @@ IMAGE_SHAS=()         # the git sha of each of those, for the records
 LATEST_REVISIONS=()   # step 8: each $LATEST's revision, to publish without a race
 NEW_VERSIONS=()       # step 9, or a rollback: the version each function will flip to
 CANDIDATE_BACK_TO=""  # step 10: set while `candidate` is ahead of a `live` that has not flipped
+SEARCH_RECORD=""      # step 14: search's `live` record before any flip, for an undo
+PASS_RECORD=""        # ...and the pass's
 INDEX_VERSION=none    # step 7: the pre-publish index version id
 WOULD_PUBLISH=unknown # step 12: printed, not gated
 FLIP_TO_FIRST_200_MS=n/a
@@ -562,20 +564,48 @@ flip_search_back() { # $1 = the description `live` had before the flip
 
 # Step 14: search flips first, watched from 5 s before the flip until the edge checks end.
 flip_search() {
-  local edge flipped_at record
+  local edge flipped_at
   edge=$(edge_url)
-  record=$(live_record "$LAMBDA_SEARCH")
+  SEARCH_RECORD=$(live_record "$LAMBDA_SEARCH")
+  PASS_RECORD=$(live_record "$LAMBDA_PASS")
   start_edge_poller "$edge"
   sleep 5
   flipped_at=$(now_ms)
   flip_live 0
   CANDIDATE_BACK_TO="" # `live` has caught up, so a stop from here is the flip's to undo
-  edge_holds_up "$edge" "$flipped_at" || flip_search_back "$record"
+  edge_holds_up "$edge" "$flipped_at" || flip_search_back "$SEARCH_RECORD"
+}
+
+# Non-zero if it stayed on the new version, having said which record a by-hand flip must put back.
+undo_flip() { # $1 = index into LAMBDA_FUNCTIONS, $2 = the description `live` had before the flip
+  local function=${LAMBDA_FUNCTIONS[$1]} version=${LIVE_VERSIONS[$1]}
+  move_live "$function" "$version" "$2" || {
+    echo "deploy.sh: could not move $function back to version $version; its record was '$2'" >&2
+    return 1
+  }
+}
+
+# `lambda rollback` takes every function back one record, so a function that flipped beside one
+# that did not would go a version too far. What flipped goes back, as flip_search_back does it,
+# and every undo is tried whatever the others do. `candidate` follows search through the EXIT
+# trap, and stays with `live` if search stayed.
+undo_step_15() { # $1 = what stopped it, $2 = pass-flipped if the pass had
+  local search_at=${LIVE_VERSIONS[0]} pass_at=${LIVE_VERSIONS[1]}
+  if [ "${2:-}" = pass-flipped ] && ! undo_flip 1 "$PASS_RECORD"; then
+    pass_at=${NEW_VERSIONS[1]}
+  fi
+  if undo_flip 0 "$SEARCH_RECORD"; then
+    CANDIDATE_BACK_TO=$search_at
+  else
+    search_at=${NEW_VERSIONS[0]}
+  fi
+  die "$1; $LAMBDA_SEARCH on version $search_at, $LAMBDA_PASS on version $pass_at," \
+    "$LAMBDA_PROBE on version ${LIVE_VERSIONS[2]}"
 }
 
 flip_pass_and_probe() { # step 15
-  flip_live 1 "idx=$INDEX_VERSION"
-  flip_live 2
+  flip_live 1 "idx=$INDEX_VERSION" || undo_step_15 "could not flip $LAMBDA_PASS"
+  flip_live 2 || undo_step_15 "could not flip $LAMBDA_PROBE" pass-flipped
 }
 
 flip_summary() {

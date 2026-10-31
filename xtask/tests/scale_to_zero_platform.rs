@@ -48,6 +48,7 @@
 //! | OP-E21 | The errors drill waits out a busy probe | `lambda test-alarm errors` |
 //! | OP-E22 | `standby` needs a flag | U-STZ-1 |
 //! | OP-E23 | A publish that changed nothing is refused before anything moves | review B1 |
+//! | OP-E24 | A failed flip of the pass or the probe undoes what flipped, and says where each is | review H1 |
 //!
 //! ## Testability contract for `deploy.sh lambda`
 //!
@@ -202,6 +203,8 @@ struct Posture {
     /// For each function, in [`FUNCTIONS`] order: whether its publish changed nothing, so
     /// Lambda answers with the version `live` already holds.
     publish_answers_live: [bool; 3],
+    /// The `live` moves that fail, each as (index into [`FUNCTIONS`], target version).
+    live_moves_that_fail: &'static [(usize, u32)],
 }
 
 impl Default for Posture {
@@ -230,6 +233,7 @@ impl Default for Posture {
             live_runs_the_build: true,
             search_concurrency: 3,
             publish_answers_live: [false; 3],
+            live_moves_that_fail: &[],
         }
     }
 }
@@ -491,6 +495,18 @@ fn aws(posture: Posture, digest: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n  ");
+    let failed_moves: String = posture
+        .live_moves_that_fail
+        .iter()
+        .map(|(function, version)| {
+            let function = FUNCTIONS[*function];
+            format!(
+                r#"  *"update-alias"*{function}*"--name live --function-version {version} "*)
+    echo 'ServiceException' >&2; exit 254 ;;
+"#
+            )
+        })
+        .collect();
     format!(
         r#"
 in_ecr={in_ecr}
@@ -499,7 +515,7 @@ for a in "$@"; do
   case "$a" in file://*) record_call "$(tr -d ' \n' <"${{a#file://}}")" ;; esac
 done
 case "$*" in
-  *"sts get-caller-identity"*) echo '{{"Account":"091153021562"}}' ;;
+{failed_moves}  *"sts get-caller-identity"*) echo '{{"Account":"091153021562"}}' ;;
   *"ecr describe-images"*"--image-ids"*)
     if [ "$in_ecr" = true ]; then
       echo '{{"imageDetails":[{{"imageDigest":"{digest}"}}]}}'
@@ -2675,6 +2691,93 @@ fn a_publish_that_changed_nothing_is_refused_before_anything_moves() {
             assert!(!called(&calls, &["lambda invoke"]), "{calls}");
         },
     );
+}
+
+/// OP-E24, crafter-owned (review H1). `lambda rollback` takes every function back one record, so
+/// a function that flipped beside one that did not would go a version too far. Step 15 therefore
+/// undoes what flipped, each under the record it had, and when an undo fails too it says exactly
+/// what is where. Rows: which `live` moves fail; then, for search, the pass and the probe, the
+/// version each ends on.
+#[test]
+fn a_flip_that_stops_at_the_pass_or_the_probe_is_undone_and_names_what_is_where() {
+    const SEARCH: usize = 0;
+    const PASS: usize = 1;
+    const PROBE: usize = 2;
+    let moves: [(&'static [(usize, u32)], [u32; 3]); 5] = [
+        (&[(PASS, 8)], [7, 7, 7]),
+        (&[(PROBE, 8)], [7, 7, 7]),
+        (&[(PASS, 8), (SEARCH, 7)], [8, 7, 7]),
+        (&[(PROBE, 8), (PASS, 7)], [7, 8, 7]),
+        (&[(PROBE, 8), (PASS, 7), (SEARCH, 7)], [8, 8, 7]),
+    ];
+    each_row(moves, |(fails, ended_on)| {
+        let stubs = Stubs::new(Posture {
+            live_moves_that_fail: fails,
+            ..Posture::default()
+        });
+
+        let run = stubs.run(&["lambda", "deploy", SHA], &[], "");
+
+        assert_ne!(run.status, 0, "{}\n{}", run.out, stubs.calls());
+        let calls = stubs.calls();
+        let record = format!("prev=6 {SHA} {}", digest());
+        let back = |function: &str| {
+            line_of(
+                &calls,
+                &[
+                    "update-alias",
+                    function,
+                    "--name live --function-version 7",
+                    &record,
+                ],
+            )
+        };
+        let forward = line_of(
+            &calls,
+            &["update-alias", FUNCTIONS[0], "live", "--function-version 8"],
+        );
+        assert!(forward.is_some() && forward < back(FUNCTIONS[0]), "{calls}");
+        let pass_tried_forward = called(
+            &calls,
+            &["update-alias", FUNCTIONS[1], "live", "--function-version 8"],
+        );
+        assert!(pass_tried_forward, "{calls}");
+        let pass_flipped = !fails.contains(&(PASS, 8));
+        assert_eq!(back(FUNCTIONS[1]).is_some(), pass_flipped, "{calls}");
+        assert_eq!(
+            called(&calls, &["update-alias", FUNCTIONS[2], "live"]),
+            pass_flipped,
+            "the probe is tried only after the pass\n{calls}"
+        );
+        let candidate_back = called(
+            &calls,
+            &[
+                "update-alias",
+                FUNCTIONS[0],
+                "candidate",
+                "--function-version 7",
+            ],
+        );
+        assert_eq!(candidate_back, ended_on[SEARCH] == 7, "{calls}");
+        for (function, version) in FUNCTIONS.iter().zip(ended_on) {
+            let state = format!("{function} on version {version}");
+            assert!(run.out.contains(&state), "{state}\n{}", run.out);
+        }
+        let undo_failures = fails.iter().filter(|(_, version)| *version == 7);
+        for (function, _) in undo_failures {
+            let said = format!("could not move {} back to version 7", FUNCTIONS[*function]);
+            let line = run
+                .out
+                .lines()
+                .find(|line| line.contains(&said))
+                .unwrap_or_else(|| panic!("{said}\n{}", run.out));
+            assert!(line.contains(&record), "the record to put back: {line}");
+        }
+        assert!(
+            !called(&calls, &["list-versions-by-function"]),
+            "a stopped deploy prunes nothing\n{calls}"
+        );
+    });
 }
 
 /// Crafter-owned (step 08-09). `resume` has no scenario, since only a real host
