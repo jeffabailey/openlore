@@ -78,7 +78,7 @@ variable), so a typo shows at once.
 | Exit | Meaning | Unit | Alarm |
 |---|---|---|---|
 | 0 | pass ok, or coalesced into a running pass | succeeded | none |
-| 2 | config, store, purge or deadline failure (`pass_summary.cause`) | **failed** | A2 |
+| 2 | config, store, purge, deadline or unusable starting index failure (`pass_summary.cause`) | **failed** | A2 |
 | 3 | every DID skipped | **failed** | A1 after two in a row |
 | 4 | `serve` unreachable (no socket, container down); no `pass_summary` | **failed** | A3 (after 45 min) |
 
@@ -596,7 +596,8 @@ and the flip records the version it replaced, so `lambda rollback` then returns 
 | Bad code, any function | `deploy.sh lambda rollback` |
 | Abuse or runaway spend | `deploy.sh lambda stop` |
 | `refusing: could not read the index object` | The read failed, and only a 404 counts as an empty bucket. Read the error. Without `s3:ListBucket` a missing object answers 403. Nothing flipped; fix it and run the verb again |
-| A bad index | `lambda rollback` first if new code wrote it. Then `lambda reset-index --trigger`, or `lambda restore-index <id>`. The id is in the deploy summary, the pass alias's `idx=`, or the rollback output |
+| `starting_index_unusable`, repeating | The pass will not work on an index it cannot use: nothing is published, the last object stays, and A2 pages after every pass, about every 15 minutes, until this is fixed. Find the pass's stderr line. `starting index not usable: read through` means the object is damaged: go to **A bad index**. A failed download, no room in `/tmp` or a refused probe is not a bad object, so reset does not help: fix that cause. The pass never heals an object |
+| A bad index | `lambda rollback` first if new code wrote it. Then `lambda reset-index --trigger`, or `lambda restore-index <id>`. The id is in the deploy summary, the pass alias's `idx=`, or the rollback output. While the object is damaged, every no-publish gate exits 2, so `lambda deploy` refuses, and so does a search instance starting cold: recover the index before deploying. Prefer `lambda restore-index <id>` when you have a good version: search keeps its data, and the next pass reads that version through first, so a damaged one pages again. `lambda reset-index --trigger` serves an empty index until the pass rebuilds it |
 | Traffic after cut-over | Rollback to the host, §12 Stage 3 |
 | Infrastructure | Revert the commit, saved plan, `check-plan.sh`, apply; then `lambda republish` if function config changed |
 
@@ -607,7 +608,7 @@ DELIVER did not touch production, so these are owed. Record each in
 
 | Item | Stage | How to get it | Passes when |
 |---|---|---|---|
-| P-15 | Stage 0 | Before the first production pass, run the simulator below on the applied pass policy, both keys, present and absent. Keep the output. The first production publish and write probe finish the proof | Allowed with a key, implicit deny with neither. A wrong condition shows as `publish_failed` after the flip |
+| P-15 | Stage 0 | Before the first production pass, run the simulator below on the applied pass policy, both keys, present and absent. Keep the output. The first production publish and write probe finish the proof | Allowed with a key, implicit deny with neither. A wrong condition shows as `publish_failed` after the flip. `publish_failed` with `not published:` naming a store read, not an object store error, means the index store could not fingerprint after the work |
 | P-17 | Stage 0 | Run the simulator below on the list statement. Keep `/healthz` from the first deploy on the empty bucket | `/healthz` 200 with a `null` pass time. If init refuses with 403, change the condition in `iam.tf` to `StringLikeIfExists`, and its row in `scale_to_zero_ci.rs`, re-apply, and record that the wider fallback is in use |
 | Metric check | Stage 0 | Keep the metric check from `lambda status`, after `lambda test-alarm a11 --metric` | A8 and A9 metrics seen, A11's on its candidate series, `:live` for shape only |
 | Test-fires | Stage 0 | Keep each `lambda test-alarm` output | Each reaches ALARM, then OK |
