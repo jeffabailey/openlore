@@ -513,7 +513,7 @@ case "$*" in
   *"ssm send-command"*) echo cmd-1 ;;
   *"ssm get-command-invocation"*) echo Success ;;
   *"cloudfront list-distributions"*)
-    echo '{{"DistributionList":{{"Items":[{{"Id":"EDIST","Aliases":{{"Items":["index.openlore.jeffbailey.us"]}}}}]}}}}' ;;
+    echo '{{"DistributionList":{{"Items":[{{"Id":"EDIST","DomainName":"dedge.cloudfront.net","Aliases":{{"Items":["index.openlore.jeffbailey.us"]}}}}]}}}}' ;;
   *"cloudfront get-distribution-config"*)
     echo '{{"ETag":"ECONFIG","DistributionConfig":{{"Enabled":{enabled},"Comment":"index"}}}}' ;;
   *) echo '{{}}' ;;
@@ -920,7 +920,6 @@ fn the_stubs_answer_what_the_gates_will_ask() {
 ///   And each live alias records the version it replaced, and the pass also records the index it started from
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn a_deploy_passes_every_gate_in_order_and_flips_live_last() {
     let stubs = Stubs::new(Posture::default());
 
@@ -1361,7 +1360,6 @@ fn both_schedules_send_an_empty_event() {
 ///     | a short digest |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn a_deploy_names_one_exact_build_or_it_is_refused_before_any_tool_runs() {
     each_row(
         ["main", "latest", "v1.2.3", "4f2c1ab", "sha256:abc123"],
@@ -1387,7 +1385,6 @@ fn a_deploy_names_one_exact_build_or_it_is_refused_before_any_tool_runs() {
 ///   Then the deploy is refused, and nothing was copied, published or flipped
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn an_image_that_cannot_run_the_pass_is_refused_before_the_registry_sees_it() {
     let stubs = Stubs::new(Posture {
         lambda_capable: false,

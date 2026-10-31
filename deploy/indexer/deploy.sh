@@ -17,6 +17,7 @@
 #                                        over the last 1-30 days (default 7; Logs + alarm history)
 #   deploy.sh test-alarm a1|a2|a3        test-fire one alarm end to end and wait for ALARM, then OK
 #                                        (go-live step 15; a2 always restores the DID list)
+#   deploy.sh lambda deploy <git-sha|digest>   the Lambda path: lambda.sh, every gate, `live` last
 #
 # DIGEST ONLY. <git-sha> must be the full 40-hex commit; it is resolved to the digest CI pushed
 # for it, and from then on only `image@sha256:...` is used. A `sha256:<64 hex>` digest is also
@@ -89,13 +90,18 @@ resolve_digest() { # $1 = git sha -> prints the digest CI pushed as sha-<sha>
   echo "$digest"
 }
 
+image_config() { # $1 = digest -> the image's config JSON
+  local ref="$IMAGE@$1"
+  if command -v crane >/dev/null 2>&1; then
+    crane config "$ref"
+  else
+    docker buildx imagetools inspect "$ref" --format '{{json .Image}}'
+  fi
+}
+
 image_revision() { # $1 = digest -> the commit in the signed image's org.opencontainers.image.revision
   local ref="$IMAGE@$1" config rev
-  if command -v crane >/dev/null 2>&1; then
-    config=$(crane config "$ref")
-  else
-    config=$(docker buildx imagetools inspect "$ref" --format '{{json .Image}}')
-  fi
+  config=$(image_config "$1")
   rev=$(jq -r '(.config.Labels // {})["org.opencontainers.image.revision"] // empty' <<<"$config" 2>/dev/null || true)
   is_git_sha "$rev" || die "refusing $ref: no 40-hex org.opencontainers.image.revision label (got '$rev')"
   echo "$rev"
@@ -114,6 +120,30 @@ verify_signature() { # $1 = digest
     --certificate-identity-regexp "$CERT_IDENTITY_RE" \
     --certificate-oidc-issuer "$OIDC_ISSUER" >/dev/null ||
     die "refusing $IMAGE@$1: no valid CI signature"
+}
+
+read_build_ref() { # $1 = git sha or digest; sets BUILD_SHA and BUILD_DIGEST, before any tool runs
+  BUILD_SHA=unknown
+  BUILD_DIGEST=""
+  if is_digest "$1"; then
+    BUILD_DIGEST="$1"
+  elif is_git_sha "$1"; then
+    BUILD_SHA="$1"
+  else
+    die "refusing '$1': deploy by full 40-hex git sha or sha256:<64 hex> digest only (no tags)"
+  fi
+}
+
+verify_build() { # CI and the signature, in each form's own order; settles BUILD_SHA and BUILD_DIGEST
+  if [ "$BUILD_SHA" != unknown ]; then
+    ci_green "$BUILD_SHA"
+    BUILD_DIGEST=$(resolve_digest "$BUILD_SHA")
+    verify_signature "$BUILD_DIGEST"
+  else # a digest: once its signature verifies, its revision label is CI's; that commit must be green
+    verify_signature "$BUILD_DIGEST"
+    BUILD_SHA=$(image_revision "$BUILD_DIGEST")
+    ci_green "$BUILD_SHA"
+  fi
 }
 
 instance_id() {
@@ -213,8 +243,8 @@ stop_pds_poller() {
   echo "PDS _health: $ok/$total ok during deploy"
 }
 
-post_checks() {
-  local base="https://$INDEX_HOST" body code tmp
+post_checks() { # $1 = base URL of the search under test
+  local base="$1" body code tmp
   body=$(curl -fsS -m 10 "$base/healthz") || die "post-check: GET /healthz failed"
   [[ "${body//[[:space:]]/}" == *'"status":"ok"'* ]] || die "post-check: /healthz is not ok"
   tmp=$(mktemp)
@@ -233,37 +263,29 @@ post_checks() {
   search_body 9000 >"$tmp"
   code=$(http_status -X POST -H 'content-type: application/json' --data-binary "@$tmp" "$base$SEARCH_PATH")
   [ "$code" = 413 ] || die "post-check: a 9 KB body answered $code, not 413"
+  echo "post-checks passed: healthz, search, createRecord 404, POST /healthz 404, 8 KB ok, 9 KB 413"
+}
+
+post_check_pds() {
+  local code
   code=$(http_status "$PDS_URL/xrpc/_health")
   [ "$code" = 200 ] || die "post-check: the PDS _health answers $code"
-  echo "post-checks passed: healthz, search, createRecord 404, POST /healthz 404, 8 KB ok, 9 KB 413, PDS _health"
+  echo "post-check passed: PDS _health"
 }
 
 laptop_deploy() { # $1 = git sha or digest
-  local ref="${1:-}" sha=unknown digest wait_s="${INDEXER_READY_WAIT_S:-60}"
+  local wait_s="${INDEXER_READY_WAIT_S:-60}"
   is_wait "$wait_s" || die "refusing INDEXER_READY_WAIT_S='$wait_s': whole seconds, at least 2"
-  if is_digest "$ref"; then
-    digest="$ref"
-  elif is_git_sha "$ref"; then
-    sha="$ref"
-  else
-    die "refusing '$ref': deploy by full 40-hex git sha or sha256:<64 hex> digest only (no tags)"
-  fi
+  read_build_ref "${1:-}"
   need gh cosign jq
-  if [ "$sha" != unknown ]; then
-    ci_green "$sha"
-    digest=$(resolve_digest "$sha")
-    verify_signature "$digest"
-  else # a digest: once its signature verifies, its revision label is CI's; that commit must be green
-    verify_signature "$digest"
-    sha=$(image_revision "$digest")
-    ci_green "$sha"
-  fi
+  verify_build
   pre_checks
   start_pds_poller
-  remote deploy "$digest" "$sha" "$wait_s"
-  post_checks
+  remote deploy "$BUILD_DIGEST" "$BUILD_SHA" "$wait_s"
+  post_checks "https://$INDEX_HOST"
+  post_check_pds
   stop_pds_poller
-  echo "deployed $IMAGE@$digest"
+  echo "deployed $IMAGE@$BUILD_DIGEST"
 }
 
 # Logs Insights over the shipped log group: no host shell, no claim content (AC-005.1..4).
@@ -840,8 +862,13 @@ case "$cmd" in
   freshness-ratio) freshness_ratio "$@" ;;
   unalerted-failures) unalerted_failures "$@" ;;
   host) host_main "$@" ;;
+  lambda) # sourced here, so the file `remote` ships to the host stays host-sized
+    # shellcheck source=/dev/null
+    source "$(dirname "$0")/lambda.sh"
+    lambda_main "$@"
+    ;;
   *)
-    sed -n '2,20p' "$0" >&2
+    sed -n '2,21p' "$0" >&2
     exit 2
     ;;
 esac
