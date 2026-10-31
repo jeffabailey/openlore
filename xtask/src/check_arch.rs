@@ -55,6 +55,10 @@
 //! 10. `aws_sdk_only_in_lambda_edge`: only `openlore-indexer-lambda` and
 //!     `adapter-s3-index-object` may reach `aws-*` or `lambda_*` crates, dev edges
 //!     included (D-STZ-3 / ADR-023; [`check_aws_sdk_only_in_lambda_edge`]).
+//! 11. `indexer_holds_no_signing_or_local_store` and
+//!     `indexer_lambda_holds_no_signing_or_local_store` also read each root's
+//!     production code: no signing capability is named, and a verify-only
+//!     construction is (D-STZ-50; [`scan_indexer_family_holds_no_signing`]).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -3699,18 +3703,209 @@ pub fn scan_indexer_search_handler_read_only(workspace_root: &Path) -> anyhow::R
 // The signing claim of the indexer family (D-STZ-50)
 // -----------------------------------------------------------------------------
 
+/// Each indexer root and the capability rule its source scan belongs to.
+const INDEXER_SIGNING_RULES: [(&str, &str); 2] = [
+    (
+        INDEXER_SOURCE_DIR,
+        "indexer_holds_no_signing_or_local_store",
+    ),
+    (
+        INDEXER_LAMBDA_SOURCE_DIR,
+        "indexer_lambda_holds_no_signing_or_local_store",
+    ),
+];
+
+/// Names that hold or reach a signing capability, wherever they stand in a path.
+const INDEXER_SIGNING_NAMES: &[&str] = &[
+    "IdentityPort",
+    "for_did",
+    "new_with_did_document",
+    "ensure_keychain_key",
+    "SigningKey",
+    "keyring",
+];
+
+/// The pure signer: `sign` alone is an ordinary word, so its parent counts.
+const PURE_SIGNER: (&str, &str) = ("claim_domain", "sign");
+
+/// The verify-only construction each root must hold.
+const VERIFY_ONLY_CONSTRUCTION: (&str, &str) = ("AtProtoDidAdapter", "resolve_only");
+
+/// One identifier of production code and the path segment it follows, if any.
+struct CodeName {
+    parent: Option<String>,
+    name: String,
+    line: usize,
+}
+
+impl CodeName {
+    fn is_child(&self, (parent, name): (&str, &str)) -> bool {
+        self.name == name && self.parent.as_deref() == Some(parent)
+    }
+}
+
+/// What one source says about the signing claim.
+struct SigningClaimReading {
+    capabilities: Vec<String>,
+    holds_verify_only_construction: bool,
+}
+
+/// Does `trees` open with `#[test]` or `#[cfg(test)]`?
+fn opens_with_test_gate(trees: &[proc_macro2::TokenTree]) -> bool {
+    let attribute: proc_macro2::TokenStream = trees.iter().take(2).cloned().collect();
+    syn::parse::Parser::parse2(syn::Attribute::parse_outer, attribute)
+        .is_ok_and(|attributes| is_test_only(&attributes))
+}
+
+/// Where a gated item stops: its brace body, or a `;` or `,`. A comma can stop
+/// short of the item's end, so the rest is read as code (fail closed), but a
+/// gated field or match arm never hides what follows it.
+fn ends_gated_item(tree: &proc_macro2::TokenTree) -> bool {
+    match tree {
+        proc_macro2::TokenTree::Group(group) => group.delimiter() == proc_macro2::Delimiter::Brace,
+        proc_macro2::TokenTree::Punct(punct) => matches!(punct.as_char(), ';' | ','),
+        proc_macro2::TokenTree::Ident(_) | proc_macro2::TokenTree::Literal(_) => false,
+    }
+}
+
+/// The trees of one level without its test-gated items. Only the item a gate
+/// sits on goes: code after a test module stays, and `cfg(not(test))` is code.
+fn production_trees(stream: proc_macro2::TokenStream) -> Vec<proc_macro2::TokenTree> {
+    let trees: Vec<proc_macro2::TokenTree> = stream.into_iter().collect();
+    let mut production = Vec::new();
+    let mut at = 0;
+    while let Some(tree) = trees.get(at) {
+        if opens_with_test_gate(&trees[at..]) {
+            let rest = &trees[at..];
+            at += rest
+                .iter()
+                .position(ends_gated_item)
+                .map_or(rest.len(), |end| end + 1);
+        } else {
+            production.push(tree.clone());
+            at += 1;
+        }
+    }
+    production
+}
+
+/// The identifier `trees[at]` follows through a `::`, if any.
+fn path_parent(trees: &[proc_macro2::TokenTree], at: usize) -> Option<String> {
+    use proc_macro2::TokenTree::{Ident, Punct};
+    match trees.get(at.checked_sub(3)?..at)? {
+        [Ident(parent), Punct(first), Punct(second)]
+            if first.as_char() == ':' && second.as_char() == ':' =>
+        {
+            Some(parent.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Every identifier of `stream`'s production code, macro bodies included. The
+/// lexer has already dropped comments, and a doc comment or a string is a
+/// literal, so neither yields a name. The names of `use parent::{…}` inherit
+/// `parent`.
+fn production_names(stream: proc_macro2::TokenStream, inherited: Option<&str>) -> Vec<CodeName> {
+    use proc_macro2::TokenTree;
+    let trees = production_trees(stream);
+    trees
+        .iter()
+        .enumerate()
+        .flat_map(|(at, tree)| {
+            let parent = path_parent(&trees, at);
+            match tree {
+                TokenTree::Ident(ident) => vec![CodeName {
+                    parent: parent.or_else(|| inherited.map(str::to_string)),
+                    name: ident.to_string(),
+                    line: ident.span().start().line,
+                }],
+                TokenTree::Group(group) => production_names(group.stream(), parent.as_deref()),
+                TokenTree::Punct(_) | TokenTree::Literal(_) => Vec::new(),
+            }
+        })
+        .collect()
+}
+
+/// The signing capability `name` is, if any, as written in a finding.
+fn signing_capability_of(name: &CodeName) -> Option<String> {
+    let (parent, signer) = PURE_SIGNER;
+    if name.is_child(PURE_SIGNER) {
+        return Some(format!("{parent}::{signer}"));
+    }
+    INDEXER_SIGNING_NAMES
+        .contains(&name.name.as_str())
+        .then(|| name.name.clone())
+}
+
+/// Pure rule over one source. A source that does not lex holds no provable
+/// site and is itself a finding (fail closed).
+fn read_signing_claim(source: &str) -> SigningClaimReading {
+    let names = match source.parse::<proc_macro2::TokenStream>() {
+        Ok(tokens) => production_names(tokens, None),
+        Err(error) => {
+            return SigningClaimReading {
+                capabilities: vec![format!("unparseable source, signing unchecked: {error}")],
+                holds_verify_only_construction: false,
+            }
+        }
+    };
+    SigningClaimReading {
+        capabilities: names
+            .iter()
+            .filter_map(|name| {
+                signing_capability_of(name)
+                    .map(|capability| format!("line {}: `{capability}`", name.line))
+            })
+            .collect(),
+        holds_verify_only_construction: names
+            .iter()
+            .any(|name| name.is_child(VERIFY_ONLY_CONSTRUCTION)),
+    }
+}
+
+/// One root's findings: each capability its production code names, and a
+/// finding when none of its sources holds the verify-only construction, which
+/// also covers a root with no source at all.
+fn scan_root_holds_no_signing(
+    workspace_root: &Path,
+    dir: &str,
+    rule: &str,
+) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    let mut holds_verify_only_construction = false;
+    for path in rust_sources_under(&workspace_root.join(dir)) {
+        let reading = read_signing_claim(&std::fs::read_to_string(&path)?);
+        let file = relative_display(workspace_root, &path);
+        holds_verify_only_construction |= reading.holds_verify_only_construction;
+        findings.extend(reading.capabilities.into_iter().map(|capability| {
+            format!("{rule}: {file}: {capability} — the indexer family holds no signing capability (D-STZ-50)")
+        }));
+    }
+    let (adapter, constructor) = VERIFY_ONLY_CONSTRUCTION;
+    findings.extend((!holds_verify_only_construction).then(|| {
+        format!(
+            "{rule}: {dir}: no `{adapter}::{constructor}` site in production code — \
+             the rule would pass vacuously (D-STZ-50)"
+        )
+    }));
+    Ok(findings)
+}
+
 /// Source half of `indexer_holds_no_signing_or_local_store` and
 /// `indexer_lambda_holds_no_signing_or_local_store` (D-STZ-50): the production
-/// code of both roots names no `IdentityPort`, `for_did`,
+/// code of both roots, lib and bin, names no `IdentityPort`, `for_did`,
 /// `new_with_did_document`, `ensure_keychain_key`, `claim_domain::sign`,
 /// `SigningKey` or `keyring`, and each root holds a `resolve_only` site, so the
-/// rule cannot pass vacuously. Not wired into `check-arch` yet.
-//
-// SCAFFOLD: true  (DISTILL 2026-10-30; DELIVER implements and wires it. Contract:
-// XS-10 in xtask/tests/scale_to_zero_architecture.rs)
+/// rule cannot pass vacuously. Names are read from tokens, so a longer name
+/// holding one of these is not a finding. A test module in a file of its own
+/// is read as code: that file cannot tell it is gated.
 pub fn scan_indexer_family_holds_no_signing(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
-    let _ = workspace_root;
-    panic!("Not yet implemented -- RED scaffold")
+    let mut findings = Vec::new();
+    for (dir, rule) in INDEXER_SIGNING_RULES {
+        findings.extend(scan_root_holds_no_signing(workspace_root, dir, rule)?);
+    }
+    Ok(findings)
 }
 
 /// `lambda_no_publish_is_read_only` (D-STZ-44): the no-publish module refuses
@@ -4442,6 +4637,7 @@ pub fn run() -> anyhow::Result<i32> {
     let indexer_origin_findings = scan_indexer_origin_only_via_listing_source(&workspace_root)?;
     let indexer_client_findings = scan_indexer_guarded_clients_only(&workspace_root)?;
     let search_handler_findings = scan_indexer_search_handler_read_only(&workspace_root)?;
+    let indexer_signing_findings = scan_indexer_family_holds_no_signing(&workspace_root)?;
     let index_delete_findings = scan_index_store_delete_only_in_purge(&workspace_root)?;
     let index_purge_findings = scan_index_purge_only_in_pass_runner(&workspace_root)?;
     let search_event_findings = scan_indexer_search_events_carry_no_query(&workspace_root)?;
@@ -4482,6 +4678,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(indexer_origin_findings);
     rendered.extend(indexer_client_findings);
     rendered.extend(search_handler_findings);
+    rendered.extend(indexer_signing_findings);
     rendered.extend(index_delete_findings);
     rendered.extend(index_purge_findings);
     rendered.extend(search_event_findings);
@@ -6664,6 +6861,107 @@ mod search_handler_read_only_tests {
         let empty = std::env::temp_dir().join("openlore-xtask-no-search-handler");
         let findings = scan_indexer_search_handler_read_only(&empty).expect("scan");
         assert_eq!(findings.len(), 1, "{findings:?}");
+    }
+
+    // --- The signing claim of the indexer family (D-STZ-50) ---
+    // bypass: closed-world fixtures — each row is one way a mention can look
+    // like code, or code can look like a mention, beyond XS-10's planted tokens.
+
+    const VERIFY_ONLY_SITE: &str = "fn wire() { let _ = AtProtoDidAdapter::resolve_only(); }\n";
+
+    #[test]
+    fn prose_and_test_code_are_not_a_signing_capability() {
+        let not_code = [
+            "fn a() {} // keyring\n",
+            "/* uses SigningKey\n and IdentityPort */\n",
+            "/// Never `for_did`.\nfn a() {}\n",
+            "fn a() { let _ = \"keyring\"; }\n",
+            "#[test]\nfn a() { let _ = SigningKey; }\n",
+            "#[cfg(test)]\nuse x::SigningKey;\n",
+            "#[cfg(test)]\nfn a() { let _ = SigningKey; }\n",
+            "fn records_for_did() {}\n",
+            "fn sign() {}\n",
+            "fn a(claim_domain: &sign) {}\n",
+            "fn a() { match x { claim_domain => sign }; }\n",
+        ];
+        for source in not_code {
+            let reading = read_signing_claim(source);
+            assert_eq!(reading.capabilities, Vec::<String>::new(), "{source}");
+        }
+    }
+
+    #[test]
+    fn a_test_gate_hides_only_the_item_it_sits_on() {
+        let code = [
+            "use claim_domain::{verify, sign};\n",
+            "use claim_domain::{a::{b}, sign};\n",
+            "#[cfg(test)]\nmod t {}\nuse x::SigningKey;\n",
+            "#[cfg(test)]\nuse x::y;\nuse x::SigningKey;\n",
+            "#[cfg(not(test))]\nuse x::SigningKey;\n",
+            "struct S { #[cfg(test)] a: u8, b: SigningKey }\n",
+            "fn a() { let _ = vec![SigningKey]; }\n",
+            "mod inner { fn a(key: SigningKey) {} }\n",
+        ];
+        for source in code {
+            let reading = read_signing_claim(source);
+            assert_eq!(reading.capabilities.len(), 1, "{source}");
+        }
+    }
+
+    #[test]
+    fn a_finding_names_the_line_of_the_capability() {
+        let reading = read_signing_claim("\n\nuse x::keyring;\n");
+        assert_eq!(reading.capabilities, ["line 3: `keyring`"]);
+    }
+
+    #[test]
+    fn only_a_production_construction_is_a_verify_only_site() {
+        let no_site = [
+            "// AtProtoDidAdapter::resolve_only()\n",
+            "/// AtProtoDidAdapter::resolve_only()\nfn a() {}\n",
+            "fn a() { let _ = \"AtProtoDidAdapter::resolve_only\"; }\n",
+            "#[cfg(test)]\nmod t { fn a() { AtProtoDidAdapter::resolve_only(); } }\n",
+            "fn resolve_only() {}\n",
+            "fn a() { Other::resolve_only(); }\n",
+        ];
+        for source in no_site {
+            let reading = read_signing_claim(source);
+            assert!(!reading.holds_verify_only_construction, "{source}");
+        }
+        assert!(read_signing_claim(VERIFY_ONLY_SITE).holds_verify_only_construction);
+    }
+
+    #[test]
+    fn a_source_that_does_not_lex_is_a_finding_and_proves_no_site() {
+        let reading = read_signing_claim("fn a( {\n");
+        assert_eq!(reading.capabilities.len(), 1);
+        assert!(!reading.holds_verify_only_construction);
+    }
+
+    // bypass: single example — a second site keeps the root's verify-only claim.
+    #[test]
+    fn a_root_may_hold_more_than_one_verify_only_site() {
+        let tree = tempfile::tempdir().expect("a tree");
+        for (dir, _) in INDEXER_SIGNING_RULES {
+            let dir = tree.path().join(dir);
+            std::fs::create_dir_all(&dir).expect("dirs");
+            std::fs::write(dir.join("first.rs"), VERIFY_ONLY_SITE).expect("a file");
+            std::fs::write(dir.join("second.rs"), VERIFY_ONLY_SITE).expect("a file");
+        }
+        let findings = scan_indexer_family_holds_no_signing(tree.path()).expect("scan");
+        assert_eq!(findings, Vec::<String>::new());
+    }
+
+    // bypass: single example — the non-vacuity guard on a tree with neither root.
+    #[test]
+    fn the_signing_scan_reports_each_root_with_no_source() {
+        let tree = tempfile::tempdir().expect("a tree");
+        let findings = scan_indexer_family_holds_no_signing(tree.path()).expect("scan");
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        for (dir, rule) in INDEXER_SIGNING_RULES {
+            let named = |finding: &&String| finding.contains(dir) && finding.starts_with(rule);
+            assert_eq!(findings.iter().filter(named).count(), 1, "{findings:?}");
+        }
     }
 
     // --- index_store_delete_only_in_purge / index_purge_only_in_pass_runner (ADR-082) ---

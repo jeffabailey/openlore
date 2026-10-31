@@ -521,7 +521,6 @@ fn findings_in(tree: &tempfile::TempDir) -> Vec<String> {
 ///     | has no verify-only construction at all  |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER implements and wires the source scan, and the Lambda root gains its resolve_only site"]
 fn check_arch_refuses_a_signing_capability_in_either_indexer_root() {
     let clean = a_family_with(RESOLVE_ONLY_SITE, RESOLVE_ONLY_SITE);
     assert_eq!(findings_in(&clean), Vec::<String>::new(), "the control");
