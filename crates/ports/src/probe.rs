@@ -190,6 +190,67 @@ pub enum ProbeRefusalReason {
 }
 
 // -----------------------------------------------------------------------------
+// The write probe's pure rules (scale-to-zero-hosting D-STZ-39). They live here
+// so the adapter and the Lambda root share one reading of the store's answers.
+// -----------------------------------------------------------------------------
+
+/// The write probe's own key (D-STZ-39). A constant and not a configured value,
+/// so configuration can never point it at the index.
+pub const WRITE_PROBE_KEY: &str = "index/.write-probe";
+
+/// D-STZ-39: does this location name the write probe's key, as its index or as
+/// its pass record? Pure, so it can be tested without building an adapter.
+pub fn location_names_write_probe_key(index_key: &str, last_pass_key: &str) -> bool {
+    index_key == WRITE_PROBE_KEY || last_pass_key == WRITE_PROBE_KEY
+}
+
+/// How the repeat PUT of the write probe ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepeatAnswer {
+    /// 412: the first write was a first run, and the store honours the condition.
+    Honoured,
+    /// 2xx: the store took the same conditional write twice.
+    Accepted,
+    /// Anything else: unreachable, access denied, a timeout.
+    Unknown,
+}
+
+/// What the write probe saw (D-STZ-39). "Accepted, with no repeat" cannot be
+/// expressed, because a 2xx is always followed by the repeat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteProbeSeen {
+    /// The first PUT got 412.
+    Honoured,
+    /// The first PUT got anything but 2xx or 412.
+    Unknown,
+    /// The first PUT got 2xx, so it was repeated.
+    Repeated(RepeatAnswer),
+}
+
+/// D-STZ-39: what the write probe's PUTs say. `Repeated(Accepted)` is the only
+/// refusal, with reason `IndexObjectWriteConditionIgnored`; an unknown answer
+/// says nothing about conditions, so it is not one. Pure, so that a store that
+/// lies can be tested: moto honours conditions.
+pub fn write_probe_outcome(seen: WriteProbeSeen) -> ProbeOutcome {
+    match seen {
+        WriteProbeSeen::Repeated(RepeatAnswer::Accepted) => write_condition_ignored().into(),
+        WriteProbeSeen::Honoured
+        | WriteProbeSeen::Unknown
+        | WriteProbeSeen::Repeated(RepeatAnswer::Honoured | RepeatAnswer::Unknown) => {
+            ProbeOutcome::Ok
+        }
+    }
+}
+
+fn write_condition_ignored() -> ProbeRefused {
+    ProbeRefused {
+        reason: ProbeRefusalReason::IndexObjectWriteConditionIgnored,
+        detail: format!("the store accepted the same conditional write to {WRITE_PROBE_KEY} twice"),
+        structured: serde_json::json!({ "key": WRITE_PROBE_KEY }),
+    }
+}
+
+// -----------------------------------------------------------------------------
 // JSON contract tests — pin the shape the DevOps tracing layer consumes.
 // -----------------------------------------------------------------------------
 

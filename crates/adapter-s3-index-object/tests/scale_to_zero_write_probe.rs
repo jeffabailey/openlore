@@ -39,7 +39,6 @@ const LAST_PASS_KEY: &str = "index/last-pass.json";
 ///     | its write taken, and its repeat taken    | refuses the store |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER adapter-s3-index-object write_probe_outcome"]
 fn only_two_accepted_writes_mean_a_store_ignores_the_condition() {
     use RepeatAnswer as Repeat;
     let rows = [
@@ -79,7 +78,6 @@ fn only_two_accepted_writes_mean_a_store_ignores_the_condition() {
 ///     | each under its own proper key  | does not name it       |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER adapter-s3-index-object location_names_write_probe_key"]
 fn the_write_checks_marker_can_never_be_the_index() {
     assert_eq!(WRITE_PROBE_KEY, "index/.write-probe");
     for (index_key, last_pass_key, names_it) in [

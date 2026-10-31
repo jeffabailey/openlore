@@ -29,47 +29,10 @@ use ports::{
     RepoDidListSourcePort, WriteCondition,
 };
 
-/// The write probe's own key (D-STZ-39). A constant and not an [`S3Location`]
-/// field, so configuration can never point it at the index.
-pub const WRITE_PROBE_KEY: &str = "index/.write-probe";
-
-/// D-STZ-39: does this location name the write probe's key, as its index or as
-/// its pass record? Pure, so it can be tested without building an adapter.
-pub fn location_names_write_probe_key(index_key: &str, last_pass_key: &str) -> bool {
-    let _ = (index_key, last_pass_key);
-    panic!("Not yet implemented -- RED scaffold")
-}
-
-/// How the repeat PUT of the write probe ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RepeatAnswer {
-    /// 412: the first write was a first run, and the store honours the condition.
-    Honoured,
-    /// 2xx: the store took the same conditional write twice.
-    Accepted,
-    /// Anything else: unreachable, access denied, a timeout.
-    Unknown,
-}
-
-/// What the write probe saw (D-STZ-39). "Accepted, with no repeat" cannot be
-/// expressed, because a 2xx is always followed by the repeat.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WriteProbeSeen {
-    /// The first PUT got 412.
-    Honoured,
-    /// The first PUT got anything but 2xx or 412.
-    Unknown,
-    /// The first PUT got 2xx, so it was repeated.
-    Repeated(RepeatAnswer),
-}
-
-/// D-STZ-39: what the write probe's PUTs say. `Repeated(Accepted)` is the only
-/// refusal, with reason `IndexObjectWriteConditionIgnored`. Pure, so that a store
-/// that lies can be tested: moto honours conditions.
-pub fn write_probe_outcome(seen: WriteProbeSeen) -> ProbeOutcome {
-    let _ = seen;
-    panic!("Not yet implemented -- RED scaffold")
-}
+pub use ports::{
+    location_names_write_probe_key, write_probe_outcome, RepeatAnswer, WriteProbeSeen,
+    WRITE_PROBE_KEY,
+};
 
 /// Every call this adapter makes (DESIGN § Timeouts).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,7 +95,11 @@ impl S3IndexObjectAdapter {
     /// when [`location_names_write_probe_key`] says a configured key is
     /// [`WRITE_PROBE_KEY`].
     pub async fn connect(location: S3Location) -> Result<Self, IndexObjectError> {
-        let _ = location;
+        if location_names_write_probe_key(&location.index_key, &location.last_pass_key) {
+            return Err(IndexObjectError::ProbeRefused {
+                detail: format!("a configured key is the write probe's key {WRITE_PROBE_KEY}"),
+            });
+        }
         panic!("Not yet implemented -- RED scaffold")
     }
 }

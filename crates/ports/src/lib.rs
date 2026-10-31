@@ -31,7 +31,10 @@ use url::Url;
 // `health.startup.refused` event) lives next to its tests.
 
 mod probe;
-pub use probe::{ProbeOutcome, ProbeRefusalReason, ProbeRefused};
+pub use probe::{
+    location_names_write_probe_key, write_probe_outcome, ProbeOutcome, ProbeRefusalReason,
+    ProbeRefused, RepeatAnswer, WriteProbeSeen, WRITE_PROBE_KEY,
+};
 
 // bluesky-claim-review-app ports (ADR-072/073/074).
 pub mod review;
