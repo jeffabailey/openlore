@@ -49,7 +49,6 @@ const RECORDED_AT: &str = "2026-10-27T14:00:00Z";
 ///   And the line names the probe as its source, the search time and status, and the last pass's age and exit code
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (probe mode)"]
 fn the_probe_reports_a_live_index() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let edge = CannedEdge::answering(200, 200);
@@ -82,7 +81,6 @@ fn the_probe_reports_a_live_index() {
 ///   Then the health line says the index is live, with the last exit code 2
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (probe mode; one cause pages once)"]
 fn a_failed_pass_that_just_ran_does_not_also_make_the_index_look_dead() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let edge = CannedEdge::answering(200, 200);
@@ -403,7 +401,6 @@ fn a_public_index_that_hangs_is_not_live_and_the_probe_still_reports_it_in_time(
 ///     | nothing   |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (probe event check, U-STZ-7)"]
 fn the_probe_refuses_an_event_that_is_not_an_object_and_does_nothing_else() {
     each_row([json!([]), json!("a string"), json!(null)], |event| {
         let world = LambdaWorld::listing(&[Author::Priya]);

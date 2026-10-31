@@ -20,13 +20,14 @@ path = "src/main.rs"
 # The fourth composition root (check-arch COMPOSITION_ROOTS). Its capability
 # boundary is the graph rule `indexer_lambda_holds_no_signing_or_local_store`:
 # adapter-atproto-did is here for the verify-only `resolve_only()` alone
-# (D-STZ-50). Still to come: adapter-index-query (probe), adapter-s3-index-object,
-# lambda_http, lambda_runtime and aws-config.
+# (D-STZ-50). adapter-index-query is the probe's bounded client (D-STZ-37). Still
+# to come: adapter-s3-index-object, lambda_http, lambda_runtime and aws-config.
 [dependencies]
 ports = { path = "../ports" }
 appview-domain = { path = "../appview-domain" }
 openlore-indexer = { path = "../openlore-indexer" }
 adapter-atproto-did = { path = "../adapter-atproto-did" }
+adapter-index-query = { path = "../adapter-index-query" }
 adapter-index-store = { path = "../adapter-index-store" }
 adapter-xrpc-query-server = { path = "../adapter-xrpc-query-server" }
 chrono = { workspace = true }

@@ -20,9 +20,6 @@
 //! [`HttpIndexQueryAdapter`] behind the `IndexQueryPort` interface. Per the
 //! anti-merging-across-the-transport contract (I-AV-2), a response row dropping
 //! `author_did` is a `BadResponse` (the wire MUST carry attribution).
-//
-// The transport is live, except `health`, which carries its own scaffold marker
-// until DELIVER.
 
 #![forbid(unsafe_code)]
 
@@ -37,6 +34,7 @@ use ports::{
     HealthBody, IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw,
     PeerClaimProvenance, ProbeOutcome, ProbeRefusalReason, SearchDimension,
 };
+use serde_json::Value;
 
 /// The bounded connect timeout (KPI-5 / WD-116): an unreachable indexer that does
 /// NOT promptly refuse (an unrouted/blackhole address) MUST fail fast to
@@ -47,6 +45,9 @@ const INDEXER_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// The bounded total request timeout: caps the whole round-trip (connect + send +
 /// receive) so a stalled-mid-response indexer also fails fast to `Unreachable`.
 const INDEXER_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The index's public health route (D-STZ-37).
+const HEALTH_PATH: &str = "/healthz";
 
 /// CLI-side `IndexQueryPort` adapter over HTTP/XRPC to the configured indexer
 /// URL (ADR-027). Holds the reqwest client + the configured indexer base URL. No
@@ -99,6 +100,95 @@ impl HttpIndexQueryAdapter {
             self.base_url.trim_end_matches('/')
         )
     }
+
+    /// The full URL of the public health route.
+    fn health_endpoint(&self) -> String {
+        format!("{}{HEALTH_PATH}", self.base_url.trim_end_matches('/'))
+    }
+
+    /// A search, with the HTTP status the index answered it with (`None` when it
+    /// gave no answer). The probe's line reports that status (D-STZ-23), which the
+    /// port's errors do not carry.
+    pub async fn search_with_status(
+        &self,
+        dim: SearchDimension,
+        value: &str,
+        cid: Option<&Cid>,
+    ) -> (Option<u16>, Result<NetworkSearchResultRaw, IndexQueryError>) {
+        let request = SearchQueryRequest {
+            dimension: to_dto_dimension(dim),
+            value: value.to_string(),
+            cid: cid.map(|c| c.0.clone()),
+        };
+        let sent = self
+            .client
+            .post(self.search_endpoint())
+            .json(&request)
+            .send()
+            .await;
+        match sent {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                (Some(status), self.read_search_answer(response).await)
+            }
+            Err(err) => (None, Err(self.unreachable(&err))),
+        }
+    }
+
+    /// A search the index answered: its body, or why that answer is an error.
+    async fn read_search_answer(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<NetworkSearchResultRaw, IndexQueryError> {
+        self.refuse_a_failed_status(&response)?;
+        let body: SearchQueryResponse =
+            response
+                .json()
+                .await
+                .map_err(|err| IndexQueryError::BadResponse {
+                    message: format!("decode searchClaims response: {err}"),
+                })?;
+
+        decode_response(body)
+    }
+
+    /// A connection failure (refused, DNS, timeout) is the SOFT, NON-FATAL
+    /// Unreachable outcome (WD-116), never a panic.
+    fn unreachable(&self, err: &reqwest::Error) -> IndexQueryError {
+        IndexQueryError::Unreachable {
+            message: format!("indexer at {} unreachable: {err}", self.base_url),
+        }
+    }
+
+    /// What an answer's status makes of it, whichever route gave it.
+    fn refuse_a_failed_status(&self, response: &reqwest::Response) -> Result<(), IndexQueryError> {
+        // A server error means the index cannot answer now (ADR-080 §7: a store
+        // error is a 500, never an empty 200): the same SOFT outcome as an
+        // unreachable indexer, so search degrades to local-only (DISTILL
+        // decision 5), never "no results".
+        if response.status().is_server_error() {
+            return Err(IndexQueryError::Unreachable {
+                message: format!(
+                    "indexer at {} unavailable: HTTP {}",
+                    self.base_url,
+                    response.status()
+                ),
+            });
+        }
+        // The per-client rate limit (429) is a busy index, not a broken one:
+        // search degrades and names the wait the index asked for (ADR-027).
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(IndexQueryError::Busy {
+                retry_after_secs: retry_after_secs(response.headers()),
+            });
+        }
+        if !response.status().is_success() {
+            return Err(IndexQueryError::BadResponse {
+                message: format!("indexer returned HTTP {}", response.status()),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -138,66 +228,47 @@ impl IndexQueryPort for HttpIndexQueryAdapter {
         value: &str,
         cid: Option<&Cid>,
     ) -> Result<NetworkSearchResultRaw, IndexQueryError> {
-        let request = SearchQueryRequest {
-            dimension: to_dto_dimension(dim),
-            value: value.to_string(),
-            cid: cid.map(|c| c.0.clone()),
-        };
+        self.search_with_status(dim, value, cid).await.1
+    }
 
+    async fn health(&self) -> Result<HealthBody, IndexQueryError> {
         let response = self
             .client
-            .post(self.search_endpoint())
-            .json(&request)
+            .get(self.health_endpoint())
             .send()
             .await
-            // A connection failure (refused, DNS, timeout) is the SOFT,
-            // NON-FATAL Unreachable outcome (WD-116) — NEVER a panic.
-            .map_err(|err| IndexQueryError::Unreachable {
-                message: format!("indexer at {} unreachable: {err}", self.base_url),
+            .map_err(|err| self.unreachable(&err))?;
+        self.refuse_a_failed_status(&response)?;
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|err| IndexQueryError::BadResponse {
+                message: format!("decode health answer: {err}"),
             })?;
 
-        // A server error means the index cannot answer now (ADR-080 §7: a store
-        // error is a 500, never an empty 200): the same SOFT outcome as an
-        // unreachable indexer, so search degrades to local-only (DISTILL
-        // decision 5), never "no results".
-        if response.status().is_server_error() {
-            return Err(IndexQueryError::Unreachable {
-                message: format!(
-                    "indexer at {} unavailable: HTTP {}",
-                    self.base_url,
-                    response.status()
-                ),
-            });
-        }
-        // The per-client rate limit (429) is a busy index, not a broken one:
-        // search degrades and names the wait the index asked for (ADR-027).
-        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            return Err(IndexQueryError::Busy {
-                retry_after_secs: retry_after_secs(response.headers()),
-            });
-        }
-        if !response.status().is_success() {
-            return Err(IndexQueryError::BadResponse {
-                message: format!("indexer returned HTTP {}", response.status()),
-            });
-        }
-
-        let body: SearchQueryResponse =
-            response
-                .json()
-                .await
-                .map_err(|err| IndexQueryError::BadResponse {
-                    message: format!("decode searchClaims response: {err}"),
-                })?;
-
-        decode_response(body)
+        decode_health(&body)
     }
+}
 
-    // SCAFFOLD: true  (DISTILL 2026-10-30, D-STZ-37; DELIVER implements. Contract:
-    // PR-1, PR-3, PR-E1 in tests/acceptance/scale_to_zero_probe.rs)
-    async fn health(&self) -> Result<HealthBody, IndexQueryError> {
-        panic!("Not yet implemented -- RED scaffold")
-    }
+/// Decode a health answer's body. `last_successful_pass_at` stays the text the
+/// index sent (see [`HealthBody`]); `null` means nothing is published.
+fn decode_health(body: &Value) -> Result<HealthBody, IndexQueryError> {
+    let bad = |what: &str| IndexQueryError::BadResponse {
+        message: format!("health answer: {what}"),
+    };
+    let status = body
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or_else(|| bad("no status"))?;
+    let last_successful_pass_at = match body.get("last_successful_pass_at") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(published_at)) => Some(published_at.clone()),
+        Some(_) => return Err(bad("last_successful_pass_at is not a time")),
+    };
+    Ok(HealthBody {
+        status: status.to_string(),
+        last_successful_pass_at,
+    })
 }
 
 /// The `Retry-After` delay in seconds, when the index sent one (RFC 9110
@@ -622,12 +693,104 @@ mod busy_index {
     }
 
     #[tokio::test]
+    async fn a_search_reports_the_status_the_index_answered_with() {
+        let url = index_answering("HTTP/1.1 500 Internal Server Error");
+        let (status, outcome) = HttpIndexQueryAdapter::for_url(url)
+            .search_with_status(SearchDimension::Subject, "x", None)
+            .await;
+        assert_eq!(status, Some(500));
+        assert!(
+            matches!(outcome, Err(IndexQueryError::Unreachable { .. })),
+            "{outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_search_nothing_answered_reports_no_status() {
+        let (status, outcome) = HttpIndexQueryAdapter::for_url("http://127.0.0.1:1")
+            .search_with_status(SearchDimension::Subject, "x", None)
+            .await;
+        assert_eq!(status, None);
+        assert!(
+            matches!(outcome, Err(IndexQueryError::Unreachable { .. })),
+            "{outcome:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn another_client_error_is_still_a_bad_response() {
         let outcome = search_at(index_answering("HTTP/1.1 400 Bad Request")).await;
         assert!(
             matches!(outcome, Err(IndexQueryError::BadResponse { .. })),
             "{outcome:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod health_answers {
+    //! D-STZ-37: a health answer decodes to the port's body, and anything else
+    //! is an error, because the probe counts all of those as a failed check.
+
+    use super::*;
+    use proptest::prelude::*;
+    use serde_json::json;
+
+    proptest! {
+        // Any status and any published-at text, or none, comes through as sent.
+        #[test]
+        fn a_health_answer_comes_through_as_the_index_sent_it(
+            status in "[ -~]{0,16}",
+            published_at in proptest::option::of("[ -~]{0,32}"),
+        ) {
+            let body = json!({"status": status, "last_successful_pass_at": published_at});
+
+            let decoded = decode_health(&body).expect("a health answer decodes");
+
+            prop_assert_eq!(decoded, HealthBody {
+                status,
+                last_successful_pass_at: published_at,
+            });
+        }
+
+        // Whatever else the field holds, the answer is not a health answer.
+        #[test]
+        fn a_published_at_that_is_not_a_time_is_a_bad_response(
+            not_a_time in prop_oneof![
+                any::<i64>().prop_map(|number| json!(number)),
+                any::<bool>().prop_map(|flag| json!(flag)),
+                Just(json!([])),
+                Just(json!({})),
+            ],
+        ) {
+            let body = json!({"status": "ok", "last_successful_pass_at": not_a_time});
+
+            let decoded = decode_health(&body);
+
+            prop_assert!(
+                matches!(decoded, Err(IndexQueryError::BadResponse { .. })),
+                "{decoded:?}"
+            );
+        }
+    }
+
+    // bypass: three fixed shapes with no status to read.
+    #[test]
+    fn an_answer_without_a_status_is_a_bad_response() {
+        for body in [json!({}), json!({"status": 200}), json!("ok")] {
+            let decoded = decode_health(&body);
+            assert!(
+                matches!(decoded, Err(IndexQueryError::BadResponse { .. })),
+                "{body}: {decoded:?}"
+            );
+        }
+    }
+
+    // bypass: the field the body leaves out is one fixed shape.
+    #[test]
+    fn an_answer_that_leaves_out_published_at_publishes_nothing() {
+        let decoded = decode_health(&json!({"status": "ok"})).expect("a health answer");
+        assert_eq!(decoded.last_successful_pass_at, None);
     }
 }
 
