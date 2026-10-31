@@ -50,6 +50,7 @@
 //! | OP-E23 | A publish that changed nothing is refused before anything moves | review B1 |
 //! | OP-E24 | A failed flip of the pass or the probe undoes what flipped, and says where each is | review H1 |
 //! | OP-E25 | Only a missing object reads as an empty bucket; any other failed read stops the verb | review H2 |
+//! | OP-18 | `standby --timers` keeps the timers off through a reboot | review H6 |
 //!
 //! ## Testability contract for `deploy.sh lambda`
 //!
@@ -2891,6 +2892,36 @@ fn the_status_report_does_not_show_a_failed_read_of_the_index_as_empty() {
         run.out
     );
     assert!(run.out.contains("--- alarms"), "{}", run.out);
+}
+
+/// OP-18, crafter-owned (review H6). `stop` lasts until the next boot, and the soak is 7 days. A
+/// reboot would bring back a second writer of the health line and a pass timer with a slot to
+/// catch up, so the timers are disabled too. `resume` re-enables both, which its own test pins.
+#[test]
+fn standby_keeps_the_timers_off_through_a_reboot() {
+    let stubs = Stubs::new(Posture::default());
+
+    let run = stubs.run(&["host", "standby", "--timers"], &[], "");
+
+    assert_eq!(run.status, 0, "{}\n{}", run.out, stubs.calls());
+    let calls = stubs.calls();
+    for timer in [
+        "openlore-indexer-pass.timer",
+        "openlore-indexer-health.timer",
+    ] {
+        let stopped = line_of(&calls, &["systemctl", "stop", timer]);
+        let disabled = line_of(&calls, &["systemctl", "disable", timer]);
+        assert!(stopped.is_some() && stopped < disabled, "{timer}\n{calls}");
+    }
+
+    let container = Stubs::new(Posture::default());
+    let run = container.run(&["host", "standby", "--container"], &[], "");
+    assert_eq!(run.status, 0, "{}\n{}", run.out, container.calls());
+    assert!(
+        !called(&container.calls(), &["systemctl"]),
+        "the container's standby leaves the timers\n{}",
+        container.calls()
+    );
 }
 
 /// Crafter-owned (step 08-09). `resume` has no scenario, since only a real host

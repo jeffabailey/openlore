@@ -208,8 +208,8 @@ stale-list and missing-heartbeat causes of A3. They are not fired live.
 ## 8. After a reboot or replacement
 
 - **Reboot:** nothing to do. Docker restarts the container at the pinned digest, the timers
-  survive, and `Persistent=true` runs one missed slot. **In standby this is wrong**: run the
-  reboot check in §15.
+  survive, and `Persistent=true` runs one missed slot. **In standby it differs**: the timers stay
+  off and a stopped container stays stopped, so run the reboot check in §15 to confirm that.
 - **Replacement** (R-REPLACE step 7): after the PDS checks pass, run
   `deploy/indexer/deploy.sh redeploy`. It reinstalls the units and the Caddy site, and recreates
   the current digest from `/pds/indexer`.
@@ -409,7 +409,8 @@ Start at minute 1 after a quarter-hour pass.
 ### Stage 3: soak, 7 green days
 
 The same green-day rule, on the prod group and A1-A3. Parity no longer applies, and `lambda parity`
-refuses once the public name serves the edge. **After any host reboot, run the check in §15.**
+refuses once the public name serves the edge. Standby lasts through a host reboot. **After any
+reboot, confirm it with the check in §15.**
 
 **Rollback to the host (soak only, target ≤ 10 min):**
 
@@ -484,21 +485,23 @@ All of these have run on stubs only (§10). A refusal starts with `refusing` and
 
 | Verb | What it does | Know this |
 |---|---|---|
-| `deploy.sh standby --timers` | Stops the pass and health timers; the container keeps serving | **Stops but does not disable them**, so a reboot starts them again. |
+| `deploy.sh standby --timers` | Stops and disables the pass and health timers; the container keeps serving | A reboot does not start them again. `resume` re-enables both. |
 | `deploy.sh standby --container` | Stops the container; files, units, Caddy site and releases stay | `index.` on the host answers 503. A stopped container stays stopped across a reboot. |
 | `deploy.sh resume` | Reinstalls, starts the container, then both timers | Runs no pass. Run `deploy.sh trigger` for that. Refuses if nothing was ever deployed. |
 
 `standby` with no flag, or both flags, is refused.
 
-**Reboot check.** Run this after any host reboot in standby (Stage 2 from step 1, and all of Stage 3):
+**Reboot check.** Standby should last through a reboot. Confirm it after any host reboot in standby
+(Stage 2 from step 1, and all of Stage 3):
 
 ```sh
 deploy.sh host-status
 ```
 
-- Both timers must show no next run. Any `openlore-indexer-*` timer with a next run has restarted.
-  Run `deploy.sh standby --timers` at once. Until you do, the host writes health lines beside the
-  probe, and the pass timer fires its missed slot.
+- Both timers must show no next run. A disabled timer can drop off the list altogether, which reads
+  the same. Any `openlore-indexer-*` timer with a next run was started by hand or by a host verb since
+  standby. Run `deploy.sh standby --timers` at once. Until you do, the host writes health lines beside
+  the probe, and the pass timer fires its missed slot.
 - In Stage 3 the container must not be running. If it is, run `deploy.sh standby --container`.
 
 ## 16. Recovery

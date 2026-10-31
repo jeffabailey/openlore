@@ -17,7 +17,8 @@
 #                                        over the last 1-30 days (default 7; Logs + alarm history)
 #   deploy.sh test-alarm a1|a2|a3        test-fire one alarm end to end and wait for ALARM, then OK
 #                                        (go-live step 15; a2 always restores the DID list)
-#   deploy.sh standby --timers           stop the pass and health timers; the container keeps serving
+#   deploy.sh standby --timers           stop and disable the pass and health timers; the container
+#                                        keeps serving
 #   deploy.sh standby --container        stop the container; files, units, Caddy site, releases stay
 #   deploy.sh resume                     reinstall, start the container, then both timers (no pass)
 #   deploy.sh lambda <verb>              the Lambda path; lambda.sh's header lists its verbs
@@ -767,13 +768,15 @@ host_start() {
 }
 
 # Stops what it names and nothing else: files, units, the Caddy site, .env and releases stay, so
-# `resume` can bring it all back. Unlike `stop_indexer`, it fails loud if nothing is deployed.
+# `resume` can bring it all back. Unlike `stop_indexer`, it fails loud if nothing is deployed. The
+# timers are disabled as well, or a reboot would start them again.
 host_standby() { # $1 = --timers | --container
   refuse_unless_one_standby_flag "$@"
   case "$1" in
     --timers)
       systemctl stop openlore-indexer-pass.timer openlore-indexer-health.timer
-      echo "timers stopped (the container keeps serving)"
+      systemctl disable openlore-indexer-pass.timer openlore-indexer-health.timer
+      echo "timers stopped and disabled (the container keeps serving)"
       ;;
     --container)
       compose stop indexer
@@ -922,7 +925,7 @@ case "$cmd" in
     lambda_main "$@"
     ;;
   *)
-    sed -n '2,24p' "$0" >&2
+    sed -n '2,25p' "$0" >&2
     exit 2
     ;;
 esac
