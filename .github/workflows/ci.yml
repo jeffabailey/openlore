@@ -465,6 +465,15 @@ jobs:
             cargo cyclonedx --format json --manifest-path "crates/$crate/Cargo.toml" --override-filename sbom
             cp "crates/$crate/sbom.json" "out/$crate.cdx.json"
           done
+      # The index lambda-smoke seeds its bucket with (DEVOPS). Next to the binaries in the
+      # artifact, and moved out of the build context before the image is built.
+      - name: Seed index for lambda-smoke (one claim)
+        shell: bash
+        run: |
+          set -euo pipefail
+          seed=$(mktemp -d)
+          cargo run --release -p adapter-index-store --example seed_index -- "$seed/index.duckdb"
+          cp "$seed/index.duckdb" out/seed-index.duckdb
       # A second layer behind the xtask rule (blocking). The Lambda binary is the control:
       # a check that cannot see these strings there proves nothing here. Only grep's exit 1,
       # no match, is a pass, so an unreadable binary is not.
@@ -498,6 +507,11 @@ jobs:
     env:
       IMAGE: ghcr.io/jeffabailey/openlore-indexer
       LOCAL_TAG: openlore-indexer:ci
+      # lambda-smoke: the same moto as rio-object-store; a pin bump reruns the proof in
+      # feature-delta.md (P-16).
+      MOTO_IMAGE: motoserver/moto:5.2.5@sha256:59a1965d845249b04def37a0e2565f9cc6c44543cb89b68e90f28f344b3b0d1a
+      RIE_VERSION: v1.38
+      RIE_SHA256: 65ade4687c22c308ff7acac6974d088d8aafaadea59e61985a083bad86f921d2
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -511,6 +525,7 @@ jobs:
           set -euo pipefail
           mv "$RUNNER_TEMP/ctx/openlore-indexer.cdx.json" "$RUNNER_TEMP/cargo.cdx.json"
           mv "$RUNNER_TEMP/ctx/openlore-indexer-lambda.cdx.json" "$RUNNER_TEMP/cargo-lambda.cdx.json"
+          mv "$RUNNER_TEMP/ctx/seed-index.duckdb" "$RUNNER_TEMP/seed-index.duckdb"
           docker buildx build --platform linux/arm64 --load \
             -f crates/openlore-indexer/Dockerfile \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
@@ -628,10 +643,40 @@ jobs:
           grep -q 'OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP' <<<"$out" || fail "refused for another reason: $out"
           echo "serve-smoke: passed"
 
-      - name: Scan (trivy, HIGH/CRITICAL blocks)
+      # Mounted by lambda-smoke, so it is on the runner and never in the image.
+      - name: Fetch the Runtime Interface Emulator (pinned)
+        shell: bash
+        run: |
+          set -euo pipefail
+          rie="$RUNNER_TEMP/aws-lambda-rie"
+          curl -fsSL -o "$rie" \
+            "https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/download/$RIE_VERSION/aws-lambda-rie-arm64"
+          echo "$RIE_SHA256  $rie" | sha256sum --check --strict
+          chmod 0555 "$rie"
+
+      # The Lambda root's only end-to-end run (DEVOPS lambda-smoke; waiver DWD-STZ-3): the
+      # ten assertions, on the image about to be pushed.
+      - name: lambda-smoke (the image as Lambda runs it)
+        timeout-minutes: 15
+        env:
+          RIE_BIN: ${{ runner.temp }}/aws-lambda-rie
+          SEED_INDEX: ${{ runner.temp }}/seed-index.duckdb
+        run: deploy/indexer/smoke/lambda-smoke.sh
+
+      - name: Secret check (no AWS credential in the image)
+        shell: bash
+        run: |
+          set -euo pipefail
+          env_rows=$(docker inspect --format '{{json .Config.Env}}' "$LOCAL_TAG" | jq -r '.[]')
+          rc=0
+          found=$(grep -E '^AWS_' <<<"$env_rows") || rc=$?
+          [ "$rc" = 1 ] || { echo "::error::the image names an AWS variable: ${found%%=*}"; exit 1; }
+
+      - name: Scan (trivy, HIGH/CRITICAL and secrets block)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.LOCAL_TAG }}
+          scanners: vuln,secret
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
@@ -695,6 +740,7 @@ jobs:
             echo "- digest: \`$IMAGE@$DIGEST\`"
             echo "- tags: \`sha-${GITHUB_SHA}\`, \`main\`"
             echo "- serve-smoke: passed"
+            echo "- lambda-smoke: passed"
             echo "- deploy (laptop): \`deploy/indexer/deploy.sh deploy ${GITHUB_SHA}\`"
             echo "- lambda deploy (laptop): \`deploy/indexer/deploy.sh lambda deploy ${GITHUB_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"

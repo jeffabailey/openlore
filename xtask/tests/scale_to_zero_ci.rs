@@ -1755,3 +1755,247 @@ fn the_msrv_job_checks_each_floor_on_its_own_toolchain_before_the_tests_run() {
         );
     }
 }
+
+const LAMBDA_SMOKE: &str = "deploy/indexer/smoke/lambda-smoke.sh";
+const RACE_SHIM: &str = "deploy/indexer/smoke/race_shim.py";
+const LAMBDA_SMOKE_STEP: &str = "- name: lambda-smoke (the image as Lambda runs it)";
+const RIE_STEP: &str = "- name: Fetch the Runtime Interface Emulator";
+const SECRET_STEP: &str = "- name: Secret check (no AWS credential in the image)";
+const SEED_STEP: &str = "- name: Seed index for lambda-smoke (one claim)";
+
+/// Where `needle` first stands in `text`.
+fn position(text: &str, needle: &str) -> usize {
+    text.find(needle).unwrap_or_else(|| panic!("no `{needle}`"))
+}
+
+/// The event of each `run_once <mode> '<event>'` in the smoke, in order.
+fn events_sent(smoke: &str, mode: &str) -> Vec<String> {
+    let opening = format!("run_once {mode} '");
+    smoke
+        .lines()
+        .filter_map(|line| line.trim().split_once(&opening))
+        .map(|(_, event)| event.strip_suffix('\'').expect("one quoted event"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The value after `name: ` on a row of `text`, read whole.
+fn pinned<'a>(text: &'a str, name: &str) -> &'a str {
+    let opening = format!("{name}: ");
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix(opening.as_str()))
+        .unwrap_or_else(|| panic!("no {name}"))
+}
+
+/// DEVOPS lambda-smoke. The binary's first real run: the first main-push CI run is
+/// the proof, and this holds the files to what that run must be. The assertions are
+/// read in order, because each one's bucket is the last one's.
+#[test]
+fn lambda_smoke_runs_every_assertion_as_lambda_runs_the_image() {
+    let smoke = read(LAMBDA_SMOKE);
+    for posture in [
+        "--user 993:990",
+        "--read-only",
+        "--tmpfs /tmp:size=512m",
+        "--memory 512m",
+        r#"-v "$RIE_BIN:/aws-lambda-rie:ro""#,
+        "--entrypoint /aws-lambda-rie",
+        "/usr/local/bin/openlore-indexer-lambda",
+        "deploy/tofu/environments/prod-indexer/lambda-env.json",
+        "AWS_ENDPOINT_URL=",
+        "AWS_REGION=",
+    ] {
+        assert!(smoke.contains(posture), "the smoke runs with `{posture}`");
+    }
+    let tofu_adds = [
+        "OPENLORE_INDEXER_LAMBDA_BUCKET=",
+        "OPENLORE_INDEXER_LAMBDA_INDEX_KEY=",
+        "OPENLORE_INDEXER_LAMBDA_LAST_PASS_KEY=",
+        "OPENLORE_INDEXER_LAMBDA_DID_PARAMETER=",
+        "OPENLORE_INDEXER_LAMBDA_PROBE_BASE_URL=",
+    ];
+    for setting in tofu_adds {
+        assert!(smoke.contains(setting), "lambda.tf adds {setting}");
+    }
+
+    let assertions: Vec<usize> = (1..=10)
+        .map(|number| position(&smoke, &format!(r#"assertion "{number}:"#)))
+        .collect();
+    assert!(
+        assertions.windows(2).all(|pair| pair[0] < pair[1]),
+        "the ten assertions, in order"
+    );
+    for (number, words) in [
+        (1, "WorkingDir"),
+        (3, "http://host.docker.internal:9"),
+        (6, "OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP=1"),
+        (8, "indexer.lambda.published"),
+        (9, "indexer.lambda.publish_conflict"),
+    ] {
+        let next = assertions.get(number).copied().unwrap_or(smoke.len());
+        assert!(
+            smoke[assertions[number - 1]..next].contains(words),
+            "assertion {number} reads {words}"
+        );
+    }
+
+    let ci = read(".github/workflows/ci.yml");
+    let job_body = job(&ci, "indexer-image");
+    let image = steps(job_body);
+    let serve_at = step_at(&image, "- name: serve-smoke (production posture)");
+    let smoke_at = step_at(&image, LAMBDA_SMOKE_STEP);
+    let scanned_at = step_at(&image, "aquasecurity/trivy-action");
+    assert!(serve_at < smoke_at && smoke_at < scanned_at);
+    assert!(
+        image[smoke_at].contains(LAMBDA_SMOKE) && image[smoke_at].contains("timeout-minutes:"),
+        "the step runs the smoke, on a time limit"
+    );
+    assert!(
+        !job_body.contains("continue-on-error"),
+        "the smoke blocks the push"
+    );
+    assert!(job_body.contains("lambda-smoke: passed"), "job summary");
+
+    let rie = image[step_at(&image, RIE_STEP)];
+    assert!(step_at(&image, RIE_STEP) < smoke_at);
+    assert!(rie.contains("releases/download/$RIE_VERSION/aws-lambda-rie-arm64"));
+    assert!(rie.contains("sha256sum --check --strict"));
+    let sha256 = pinned(job_body, "RIE_SHA256");
+    assert!(
+        sha256.len() == 64 && sha256.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "{sha256}"
+    );
+    assert!(pinned(job_body, "RIE_VERSION").starts_with("v1."));
+    assert!(
+        !read("crates/openlore-indexer/Dockerfile").contains("aws-lambda-rie"),
+        "mounted, never in the image"
+    );
+
+    assert_eq!(
+        pinned(job_body, "MOTO_IMAGE"),
+        pinned(job(&ci, "rio-object-store"), "image"),
+        "the same moto as the RIO suite"
+    );
+}
+
+/// D-STZ-44: anything richer than these is refused, so a sloppy event would prove a
+/// refusal and no pass.
+#[test]
+fn each_smoke_invoke_sends_exactly_the_event_its_function_takes() {
+    let smoke = read(LAMBDA_SMOKE);
+    assert_eq!(
+        events_sent(&smoke, "pass"),
+        [
+            "{}",
+            r#"{"mode":"no-publish"}"#,
+            "{}",
+            "{}",
+            r#"{"mdoe":"no-publish"}"#,
+        ],
+        "assertions 4, 7, 8, 9 and 10"
+    );
+    assert_eq!(events_sent(&smoke, "probe"), ["{}"], "assertion 5");
+}
+
+/// A release image has no test faults, so the stale version comes from the shim:
+/// armed before the invoke, and only on the index key, or the write probe trips it.
+#[test]
+fn the_stale_version_is_armed_before_the_invoke_on_the_index_key_only() {
+    let smoke = read(LAMBDA_SMOKE);
+    let ninth = &smoke[position(&smoke, r#"assertion "9:"#)..];
+    let armed = position(ninth, r#"arm_the_shim "/$BUCKET/$INDEX_KEY""#);
+    assert!(armed < position(ninth, "run_once pass '{}'"));
+    assert_eq!(smoke.matches("arm_the_shim \"").count(), 1, "armed once");
+
+    let shim = read(RACE_SHIM);
+    let imports: BTreeSet<&str> = shim
+        .lines()
+        .filter(|line| line.starts_with("import ") || line.starts_with("from "))
+        .map(|line| line.split_whitespace().nth(1).expect("a module"))
+        .collect();
+    assert_eq!(
+        imports,
+        BTreeSet::from([
+            "argparse",
+            "http.client",
+            "http.server",
+            "json",
+            "threading"
+        ]),
+        "Python's standard library, and nothing to install"
+    );
+    assert!(
+        shim.contains("self.command == \"PUT\""),
+        "a publish, no GET"
+    );
+    assert!(shim.contains("if_match"), "it logs conditional headers");
+    assert!(
+        shim.contains("if_none_match"),
+        "it logs conditional headers"
+    );
+}
+
+/// The seed goes round the shim, or the shim's log would hold it. Assertion 8 leaves
+/// the purged index current, and a pass from there changes nothing, so assertion 9
+/// needs the seed back.
+#[test]
+fn the_seed_goes_straight_to_moto_and_again_before_the_stale_version() {
+    let smoke = read(LAMBDA_SMOKE);
+    let seed = &smoke[position(&smoke, "seed_the_bucket() {")..];
+    let seed = &seed[..position(seed, "\n}\n")];
+    for row in [
+        "x-amz-meta-published-at:",
+        "x-amz-meta-pass-id:",
+        r#"--upload-file "$SEED_INDEX""#,
+        r#""$MOTO/$BUCKET/$INDEX_KEY""#,
+    ] {
+        assert!(seed.contains(row), "the seed has {row}");
+    }
+    assert!(!seed.contains("$SHIM"), "not through the shim");
+
+    let seeded_at: Vec<usize> = smoke
+        .match_indices("\nseed_the_bucket\n")
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(seeded_at.len(), 2, "seeded twice");
+    let between = |earlier: &str, later: &str, at: usize| {
+        position(&smoke, earlier) < at && at < position(&smoke, later)
+    };
+    assert!(between(
+        r#"assertion "6:"#,
+        r#"assertion "7:"#,
+        seeded_at[0]
+    ));
+    assert!(between(
+        r#"assertion "8:"#,
+        r#"assertion "9:"#,
+        seeded_at[1]
+    ));
+
+    let ci = read(".github/workflows/ci.yml");
+    let build = steps(job(&ci, "indexer-build"));
+    let seed_step = build[step_at(&build, SEED_STEP)];
+    assert!(seed_step.contains("cargo run --release -p adapter-index-store --example seed_index"));
+    assert!(step_at(&build, SEED_STEP) < step_at(&build, "actions/upload-artifact"));
+    let image = job(&ci, "indexer-image");
+    assert!(
+        image.contains(
+            r#"mv "$RUNNER_TEMP/ctx/seed-index.duckdb" "$RUNNER_TEMP/seed-index.duckdb""#
+        ),
+        "out of the build context, and so out of the image"
+    );
+}
+
+/// NFR-IXD-8, on the image. The file that becomes the Lambda environment has its own
+/// check in `scale_to_zero_architecture.rs`.
+#[test]
+fn the_image_shows_no_aws_credential_and_trivy_looks_for_secrets_too() {
+    let ci = read(".github/workflows/ci.yml");
+    let image = steps(job(&ci, "indexer-image"));
+    let secret_at = step_at(&image, SECRET_STEP);
+    let scanned_at = step_at(&image, "aquasecurity/trivy-action");
+    assert!(secret_at < scanned_at);
+    assert!(image[secret_at].contains("{{json .Config.Env}}"));
+    assert!(image[secret_at].contains("^AWS_"));
+    assert_eq!(pinned(image[scanned_at], "scanners"), "vuln,secret");
+}
