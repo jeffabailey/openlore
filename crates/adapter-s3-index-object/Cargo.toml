@@ -1,0 +1,34 @@
+[package]
+name = "adapter-s3-index-object"
+version = "0.0.1"
+edition.workspace = true
+# D-STZ-35: only the two Lambda crates need 1.94.1, for the AWS SDK. The workspace
+# stays at 1.91.
+rust-version = "1.94.1"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore index object EFFECT shell (ADR-090): IndexObjectReadPort and IndexObjectWritePort over S3, RepoDidListSourcePort over SSM. The only adapter that links aws-* crates."
+
+# RED scaffold (DISTILL 2026-10-27). DELIVER adds aws-config, aws-sdk-s3,
+# aws-sdk-ssm and aws-smithy-http-client (rustls-ring) with
+# `default-features = false` (D-STZ-36), together with the xtask rule
+# `aws_sdk_only_in_lambda_edge` (P-2).
+[dependencies]
+ports = { path = "../ports" }
+async-trait = "0.1.92"
+
+[dev-dependencies]
+# The real-I/O contract against moto (DEVOPS UD-5), gated on
+# OPENLORE_TEST_MOTO_ENDPOINT. reqwest only seeds the moto bucket and parameter.
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tempfile = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-webpki-roots"] }
+
+[[test]]
+name = "scale_to_zero_object_store_real_io"
+path = "../../tests/acceptance/scale_to_zero_object_store_real_io.rs"
+harness = true
+
+[lints]
+workspace = true

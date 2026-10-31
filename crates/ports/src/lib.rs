@@ -194,12 +194,22 @@ pub use identity_link_listing::{
 /// The DuckDB caps the indexer (B9) and the review app (B11) accept.
 pub mod duckdb_caps;
 mod identity_resolve;
+/// scale-to-zero-hosting (ADR-090): the published index object + fingerprint.
+mod index_object;
 mod index_query;
 mod index_store;
 mod indexed_claim;
 mod ingest_source;
 /// indexer-per-did-pds-fetch (DD-IPF-5): the shared transport policy.
 pub mod net_policy;
+/// scale-to-zero-hosting (ADR-090): the DID list source read on every pass.
+mod repo_did_list;
+
+pub use index_object::{
+    HeadOutcome, IndexFingerprint, IndexObjectError, IndexObjectReadPort, IndexObjectWritePort,
+    LastPass, ObjectVersion, PublishMetadata, PublishOutcome, WriteCondition,
+};
+pub use repo_did_list::{RepoDidListError, RepoDidListSourcePort};
 
 pub use identity_resolve::{
     IdentityLookupError, IdentityLookupPort, IdentityResolvePort, ResolveError, ResolvedIdentity,
@@ -220,7 +230,7 @@ pub use identity_resolve::{
 mod store_read;
 
 pub use index_query::{
-    IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw,
+    HealthBody, IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw,
 };
 pub use index_store::{
     IndexPurgePort, IndexReadPort, IndexStoreError, IndexStorePort, PurgeReport, NEAR_OBJECTS_CAP,

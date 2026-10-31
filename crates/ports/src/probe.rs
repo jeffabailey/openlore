@@ -183,6 +183,10 @@ pub enum ProbeRefusalReason {
     /// DID or fallback URL, an out-of-range bound, or the loopback test seam
     /// in a release build); `structured` names the variable and its value.
     IndexerConfigInvalid,
+    /// The object store accepted a conditional write it should have refused, so
+    /// the single-writer guarantee cannot be trusted (scale-to-zero-hosting
+    /// D-STZ-39).
+    IndexObjectWriteConditionIgnored,
 }
 
 // -----------------------------------------------------------------------------

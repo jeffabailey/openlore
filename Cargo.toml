@@ -50,6 +50,11 @@ members = [
     "crates/adapter-atproto-oauth",
     "crates/adapter-review-store",
     "crates/openlore-review-app",
+    # scale-to-zero-hosting (ADR-090) — the index object EFFECT shell (S3 + SSM)
+    # and the FOURTH composition root (search | pass | probe on Lambda).
+    # DISTILL 2026-10-27 RED scaffolds.
+    "crates/adapter-s3-index-object",
+    "crates/openlore-indexer-lambda",
     "crates/cli",
     "crates/test-support",
     "xtask",

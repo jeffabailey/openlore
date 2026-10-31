@@ -1,10 +1,10 @@
-# environments.yaml: scale-to-zero-hosting (DEVOPS, 2026-10-27)
+# environments.yaml: scale-to-zero-hosting (DEVOPS, 2026-10-27; revised 2026-10-30)
 # Consumed by DISTILL (Mandate 4, environmental realism). Design: feature-delta.md
 # "Wave: DEVOPS / [REF] Environment matrix" and "Coexistence matrix".
 
 target_environments:
   - name: local
-    description: "Developer laptop. cargo nextest over the pure decide module, the handlers with in-memory fakes of IndexObjectPort and RepoDidListSourcePort, dispatch and fingerprint. No AWS credentials, no network."
+    description: "Developer laptop. cargo nextest over the pure decide module, the handlers with in-memory fakes of IndexObjectReadPort, IndexObjectWritePort and RepoDidListSourcePort, dispatch and fingerprint. No AWS credentials, no network."
     platform: [macos, linux]
     preconditions:
       - "Rust stable per rust-toolchain.toml"
@@ -17,14 +17,24 @@ target_environments:
       - "push to main (trunk-based)"
       - "CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback in the msrv job (Cargo.lock is gitignored)"
 
+  - name: ci-rio-object-store
+    description: "CI job rio-object-store, on every push: the real adapter-s3-index-object against moto (RIO-1..9, D-STZ-47). cargo nextest run -p adapter-s3-index-object --run-ignored only, with OPENLORE_TEST_MOTO_ENDPOINT set. A skip fails the job."
+    platform: [linux]
+    preconditions:
+      - "service container motoserver/moto:5.2.5@sha256:59a1965d845249b04def37a0e2565f9cc6c44543cb89b68e90f28f344b3b0d1a"
+      - "moto 5.2.5 proven to honour If-Match and If-None-Match on PutObject (feature-delta.md, CI/CD outline)"
+      - "indexer-build needs this job, so no digest is signed without it"
+
   - name: ci-image-lambda
-    description: "The single release image run as Lambda runs it: Runtime Interface Emulator mounted at run time, arbitrary uid (not 65532), read-only root, 512 MB /tmp tmpfs, 512 MB memory, moto standing in for S3 and SSM via AWS_ENDPOINT_URL, the production Lambda env from lambda-env.json."
+    description: "The single release image run as Lambda runs it: Runtime Interface Emulator mounted at run time, arbitrary uid (not 65532), read-only root, 512 MB /tmp tmpfs, 512 MB memory, moto standing in for S3 and SSM via AWS_ENDPOINT_URL through a small race shim, the production Lambda env from lambda-env.json."
     platform: [linux-arm64]
     preconditions:
       - "main push; image built from indexer-build's two binaries"
       - "aws-lambda-rie release pinned by version and sha256, never copied into the image"
-      - "moto server pinned (image digest or hashed pip install)"
-      - "empty bucket and one SSM parameter holding did:web:smoke.invalid"
+      - "moto 5.2.5 by image digest, the same pin as ci-rio-object-store"
+      - "empty bucket and one SSM parameter holding did:web:smoke.invalid for assertions 2-6"
+      - "seed step between assertions 6 and 7: the harness writes the one-claim index to moto directly, with the seeded author left off the DID list; repeated before assertion 9, because assertion 8 leaves the purged index as current"
+      - "every normal invoke sends {}, and the no-publish invoke sends exactly {\"mode\":\"no-publish\"}"
 
   - name: ci-image-self-host
     description: "The existing serve-smoke, unchanged, on the same image now built with WORKDIR /."
@@ -37,16 +47,18 @@ target_environments:
     platform: [aws-lambda-arm64]
     preconditions:
       - "prod-indexer tofu root applied (phase = trial); ACM validated through the manual Cloudflare record"
-      - "first deploy.sh lambda deploy done; first scheduled pass exit 0"
-      - "alarms test-fired, then lambda_alarms_enabled = true"
+      - "schedules created DISABLED; first deploy.sh lambda deploy done (LAMBDA_ACCEPT_NOT_LIVE=1, no pass record yet); only then schedules_enabled = true; first scheduled pass exit 0"
+      - "alarms test-fired (A1-T..A3-T, A4, A5, A8-A11, errors, throttles), then lambda_alarms_enabled = true"
+      - "s3:if-match and s3:if-none-match simulated on the applied policy (P-15); empty-bucket 404 confirmed (P-17)"
+      - "lambda status shows the A8 and A9 metrics seen, and A11's on its candidate series after test-alarm a11 --metric; the :live dimension is checked for shape only, because a healthy live search never has a 5xx; A11 blocks the trial until then"
       - "host indexer live and reading the same SSM DID list"
 
   - name: prod-cutover-soak
-    description: "Cloudflare exact CNAME index.openlore -> CloudFront (DNS-only, TTL 60). Lambda logs to /openlore/prod/indexer; A1-A3 cover it; trial alarms removed. Host indexer on standby (timers and container stopped, files kept) as the rollback target."
+    description: "Cloudflare exact CNAME index.openlore -> CloudFront (DNS-only, TTL 60). Lambda logs to /openlore/prod/indexer; A1-A3 cover it; trial alarms removed. Host indexer on standby (timers and container stopped, files kept) as the rollback target. The probe stays on the CloudFront domain."
     platform: [aws-lambda-arm64]
     preconditions:
-      - "7 green trial days (definition in feature-delta.md, cut-over runbook)"
-      - "lambda measure passed: 5 cold < 3 s, 20 warm < 200 ms, client side"
+      - "7 consecutive green trial days; a red day resets the count (definition in feature-delta.md, cut-over runbook)"
+      - "lambda measure passed for this digest from the operator's laptop: 5 cold < 3 s, 20 warm < 200 ms, client side, reserved concurrency search 3 and pass 1; another vantage point needs a recorded user waiver; checked at cut-over step 0"
       - "rollback drill N -> N-1 timed <= 2 min"
       - "Caddy certificate for index.openlore valid for >= 14 more days"
       - "tofu phase = cutover applied and lambda republish run"
@@ -75,7 +87,7 @@ coexistence_matrix:
     notes: "Only the SNS topic is shared, read through remote state. The new root never plans the PDS module."
   - tool: "Review app on the same host"
     must_not_break: true
-    notes: "Host standby and decommission touch indexer units and the index. Caddy site only."
+    notes: "Host standby and decommission touch indexer units and the index. Caddy site only. The PDS _health poller runs through these steps (KPI-IXD-6); no lambda verb calls a host path."
   - tool: "Prod tofu root (deploy/tofu/environments/prod)"
     must_not_break: true
     notes: "Unchanged until decommission; then removed blocks (forget, not delete) so check-plan.sh passes."
@@ -111,13 +123,16 @@ platform_coverage:
 deployment_assumptions:
   - "Only CI-green main commits deploy, by digest, after cosign verification against GHCR; the same digest is copied to ECR with crane and its digest re-checked."
   - "A digest without the Lambda root (WorkingDir / and the lambda-root label) is refused."
+  - "ECR keeps the newest 10 sha- images. A copy that would evict a digest referenced by live, candidate, $LATEST or a prev= record is refused, and a copy from a deploy that fails before publish is deleted when nothing references it."
+  - "Both schedules send input {}, are DISABLED until after the first flip, and never run on unchecked code."
   - "lambda deploy is idempotent: a digest already in ECR is not copied again; publish-version with an unchanged $LATEST returns the existing version."
-  - "Rollback is an alias flip to the prev= version and refuses a target whose image left ECR."
-  - "Tofu ignores image_uri, alias versions and search reserved concurrency; deploy.sh owns them."
-  - "A tofu change to versioned function configuration reaches live only through lambda republish."
+  - "Rollback is an alias flip to the prev= version recorded on all three aliases and refuses a target whose image left ECR. republish never falls back to prev=."
+  - "Tofu ignores image_uri, alias versions, search reserved concurrency and the distribution's enabled value; deploy.sh owns them."
+  - "A tofu change to versioned function configuration reaches live only through lambda republish, which first sets $LATEST to the digest read from the live version and refuses if it cannot read it."
+  - "The pre-flip pass gate is no-publish: it writes nothing to the bucket, and the first real publish comes from a scheduled pass after the flip."
   - "Exactly one writer of index/index.duckdb: pass reserved concurrency 1 plus conditional PUT (If-Match / If-None-Match), backed by IAM conditions."
   - "Pass and probe have 0 async retries; the pass returns success for exit 0/2/3."
   - "The index bucket is never deleted by tofu (prevent_destroy and check-plan.sh); reset-index leaves versions for 7 days (at least 5)."
   - "No secrets in the image or the Lambda environment; the budget email is read from SSM at plan time and kept in encrypted state."
   - "Cloudflare records (ACM validation, the cut-over CNAME) are created and deleted by hand."
-  - "The host indexer and Lambda never write pass_summary or indexer.host.health lines into the same log group at the same time."
+  - "The host indexer and Lambda never write pass_summary or indexer.host.health lines into the same log group at the same time: cut-over step 1 (standby --timers) stops both host timers before step 2 repoints Lambda's logs."

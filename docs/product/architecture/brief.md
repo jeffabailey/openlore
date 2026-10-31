@@ -46,7 +46,7 @@ Workspace layout — all crates live under `/Users/jeffbailey/Projects/foss/lead
 | `crates/adapter-index-query` | effect      | CLI-side `IndexQueryPort` XRPC client (bounded timeouts); treats indexer-unreachable as a SOFT non-fatal outcome (graceful degradation) | slice-05     |
 | `crates/openlore-indexer`    | driver (lib + binary) | The SECOND composition root (`serve`/`ingest`/`stats`, plus `trigger` per ADR-080); self-hostable network service; signing-incapable; holds no local store; AWS-free. Split into lib + bin by scale-to-zero-hosting (ADR-090) so the Lambda root reuses its wiring, pass and handlers. The bin's behaviour is unchanged. | slice-05     |
 | `crates/openlore-indexer-lambda` | driver (binary) | The FOURTH composition root (indexer family, ADR-090): modes `search` (lambda_http), `pass` and `probe` (lambda_runtime) on AWS Lambda; pure `decide` module (freshness, publish, liveness). Same capability boundary as the indexer. (designed, not built) | scale-to-zero-hosting |
-| `crates/adapter-s3-index-object` | effect   | `IndexObjectPort` over S3 (one index object: head, fetch, conditional publish, last-pass record) and `RepoDidListSourcePort` over SSM. The only adapter linking the AWS SDK. (designed, not built) | scale-to-zero-hosting |
+| `crates/adapter-s3-index-object` | effect   | `IndexObjectReadPort` (head, fetch, read the pass record) and `IndexObjectWritePort` (conditional publish, write the pass record) over S3, on one index object, and `RepoDidListSourcePort` over SSM. The only adapter linking the AWS SDK. (designed, not built) | scale-to-zero-hosting |
 | `crates/review-domain`       | pure core   | Review/consent context: ownership verdict, suggestion lifecycle, reconcile, Publish/Retract/SharePost **plans**, budget arithmetic, maud views (ADR-072/076) | bluesky-claim-review-app |
 | `crates/adapter-atproto-oauth` | effect    | `OAuthPort` + create-only `UserRepoWritePort` over `atrium-oauth` (confidential client, DPoP) (ADR-073) | bluesky-claim-review-app |
 | `crates/adapter-review-store`| effect      | Owner-scoped private state + AEAD secret store over a SEPARATE `review-app.duckdb` (ADR-074) | bluesky-claim-review-app |
@@ -81,13 +81,16 @@ Shipped slice extensions:
     - pass: every 15 min, reserved concurrency 1, the only writer;
     - probe: every 5 min, feeds A3.
   - **Index**: one S3 object, `index/index.duckdb`, versioned. The pass publishes with `If-Match`
-    only when the index fingerprint changed, and writes `last-pass.json` on every good pass.
+    only when the index fingerprint changed, and writes `last-pass.json` on every pass that writes a
+    `pass_summary`.
     Search instances fetch the object at init and recheck the ETag at most every 60 s.
   - **Shared bounds**: a transport-free `dispatch` in `adapter-xrpc-query-server` serves both hyper
     `serve` and Lambda, so the bounds are identical. `/healthz` `last_successful_pass_at` = index
     published at.
-  - **Abuse guard**: a global cap replaces per-client 429s on Lambda: reserved concurrency 3, A4
-    above 3,000 calls per 5 min, Budgets at $2 and $10, kill switch `deploy.sh lambda stop`.
+  - **Abuse guard**: capped in rate, alerted in spend. A global cap replaces per-client 429s on
+    Lambda: reserved concurrency 3, A4 above 3,000 calls per 5 min, A8 above 1,900 calls per hour, A9
+    above 13,000 CloudFront requests per hour, one tag-filtered budget at $2 and $10, and the human
+    kill switch `deploy.sh lambda stop`, which also disables the distribution.
   - **Self-host**: `openlore-indexer` becomes lib + bin with unchanged behaviour. It stays AWS-free
     (xtask `aws_sdk_only_in_lambda_edge`). The two Lambda crates set `rust-version` 1.94.1 for the AWS SDK; the workspace stays 1.91.
   - **Docs**: `docs/feature/scale-to-zero-hosting/feature-delta.md` and `design/wave-decisions.md`.
@@ -935,11 +938,15 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
   - `reload_needed` (ETag cases: none, same, changed, head failed);
   - `publish_decision` (exit 0/2/3 × fingerprint same or changed × store usable or not);
   - `not_live`;
-  - `dids_copy_usable`.
+  - `dids_copy_usable`;
+  - `final_exit` (first failure wins; publish failure, then record failure, then the pass exit);
+  - `pass_mode` (`{}` is a normal pass, `{"mode":"no-publish"}` is no-publish, anything else is
+    refused as a function error).
 
   Also `IndexFingerprint` equality under a re-upsert of the same claim.
-- **Doubles**: a fake `IndexObjectPort` (ETag versions, 404, 412 on a stale `If-Match`, transient
-  errors); a fake `RepoDidListSourcePort` (ok, malformed, failure); the existing `FakeIngestSource`
+- **Doubles**: fakes of `IndexObjectReadPort` and `IndexObjectWritePort` (ETag versions, 404, 412 on
+  a stale `If-Match`, transient errors); a write port that fails the test on any call, for the
+  read-only modes and no-publish; a fake `RepoDidListSourcePort` (ok, malformed, failure); the existing `FakeIngestSource`
   and fake PLC; a real DuckDB file in `/tmp`.
 - **Must-cover behaviors**:
   - Bounds are identical on both transports: 8 KB ok, 9 KB 413, 513 B value 400, `createRecord`
@@ -949,9 +956,10 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
     still answers from the current copy.
   - A missing object gives an empty index, with `/healthz` 200 and `null`.
   - An S3 failure at init gives `health.startup.refused`.
-  - Exactly one `pass_summary` per pass.
+  - Exactly one `pass_summary` per pass, after the publish and the record, with the final exit.
+  - A no-publish run writes nothing to the bucket and echoes `mode`.
   - No publish when nothing changed; publish on change for exit 0/2/3 with a usable store; never
-    publish on an unusable store; a 412 gives `publish_conflict` and exit 2.
+    publish on an unusable store; a 412 gives `publish_conflict` and exit 2 inside the one summary.
   - A DID edit is picked up on the next pass; an SSM failure on a cold pass refuses it (exit 2).
   - The probe emits `not_live = 1` for each cause.
   - The self-host `serve` behaves exactly as before (the existing suites stay green).
@@ -963,22 +971,49 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
 - **Lib split first.** `openlore-indexer` gains `src/lib.rs`, and `main.rs` stays thin. Change
   `health_handler` to take a published-at reader closure. Self-host passes the runner's
   `StatusReader`, so its behaviour is unchanged.
+  - Expose the `in_serve_pass` path, or an extracted equivalent, with the summary split out. Do not
+    use `run_pass`: it lacks the list reload, the purge, the panic catch and the test faults.
+  - Move `PassLabel` and the purge contract out of `pass_runner` to a neutral module, and move the
+    `index_purge_only_in_pass_runner` rule with them.
+  - In the same step, drop `cli`'s `openlore-indexer` dev-dependency and use build-before-run. Dev
+    edges stay in the rule. Add the xtask test.
 - **Extract `dispatch`.** In `adapter-xrpc-query-server`, extract `dispatch` from the hyper
   `serve`. The rate limit and connection cap stay in the hyper path only. Do not copy route or
   bound logic into the Lambda root.
-- **Pure `decide` module.** Freshness, publish and liveness decisions are pure functions that take
-  `now`. The handlers only read, call and write.
+- **Pure `decide` module.** Freshness, publish, final-exit, pass-mode, liveness and served-index
+  decisions are pure functions that take `now` and outcomes as arguments. The handlers only read, call and write.
+- **Two object ports.** `IndexObjectReadPort` (`head`, `fetch_to`, `get_last_pass`) and
+  `IndexObjectWritePort` (`publish_if_match`, `put_last_pass`). Search and probe get read only, and
+  `Driven` is per-function. Extend `SEARCH_HANDLER_WRITE_TOKENS`.
 - **Search mode.** Hold the index in `RwLock<Arc<..>>` (std only, no new dependency). Download a
-  reload to a new path, open it with `open_capped`, swap, then delete the old file.
+  reload to a new path, open it with `open_capped`, swap, then delete the old file. The `HEAD` has a
+  1 s timeout and the reload 3 s; when either fires, keep the current copy and answer.
 - **AWS SDK.** Use `default-features = false` with `aws-smithy-http-client` `rustls-ring` (no
   aws-lc, no openssl). Only `adapter-s3-index-object` and the Lambda root may link `aws-*` or
   `lambda_*`. Add the xtask rule and extend the indexer rules to the new root.
 - **Pass mode.**
-  - Pass deadline 780 s.
+  - Pass deadline 780 s from handler entry.
+  - Order: pass exit, publish, `last-pass.json`, then the one summary with the exit from
+    `decide::final_exit`. The local post-pass steps, the publish, the record and the summary fit the
+    60 s margin. Measure the local steps at the 140 MB ceiling.
+  - New `PassFailure` tokens: `starting_index_unusable`, `publish_conflict`, `publish_failed`,
+    `pass_record_failed`. A panic is exit 2 and the invocation succeeds.
   - Verify the end-of-pass `CHECKPOINT` leaves no WAL before upload.
   - Conditional `PutObject` with `If-Match` or `If-None-Match: *`.
   - Metadata `published-at` and `pass-id`.
   - Log `indexer.lambda.published {index_bytes, pass_id}` for A5.
+  - The record carries `index_published_at`: this pass's publish, otherwise the object seen at the
+    start of the pass, otherwise `null`.
+  - The pass event is strict: `{}` or `{"mode":"no-publish"}`, and anything else is a function error
+    before any work. The no-publish arm is `run_no_publish` in `no_publish.rs` and takes the read
+    port only (D-STZ-44).
+  - Every AWS call sets an operation timeout and `max_attempts = 1` (feature delta § Timeouts). The
+    write-probe key is a constant in the adapter. Object-port probes stay sync; call them through
+    `spawn_blocking`.
+- **Probe mode.** Run the canned search, then `/healthz`. Compare the served value with the record
+  through `decide::served_index_stale` and emit `indexer.lambda.served_index_stale`. `not_live` does
+  not change. Refuse an event that is not a JSON object: a function error, with no calls.
+- **Fingerprint.** One SQL literal that names `author_did`. No allowlist entry is needed.
 - **Image.** `WORKDIR /`, both binaries in one image. The host `serve-smoke` must stay green.
 - **MSRV.** Workspace stays 1.91; only `openlore-indexer-lambda` and `adapter-s3-index-object` set `rust-version = "1.94.1"`. Run `cargo deny check` after adding the crates.
 
@@ -1314,7 +1349,7 @@ app).
   `openlore/indexer/prod.tfstate`, laptop apply). It reads the SNS topic and the indexer log group
   from the prod root's outputs.
 - **Runtime**: Lambda arm64, three functions from one cosign-signed image digest that `deploy.sh`
-  copies from GHCR into ECR (`openlore-indexer`, immutable tags, last 5 kept):
+  copies from GHCR into ECR (`openlore-indexer`, immutable tags, last 10 kept):
 
   | Function | Memory | Reserved concurrency | Trigger |
   |---|---|---|---|
@@ -1325,16 +1360,27 @@ app).
 - **Data**: a versioned S3 bucket holds `index/index.duckdb` (one writer, conditional PUT, publish on
   change) and `index/last-pass.json`. The DID list is still the SSM String
   `/openlore/prod/indexer/repo-dids`, read on every pass.
-- **Edge**: CloudFront (ACM us-east-1, no OAC) with a CloudFront Function 404 default. DNS is a
-  manual Cloudflare exact CNAME `index.openlore` → CloudFront, DNS-only, TTL 60.
+- **Edge**: CloudFront (ACM us-east-1, no OAC) with three all-method behaviors and one viewer-request
+  CloudFront Function that allows the two routes and answers 404 otherwise. DNS is a manual
+  Cloudflare exact CNAME `index.openlore` → CloudFront, DNS-only, TTL 60.
+- **Credentials**: NFR-IXD-8 is superseded for the indexer on Lambda: short-lived role credentials,
+  no secret in the image, read-only roles on the read-only functions.
 - **Alarms**: A1-A3 reused (A3 is fed by the probe). A4: more than 3,000 search calls per 5 min.
-  A5: index > 100 MB. Budgets alert at $2 and $10. Kill switch: `deploy.sh lambda stop`.
-- **Deploy**: CI green, cosign verify, `crane copy`, publish versions, post-check the `candidate`
-  alias, flip `live`. Rollback flips the alias back.
+  A5: index > 100 MB. A6: errors. A7: throttles. A8: more than 1,900 search calls per hour. A9: more
+  than 13,000 CloudFront requests per hour. A10: 3 failed freshness checks or stale probe readings in
+  15 min. A11: search 5xx in 2 of 2 periods. One tag-filtered budget alerts at $2 and $10.
+- **Spend**: capped in rate, alerted in spend. The kill switch, `deploy.sh lambda stop`, sets search
+  concurrency to 0 and disables the distribution. A human runs it.
+- **Deploy**: the DEVOPS gate order: CI green, cosign verify, `crane copy`, publish versions,
+  post-check the `candidate` alias, a no-publish pass gate, flip `live`. The first real publish
+  comes from the scheduled pass after the flip. Rollback flips the alias back. `lambda republish`
+  follows any tofu change to versioned configuration.
 - **Trial**: the host indexer runs in parallel, and Lambda logs to `/openlore/prod/indexer-lambda`.
-  Cut-over is the CNAME. Decommission after 7 green days.
-- **Cost**: about $0.36/month (about $0.30 with the Lambda free tier). The host bill is unchanged
-  until the host is retired.
+  Cut-over is the CNAME, and the host goes to standby. Soak rollback takes about 10 min.
+  Decommission after 7 green soak days.
+- **Cost**: a recurring add of about $0.72/month on the bill, about $1.60 at list with no free tier.
+  A month just under A8 and A9 is about $1.93, and saturation about $0.34-0.38/hour. The host bill is unchanged after decommission, because no downsizing is decided; the
+  offset is 128 MB of host memory.
 
 ```mermaid
 C4Container

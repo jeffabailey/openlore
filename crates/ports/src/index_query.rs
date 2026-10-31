@@ -120,6 +120,17 @@ pub enum IndexQueryError {
 // IndexQueryPort — CLI → indexer transport (ASYNC; graceful-degrading)
 // -----------------------------------------------------------------------------
 
+/// The body of the index's public health answer (`GET /healthz`, 200).
+///
+/// `last_successful_pass_at` is the wire name. On Lambda it means "index
+/// published at" (D-STZ-12); `None` means nothing is published yet. It is kept
+/// as the text the index sent: whoever compares it parses it (D-STZ-48).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HealthBody {
+    pub status: String,
+    pub last_successful_pass_at: Option<String>,
+}
+
 /// The CLI-side index-query port: query the self-hosted indexer over HTTP/XRPC
 /// (ADR-027). ASYNC (network I/O) so `#[async_trait]` is permitted exactly as
 /// for `PdsPort`/`GithubPort` (ADR-004).
@@ -144,4 +155,9 @@ pub trait IndexQueryPort: Send + Sync {
         value: &str,
         cid: Option<&Cid>,
     ) -> Result<NetworkSearchResultRaw, IndexQueryError>;
+
+    /// `GET /healthz` with the same bounded timeouts as `search` (D-STZ-37).
+    /// A 200 with a valid body is `Ok`; any other answer is an error, because
+    /// the probe counts all of them as a failed health check.
+    async fn health(&self) -> Result<HealthBody, IndexQueryError>;
 }

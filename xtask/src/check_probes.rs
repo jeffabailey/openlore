@@ -101,11 +101,19 @@ const PORT_TRAIT_SUFFIX: &str = "Port";
 ///   check_plc_endpoint_ready`), so the body classifies `Accept` and no longer
 ///   needs the allowlist. The REAL end-to-end z6Mk resolve+decode is proven by
 ///   AV-4. (The SAME adapter's `IdentityPort::probe` was always a REAL body.)
+///
+/// scale-to-zero-hosting (DISTILL 2026-10-27) RED scaffolds; the REAL probes
+/// land with the AWS SDK in DELIVER:
+/// - `S3IndexObjectAdapter`  (adapter-s3-index-object): `IndexObjectReadPort::probe`
+///   and `IndexObjectWritePort::probe`.
+/// - `SsmRepoDidListAdapter` (adapter-s3-index-object): `RepoDidListSourcePort::probe`.
 const BOOTSTRAP_STUB_ALLOWLIST: &[&str] = &[
     "DuckDbPeerStorageAdapter",
     "AtProtoIngestAdapter",
     "HttpIndexQueryAdapter",
     "IndexStoreAdapter",
+    "S3IndexObjectAdapter",
+    "SsmRepoDidListAdapter",
 ];
 
 /// Result of classifying one `probe()` body. The variants carry the

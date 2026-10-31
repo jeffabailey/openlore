@@ -1,6 +1,7 @@
 # ADR-081: The DID List Comes From a Host-Rendered File That Each Pass Reads, With the Last Good Copy Kept by the Host
 
 - **Status**: Accepted (2026-10-07) — implemented, not yet deployed; see `docs/evolution/indexer-deployment-evolution.md` (proposed 2026-10-06)
+- **Amended 2026-10-30 (scale-to-zero-hosting, ADR-090; user decision)**: NFR-IXD-8 is superseded for the indexer on Lambda, so "The container reads SSM itself", rejected below, is what the Lambda pass does. The reason: it holds short-lived role credentials, no secret is in the image, and it runs on a schedule with no public surface. Search holds a read-only role and never reads SSM. The pass renders the parameter to `/tmp/config/repo-dids` with a rename, and each pass still reads that file. The list rules here are unchanged: validation, a malformed list refused with exit 2, and a last good copy on read failure (up to 2 h on a warm instance). On the host and for self-hosters this ADR and NFR-IXD-8 stand as written.
 - **Date**: 2026-10-06
 - **Deciders**: Morgan (nw-solution-architect); DEVOPS owns the host script
 - **Feature**: indexer-deployment (DESIGN). Resolves OQ-IXD-3.

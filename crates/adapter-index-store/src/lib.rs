@@ -25,8 +25,8 @@
 //! attributed rows this adapter returns (the dependency on `appview-domain` is
 //! the shared boundary-value home, not a behavioral coupling).
 //
-// SCAFFOLD: false  (step 03-01: live DDL + query bodies for the AV-1 walking
-// skeleton; the broader query surface is exercised by AV-2..7 in 03-02..03-07).
+// The bodies are live, except `fingerprint`, which carries its own scaffold
+// marker until DELIVER.
 
 #![allow(dead_code)]
 #![forbid(unsafe_code)]
@@ -181,6 +181,16 @@ impl IndexStoreAdapter {
             panic!("test fault: the index store's connection mutex is poisoned");
         })
         .join();
+    }
+
+    /// The store's fingerprint (scale-to-zero-hosting D-STZ-8): claim count,
+    /// distinct author count, XOR of a 64-bit hash of every CID. One read-only
+    /// query; it returns no claim data.
+    //
+    // SCAFFOLD: true  (DISTILL 2026-10-27; DELIVER implements; contract in
+    // `tests/fingerprint_contract.rs`)
+    pub fn fingerprint(&self) -> Result<ports::IndexFingerprint, IndexStoreError> {
+        panic!("Not yet implemented -- RED scaffold")
     }
 
     /// What DuckDB reports for the capped settings now.

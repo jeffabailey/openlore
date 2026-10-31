@@ -7,6 +7,7 @@
 - **Amends**: ADR-078 §1 (amendment recorded there), and the ADR-024/025 assumption that the index
   store has no delete path
 - **Builds on**: ADR-023 (the index is a re-buildable cache), ADR-081 (DID list per pass)
+- **Amended 2026-10-30 by ADR-090 (scale-to-zero-hosting, D-STZ-42)**: the purge contract (`RunnerPurge`, `PurgeStep`, `PurgedAuthor`, `purge_unlisted_authors`) moves out of `pass_runner` into a neutral `openlore-indexer` lib module, proposed name `pass_contract`, so the Lambda pass can reuse it without depending on `pass_runner`. Read "the pass runner" in §4 as that module's holder: the in-`serve` pass and the Lambda pass. The check-arch rule `index_purge_only_in_pass_runner` keeps its name, its allowed file becomes the new module, and it also scans `openlore-indexer-lambda/src`. On Lambda the purge changes only the `/tmp` working copy and reaches S3 only through a publish. The search handler, health handler and probe still never hold `IndexPurgePort`. The rest of this ADR is unchanged. Not built yet.
 
 ## Context
 

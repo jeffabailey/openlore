@@ -1,0 +1,74 @@
+[package]
+name = "openlore-indexer-lambda"
+version = "0.0.1"
+edition.workspace = true
+# D-STZ-35: only the two Lambda crates need 1.94.1, for the AWS SDK. The workspace
+# stays at 1.91.
+rust-version = "1.94.1"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore index on AWS Lambda: the FOURTH composition root (ADR-090). search | pass | probe from one signed image. Signing-incapable; holds no local claim store."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "openlore-indexer-lambda"
+path = "src/main.rs"
+
+# RED scaffold (DISTILL 2026-10-27). DELIVER adds openlore-indexer (lib split,
+# D-STZ-2), adapter-xrpc-query-server (dispatch), adapter-index-store,
+# adapter-index-query (probe), adapter-s3-index-object, lambda_http,
+# lambda_runtime and aws-config, and adds this crate to check-arch's
+# COMPOSITION_ROOTS together with `indexer_lambda_holds_no_signing_or_local_store`.
+[dependencies]
+ports = { path = "../ports" }
+appview-domain = { path = "../appview-domain" }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+
+# The acceptance harness drives the entry points in-process with the external
+# ports faked; the PDSes and PLC are the shared FakeAtprotoNetwork. None of
+# these reach an adapter-* crate (check-arch I-3).
+[dev-dependencies]
+openlore-test-support = { path = "../test-support" }
+claim-domain = { path = "../claim-domain" }
+async-trait = "0.1.92"
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tempfile = { workspace = true }
+proptest = { workspace = true }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+
+[[test]]
+name = "scale_to_zero_walking_skeleton"
+path = "../../tests/acceptance/scale_to_zero_walking_skeleton.rs"
+harness = true
+
+[[test]]
+name = "scale_to_zero_search"
+path = "../../tests/acceptance/scale_to_zero_search.rs"
+harness = true
+
+[[test]]
+name = "scale_to_zero_pass"
+path = "../../tests/acceptance/scale_to_zero_pass.rs"
+harness = true
+
+[[test]]
+name = "scale_to_zero_probe"
+path = "../../tests/acceptance/scale_to_zero_probe.rs"
+harness = true
+
+[[test]]
+name = "scale_to_zero_harness"
+path = "../../tests/acceptance/scale_to_zero_harness.rs"
+harness = true
+
+[[test]]
+name = "scale_to_zero_core"
+path = "../../tests/acceptance/scale_to_zero_core.rs"
+harness = true
+
+[lints]
+workspace = true

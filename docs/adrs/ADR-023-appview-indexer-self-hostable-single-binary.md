@@ -1,6 +1,7 @@
-# ADR-023: AppView Indexer = Self-Hostable Single Binary (`openlore-indexer`), Signing-Incapable by Construction
+# ADR-023: AppView Indexer = Self-Hostable Single Binary (`openlore-indexer`), Signing-Incapable by Composition (See the 2026-10-30 Amendment)
 
 - **Status**: Proposed
+- **Amended 2026-10-30 (scale-to-zero-hosting, ADR-090; user decision)**: the self-host artifact is the `openlore-indexer` **binary**. The image also carries the Lambda binary, `openlore-indexer-lambda`, a fourth composition root, so one signed digest covers every runtime. The self-host binary stays AWS-free and behaves as before, and the boundary below applies to the Lambda root too. "Signing-incapable" means the indexer family holds no signing capability and no path to publish a signature: `adapter-atproto-did` does link signing code into both binaries, but the roots build it only through `resolve_only()`, which holds an all-zero placeholder key, and hold it only behind the verify-only port. They hold no real key. "By construction" in this ADR means by composition, not by linkage. The capability rules check this with the dependency graph and a source scan over `crates/openlore-indexer/src` and `crates/openlore-indexer-lambda/src` (D-STZ-50). See ADR-090.
 - **Date**: 2026-05-28
 - **Deciders**: Morgan (nw-solution-architect), per WD-100..WD-110 locks from Luna (nw-product-owner) for openlore-appview-search (slice-05)
 - **Feature**: openlore-appview-search (slice-05)

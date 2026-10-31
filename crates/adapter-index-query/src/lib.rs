@@ -21,7 +21,8 @@
 //! anti-merging-across-the-transport contract (I-AV-2), a response row dropping
 //! `author_did` is a `BadResponse` (the wire MUST carry attribution).
 //
-// SCAFFOLD: false  (step 04-01: live B1 transport for the `--object` walking skeleton)
+// The transport is live, except `health`, which carries its own scaffold marker
+// until DELIVER.
 
 #![forbid(unsafe_code)]
 
@@ -33,7 +34,7 @@ use lexicon::{
     SearchResultDto, SEARCH_CLAIMS_NSID,
 };
 use ports::{
-    IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw,
+    HealthBody, IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw,
     PeerClaimProvenance, ProbeOutcome, ProbeRefusalReason, SearchDimension,
 };
 
@@ -190,6 +191,12 @@ impl IndexQueryPort for HttpIndexQueryAdapter {
                 })?;
 
         decode_response(body)
+    }
+
+    // SCAFFOLD: true  (DISTILL 2026-10-30, D-STZ-37; DELIVER implements. Contract:
+    // PR-1, PR-3, PR-E1 in tests/acceptance/scale_to_zero_probe.rs)
+    async fn health(&self) -> Result<HealthBody, IndexQueryError> {
+        panic!("Not yet implemented -- RED scaffold")
     }
 }
 

@@ -18,7 +18,7 @@
 #   notes:                  caveats, deferrals, links
 
 schema_version: 1
-last_updated: 2026-10-27  # +KPI-IXD-1..6, KPI-IXD-G1 (indexer-deployment, first registration) and KPI-STZ-G1..G6 (scale-to-zero-hosting DEVOPS instrumentation). Earlier: +KPI-RRA-1..7 (review-app-repos-and-accounts, KPI-RRA-6 deferred). Earlier: +KPI-GDL-1..4, +KPI-OOS-1..4 (registered at DESIGN acceptance). Earlier: +KPI-CPI-1..5, +KPI-HB-1..3 (registered after finalize). Earlier: serverless-philosophy-federation DEVOPS: +KPI-SF-1..5 (KPI-SF-1 = round-trip CID integrity North Star, CI contract test; telemetry-free per sovereignty). slice-08 realized KPI-AV-1/2/3/4/5 + KPI-VIEW-2 + KPI-HX-G1/2/3 on /search (no new KPI)
+last_updated: 2026-10-30  # scale-to-zero-hosting DISTILL revision: @kpi scenario links only (notes). Earlier: scale-to-zero-hosting DEVOPS revision: A8-A11, final cost figures, manual KPI-IXD-1/2, KPI-IXD-6 gap definition. Earlier: scale-to-zero-hosting DISTILL linked its @kpi scenarios (notes only). Earlier: +KPI-IXD-1..6, KPI-IXD-G1 (indexer-deployment, first registration) and KPI-STZ-G1..G6 (scale-to-zero-hosting DEVOPS instrumentation). Earlier: +KPI-RRA-1..7 (review-app-repos-and-accounts, KPI-RRA-6 deferred). Earlier: +KPI-GDL-1..4, +KPI-OOS-1..4 (registered at DESIGN acceptance). Earlier: +KPI-CPI-1..5, +KPI-HB-1..3 (registered after finalize). Earlier: serverless-philosophy-federation DEVOPS: +KPI-SF-1..5 (KPI-SF-1 = round-trip CID integrity North Star, CI contract test; telemetry-free per sovereignty). slice-08 realized KPI-AV-1/2/3/4/5 + KPI-VIEW-2 + KPI-HX-G1/2/3 on /search (no new KPI)
 
 kpis:
   - id: KPI-1
@@ -848,7 +848,7 @@ kpis:
     feature_origin: indexer-deployment
     persona: P-001
     target: ">= 2 distinct PDS hosts in results; 100% of rows attributed to their author"
-    measurement_method: "a fixed broad search through the public edge; each distinct author DID resolved (PLC / did:web) to its PDS endpoint; `deploy.sh lambda kpi` reach line on Lambda"
+    measurement_method: "MANUAL: a fixed broad search through the public edge; each distinct author DID resolved (PLC / did:web) to its PDS endpoint. No automated check exists"
     baseline_at_ga: "host go-live 2026-10-12/13; Lambda: read on cut-over day"
     notes: "Leading. The nightly index-smoke designed in DV-IXD-15 was never built; if built it must not use /healthz freshness (see KPI-IXD-3)."
 
@@ -858,9 +858,9 @@ kpis:
     feature_origin: indexer-deployment
     persona: P-001
     target: "<= 30 min from publish, 5 of 5 samples"
-    measurement_method: "manual timed publish-to-search samples (60 s polling) against the public edge; on Lambda the bound is <= 15 min to the next pass + 60 s freshness TTL + one reload"
+    measurement_method: "MANUAL: timed publish-to-search samples (60 s polling) against the public edge; on Lambda the bound is <= 15 min to the next pass + 60 s freshness TTL + one reload"
     baseline_at_ga: "Lambda: 5 samples during the scale-to-zero trial"
-    notes: "Leading."
+    notes: "Leading. Lambda acceptance: WS-1, PA-3, SE-3 (tests/acceptance/scale_to_zero_*.rs). The minutes themselves are the manual samples."
 
   - id: KPI-IXD-3
     name: "Index freshness"
@@ -868,9 +868,9 @@ kpis:
     feature_origin: indexer-deployment
     persona: P-001
     target: "last exit-0 pass <= 30 min old in >= 98% of hourly checks over 30 days"
-    measurement_method: "indexer.ingest.pass_summary exit_code = 0 in the current log group (saved query indexer/kpi-freshness; `deploy.sh kpi` / `deploy.sh lambda kpi` freshness_ratio). NOT /healthz: on Lambda last_successful_pass_at means 'index published at' and moves only when the index changes (ADR-090)."
+    measurement_method: "indexer.ingest.pass_summary exit_code = 0 in the current log group, skipping no_publish: true lines on Lambda (`deploy.sh kpi` / `deploy.sh lambda kpi` freshness_ratio; host: saved query indexer/kpi-freshness). NOT /healthz: on Lambda last_successful_pass_at means 'index published at' and moves only when the index changes (ADR-090)."
     baseline_at_ga: "host from 2026-10-13; Lambda: daily in the trial (>= 23/24 per green day, >= 165/168 over 7 days)"
-    notes: "North star of the indexer's operation. Alarms A1 and A3 cover outages."
+    notes: "North star of the indexer's operation. Alarms A1 and A3 cover outages. Lambda acceptance: PR-E1 (a stale pass makes the index not live)."
 
   - id: KPI-IXD-4
     name: "DID-list edits change coverage without a deploy"
@@ -880,7 +880,7 @@ kpis:
     target: "100% of edits applied on the next pass, with 0 deploys"
     measurement_method: "aws ssm get-parameter-history of /openlore/prod/indexer/repo-dids against indexer.config.loaded repo_did_count / repo_dids_age_secs; no host releases line or Lambda live-alias flip in between"
     baseline_at_ga: "per edit"
-    notes: "Leading. On Lambda the pass reads SSM on every run (ADR-090)."
+    notes: "Leading. On Lambda the pass reads SSM on every run (ADR-090). Lambda acceptance: WS-2, PA-4, PA-8, RIO-4."
 
   - id: KPI-IXD-5
     name: "Alerts on real failures only"
@@ -888,9 +888,9 @@ kpis:
     feature_origin: indexer-deployment
     persona: P-001
     target: "100% of exit-2 passes and 2x exit-3 runs alerted; 0 alerts on exit-0; <= 2 alert emails/week in steady state"
-    measurement_method: "CloudWatch alarm history (A1-A3; A1-T..A3-T during the trial; A4-A7 counted toward the email budget) against pass exit codes (`deploy.sh kpi` / `deploy.sh lambda kpi`)"
+    measurement_method: "CloudWatch alarm history (A1-A3; A1-T..A3-T during the trial; A4-A11 counted toward the email budget) against pass exit codes (`deploy.sh kpi` / `deploy.sh lambda kpi`)"
     baseline_at_ga: "host from 2026-10-13"
-    notes: "Guardrail. last-pass.json is written on every pass on Lambda so one cause does not page twice (scale-to-zero upstream change U-STZ-3)."
+    notes: "Guardrail. last-pass.json is written on every pass on Lambda so one cause does not page twice (scale-to-zero upstream change U-STZ-3). Lambda acceptance: PA-5, PA-6, PA-11, PA-E1, PA-E3, PA-E5..E10, PR-1, PR-2, PR-E2."
 
   - id: KPI-IXD-6
     name: "Ship and roll back the indexer with no PDS impact"
@@ -898,9 +898,9 @@ kpis:
     feature_origin: indexer-deployment
     persona: P-001
     target: "0 PDS _health failures attributable to the indexer; rollback <= 2 min; search downtime <= 30 s per deploy"
-    measurement_method: "host: deploy.sh ready_s + PDS poller; Lambda: deploy summary (flip to first 200 through the edge), timed `deploy.sh lambda rollback` drill; no shared fate with the PDS after cut-over"
+    measurement_method: "host: deploy.sh ready_s + PDS poller. Lambda alias flip: a 1/s poller through the edge on /healthz and a search POST; gap = longest run in which either call fails to answer 200, last 200 before it to first 200 after it; above 30 s the deploy flips back. Cut-over: `deploy.sh lambda cutover-watch`, last host 200 to first edge 200, fails above 30 s. Rollback: timed `deploy.sh lambda rollback` drill. PDS _health: start_pds_poller on host steps and the cut-over; NOT measured for `lambda deploy` or `rollback`; the attribution check is the stubbed assertion that no `lambda` verb calls a host path"
     baseline_at_ga: "host drill 14 s (2026-10-12); Lambda: drill during the trial"
-    notes: "Guardrail."
+    notes: "Guardrail. Lambda acceptance: OP-1, OP-2, OP-12, OP-E15."
 
   - id: KPI-IXD-G1
     name: "Indexer added cost (NFR-IXD-6)"
@@ -909,8 +909,8 @@ kpis:
     persona: P-001
     target: "<= $2/month added"
     measurement_method: "Lambda: AWS Budgets budget openlore-indexer-lambda filtered on tag Component=openlore-indexer-lambda, email at $2 (20%) and $10 (100%); host: Cost Explorer month over month"
-    baseline_at_ga: "Lambda design estimate about $0.56/month list (about $0.28 with free tiers)"
-    notes: "Guardrail. Budgets data lags hours; alarm A4 plus `deploy.sh lambda stop` is the fast guard."
+    baseline_at_ga: "Lambda design estimate about $0.72/month on the bill (about $1.60 at list, no free tier)"
+    notes: "Guardrail. Budgets data lags hours; alarms A4, A8 and A9 plus `deploy.sh lambda stop` are the fast guard. Not a guarantee under abuse: a 30-day month just under A8 and A9 is about $1.93, but any rate above them held long enough passes $2."
 
   # --- scale-to-zero-hosting guards, registered 2026-10-27 at DEVOPS ---
   # Source: docs/feature/scale-to-zero-hosting/feature-delta.md (R-STZ-*, DEVOPS Monitoring contracts).
@@ -919,8 +919,8 @@ kpis:
     type: guardrail
     feature_origin: scale-to-zero-hosting
     persona: P-001
-    target: "< 3 s client side, end to end over HTTPS (R-STZ-1)"
-    measurement_method: "`deploy.sh lambda measure` (5 cold calls, client side) before cut-over; daily proxy: platform.report initDurationMs p95 < 2,000 ms (saved query indexer-lambda/cold-starts)"
+    target: "< 3 s client side, end to end over HTTPS (R-STZ-1; the first search after a new image is excepted, about 3.1 s)"
+    measurement_method: "`deploy.sh lambda measure` gate (all 5 cold calls, client side from the operator's laptop; any other vantage point needs a recorded user waiver; stops Stage 2 on failure) before cut-over; daily proxy: platform.report initDurationMs p95 < 2,000 ms (saved query indexer-lambda/cold-starts)"
     baseline_at_ga: "spike us-west-2: 0.36-0.96 s up to 100k claims; us-east-1 re-measure pending"
     notes: "Guardrail. Gates cut-over."
 
@@ -930,19 +930,19 @@ kpis:
     feature_origin: scale-to-zero-hosting
     persona: P-001
     target: "< 200 ms client side (R-STZ-2)"
-    measurement_method: "`deploy.sh lambda measure` (20 warm calls); daily: probe search_ms p95 < 200 ms; AWS/Lambda UrlRequestLatency p95"
+    measurement_method: "`deploy.sh lambda measure` gate (all 20 warm calls); daily: probe search_ms p95 < 200 ms; AWS/Lambda UrlRequestLatency p95"
     baseline_at_ga: "spike: warm median 63-75 ms"
     notes: "Guardrail. Gates cut-over."
 
   - id: KPI-STZ-G3
-    name: "Abuse and spend capped"
+    name: "Abuse capped in rate, alerted in spend"
     type: guardrail
     feature_origin: scale-to-zero-hosting
     persona: P-001
-    target: "search concurrency <= 3; alert within 10 min of > 3,000 calls per 5 min; spend alerts at $2 and $10"
-    measurement_method: "alarm A4 (AWS/Lambda Invocations, search, Sum/300 s > 3,000), A7 (Throttles >= 10 per 5 min), the tag-filtered budget; kill switch `deploy.sh lambda stop`"
+    target: "search concurrency <= 3; alert within 10 min of > 3,000 calls per 5 min, within about an hour of > 1,900 calls or > 13,000 edge requests per hour; spend alerts at $2 and $10"
+    measurement_method: "alarms A4 (AWS/Lambda Invocations, search, Sum/300 s > 3,000), A7 (Throttles >= 10 per 5 min), A8 (Invocations, Sum/3,600 s > 1,900), A9 (AWS/CloudFront Requests, Sum/3,600 s > 13,000), the tag-filtered budget; kill switch `deploy.sh lambda stop` (search concurrency 0 and the distribution disabled)"
     baseline_at_ga: "n/a (new surface)"
-    notes: "Guardrail. Replaces the per-client token bucket on Lambda (ADR-083 amendment)."
+    notes: "Guardrail. Replaces the per-client token bucket on Lambda (ADR-083 amendment). Rate is capped; edge spend is not. Acceptance: OP-3 (kill switch), OP-6 (the cap and its survival of an apply). The 429 at cap 3 is unverified until the trial (P-18)."
 
   - id: KPI-STZ-G4
     name: "Index stays under the cold-start ceiling"
@@ -952,7 +952,7 @@ kpis:
     target: "published index <= 100 MB (cold starts fail near 140 MB)"
     measurement_method: "metric filter on indexer.lambda.published $.index_bytes -> OpenLore/Indexer IndexBytes; alarm A5 Maximum/900 s > 104,857,600, missing data ignore"
     baseline_at_ga: "about 3 MB"
-    notes: "Guardrail. When it fires, revisit fetch strategy (ADR-090 deferred alternatives)."
+    notes: "Guardrail. When it fires, revisit fetch strategy (ADR-090 deferred alternatives). Lambda acceptance: PA-1 (the published event carries index_bytes)."
 
   - id: KPI-STZ-G5
     name: "Lambda faults and memory headroom"
@@ -960,9 +960,9 @@ kpis:
     feature_origin: scale-to-zero-hosting
     persona: P-001
     target: "0 function errors (crash or timeout); max memory used <= 400 MB (search, pass) and <= 100 MB (probe)"
-    measurement_method: "alarm A6 (AWS/Lambda Errors, account level, Sum/300 s >= 1); platform.report maxMemoryUsedMB (saved query indexer-lambda/memory)"
+    measurement_method: "alarm A6 (AWS/Lambda Errors, account level, Sum/300 s >= 1), alarm A11 (Url5xxCount, search live, Sum/300 s >= 1, 2 of 2); platform.report maxMemoryUsedMB (saved query indexer-lambda/memory)"
     baseline_at_ga: "n/a (new surface)"
-    notes: "Guardrail. Replaces NFR-IXD-4 (host MemAvailable) once the host indexer is retired. A6 must move to per-function dimensions if another Lambda function appears in us-east-1."
+    notes: "Guardrail. Replaces NFR-IXD-4 (host MemAvailable) once the host indexer is retired. A6 must move to per-function dimensions if another Lambda function appears in us-east-1. Lambda acceptance: PA-E11, PR-E3, OP-E21 (a refused event is what A6 counts)."
 
   - id: KPI-STZ-G6
     name: "Self-host indexer stays AWS-free"
@@ -972,7 +972,7 @@ kpis:
     target: "0 aws-* or lambda_* crates in openlore-indexer's graph; 0 AWS/Lambda strings in its release binary"
     measurement_method: "xtask check-arch aws_sdk_only_in_lambda_edge (blocking, every push) + indexer-build artifact string check (blocking)"
     baseline_at_ga: "0 (rule lands with the first aws-* dependency)"
-    notes: "Guardrail. Release-blocking (R-STZ-9, ADR-023)."
+    notes: "Guardrail. Release-blocking (R-STZ-9, ADR-023). Acceptance: XS-1, XS-2 (xtask/tests/scale_to_zero_architecture.rs)."
 
 # Guardrail policy:
 #   KPI-4 and KPI-5 are guardrails. A release that lowers either is blocked,

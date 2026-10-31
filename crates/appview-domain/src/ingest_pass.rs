@@ -423,6 +423,15 @@ pub enum PassFailure {
     PurgeFailed,
     PassPanicked,
     PassDeadlineExceeded,
+    /// The Lambda pass could not get a usable starting index (D-STZ-41). Only
+    /// the Lambda root produces this and the next three.
+    StartingIndexUnusable,
+    /// A publish lost to another version: HTTP 412 (D-STZ-41).
+    PublishConflict,
+    /// Any other store error on publish (D-STZ-41).
+    PublishFailed,
+    /// `last-pass.json` could not be written (D-STZ-41).
+    PassRecordFailed,
 }
 
 impl PassFailure {
@@ -435,6 +444,10 @@ impl PassFailure {
             Self::PurgeFailed => "purge_failed",
             Self::PassPanicked => "pass_panicked",
             Self::PassDeadlineExceeded => "pass_deadline_exceeded",
+            Self::StartingIndexUnusable => "starting_index_unusable",
+            Self::PublishConflict => "publish_conflict",
+            Self::PublishFailed => "publish_failed",
+            Self::PassRecordFailed => "pass_record_failed",
         }
     }
 }

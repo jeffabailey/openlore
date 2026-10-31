@@ -622,8 +622,12 @@ const INDEXER_ROOT: &str = "openlore-indexer";
 /// it ONLY for the verify-only `IdentityResolvePort` (resolve/verify-only).
 /// `adapter-github` too (C-OOS-8, UC-7): the indexer never asks GitHub and
 /// never judges authority — each reader labels index rows from its own checks.
-const INDEXER_FORBIDDEN_DEPS: &[&str] =
-    &["adapter-duckdb", "adapter-atproto-pds", "adapter-github"];
+const INDEXER_FORBIDDEN_DEPS: &[&str] = &[
+    "adapter-duckdb",
+    "adapter-atproto-pds",
+    "adapter-atproto-oauth",
+    "adapter-github",
+];
 
 /// Indexer-side adapters the `cli` composition root MUST NOT link (I-3 second
 /// axis): the HTTP query server + the indexer's store/ingest crates. The CLI
@@ -3548,6 +3552,36 @@ pub fn scan_indexer_search_handler_read_only(workspace_root: &Path) -> anyhow::R
         );
     }
     Ok(findings)
+}
+
+// -----------------------------------------------------------------------------
+// The signing claim of the indexer family (D-STZ-50)
+// -----------------------------------------------------------------------------
+
+/// Source half of `indexer_holds_no_signing_or_local_store` and
+/// `indexer_lambda_holds_no_signing_or_local_store` (D-STZ-50): the production
+/// code of both roots names no `IdentityPort`, `for_did`,
+/// `new_with_did_document`, `ensure_keychain_key`, `claim_domain::sign`,
+/// `SigningKey` or `keyring`, and each root holds a `resolve_only` site, so the
+/// rule cannot pass vacuously. Not wired into `check-arch` yet.
+//
+// SCAFFOLD: true  (DISTILL 2026-10-30; DELIVER implements and wires it. Contract:
+// XS-10 in xtask/tests/scale_to_zero_architecture.rs)
+pub fn scan_indexer_family_holds_no_signing(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let _ = workspace_root;
+    panic!("Not yet implemented -- RED scaffold")
+}
+
+/// `lambda_no_publish_is_read_only` (D-STZ-44): the no-publish module refuses
+/// `IndexObjectWritePort`, `publish_if_match`, `put_last_pass` and `PassDriven`,
+/// and must name `IndexObjectReadPort`, so it cannot pass vacuously. A missing
+/// module is itself a finding. Not wired into `check-arch` yet.
+//
+// SCAFFOLD: true  (DISTILL 2026-10-30; DELIVER implements and wires it. Contract:
+// XS-11 in xtask/tests/scale_to_zero_architecture.rs)
+pub fn scan_lambda_no_publish_is_read_only(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let _ = workspace_root;
+    panic!("Not yet implemented -- RED scaffold")
 }
 
 // -----------------------------------------------------------------------------

@@ -247,6 +247,13 @@ fn each_pass_failure_reads_as_its_summary_cause_token() {
         (PassFailure::PurgeFailed, "purge_failed"),
         (PassFailure::PassPanicked, "pass_panicked"),
         (PassFailure::PassDeadlineExceeded, "pass_deadline_exceeded"),
+        (
+            PassFailure::StartingIndexUnusable,
+            "starting_index_unusable",
+        ),
+        (PassFailure::PublishConflict, "publish_conflict"),
+        (PassFailure::PublishFailed, "publish_failed"),
+        (PassFailure::PassRecordFailed, "pass_record_failed"),
     ];
     for (failure, token) in tokens {
         assert_eq!(failure.token(), token);
