@@ -28,6 +28,7 @@ COPIED_DIGEST=""      # step 6: set while this run's copy is not yet on every $L
 LIVE_VERSIONS=()      # step 7: what each `live` alias holds now
 LATEST_REVISIONS=()   # step 8: each $LATEST's revision, to publish without a race
 NEW_VERSIONS=()       # step 9: the version each function will flip to
+CANDIDATE_BACK_TO=""  # step 10: set while `candidate` is ahead of a `live` that has not flipped
 INDEX_VERSION=none    # step 7: the pre-publish index version id
 WOULD_PUBLISH=unknown # step 12: printed, not gated
 FLIP_TO_FIRST_200_MS=n/a
@@ -200,9 +201,23 @@ publish_versions() { # $1 = digest, $2 = git sha
   done
 }
 
-move_candidate() { # step 10
+point_candidate_at() { # $1 = version
   aws lambda update-alias --region "$REGION" --function-name "$LAMBDA_SEARCH" --name candidate \
-    --function-version "${NEW_VERSIONS[0]}" >/dev/null
+    --function-version "$1" >/dev/null
+}
+
+move_candidate() { # step 10
+  CANDIDATE_BACK_TO=${LIVE_VERSIONS[0]}
+  point_candidate_at "${NEW_VERSIONS[0]}"
+}
+
+# A deploy that stopped before the flip leaves `candidate` on the live version; the new versions
+# stay until a later prune. Returns zero whatever happens, like discard_failed_copy: it runs in
+# the EXIT trap, and a failure there must not stop `cleanup`.
+put_candidate_back() {
+  [ -n "$CANDIDATE_BACK_TO" ] || return 0
+  point_candidate_at "$CANDIDATE_BACK_TO" ||
+    echo "deploy.sh: could not move candidate back to version $CANDIDATE_BACK_TO" >&2
 }
 
 candidate_url() {
@@ -221,7 +236,7 @@ candidate_checks() {
   started=$(date +%s)
   health=$(curl -fsS -m 30 "$base/healthz") || die "refusing: the candidate's /healthz failed"
   echo "candidate first call: $(($(date +%s) - started)) s (includes the image cache; not gated)"
-  post_checks "$base"
+  (TMPDIR=$LAMBDA_WORK post_checks "$base") || die "refusing: the candidate failed its post-checks"
   served=$(jq -r '.last_successful_pass_at // ""' <<<"$health")
   published=$(index_head | jq -r '.Metadata["published-at"] // ""')
   [ "$served" = "$published" ] ||
@@ -247,7 +262,10 @@ pass_gate() {
   exit_code=$(jq -r .exit_code "$reply")
   WOULD_PUBLISH=$(jq -r '.would_publish // "unknown"' "$reply")
   echo "pass gate: exit $exit_code, would_publish $WOULD_PUBLISH"
-  [ "$exit_code" = 0 ] || die "refusing: the pass gate ended in exit $exit_code"
+  [ "$exit_code" != 3 ] || [ "${LAMBDA_ACCEPT_EXIT_3:-}" = 1 ] ||
+    die "refusing: the pass gate ended in exit 3; LAMBDA_ACCEPT_EXIT_3=1 accepts that exit alone"
+  [ "$exit_code" = 0 ] || [ "$exit_code" = 3 ] ||
+    die "refusing: the pass gate ended in exit $exit_code"
 }
 
 health_lines() { # stdin = the CLI's answer -> the indexer.host.health lines of its log tail
@@ -365,6 +383,7 @@ flip_search() { # $1 = digest, $2 = git sha
   sleep 5
   flipped_at=$(now_ms)
   flip_live 0 "$1" "$2"
+  CANDIDATE_BACK_TO="" # `live` has caught up, so a stop from here is the flip's to undo
   edge_checks "$edge"
   stop_edge_poller
   EDGE_GAP_MS=$(longest_edge_gap <"$EDGE_POLL_LOG")
@@ -428,7 +447,7 @@ lambda_deploy() { # $1 = git sha or digest
   LAMBDA_WORK=$(mktemp -d)
   CLEANUP_PATHS+=("$LAMBDA_WORK")
   EDGE_POLL_LOG=$LAMBDA_WORK/edge-poll
-  trap 'discard_failed_copy; cleanup' EXIT
+  trap 'discard_failed_copy; put_candidate_back; cleanup' EXIT
   verify_build
   local digest="$BUILD_DIGEST" sha="$BUILD_SHA"
   refuse_unless_lambda_capable "$digest"

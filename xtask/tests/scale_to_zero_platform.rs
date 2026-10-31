@@ -1424,7 +1424,6 @@ fn an_image_that_cannot_run_the_pass_is_refused_before_the_registry_sees_it() {
 ///   Then the deploy stops, and no live alias moved
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn a_pass_gate_that_fails_stops_the_deploy_with_nothing_flipped() {
     let stubs = Stubs::new(Posture {
         pass_gate_exit: 2,
@@ -1452,7 +1451,6 @@ fn a_pass_gate_that_fails_stops_the_deploy_with_nothing_flipped() {
 ///     | accepts         | flips live          |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn a_pass_gate_that_reached_nobody_stops_the_deploy_unless_the_operator_accepts_it() {
     let exit_3 = Posture {
         pass_gate_exit: 3,
@@ -1552,7 +1550,6 @@ fn resetting_the_index_needs_the_exact_typed_word() {
 ///     | 3    | accepts         |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn a_pass_gate_that_does_not_say_it_ran_as_no_publish_stops_the_deploy() {
     each_row(
         [(0, None), (3, Some(ACCEPT_EXIT_3))],
@@ -1588,7 +1585,6 @@ fn a_pass_gate_that_does_not_say_it_ran_as_no_publish_stops_the_deploy() {
 ///     | crashes             |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn accepting_a_gate_that_reached_nobody_accepts_nothing_else() {
     each_row(
         [
@@ -1874,7 +1870,6 @@ fn a_search_that_fails_at_the_public_edge_after_its_flip_goes_straight_back() {
 ///     | reports an index published at a time the bucket's does not |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn a_candidate_that_fails_its_checks_stops_the_deploy_before_any_gate() {
     each_row(
         [
@@ -2315,7 +2310,6 @@ fn a_failed_deploy_removes_the_copy_it_made_and_only_that() {
 ///     | the probe gate finds the index dead |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn a_deploy_stopped_before_the_flip_puts_its_candidate_back() {
     each_row(
         [
