@@ -22,6 +22,7 @@ INDEX_BUCKET=openlore-indexer-index-$LAMBDA_ACCOUNT
 INDEX_KEY=index/index.duckdb
 RETAINED_VERSIONS=5
 RETAINED_IMAGES=10 # the ECR lifecycle's count of sha-* images
+GATE_ATTEMPTS=30   # 30 s apart, so up to 870 s: a pass's 840 s timeout plus 30 s
 MAX_EDGE_GAP_MS=30000
 
 COPIED_DIGEST=""      # step 6: set while this run's copy is not yet on every $LATEST
@@ -244,12 +245,24 @@ candidate_checks() {
 }
 
 # Synchronous, and never re-invoked by the client: a gate may run for the whole timeout.
-# Prints the CLI's answer; $4 receives the function's own reply. A later step adds the throttle
-# wait here (`sleep 30`), shared by both gates.
-invoke_gate() { # $1 = function, $2 = version, $3 = payload, $4 = reply file
+# Prints the CLI's answer; $4 receives the function's own reply.
+invoke_once() { # $1 = function, $2 = version, $3 = payload, $4 = reply file
   AWS_MAX_ATTEMPTS=1 aws lambda invoke --region "$REGION" --function-name "$1" --qualifier "$2" \
     --cli-read-timeout 0 --cli-binary-format raw-in-base64-out --log-type Tail \
     --payload "$3" "$4"
+}
+
+# Pass and probe have one slot each, so a run already in it throttles the invoke: wait it out.
+invoke_gate() { # the arguments of invoke_once
+  local errors="$LAMBDA_WORK/gate-errors" attempt=1
+  until invoke_once "$@" 2>"$errors"; do
+    grep -q TooManyRequestsException "$errors" ||
+      die "refusing: the gate's invoke of $1 failed: $(cat "$errors")"
+    [ "$attempt" -lt "$GATE_ATTEMPTS" ] ||
+      die "refusing: $1 was still busy after $GATE_ATTEMPTS attempts"
+    attempt=$((attempt + 1))
+    sleep 30
+  done
 }
 
 # Step 12 (D-STZ-44). A version that does not say it ran as no-publish ignored the request and may
@@ -275,16 +288,20 @@ health_lines() { # stdin = the CLI's answer -> the indexer.host.health lines of 
 # Step 13. This proves the new probe code and the current index, not the candidate's search:
 # the probe calls the public edge, which still reaches the old `live` search.
 probe_gate() {
-  local reply="$LAMBDA_WORK/probe-reply" answer health
+  local reply="$LAMBDA_WORK/probe-reply" answer health not_live
   answer=$(invoke_gate "$LAMBDA_PROBE" "${NEW_VERSIONS[2]}" '{}' "$reply")
   jq -e 'has("FunctionError") | not' <<<"$answer" >/dev/null ||
     die "refusing: the probe gate ended in a function error"
   health=$(health_lines <<<"$answer")
   [ "$(grep -c . <<<"$health" || true)" = 1 ] ||
     die "refusing: the probe gate did not log exactly one health line"
-  jq -e '.not_live == 0' <<<"$health" >/dev/null ||
-    die "refusing: the probe gate found the index not live: $health"
-  echo "probe gate: live"
+  not_live=$(jq -r .not_live <<<"$health")
+  echo "probe gate: not_live $not_live: $health"
+  [ "$not_live" != 1 ] || [ "${LAMBDA_ACCEPT_NOT_LIVE:-}" = 1 ] ||
+    die "refusing: the probe gate found the index not live: $health;" \
+      "LAMBDA_ACCEPT_NOT_LIVE=1 accepts that check alone"
+  [ "$not_live" = 0 ] || [ "$not_live" = 1 ] ||
+    die "refusing: the probe gate's health line says not_live '$not_live': $health"
 }
 
 # Moves `live` and records what it replaced (L-13); $2 is appended for the pass's index id.
@@ -375,21 +392,45 @@ edge_checks() { # $1 = edge URL
   echo "edge checks passed: healthz, search, GET / 404, POST /healthz 404, no x-amzn- header"
 }
 
+# Returns non-zero rather than dying, because a failure here has a flip to undo.
+edge_holds_up() { # $1 = edge URL, $2 = ms of the flip
+  local checked=0
+  (edge_checks "$1") || checked=1
+  stop_edge_poller
+  EDGE_GAP_MS=$(longest_edge_gap <"$EDGE_POLL_LOG")
+  FLIP_TO_FIRST_200_MS=$(first_200_after "$2" <"$EDGE_POLL_LOG")
+  [ "$checked" = 0 ] || return 1
+  [ "$EDGE_GAP_MS" -le "$MAX_EDGE_GAP_MS" ] || {
+    echo "deploy.sh: edge check: search was gone for $EDGE_GAP_MS ms, more than $MAX_EDGE_GAP_MS" >&2
+    return 1
+  }
+}
+
+# Search and its candidate go back to the version they replaced; pass and probe never flipped.
+# The alias takes back its own record too, or its prev= would name the version it now holds.
+# `candidate` is the EXIT trap's again, which keeps this deploy's exit status.
+flip_search_back() { # $1 = the description `live` had before the flip
+  local version=${LIVE_VERSIONS[0]}
+  aws lambda update-alias --region "$REGION" --function-name "$LAMBDA_SEARCH" --name live \
+    --function-version "$version" --description "$1" >/dev/null ||
+    die "search stayed on version ${NEW_VERSIONS[0]}: could not flip live back to $version"
+  CANDIDATE_BACK_TO=$version
+  echo "deploy.sh: search is back on version $version; the pass and the probe did not flip" >&2
+  exit 1
+}
+
 # Step 14: search flips first, watched from 5 s before the flip until the edge checks end.
 flip_search() { # $1 = digest, $2 = git sha
-  local edge flipped_at
+  local edge flipped_at record
   edge=$(edge_url)
+  record=$(aws lambda get-alias --region "$REGION" --function-name "$LAMBDA_SEARCH" --name live |
+    jq -r '.Description // ""')
   start_edge_poller "$edge"
   sleep 5
   flipped_at=$(now_ms)
   flip_live 0 "$1" "$2"
   CANDIDATE_BACK_TO="" # `live` has caught up, so a stop from here is the flip's to undo
-  edge_checks "$edge"
-  stop_edge_poller
-  EDGE_GAP_MS=$(longest_edge_gap <"$EDGE_POLL_LOG")
-  FLIP_TO_FIRST_200_MS=$(first_200_after "$flipped_at" <"$EDGE_POLL_LOG")
-  [ "$EDGE_GAP_MS" -le "$MAX_EDGE_GAP_MS" ] ||
-    die "edge check: search was gone for $EDGE_GAP_MS ms, more than $MAX_EDGE_GAP_MS"
+  edge_holds_up "$edge" "$flipped_at" || flip_search_back "$record"
 }
 
 flip_pass_and_probe() { # step 15; $1 = digest, $2 = git sha

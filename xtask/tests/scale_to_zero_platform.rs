@@ -923,6 +923,7 @@ fn the_stubs_answer_what_the_gates_will_ask() {
 ///     the no-publish pass gate, the probe gate and the flips happen in exactly that order
 ///   And search flips first, then the pass, then the probe
 ///   And each live alias records the version it replaced, and the pass also records the index it started from
+///   And the candidate stays on the new version
 /// ```
 #[test]
 fn a_deploy_passes_every_gate_in_order_and_flips_live_last() {
@@ -1008,6 +1009,17 @@ fn a_deploy_passes_every_gate_in_order_and_flips_live_last() {
     assert!(
         called(&calls, &["s3api head-object"]),
         "the candidate's published time is compared with the object's\n{calls}"
+    );
+    let moved = |version: &str| {
+        let version = format!("--function-version {version}");
+        line_of(
+            &calls,
+            &["update-alias", FUNCTIONS[0], "candidate", &version],
+        )
+    };
+    assert!(
+        moved("8").is_some() && moved("7").is_none(),
+        "a clean deploy leaves candidate on the new version\n{calls}"
     );
 }
 
@@ -1625,7 +1637,6 @@ fn accepting_a_gate_that_reached_nobody_accepts_nothing_else() {
 ///     | 2    | accepts         | stops               |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn a_probe_gate_that_finds_the_index_not_live_stops_the_deploy_unless_accepted() {
     each_row(
         [(0, false, false), (0, true, true), (2, true, false)],
@@ -1754,7 +1765,6 @@ fn restoring_the_index_is_refused_when_a_pass_is_due_or_running() {
 ///     | the probe | the whole way | gives up, and no live alias moved |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn a_gate_waits_for_a_running_pass_or_probe_and_gives_up_with_nothing_flipped() {
     let busy = |pass, probe| Posture {
         throttled_pass_gates: pass,
@@ -1824,7 +1834,6 @@ fn a_republish_of_an_image_that_left_the_registry_is_refused() {
 ///   And the deploy fails, and the pass and the probe never flipped
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn a_search_that_fails_at_the_public_edge_after_its_flip_goes_straight_back() {
     let stubs = Stubs::new(Posture {
         edge_after_the_flip: 500,
