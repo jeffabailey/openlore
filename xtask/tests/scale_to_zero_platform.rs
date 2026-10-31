@@ -25,13 +25,14 @@
 //! | OP-15 | The registry keeps 10 images | U-STZ-9 |
 //! | OP-16 | The probe's base URL does not change with the phase | DEVOPS |
 //! | OP-17 | `lambda status` looks for A11's metric on the candidate series | DEVOPS metric check |
+//! | OP-19 | `lambda republish` keeps each function on its own live image | U-STZ-2 |
 //! | OP-E1 | A tag, branch or short sha is refused before any tool runs | DV-STZ-9 step 1 |
 //! | OP-E2 | A digest without the Lambda root is refused before ECR | DV-STZ-9 step 5 |
 //! | OP-E3 | A pass gate ending in exit 2 stops the deploy; nothing flips | step 12 |
 //! | OP-E4 | Exit 3 stops the deploy unless the operator accepts it | step 12 |
 //! | OP-E5 | A rollback target whose image left ECR is refused | DEVOPS rollback table |
 //! | OP-E6 | `lambda reset-index` deletes nothing without the exact word `reset` | D-STZ-27 |
-//! | OP-E7 | A gate reply with no `mode` stops the deploy, whatever else it says | D-STZ-44 |
+//! | OP-E7 | A gate reply with no `mode`, or one that says it published, stops the deploy, whatever else it says | D-STZ-44 |
 //! | OP-E8 | Accepting exit 3 changes only exit 3 (C5b) | step 12 |
 //! | OP-E9 | `not_live = 1` stops the deploy unless accepted, and that changes only this check | step 13 |
 //! | OP-E10 | A rollback with no recorded version is refused (C4b) | D-STZ-26 |
@@ -61,14 +62,14 @@
 //!   and names the output file last on the `lambda invoke` line.
 //! * A gate waits with `sleep 30` and counts attempts, so stubbing `sleep` also
 //!   stubs the wait.
-//! * It writes a distribution config to a file and passes it as `file://…`, or
-//!   inline. The stub records either, so a scenario can read `Enabled`.
+//! * It passes a distribution config inline, so a scenario can read `Enabled`.
 //! * The tofu root declares each function as its own `aws_lambda_function` with a
 //!   literal `function_name`, each cache behavior as its own block, and each
 //!   schedule's `input` in its `target` block. No `for_each` or `dynamic` there:
 //!   the reader below reads settings, not expressions.
 //! * The stubs answer in JSON. If DELIVER reads a field with `--query`, it
 //!   adjusts the stub's output; the order and refusal assertions stay.
+//! * OP-4 runs the edge function under `node`, which every CI runner has.
 //!
 //! The other verbs (`status`, `kpi`, `measure`, `parity`, `seed`, `cutover-watch`,
 //! the other `test-alarm` targets) and the host's `resume` stay with the runbook;
@@ -162,6 +163,8 @@ struct Posture {
     pass_gate_exit: i32,
     /// Whether the new pass version says it ran as no-publish (D-STZ-44).
     echoes_mode: bool,
+    /// Whether the pass gate's reply says it published.
+    gate_says_published: bool,
     /// Whether the pass gate ends in a function error.
     pass_gate_crashes: bool,
     /// What the new probe version's health line says.
@@ -187,8 +190,12 @@ struct Posture {
     distribution_enabled: bool,
     /// The index object's `published-at`; the candidate serves [`SERVED_AT`].
     object_published_at: &'static str,
-    /// Whether the `live` version's image can be read.
+    /// Whether the `live` version's image can be read. The version it replaced stays
+    /// readable, so a fallback to the `prev=` record would get an image.
     live_image_readable: bool,
+    /// For each function, in [`FUNCTIONS`] order: the hex digit its live digest is made
+    /// of, as a partial flip leaves them. Otherwise all three run one image.
+    own_live_images: Option<[char; 3]>,
     /// What the oldest `sha-*` image, next to be evicted, is held by.
     oldest_image: Holder,
     /// Whether `$LATEST` already holds the digest being deployed.
@@ -217,6 +224,7 @@ impl Default for Posture {
         Self {
             pass_gate_exit: 0,
             echoes_mode: true,
+            gate_says_published: false,
             pass_gate_crashes: false,
             not_live: 0,
             throttled_pass_gates: 0,
@@ -231,6 +239,7 @@ impl Default for Posture {
             distribution_enabled: true,
             object_published_at: SERVED_AT,
             live_image_readable: true,
+            own_live_images: None,
             oldest_image: Holder::Nobody,
             latest_holds_the_build: false,
             candidate_5xx_seen: true,
@@ -428,6 +437,7 @@ fn aws(posture: Posture, digest: &str) -> String {
     } else {
         ""
     };
+    let published = posture.gate_says_published;
     let not_live = posture.not_live;
     let pass_throttle = throttled_shell(FUNCTIONS[1], posture.throttled_pass_gates);
     let probe_throttle = throttled_shell(FUNCTIONS[2], posture.throttled_probe_gates);
@@ -437,7 +447,7 @@ fn aws(posture: Posture, digest: &str) -> String {
             .to_string()
     } else {
         format!(
-            r#"echo '{{"pass_id":"boot-1","exit_code":{pass_exit},"published":false,"index_bytes":0{mode}}}' >"$last"
+            r#"echo '{{"pass_id":"boot-1","exit_code":{pass_exit},"published":{published},"index_bytes":0{mode}}}' >"$last"
     echo '{{"StatusCode":200}}'"#
         )
     };
@@ -476,13 +486,35 @@ fn aws(posture: Posture, digest: &str) -> String {
     } else {
         r#"{"Metrics":[]}"#
     };
+    let image_answer = format!(
+        r#"echo '{{"Configuration":{{"Version":"7","Description":"{SHA} {referenced}","CodeSha256":"{live_sha}","RevisionId":"r","State":"Active","LastUpdateStatus":"Successful"}},"Code":{{"ImageUri":"{repo}@{referenced}"}}}}'"#
+    );
     let live_image = if posture.live_image_readable {
-        format!(
-            r#"echo '{{"Configuration":{{"Version":"7","Description":"{SHA} {referenced}","CodeSha256":"{live_sha}","RevisionId":"r","State":"Active","LastUpdateStatus":"Successful"}},"Code":{{"ImageUri":"{repo}@{referenced}"}}}}'"#
-        )
+        image_answer
     } else {
-        "echo 'ResourceNotFoundException' >&2; exit 254".to_string()
+        format!(
+            r#"case "$*" in
+      *"--qualifier 7"* | *"--qualifier live"*)
+        echo 'ResourceNotFoundException' >&2; exit 254 ;;
+    esac
+    {image_answer}"#
+        )
     };
+    let own_images: String = posture
+        .own_live_images
+        .iter()
+        .flat_map(|digits| FUNCTIONS.iter().zip(digits))
+        .map(|(function, digit)| {
+            let sha = digit.to_string().repeat(64);
+            format!(
+                r#"  *"lambda get-function "*{function}*"--qualifier"*)
+    echo '{{"Configuration":{{"Version":"7","Description":"{SHA} sha256:{sha}","CodeSha256":"{sha}"}},"Code":{{"ImageUri":"{repo}@sha256:{sha}"}}}}' ;;
+  *"lambda get-function-configuration"*{function}*)
+    echo '{{"Version":"7","CodeSha256":"{sha}","RevisionId":"r"}}' ;;
+"#
+            )
+        })
+        .collect();
     let code_update = if posture.code_update_fails {
         "echo 'ServiceException' >&2; exit 254".to_string()
     } else {
@@ -526,11 +558,8 @@ fn aws(posture: Posture, digest: &str) -> String {
         r#"
 in_ecr={in_ecr}
 for last in "$@"; do :; done
-for a in "$@"; do
-  case "$a" in file://*) record_call "$(tr -d ' \n' <"${{a#file://}}")" ;; esac
-done
 case "$*" in
-{failed_moves}  *"sts get-caller-identity"*) echo '{{"Account":"091153021562"}}' ;;
+{own_images}{failed_moves}  *"sts get-caller-identity"*) echo '{{"Account":"091153021562"}}' ;;
   *"ecr describe-images"*"--image-ids"*)
     if [ "$in_ecr" = true ]; then
       echo '{{"imageDetails":[{{"imageDigest":"{digest}"}}]}}'
@@ -631,6 +660,39 @@ fn called(calls: &str, tokens: &[&str]) -> bool {
     line_of(calls, tokens).is_some()
 }
 
+/// Every `aws` call that is not a read, so what a verb changed, whatever it changed.
+fn changes(calls: &str) -> Vec<&str> {
+    const READS: [&str; 3] = ["get-", "describe-", "list-"];
+    calls
+        .lines()
+        .filter(|line| {
+            let mut words = line.split_whitespace();
+            let action = words.nth(2).unwrap_or_default();
+            line.starts_with("aws ") && !READS.iter().any(|read| action.starts_with(read))
+        })
+        .collect()
+}
+
+/// What the edge function does to one request, run for real: `passes` or its answer.
+fn edge_answer(method: &str, uri: &str) -> String {
+    let function = std::fs::read_to_string(root().join(PROD_INDEXER_ROOT).join("edge-function.js"))
+        .expect("the edge function");
+    let call = format!(
+        r#"var answer = handler({{ request: {{ method: "{method}", uri: "{uri}" }} }});
+console.log(answer.statusCode === undefined ? "passes" : answer.statusCode);"#
+    );
+    let output = Command::new("node")
+        .args(["-e", &format!("{function}\n{call}")])
+        .output()
+        .expect("run node");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
 /// A deploy that stopped: it failed, and no `live` alias moved.
 fn assert_stopped_with_nothing_flipped(run: &Run, stubs: &Stubs) {
     assert_ne!(run.status, 0, "{}\n{}", run.out, stubs.calls());
@@ -683,11 +745,6 @@ fn uncommented(text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// Every file of the new root, as written: the edge function may be its own file.
-fn prod_indexer_files() -> String {
-    root_files(|_| true)
 }
 
 fn root_files(keep: impl Fn(&Path) -> bool) -> String {
@@ -877,108 +934,6 @@ resource "aws_cloudfront_distribution" "d" {
         1
     );
     assert_eq!(setting(pass, "reserved"), None, "a prefix is not a key");
-}
-
-/// Not a scenario: the stubs run green at hand-off, so a broken stub cannot
-/// look like a broken verb when DELIVER un-ignores OP-1..E16.
-#[test]
-fn the_stubs_answer_what_the_gates_will_ask() {
-    let stubs = Stubs::new(Posture {
-        pass_gate_exit: 3,
-        throttled_pass_gates: 1,
-        not_live: 1,
-        ..Posture::default()
-    });
-    let tool = |name: &str, args: &[&str]| {
-        let output = Command::new(stubs.dir.path().join(name))
-            .args(args)
-            .output()
-            .expect("run the stub");
-        (
-            output.status.code(),
-            String::from_utf8_lossy(&output.stdout).into_owned(),
-        )
-    };
-    let url = "https://x/xrpc/org.openlore.appview.searchClaims";
-    let oversized = stubs.dir.path().join("oversized");
-    std::fs::write(&oversized, vec![b'a'; 9000]).expect("a large body");
-    let body = format!("@{}", oversized.display());
-    let payload = stubs.dir.path().join("payload");
-    let payload_arg = payload.display().to_string();
-    let pass_gate = [
-        "lambda",
-        "invoke",
-        "--function-name",
-        FUNCTIONS[1],
-        &payload_arg,
-    ];
-    let probe_gate = [
-        "lambda",
-        "invoke",
-        "--function-name",
-        FUNCTIONS[2],
-        &payload_arg,
-    ];
-
-    assert_eq!(tool("curl", &["-w", "%{http_code}", url]).1, "200");
-    assert_eq!(
-        tool("curl", &["-w", "%{http_code}", "--data-binary", &body, url]).1,
-        "413"
-    );
-    assert_eq!(
-        tool(
-            "curl",
-            &["-w", "%{http_code}", "-X", "POST", "https://x/healthz"]
-        )
-        .1,
-        "404"
-    );
-    assert_eq!(tool("curl", &["-w", "%{http_code}", "https://x/"]).1, "404");
-    assert_eq!(tool("date", &["-u", "+%M"]).1.trim(), "07");
-    assert_eq!(tool("sleep", &["30"]).0, Some(0));
-    assert_eq!(
-        tool(
-            "aws",
-            &["ecr", "describe-images", "--image-ids", "imageDigest=x"]
-        )
-        .0,
-        Some(254)
-    );
-    assert!(tool("crane", &["config", "x"]).1.contains("lambda-root"));
-    assert!(tool("aws", &["lambda", "get-alias"]).1.contains("prev=6"));
-    let live = [
-        "lambda",
-        "get-function",
-        "--function-name",
-        FUNCTIONS[0],
-        "--qualifier",
-        "live",
-    ];
-    let latest = ["lambda", "get-function", "--function-name", FUNCTIONS[0]];
-    assert!(tool("aws", &live).1.contains(&digest()));
-    assert!(!tool("aws", &latest).1.contains(&digest()));
-    let images: serde_json::Value =
-        serde_json::from_str(&tool("aws", &["ecr", "describe-images", "--repository-name", "x"]).1)
-            .expect("JSON");
-    assert_eq!(images["imageDetails"].as_array().map(Vec::len), Some(10));
-    assert_eq!(payload_of("aws lambda invoke --payload {} out"), Some("{}"));
-
-    assert_eq!(tool("aws", &pass_gate).0, Some(254), "throttled once");
-    assert_eq!(tool("aws", &pass_gate).0, Some(0));
-    let answer: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&payload).expect("the payload")).expect("JSON");
-    assert_eq!(answer["exit_code"], 3);
-    assert_eq!(answer["mode"], "no-publish");
-
-    let probed: serde_json::Value =
-        serde_json::from_str(&tool("aws", &probe_gate).1).expect("JSON");
-    assert!(probed["LogResult"].as_str().is_some_and(|l| !l.is_empty()));
-
-    let config = stubs.dir.path().join("config.json");
-    std::fs::write(&config, "{ \"Enabled\": false }").expect("a config");
-    let file_arg = format!("file://{}", config.display());
-    tool("aws", &["cloudfront", "update-distribution", &file_arg]);
-    assert!(stubs.calls().contains(r#"{"Enabled":false}"#));
 }
 
 /// OP-1
@@ -1187,17 +1142,27 @@ fn the_kill_switch_stops_search_and_the_edge_and_leaves_the_pass_and_the_probe_a
 /// ```
 #[test]
 fn the_edge_is_one_allowlist_in_front_of_every_path() {
-    let (tofu, files) = (prod_indexer_tofu(), prod_indexer_files());
+    const SEARCH: &str = "/xrpc/org.openlore.appview.searchClaims";
+    let tofu = prod_indexer_tofu();
 
     assert!(
         tofu.contains("resource \"aws_cloudfront_function\""),
         "an edge function"
     );
-    assert!(
-        files.contains("/xrpc/org.openlore.appview.searchClaims"),
-        "the search path"
+    each_row(
+        [
+            ("POST", SEARCH, "passes"),
+            ("GET", "/healthz", "passes"),
+            ("HEAD", "/healthz", "passes"),
+            ("GET", SEARCH, "404"),
+            ("POST", "/healthz", "404"),
+            ("POST", "/healthz/", "404"),
+            ("POST", "/xrpc/org.openlore.appview.searchClaims/", "404"),
+            ("POST", "/xrpc/com.atproto.repo.createRecord", "404"),
+            ("GET", "/", "404"),
+        ],
+        |(method, uri, answer)| assert_eq!(edge_answer(method, uri), *answer),
     );
-    assert!(files.contains("/healthz"), "the health path");
     let distributions = resources(&tofu, "aws_cloudfront_distribution");
     assert_eq!(distributions.len(), 1);
     let distribution = distributions[0];
@@ -1397,10 +1362,13 @@ fn maintenance_switches_change_one_function_and_nothing_else() {
 
             assert_eq!(run.status, 0, "{}\n{}", run.out, stubs.calls());
             let calls = stubs.calls();
-            let set = "put-function-concurrency";
             let cap = format!("--reserved-concurrent-executions {cap}");
-            assert!(called(&calls, &[set, function, &cap]), "{calls}");
-            assert_eq!(calls.matches(set).count(), 1, "{calls}");
+            let changed = changes(&calls);
+            assert_eq!(changed.len(), 1, "{calls}");
+            assert!(
+                called(changed[0], &["put-function-concurrency", function, &cap]),
+                "{calls}"
+            );
         },
     );
 }
@@ -1614,23 +1582,29 @@ fn resetting_the_index_needs_the_exact_typed_word() {
 /// ```gherkin
 /// @driving_adapter @real-io @error @D-STZ-44 @C6a @contract-shape:unbounded-preservation
 /// Scenario Outline: A pass gate that does not say it ran as no-publish stops the deploy
-///   Given the new pass version answers its gate with exit <exit> and no word of no-publish
+///   Given the new pass version answers its gate with exit <exit> and <what it says>
 ///   And the operator <accepts or not> a pass gate that reached nobody
 ///   When the operator deploys
 ///   Then the deploy stops, and no live alias moved
 ///   Examples:
-///     | exit | accepts or not  |
-///     | 0    | does not accept |
-///     | 3    | accepts         |
+///     | exit | what it says                 | accepts or not  |
+///     | 0    | no word of no-publish        | does not accept |
+///     | 3    | no word of no-publish        | accepts         |
+///     | 0    | no-publish, and it published | does not accept |
 /// ```
 #[test]
 fn a_pass_gate_that_does_not_say_it_ran_as_no_publish_stops_the_deploy() {
     each_row(
-        [(0, None), (3, Some(ACCEPT_EXIT_3))],
-        |(exit, acceptance)| {
+        [
+            (0, false, false, None),
+            (3, false, false, Some(ACCEPT_EXIT_3)),
+            (0, true, true, None),
+        ],
+        |(exit, echoes_mode, gate_says_published, acceptance)| {
             let stubs = Stubs::new(Posture {
                 pass_gate_exit: *exit,
-                echoes_mode: false,
+                echoes_mode: *echoes_mode,
+                gate_says_published: *gate_says_published,
                 ..Posture::default()
             });
             let env: Vec<(&str, &str)> = acceptance.iter().copied().collect();
@@ -1639,7 +1613,7 @@ fn a_pass_gate_that_does_not_say_it_ran_as_no_publish_stops_the_deploy() {
 
             assert_stopped_with_nothing_flipped(&run, &stubs);
             assert_reached(&stubs, &PASS_GATE);
-            assert_refused(&run);
+            assert!(run.out.contains("did not run as no-publish"), "{}", run.out);
         },
     );
 }
@@ -1889,6 +1863,7 @@ fn a_republish_of_an_image_that_left_the_registry_is_refused() {
 ///   And the public edge fails once search has flipped
 ///   When the operator deploys
 ///   Then search and its candidate go back to the version they replaced
+///   And search takes back the record it had, so its rollback target is not lost
 ///   And the deploy fails, and the pass and the probe never flipped
 /// ```
 #[test]
@@ -1900,14 +1875,18 @@ fn a_search_that_fails_at_the_public_edge_after_its_flip_goes_straight_back() {
 
     let run = stubs.run(&["lambda", "deploy", SHA], &[], "");
 
-    assert_ne!(run.status, 0, "{}\n{}", run.out, stubs.calls());
+    assert_eq!(run.status, 1, "{}\n{}", run.out, stubs.calls());
     let calls = stubs.calls();
     let back = "--function-version 7";
+    let record = format!("prev=6 {SHA} {} 2026-10-27T14:00:00Z", digest());
     let forward = line_of(
         &calls,
         &["update-alias", FUNCTIONS[0], "live", "--function-version 8"],
     );
-    let returned = line_of(&calls, &["update-alias", FUNCTIONS[0], "live", back]);
+    let returned = line_of(
+        &calls,
+        &["update-alias", FUNCTIONS[0], "live", back, &record],
+    );
     assert!(forward.is_some() && forward < returned, "{calls}");
     assert!(
         called(&calls, &["update-alias", FUNCTIONS[0], "candidate", back]),
@@ -2170,21 +2149,38 @@ fn nothing_runs_on_a_schedule_until_the_operator_turns_it_on() {
 /// Scenario: The registry keeps the newest 10 builds
 ///   Given the new infrastructure root
 ///   Then its lifecycle rule for built images keeps exactly 10
+///   And that is the count the deploy's eviction guard works from
 /// ```
 #[test]
 fn the_registry_keeps_the_newest_10_builds() {
-    let squeezed: String = prod_indexer_tofu().split_whitespace().collect();
+    let tofu = prod_indexer_tofu();
+    let script =
+        std::fs::read_to_string(root().join("deploy/indexer/lambda.sh")).expect("lambda.sh");
 
-    let kept = |number: &str| {
-        squeezed.match_indices(number).any(|(at, found)| {
-            !squeezed[at + found.len()..].starts_with(|c: char| c.is_ascii_digit())
+    let policies = resources(&tofu, "aws_ecr_lifecycle_policy");
+    assert_eq!(policies.len(), 1, "the policy");
+    let built: Vec<&str> = blocks(policies[0], "selection")
+        .into_iter()
+        .filter(|selection| {
+            setting(selection, "tagPrefixList")
+                .is_some_and(|tags| items(&tags) == items(r#"["sha-"]"#))
         })
-    };
-
-    assert!(squeezed.contains("aws_ecr_lifecycle_policy"), "the policy");
-    assert!(
-        kept("countNumber=10") || kept(r#""countNumber":10"#),
-        "keep 10"
+        .collect();
+    assert_eq!(built.len(), 1, "one rule for built images");
+    assert_eq!(
+        setting(built[0], "countType").as_deref(),
+        Some(r#""imageCountMoreThan""#)
+    );
+    let kept = setting(built[0], "countNumber").expect("a count");
+    assert_eq!(kept, "10");
+    let guarded = script
+        .lines()
+        .find_map(|line| line.strip_prefix("RETAINED_IMAGES="))
+        .and_then(|rest| rest.split_whitespace().next());
+    assert_eq!(
+        guarded,
+        Some(kept.as_str()),
+        "the guard counts what ECR keeps"
     );
 }
 
@@ -2198,19 +2194,17 @@ fn the_registry_keeps_the_newest_10_builds() {
 /// ```
 #[test]
 fn the_probe_watches_the_same_address_before_and_after_the_cut_over() {
+    const BASE_URL: &str = "OPENLORE_INDEXER_LAMBDA_PROBE_BASE_URL";
     let tofu = prod_indexer_tofu();
 
-    let lines: Vec<&str> = tofu
-        .lines()
-        .filter(|line| line.contains("PROBE_BASE_URL"))
-        .collect();
+    let environment = blocks(function(&tofu, "openlore-indexer-probe"), "environment");
 
-    assert!(!lines.is_empty(), "the probe has a base URL");
-    for line in lines {
-        assert!(line.contains("aws_cloudfront_distribution"), "{line}");
-        assert!(!line.contains("phase"), "{line}");
-        assert!(!line.contains("index.openlore"), "{line}");
-    }
+    assert_eq!(environment.len(), 1);
+    assert_eq!(
+        setting(environment[0], BASE_URL).as_deref(),
+        Some(r#""https://${aws_cloudfront_distribution.index.domain_name}""#),
+        "the whole value, so no phase and no public name can sit beside the domain"
+    );
 }
 
 /// OP-17 (a healthy live search never has a 5xx, so A11's seen-check uses the
@@ -2249,12 +2243,19 @@ fn the_status_report_looks_for_the_search_error_metric_where_a_test_put_it() {
             .lines()
             .find(|line| line.contains("Url5xxCount"))
             .unwrap_or_else(|| panic!("the report names the metric\n{}", run.out));
-        assert!(report.ends_with(seen), "{report}");
+        assert_eq!(
+            report,
+            format!(
+                "A11 Url5xxCount Resource={}:candidate: {seen}",
+                FUNCTIONS[0]
+            )
+        );
     });
 }
 
 /// OP-E17 (a `prev=` record names the version before this one, so falling back to
-/// it would publish the wrong image)
+/// it would publish the wrong image. Only the live version fails to read here, so
+/// such a fallback would find an image and get through.)
 /// ```gherkin
 /// @driving_adapter @real-io @error @U-STZ-2 @D-STZ-29 @C6b @contract-shape:unbounded-preservation
 /// Scenario: A republish that cannot read the live image is refused, whatever the record says
@@ -2278,6 +2279,43 @@ fn a_republish_that_cannot_read_the_live_image_is_refused() {
     let calls = stubs.calls();
     for change in ["update-function-code", "publish-version", "update-alias"] {
         assert!(!called(&calls, &[change]), "{change}\n{calls}");
+    }
+}
+
+/// OP-19, review 08-06 (a partial flip leaves the functions on different images, and a
+/// republish must not bring them together)
+/// ```gherkin
+/// @driving_adapter @real-io @U-STZ-2 @D-STZ-29 @contract-shape:bounded-change
+/// Scenario: A republish keeps each function on the image it already runs
+///   Given the three functions run three different images
+///   When the operator republishes
+///   Then each function is set to, published from and flipped to its own image
+/// ```
+#[test]
+fn a_republish_keeps_each_function_on_its_own_live_image() {
+    const LIVE_IMAGES: [char; 3] = ['a', 'b', 'd'];
+    let stubs = Stubs::new(Posture {
+        image_in_ecr: true,
+        own_live_images: Some(LIVE_IMAGES),
+        ..Posture::default()
+    });
+
+    let run = stubs.run(&["lambda", "republish"], &[], "");
+
+    assert_flipped(&run, &stubs);
+    let calls = stubs.calls();
+    assert_eq!(calls.matches("update-function-code").count(), 3, "{calls}");
+    for (function, digit) in FUNCTIONS.iter().zip(LIVE_IMAGES) {
+        let code_sha = digit.to_string().repeat(64);
+        let image = format!("sha256:{code_sha}");
+        let at = format!("@{image}");
+        let set = line_of(&calls, &["update-function-code", function, &at]);
+        let published = line_of(&calls, &["publish-version", function, &code_sha]);
+        let flipped = line_of(&calls, &["update-alias", function, "--name live", &image]);
+        assert!(
+            set.is_some() && set < published && published < flipped,
+            "{function}\n{calls}"
+        );
     }
 }
 
@@ -2710,6 +2748,9 @@ fn a_publish_that_changed_nothing_is_refused_before_anything_moves() {
     );
 }
 
+/// Which `live` moves fail, then the version search, the pass and the probe each end on.
+type FlipRow = (&'static [(usize, u32)], [u32; 3]);
+
 /// OP-E24, crafter-owned (review H1). `lambda rollback` takes every function back one record, so
 /// a function that flipped beside one that did not would go a version too far. Step 15 therefore
 /// undoes what flipped, each under the record it had, and when an undo fails too it says exactly
@@ -2720,7 +2761,7 @@ fn a_flip_that_stops_at_the_pass_or_the_probe_is_undone_and_names_what_is_where(
     const SEARCH: usize = 0;
     const PASS: usize = 1;
     const PROBE: usize = 2;
-    let moves: [(&'static [(usize, u32)], [u32; 3]); 5] = [
+    let moves: [FlipRow; 5] = [
         (&[(PASS, 8)], [7, 7, 7]),
         (&[(PROBE, 8)], [7, 7, 7]),
         (&[(PASS, 8), (SEARCH, 7)], [8, 7, 7]),
