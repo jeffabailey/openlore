@@ -2098,7 +2098,7 @@
           "green": [
             "cargo test -p xtask --test scale_to_zero_ci"
           ],
-          "implementation_notes": "Structural: a golden check of the verb list against the runbook. The stage content comes from feature-delta Cut-over runbook outline; do not restate decisions. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "Structural: a golden check of the verb list against the runbook. The stage content comes from feature-delta Cut-over runbook outline; do not restate decisions. EXEMPT FROM PARADIGM: conventions.test_paradigm. FROM 07-02, for the runbook's first-apply section: step 6 sets cost_allocation_tag_active=true, because AWS refuses to activate a tag key before it appears in billing data; a response headers policy removing x-amzn-* may be refused at apply (X-Amzn-RequestId), so say what to do if it is; the cold-starts and memory saved queries assume the shared log group's stream format, so check they return rows in the trial. FROM 06-01: measure connect time on Lambda against the 10 s init budget.",
           "estimate_hours": 2,
           "depends_on": [
             "08-08",
