@@ -12,12 +12,14 @@
 //!   `GetParameter`, returning the raw text.
 //!
 //! The only crate besides the Lambda root that may link `aws-*` (xtask
-//! `aws_sdk_only_in_lambda_edge`, DELIVER).
+//! `aws_sdk_only_in_lambda_edge`).
 //
-// SCAFFOLD: true  (DISTILL 2026-10-27: signatures only; every body panics.
+// SCAFFOLD: true  (DISTILL 2026-10-27: signatures only; every port body panics.
 // Contract: tests/acceptance/scale_to_zero_object_store_real_io.rs)
 
 #![forbid(unsafe_code)]
+
+mod client_settings;
 
 use std::path::Path;
 use std::time::Duration;
@@ -29,6 +31,7 @@ use ports::{
     RepoDidListSourcePort, WriteCondition,
 };
 
+pub use client_settings::{client_settings, ClientSettings};
 pub use ports::{
     location_names_write_probe_key, write_probe_outcome, RepeatAnswer, WriteProbeSeen,
     WRITE_PROBE_KEY,
@@ -59,8 +62,19 @@ pub struct CallBudget {
 /// The one place the § Timeouts table lives. Every S3 and SSM client takes its
 /// settings from here, so each figure is the real worst case.
 pub fn call_budget(call: StoreCall) -> CallBudget {
-    let _ = call;
-    panic!("Not yet implemented -- RED scaffold")
+    let seconds = match call {
+        StoreCall::FreshnessHead => 1,
+        StoreCall::WriteProbePut | StoreCall::ReadProbeHead => 2,
+        StoreCall::Reload | StoreCall::GetLastPass => 3,
+        StoreCall::GetParameter | StoreCall::PutLastPass => 5,
+        StoreCall::SearchInitGet => 8,
+        StoreCall::Publish => 35,
+        StoreCall::PassGet => 60,
+    };
+    CallBudget {
+        operation_timeout: Duration::from_secs(seconds),
+        max_attempts: 1,
+    }
 }
 
 /// Where the index object lives.

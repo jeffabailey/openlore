@@ -67,6 +67,12 @@ deny = [
     # banned for build hygiene (no cross-compile pain, no system OpenSSL drift).
     { name = "openssl" },
     { name = "openssl-sys" },
+    # aws-lc-*: the AWS SDK's default TLS stack. D-STZ-36 keeps it on rustls with
+    # ring (`aws-smithy-http-client` feature `rustls-ring`, SDK
+    # `default-features = false`), so a default feature cannot bring in C crypto.
+    { name = "aws-lc-rs" },
+    { name = "aws-lc-sys" },
+    { name = "aws-lc-fips-sys" },
     # serde_cbor: unmaintained (last release 2021); superseded by ciborium
     # which is what claim-domain uses for canonical CBOR.
     { name = "serde_cbor" },

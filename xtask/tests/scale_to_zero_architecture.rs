@@ -214,7 +214,6 @@ fn the_real_graph_names_what_the_guards_look_for() {
 ///   And it has the rules aws_sdk_only_in_lambda_edge and indexer_lambda_holds_no_signing_or_local_store
 /// ```
 #[test]
-#[ignore = "RED: DELIVER adds the rules with the first aws-* dependency (P-2)"]
 fn check_arch_knows_the_lambda_root_and_its_rules() {
     let code = code_of(&root().join("xtask/src/check_arch.rs"));
     let roots = const_body(&code, "COMPOSITION_ROOTS");

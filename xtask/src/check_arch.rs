@@ -52,6 +52,9 @@
 //! 9. `adapter_github_holds_no_storage_port`: `adapter-github` names no
 //!    storage / identity / publish port (DDD-16 / I-SCR-1;
 //!    [`classify_adapter_github_port_reference`]).
+//! 10. `aws_sdk_only_in_lambda_edge`: only `openlore-indexer-lambda` and
+//!     `adapter-s3-index-object` may reach `aws-*` or `lambda_*` crates, dev edges
+//!     included (D-STZ-3 / ADR-023; [`check_aws_sdk_only_in_lambda_edge`]).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -628,6 +631,9 @@ const INDEXER_ROOT: &str = "openlore-indexer";
 /// The Lambda composition-root crate name (ADR-090, D-STZ-1).
 const INDEXER_LAMBDA_ROOT: &str = "openlore-indexer-lambda";
 
+/// The one adapter that links the AWS SDK (ADR-090, D-STZ-3).
+const INDEXER_LAMBDA_ADAPTER: &str = "adapter-s3-index-object";
+
 /// Dep classes the signing-incapable, store-less indexer MUST NOT reach (I-AV-5
 /// / ADR-023): the user's local store (`StoragePort` impl) + any PDS-write
 /// surface. `adapter-atproto-did` is intentionally NOT here — the indexer wires
@@ -642,13 +648,15 @@ const INDEXER_FORBIDDEN_DEPS: &[&str] = &[
 ];
 
 /// Indexer-side adapters the `cli` composition root MUST NOT link (I-3 second
-/// axis): the HTTP query server + the indexer's store/ingest crates. The CLI
-/// links the index-query CLIENT (`adapter-index-query`) instead — that is
-/// permitted (NOT on this list).
+/// axis): the HTTP query server + the indexer's store/ingest crates + the Lambda
+/// root and its adapter (ADR-090). The CLI links the index-query CLIENT
+/// (`adapter-index-query`) instead — that is permitted (NOT on this list).
 const CLI_FORBIDDEN_INDEXER_DEPS: &[&str] = &[
     "adapter-xrpc-query-server",
     "adapter-index-store",
     "adapter-atproto-ingest",
+    INDEXER_LAMBDA_ADAPTER,
+    INDEXER_LAMBDA_ROOT,
 ];
 
 /// Pure dep-graph check (I-AV-5 + I-3 extension): the `openlore-indexer` crate's
@@ -698,13 +706,51 @@ pub fn check_indexer_capability_boundary(workspace: &Workspace) -> Vec<Violation
                     package: COMPOSITION_ROOT.to_string(),
                     forbidden: (*forbidden).to_string(),
                     rule: "cli MUST NOT link the indexer's HTTP server / store / ingest \
-                           crates (I-3: disjoint composition roots)",
+                           crates or the Lambda root and its adapter (I-3: disjoint \
+                           composition roots)",
                 });
             }
         }
     }
 
     violations
+}
+
+// -----------------------------------------------------------------------------
+// AWS boundary rule — `aws_sdk_only_in_lambda_edge` (D-STZ-3 / ADR-023 / P-2)
+// -----------------------------------------------------------------------------
+//
+// The AWS SDK and the Lambda runtime live at one edge: the Lambda root and its
+// adapter. No other member may reach them, dev edges included, so the self-host
+// binary and the CLI cannot link them by accident.
+
+/// The members allowed to reach `aws-*` and `lambda_*`.
+const AWS_EDGE_MEMBERS: &[&str] = &[INDEXER_LAMBDA_ROOT, INDEXER_LAMBDA_ADAPTER];
+
+/// Crate-name prefixes of the AWS SDK and the Lambda runtime.
+const AWS_EDGE_PREFIXES: &[&str] = &["aws-", "lambda_", "lambda-"];
+
+/// Pure dep-graph check: one [`Violation`] for each `aws-*` or `lambda_*` crate a
+/// member outside the Lambda edge reaches. Empty vec = compliant.
+pub fn check_aws_sdk_only_in_lambda_edge(workspace: &Workspace) -> Vec<Violation> {
+    workspace
+        .members
+        .iter()
+        .filter(|member| !AWS_EDGE_MEMBERS.contains(&member.as_str()))
+        .flat_map(|member| {
+            workspace
+                .transitive_deps(member)
+                .into_iter()
+                .filter(|dep| AWS_EDGE_PREFIXES.iter().any(|p| dep.starts_with(p)))
+                .map(|dep| Violation {
+                    package: member.clone(),
+                    forbidden: dep,
+                    rule: "aws_sdk_only_in_lambda_edge: only openlore-indexer-lambda and \
+                           adapter-s3-index-object may reach aws-* or lambda_* crates \
+                           (D-STZ-3 / ADR-023)",
+                })
+        })
+        .collect()
 }
 
 // -----------------------------------------------------------------------------
@@ -847,6 +893,8 @@ pub fn check_workspace(workspace: &Workspace) -> Vec<Violation> {
     // boundary — `openlore-indexer` holds no signing/local-store; both
     // composition roots wire disjoint adapter sets.
     violations.extend(check_indexer_capability_boundary(workspace));
+    // scale-to-zero-hosting (D-STZ-3): the AWS SDK stays at the Lambda edge.
+    violations.extend(check_aws_sdk_only_in_lambda_edge(workspace));
     // Slice-06 (I-VIEW-3 / ADR-028/030): the viewer capability boundary —
     // `adapter-http-viewer` holds no signing/PDS surface; only `cli` links it.
     violations.extend(check_viewer_capability_boundary(workspace));
@@ -6200,6 +6248,61 @@ mod review_app_rule_tests {
             assert!(
                 v.iter()
                     .any(|x| x.package == INDEXER_LAMBDA_ROOT && x.forbidden == *forbidden),
+                "{forbidden}: {v:?}"
+            );
+        }
+    }
+
+    /// `aws_sdk_only_in_lambda_edge`: a transitive edge is enough, from any
+    /// member, and the rule is part of `check_workspace`.
+    #[test]
+    fn a_member_outside_the_lambda_edge_reaching_aws_or_lambda_is_a_violation() {
+        let sdk_crates = [
+            "aws-config",
+            "aws-sdk-s3",
+            "lambda_runtime",
+            "lambda-extension",
+        ];
+        for member in ["cli", "openlore-indexer", "ports"] {
+            for sdk in sdk_crates {
+                let v = check_workspace(&ws(&[
+                    (member, &["shared"]),
+                    ("shared", std::slice::from_ref(&sdk)),
+                ]));
+                assert!(
+                    v.iter().any(|x| x.package == member
+                        && x.forbidden == sdk
+                        && x.rule.starts_with("aws_sdk_only_in_lambda_edge")),
+                    "{member} {sdk}: {v:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_lambda_root_and_its_adapter_may_reach_aws_and_lambda() {
+        let edge = ws(&[
+            (
+                INDEXER_LAMBDA_ROOT,
+                &[INDEXER_LAMBDA_ADAPTER, "lambda_runtime"],
+            ),
+            (INDEXER_LAMBDA_ADAPTER, &["aws-config"]),
+        ]);
+        assert_eq!(check_aws_sdk_only_in_lambda_edge(&edge), Vec::new());
+    }
+
+    /// The I-3 second axis: a transitive edge is enough, and the rule is part of
+    /// `check_workspace`.
+    #[test]
+    fn the_cli_reaching_the_lambda_root_or_its_adapter_is_a_violation() {
+        for forbidden in [INDEXER_LAMBDA_ROOT, INDEXER_LAMBDA_ADAPTER] {
+            let v = check_workspace(&ws(&[
+                (COMPOSITION_ROOT, &["shared"]),
+                ("shared", std::slice::from_ref(&forbidden)),
+            ]));
+            assert!(
+                v.iter()
+                    .any(|x| x.package == COMPOSITION_ROOT && x.forbidden == forbidden),
                 "{forbidden}: {v:?}"
             );
         }

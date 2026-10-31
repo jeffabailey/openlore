@@ -10,13 +10,16 @@ repository.workspace = true
 authors.workspace = true
 description = "OpenLore index object EFFECT shell (ADR-090): IndexObjectReadPort and IndexObjectWritePort over S3, RepoDidListSourcePort over SSM. The only adapter that links aws-* crates."
 
-# RED scaffold (DISTILL 2026-10-27). DELIVER adds aws-config, aws-sdk-s3,
-# aws-sdk-ssm and aws-smithy-http-client (rustls-ring) with
-# `default-features = false` (D-STZ-36), together with the xtask rule
-# `aws_sdk_only_in_lambda_edge` (P-2).
+# The AWS SDK (D-STZ-3, D-STZ-35, D-STZ-36): rustls with ring, `default-features =
+# false` everywhere so no aws-lc reaches the graph. xtask `aws_sdk_only_in_lambda_edge`
+# keeps these out of every other crate (P-2); deny.toml bans aws-lc (P-3).
 [dependencies]
 ports = { path = "../ports" }
 async-trait = "0.1.92"
+aws-config = { version = "1.13.0", default-features = false, features = ["rt-tokio", "behavior-version-latest"] }
+aws-sdk-s3 = { version = "1.155.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-ssm = { version = "1.131.0", default-features = false, features = ["rt-tokio"] }
+aws-smithy-http-client = { version = "1.5.1", default-features = false, features = ["rustls-ring"] }
 
 [dev-dependencies]
 # The real-I/O contract against moto (DEVOPS UD-5), gated on

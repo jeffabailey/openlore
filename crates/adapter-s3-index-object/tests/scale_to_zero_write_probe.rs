@@ -118,7 +118,6 @@ fn the_write_checks_marker_can_never_be_the_index() {
 ///   And no call may try twice, so each limit is the real worst case
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER adapter-s3-index-object call_budget"]
 fn every_store_call_has_one_attempt_and_its_own_time_limit() {
     let rows = [
         (StoreCall::WriteProbePut, 2),
