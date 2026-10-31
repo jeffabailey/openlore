@@ -195,7 +195,6 @@ fn a_pass_that_indexes_a_new_claim_replaces_exactly_the_version_it_started_from(
 ///   And a search instance that starts afterwards finds Tomás's loom claim
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (DID list read from the parameter store each pass)"]
 fn an_edit_to_the_did_list_takes_effect_on_the_next_pass_with_no_redeploy() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     world.publishes(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
@@ -315,7 +314,6 @@ fn a_pass_that_reaches_nobody_publishes_nothing_and_still_records_itself() {
 ///   Then the pass completes on the list it read at 14:00 and publishes Priya's new claim
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (warm DID-list copy, D-STZ-16)"]
 fn a_warm_pass_rides_out_a_parameter_store_outage_on_its_last_good_list() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     world.publishes(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);

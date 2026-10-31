@@ -13,12 +13,12 @@ use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use appview_domain::ingest_pass::PassExit;
 use appview_domain::pass_runner::PassId;
-use chrono::SecondsFormat;
+use chrono::{DateTime, SecondsFormat, Utc};
 use openlore_indexer::config::{IndexerConfig, REPO_DIDS_FILE_VAR};
 use openlore_indexer::events::Events;
 use openlore_indexer::ingest_pass::{write_pass_summary, EndedPass};
@@ -29,7 +29,7 @@ use ports::{
 };
 use serde_json::json;
 
-use crate::decide::{publish_decision, Publish};
+use crate::decide::{dids_copy_usable, publish_decision, Publish, DIDS_COPY_MAX_AGE};
 use crate::{events_through, pass_wiring, Environment, FunctionError, InitRefused, PassDriven};
 
 /// The reused pass's work, and whether its store is to be published.
@@ -49,6 +49,8 @@ pub struct PassFunction {
     driven: PassDriven,
     config: IndexerConfig,
     did_list_file: PathBuf,
+    /// When this instance last rendered a good list: the age of its copy.
+    list_rendered_at: Mutex<Option<DateTime<Utc>>>,
     boot: BootNonce,
     passes_started: AtomicU64,
 }
@@ -67,6 +69,7 @@ impl PassFunction {
             driven,
             config,
             did_list_file,
+            list_rendered_at: Mutex::new(None),
             boot: BootNonce::now(),
             passes_started: AtomicU64::new(0),
         })
@@ -105,17 +108,20 @@ impl PassFunction {
         PassLabel::new(self.boot, PassId(sequence))
     }
 
-    /// Render the operator's list where the reused pass reads it (D-STZ-16). A
-    /// list that cannot be rendered leaves the file as it was, and the pass's
-    /// own list refusal decides from there (ADR-081).
+    /// Render the operator's list where the reused pass reads it, once a pass
+    /// (D-STZ-16). When that fails, `settle_did_list` says whether the last good
+    /// copy stays, and the pass's own list refusal decides from there (ADR-081).
     async fn render_did_list(&self) {
+        let now = self.driven.clock.now_utc();
         let rendered = match self.driven.repo_dids.current().await {
             Ok(list) => render_by_rename(&self.did_list_file, &list).map_err(|e| e.to_string()),
             Err(unavailable) => Err(unavailable.to_string()),
         };
-        if let Err(cause) = rendered {
-            eprintln!("openlore-indexer-lambda: DID list not rendered: {cause}");
-        }
+        let mut rendered_at = self
+            .list_rendered_at
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *rendered_at = settle_did_list(rendered, &self.did_list_file, *rendered_at, now);
     }
 
     /// Replace the local copy with the current object. `fetch_to` wants a new
@@ -303,6 +309,35 @@ fn remove_if_present(file: &Path) -> std::io::Result<()> {
     }
 }
 
+/// What a render attempt leaves behind, returning when the copy on disk was last
+/// read good. Only a good read moves that time, so an outage never makes a copy
+/// younger. A copy past its age is removed, so the ADR-081 path refuses.
+fn settle_did_list(
+    rendered: Result<(), String>,
+    file: &Path,
+    rendered_at: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    let Err(cause) = rendered else {
+        return Some(now);
+    };
+    eprintln!("openlore-indexer-lambda: DID list not rendered: {cause}");
+    if !copy_usable(rendered_at, now) {
+        if let Err(stuck) = remove_if_present(file) {
+            eprintln!("openlore-indexer-lambda: old DID list copy not removed: {stuck}");
+        }
+    }
+    rendered_at
+}
+
+/// `decide::dids_copy_usable`, when the copy's age is known. A copy this instance
+/// never rendered, or a clock that went back, gives no age to trust.
+fn copy_usable(rendered_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+    rendered_at
+        .and_then(|read| (now - read).to_std().ok())
+        .is_some_and(|age| dids_copy_usable(age, DIDS_COPY_MAX_AGE))
+}
+
 /// Write `list` to `file` by rename, so a reader never sees half of it.
 fn render_by_rename(file: &Path, list: &str) -> std::io::Result<()> {
     if let Some(directory) = file.parent() {
@@ -314,8 +349,132 @@ fn render_by_rename(file: &Path, list: &str) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
+#[path = "../../../tests/common/state_delta.rs"]
+mod state_delta;
+
+#[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+
+    use chrono::TimeDelta;
+    use proptest::prelude::*;
+    use serde_json::Value;
+
+    use super::state_delta::{assert_state_delta, set_to, Delta};
     use super::*;
+
+    /// D-STZ-16's limit, stated here so a changed constant shows.
+    const TWO_HOURS_IN_SECONDS: i64 = 2 * 60 * 60;
+
+    fn fourteen_hundred() -> DateTime<Utc> {
+        "2026-10-27T14:00:00Z".parse().expect("a fixed instant")
+    }
+
+    /// What a reader can see of the copy: the file, and the age it is held to.
+    fn copy_slots(file: &Path, rendered_at: Option<DateTime<Utc>>) -> HashMap<String, Value> {
+        let text = std::fs::read_to_string(file).map_or(Value::Null, Value::String);
+        HashMap::from([
+            ("copy.text".to_string(), text),
+            (
+                "copy.rendered_at".to_string(),
+                json!(rendered_at.map(|at| at.to_rfc3339())),
+            ),
+        ])
+    }
+
+    fn copy_universe() -> HashSet<String> {
+        ["copy.text", "copy.rendered_at"]
+            .into_iter()
+            .map(String::from)
+            .collect()
+    }
+
+    proptest! {
+        // Any order of good and failed reads: the file is the last good list for
+        // exactly two hours after that read, and only a good read restarts them.
+        #[test]
+        fn a_copy_lasts_two_hours_from_its_last_good_read_through_any_outage(
+            passes in prop::collection::vec(
+                (
+                    prop_oneof![
+                        Just(TWO_HOURS_IN_SECONDS),
+                        Just(1),
+                        0..=TWO_HOURS_IN_SECONDS + 60,
+                    ],
+                    any::<bool>(),
+                ),
+                1..8,
+            ),
+        ) {
+            let scratch = tempfile::tempdir().expect("scratch");
+            let file = scratch.path().join("config").join("repo-dids");
+            let (mut now, mut rendered_at, mut last_good) = (fourteen_hundred(), None, None);
+
+            for (pass, (seconds_later, read_is_good)) in passes.into_iter().enumerate() {
+                now += TimeDelta::seconds(seconds_later);
+                let before = copy_slots(&file, rendered_at);
+
+                let expected = if read_is_good {
+                    let list = format!("did:plc:list{pass}\n");
+                    render_by_rename(&file, &list).expect("a render");
+                    rendered_at = settle_did_list(Ok(()), &file, rendered_at, now);
+                    last_good = Some(now);
+                    Delta::new()
+                        .with_slot("copy.text", set_to(json!(list)))
+                        .with_slot("copy.rendered_at", set_to(json!(now.to_rfc3339())))
+                } else {
+                    rendered_at =
+                        settle_did_list(Err("outage".to_string()), &file, rendered_at, now);
+                    let within_the_limit = last_good.is_some_and(|read: DateTime<Utc>| {
+                        (now - read).num_seconds() <= TWO_HOURS_IN_SECONDS
+                    });
+                    if within_the_limit {
+                        Delta::new()
+                    } else {
+                        Delta::new().with_slot("copy.text", set_to(Value::Null))
+                    }
+                };
+
+                assert_state_delta(
+                    &before,
+                    &copy_slots(&file, rendered_at),
+                    &copy_universe(),
+                    &expected,
+                );
+            }
+        }
+    }
+
+    // bypass: a file this instance never rendered and a clock that went back are
+    // two fixed facts that no order of reads produces.
+    #[test]
+    fn a_copy_of_unknown_age_is_not_used() {
+        let now = fourteen_hundred();
+        let unknown_ages = [
+            ("never rendered here", None),
+            ("the clock went back", Some(now + TimeDelta::seconds(1))),
+        ];
+        for (case, rendered_at) in unknown_ages {
+            let scratch = tempfile::tempdir().expect("scratch");
+            let file = scratch.path().join("repo-dids");
+            std::fs::write(&file, "did:plc:priya\n").expect("a copy");
+
+            let kept = settle_did_list(Err("outage".to_string()), &file, rendered_at, now);
+
+            assert!(!file.exists(), "{case}");
+            assert_eq!(kept, rendered_at, "{case}");
+        }
+    }
+
+    // bypass: the two fixed outcomes of one file-system call; a pass cannot make
+    // a removal in its own scratch directory fail.
+    #[test]
+    fn a_file_already_gone_is_removed_and_one_that_stays_is_a_failure() {
+        let scratch = tempfile::tempdir().expect("scratch");
+
+        assert!(remove_if_present(&scratch.path().join("gone")).is_ok());
+        assert!(remove_if_present(scratch.path()).is_err(), "a directory");
+    }
 
     // bypass: P-7 is one rule over a file's three states, and a real pass can
     // only ever reach the empty one, so these rows plant the others.
