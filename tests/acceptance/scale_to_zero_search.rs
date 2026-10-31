@@ -111,7 +111,6 @@ fn given_the_next_pass_published_priyas_new_claim(world: &LambdaWorld) {
 ///   And the index reports it is healthy with nothing published yet
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (search mode)"]
 fn a_fresh_deployment_answers_before_any_index_was_published() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = world.cold_search_instance();
@@ -140,7 +139,6 @@ fn a_fresh_deployment_answers_before_any_index_was_published() {
 ///   Then it reports the index as published at 14:00
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (search mode, health from object metadata)"]
 fn the_index_reports_when_the_copy_it_serves_was_published() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let published_at = world.clock.now();

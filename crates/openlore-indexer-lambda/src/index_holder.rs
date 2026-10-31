@@ -5,11 +5,9 @@
 use std::sync::Arc;
 
 use adapter_index_store::{DuckDbCaps, IndexStoreAdapter};
-use adapter_xrpc_query_server::Handlers;
+use adapter_xrpc_query_server::HealthHandler;
 use openlore_indexer::config::IndexerConfig;
-use openlore_indexer::events::Events;
 use openlore_indexer::health::{health_handler, published_at_of_fetched, store_usability};
-use openlore_indexer::run::search_answers;
 use openlore_indexer::search_handler::SharedIndexReads;
 use ports::{IndexObjectReadPort, ObjectVersion};
 
@@ -43,16 +41,17 @@ impl HeldIndex {
         })
     }
 
-    /// The public surface over this copy, read-only: a search sees the store
-    /// through its read port, `/healthz` its usability and the version's stamp.
-    pub(crate) fn handlers(&self, events: &Events) -> Handlers {
-        Handlers {
-            query: search_answers(Arc::clone(&self.store) as SharedIndexReads, events),
-            health: Some(health_handler(
-                published_at_of_fetched(self.version.as_ref()),
-                store_usability(Arc::clone(&self.store)),
-            )),
-        }
+    /// This copy as a search sees it: through its read port alone.
+    pub(crate) fn reads(&self) -> SharedIndexReads {
+        Arc::clone(&self.store) as SharedIndexReads
+    }
+
+    /// `/healthz` over this copy: its usability and the version's stamp.
+    pub(crate) fn health(&self) -> HealthHandler {
+        health_handler(
+            published_at_of_fetched(self.version.as_ref()),
+            store_usability(Arc::clone(&self.store)),
+        )
     }
 }
 

@@ -3591,19 +3591,36 @@ fn scan_sources_under(
 // `indexer_search_handler_read_only` (ADR-082/083, B7, DD-IXD-9)
 // -----------------------------------------------------------------------------
 
-/// Names of a write or purge capability on the index: none may appear in the
-/// indexer's search-handler module (FR-IXD-2: no request can change the index).
-const SEARCH_HANDLER_WRITE_TOKENS: &[&str] =
-    &["IndexStorePort", "IndexPurgePort", "upsert", "purge"];
+/// Names of a write or purge capability on the index or its object: none may
+/// appear in the indexer's search-handler module (FR-IXD-2: no request can
+/// change the index) or in a read-only Lambda mode (D-STZ-38).
+const SEARCH_HANDLER_WRITE_TOKENS: &[&str] = &[
+    "IndexStorePort",
+    "IndexPurgePort",
+    "upsert",
+    "purge",
+    "publish_if_match",
+    "put_last_pass",
+    "IndexObjectPort",
+    "IndexObjectWritePort",
+];
 
 /// The one capability the search handler holds.
 const SEARCH_HANDLER_READ_PORT: &str = "IndexReadPort";
 
+/// Lambda search calls `head` and `fetch_to` only; the pass record is the
+/// probe's to read (D-STZ-38).
+const LAMBDA_SEARCH_PASS_RECORD_READ: &str = "get_last_pass";
+
+/// The Lambda root's two read-only modes.
+const LAMBDA_SEARCH_MODULE: &str = "crates/openlore-indexer-lambda/src/search.rs";
+const LAMBDA_PROBE_MODULE: &str = "crates/openlore-indexer-lambda/src/probe.rs";
+
 /// Pure rule over one search-handler source: every non-comment line of its
-/// production part (before the first `#[cfg(test)]`) naming a write
-/// capability, plus a finding when the module does not hold `IndexReadPort`.
+/// production part naming a write capability, plus a finding when the module
+/// does not hold `IndexReadPort`.
 pub fn classify_search_handler_read_only(source: &str) -> Vec<String> {
-    let production = source.split("#[cfg(test)]").next().unwrap_or_default();
+    let production = production_part(source);
     let missing_read_port = (!production.contains(SEARCH_HANDLER_READ_PORT))
         .then(|| format!("does not hold `{SEARCH_HANDLER_READ_PORT}`"));
     classify_forbidden_tokens(production, SEARCH_HANDLER_WRITE_TOKENS)
@@ -3612,9 +3629,30 @@ pub fn classify_search_handler_read_only(source: &str) -> Vec<String> {
         .collect()
 }
 
+/// One pure read-only rule over a module's source.
+type ReadOnlyRule = fn(&str) -> Vec<String>;
+
+/// Pure rule over the Lambda search module: the search-handler rule, plus no
+/// read of the pass record.
+pub fn classify_lambda_search_read_only(source: &str) -> Vec<String> {
+    let reads_the_pass_record =
+        classify_forbidden_tokens(production_part(source), &[LAMBDA_SEARCH_PASS_RECORD_READ]);
+    classify_search_handler_read_only(source)
+        .into_iter()
+        .chain(reads_the_pass_record)
+        .collect()
+}
+
+/// Pure rule over the Lambda probe module: no write capability. It holds no
+/// store, so it needs no `IndexReadPort`, and it alone reads the pass record.
+pub fn classify_lambda_probe_read_only(source: &str) -> Vec<String> {
+    classify_forbidden_tokens(production_part(source), SEARCH_HANDLER_WRITE_TOKENS)
+}
+
 /// Effect shell for `indexer_search_handler_read_only`: every
-/// `crates/openlore-indexer/src/*search*.rs`. Finding no search-handler module
-/// is itself a finding (the rule must never pass vacuously).
+/// `crates/openlore-indexer/src/*search*.rs`, and the Lambda search and probe
+/// modules. Finding no search-handler module is itself a finding, and a missing
+/// Lambda mode is an error (the rule must never pass vacuously).
 pub fn scan_indexer_search_handler_read_only(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
     const RULE: &str = "indexer_search_handler_read_only";
     let handlers: Vec<PathBuf> = rust_sources_under(&workspace_root.join(INDEXER_SOURCE_DIR))
@@ -3630,19 +3668,29 @@ pub fn scan_indexer_search_handler_read_only(workspace_root: &Path) -> anyhow::R
              the rule would pass vacuously"
         )]);
     }
+    let lambda_modes: [(PathBuf, ReadOnlyRule); 2] = [
+        (
+            workspace_root.join(LAMBDA_SEARCH_MODULE),
+            classify_lambda_search_read_only,
+        ),
+        (
+            workspace_root.join(LAMBDA_PROBE_MODULE),
+            classify_lambda_probe_read_only,
+        ),
+    ];
+    let self_host_handlers = handlers
+        .into_iter()
+        .map(|path| (path, classify_search_handler_read_only as ReadOnlyRule));
     let mut findings = Vec::new();
-    for path in handlers {
-        let source = std::fs::read_to_string(&path)?;
-        findings.extend(
-            classify_search_handler_read_only(&source)
-                .into_iter()
-                .map(|finding| {
-                    format!(
-                        "{RULE}: {}: {finding} — the search handler holds the read port only (B7)",
-                        path.display()
-                    )
-                }),
-        );
+    for (path, classify) in self_host_handlers.chain(lambda_modes) {
+        let source = std::fs::read_to_string(&path)
+            .map_err(|error| anyhow::anyhow!("{RULE}: {}: {error}", path.display()))?;
+        findings.extend(classify(&source).into_iter().map(|finding| {
+            format!(
+                "{RULE}: {}: {finding} — a read-only mode holds the read port only (B7, D-STZ-38)",
+                path.display()
+            )
+        }));
     }
     Ok(findings)
 }

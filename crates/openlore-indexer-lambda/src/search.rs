@@ -3,9 +3,14 @@
 //! composed with the read port alone (D-STZ-38), so it cannot name a write
 //! (check-arch `indexer_search_handler_read_only`, extended).
 
+use std::sync::Arc;
+
 use adapter_xrpc_query_server::{
     dispatch, BodyRead, Handlers, PublicAnswer, PublicRequest, REQUEST_TIMEOUT,
 };
+use openlore_indexer::events::Events;
+use openlore_indexer::run::search_answers;
+use ports::IndexReadPort;
 use serde_json::{json, Map, Value};
 
 use crate::index_holder::HeldIndex;
@@ -23,7 +28,7 @@ impl SearchFunction {
         let config = env.indexer_config()?;
         let index = HeldIndex::fetched(driven.index_object.as_ref(), &config).await?;
         Ok(Self {
-            handlers: index.handlers(&events_through(driven.events)),
+            handlers: handlers_over(&index, &events_through(driven.events)),
         })
     }
 
@@ -37,6 +42,16 @@ impl SearchFunction {
             time_allowed: REQUEST_TIMEOUT,
         };
         function_url_response(&dispatch(request, &self.handlers).await)
+    }
+}
+
+/// The public surface over one copy. A search holds `IndexReadPort` and nothing
+/// that writes.
+fn handlers_over(index: &HeldIndex, events: &Events) -> Handlers {
+    let reads: Arc<dyn IndexReadPort + Send + Sync> = index.reads();
+    Handlers {
+        query: search_answers(reads, events),
+        health: Some(index.health()),
     }
 }
 

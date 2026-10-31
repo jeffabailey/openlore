@@ -434,7 +434,6 @@ fn check_arch_accepts_clean_read_modes() {
 ///     | search | a read of the pass record         |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER extends indexer_search_handler_read_only to the Lambda modes"]
 fn check_arch_refuses_a_write_capability_in_a_read_only_lambda_mode() {
     let naming =
         |clean: &str, capability: &str| format!("{clean}fn holds(_: &dyn {capability}) {{}}\n");
