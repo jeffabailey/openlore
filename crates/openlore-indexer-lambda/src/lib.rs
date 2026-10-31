@@ -14,14 +14,11 @@
 //!
 //! Every function writes its JSON event lines through [`EventSink`] (stdout in
 //! production, so the existing log metric filters match unchanged).
-//
-// SCAFFOLD: true  (DISTILL 2026-10-27: the driving surface is DISTILL-proposed;
-// every body panics. DELIVER wires the openlore-indexer lib, dispatch, the
-// adapters and lambda_http / lambda_runtime.)
 
 #![forbid(unsafe_code)]
 
 pub mod decide;
+mod index_holder;
 pub mod no_publish;
 mod pass;
 mod probe;
@@ -30,7 +27,14 @@ mod search;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use ports::{ClockPort, IndexObjectReadPort, IndexObjectWritePort, RepoDidListSourcePort};
+use adapter_atproto_did::AtProtoDidAdapter;
+use openlore_indexer::config::{parse_config, BuildProfile, IndexerConfig};
+use openlore_indexer::events::{EventWriter, Events};
+use openlore_indexer::run::{IndexerWiring, Wired};
+use ports::{
+    ClockPort, IdentityResolvePort, IndexObjectReadPort, IndexObjectWritePort,
+    RepoDidListSourcePort,
+};
 
 pub use pass::PassFunction;
 pub use probe::ProbeFunction;
@@ -42,9 +46,56 @@ pub use search::SearchFunction;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Environment(pub BTreeMap<String, String>);
 
+impl Environment {
+    /// The indexer's own configuration, read from this environment.
+    fn indexer_config(&self) -> Result<IndexerConfig, InitRefused> {
+        parse_config(
+            |name| self.0.get(name).cloned(),
+            BuildProfile::of_this_build(),
+        )
+        .map_err(|refused| InitRefused {
+            reason: refused.to_string(),
+        })
+    }
+}
+
 /// Where the function's JSON event lines go: stdout in production.
 pub trait EventSink: Send + Sync {
     fn line(&self, line: &str);
+}
+
+/// The indexer's event writer over the root's sink (UI-8).
+struct SinkWriter(Arc<dyn EventSink>);
+
+impl EventWriter for SinkWriter {
+    fn write_line(&self, line: &str) -> std::io::Result<()> {
+        self.0.line(line);
+        Ok(())
+    }
+
+    fn flush(&self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn events_through(sink: Arc<dyn EventSink>) -> Events {
+    Events::new(Arc::new(SinkWriter(sink)))
+}
+
+/// The verify-only resolve path (D-STZ-50): the root's one site, held behind
+/// `IdentityResolvePort`.
+fn verify_only_resolver() -> Box<dyn IdentityResolvePort> {
+    Box::new(AtProtoDidAdapter::resolve_only())
+}
+
+/// The pass's store, ingest and DID-resolve clients, composed from the
+/// environment (D-STZ-38). Opens the store, so it is called off the async runtime.
+fn pass_wiring(config: IndexerConfig, sink: Arc<dyn EventSink>) -> Result<Wired, FunctionError> {
+    IndexerWiring::production(config, events_through(sink), verify_only_resolver()).map_err(
+        |refused| FunctionError {
+            message: format!("{refused:#}"),
+        },
+    )
 }
 
 /// What the search function is composed with (D-STZ-38): the read port only, so

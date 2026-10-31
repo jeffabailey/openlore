@@ -17,16 +17,21 @@ path = "src/lib.rs"
 name = "openlore-indexer-lambda"
 path = "src/main.rs"
 
-# RED scaffold (DISTILL 2026-10-27). DELIVER adds openlore-indexer (lib split,
-# D-STZ-2), adapter-xrpc-query-server (dispatch), adapter-index-store,
-# adapter-index-query (probe), adapter-s3-index-object, lambda_http,
-# lambda_runtime and aws-config, and adds this crate to check-arch's
-# COMPOSITION_ROOTS together with `indexer_lambda_holds_no_signing_or_local_store`.
+# The fourth composition root (check-arch COMPOSITION_ROOTS). Its capability
+# boundary is the graph rule `indexer_lambda_holds_no_signing_or_local_store`:
+# adapter-atproto-did is here for the verify-only `resolve_only()` alone
+# (D-STZ-50). Still to come: adapter-index-query (probe), adapter-s3-index-object,
+# lambda_http, lambda_runtime and aws-config.
 [dependencies]
 ports = { path = "../ports" }
 appview-domain = { path = "../appview-domain" }
+openlore-indexer = { path = "../openlore-indexer" }
+adapter-atproto-did = { path = "../adapter-atproto-did" }
+adapter-index-store = { path = "../adapter-index-store" }
+adapter-xrpc-query-server = { path = "../adapter-xrpc-query-server" }
 chrono = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
 
 # The acceptance harness drives the entry points in-process with the external
 # ports faked; the PDSes and PLC are the shared FakeAtprotoNetwork. None of

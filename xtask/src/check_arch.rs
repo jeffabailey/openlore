@@ -110,7 +110,16 @@ const ADAPTER_DEPENDENT_EXEMPT_MEMBERS: &[&str] = &["xtask", "openlore-test-supp
 /// bluesky-claim-review-app (ADR-072) adds the THIRD root, the hosted
 /// `openlore-review-app`; its adapter set is kept disjoint from the other two
 /// by [`check_review_app_capability_boundary`].
-const COMPOSITION_ROOTS: &[&str] = &["cli", "openlore-indexer", "openlore-review-app"];
+///
+/// scale-to-zero-hosting (ADR-090) adds the FOURTH root, the Lambda
+/// `openlore-indexer-lambda`; its forbidden set is kept by
+/// [`check_indexer_capability_boundary`] too.
+const COMPOSITION_ROOTS: &[&str] = &[
+    "cli",
+    "openlore-indexer",
+    "openlore-review-app",
+    "openlore-indexer-lambda",
+];
 
 /// The user's CLI composition root, per ADR-009. Named separately because the
 /// indexer capability-boundary rule keys on it specifically (the `cli`-side I-3
@@ -280,7 +289,7 @@ fn check_only_cli_depends_on_adapters(workspace: &Workspace) -> Vec<Violation> {
                 violations.push(Violation {
                     package: member.clone(),
                     forbidden: dep,
-                    rule: "only a composition root (`cli` / `openlore-indexer` / `openlore-review-app`) may depend on `adapter-*` crates (I-3)",
+                    rule: "only a composition root (`cli` / `openlore-indexer` / `openlore-review-app` / `openlore-indexer-lambda`) may depend on `adapter-*` crates (I-3)",
                 });
             }
         }
@@ -616,6 +625,9 @@ pub fn classify_pubkey_seam_guard(source: &str) -> Option<PubkeySeamViolation> {
 /// The indexer composition-root crate name.
 const INDEXER_ROOT: &str = "openlore-indexer";
 
+/// The Lambda composition-root crate name (ADR-090, D-STZ-1).
+const INDEXER_LAMBDA_ROOT: &str = "openlore-indexer-lambda";
+
 /// Dep classes the signing-incapable, store-less indexer MUST NOT reach (I-AV-5
 /// / ADR-023): the user's local store (`StoragePort` impl) + any PDS-write
 /// surface. `adapter-atproto-did` is intentionally NOT here — the indexer wires
@@ -658,6 +670,21 @@ pub fn check_indexer_capability_boundary(workspace: &Workspace) -> Vec<Violation
                     rule: "openlore-indexer MUST NOT depend on the signing identity / \
                            local store / PDS-write surface / GitHub (I-AV-5 / ADR-023 / \
                            C-OOS-8)",
+                });
+            }
+        }
+    }
+
+    if workspace.members.contains(INDEXER_LAMBDA_ROOT) {
+        let transitive = workspace.transitive_deps(INDEXER_LAMBDA_ROOT);
+        for forbidden in INDEXER_FORBIDDEN_DEPS {
+            if transitive.contains(*forbidden) {
+                violations.push(Violation {
+                    package: INDEXER_LAMBDA_ROOT.to_string(),
+                    forbidden: (*forbidden).to_string(),
+                    rule: "indexer_lambda_holds_no_signing_or_local_store: \
+                           openlore-indexer-lambda MUST NOT depend on the signing identity / \
+                           local store / PDS-write surface / GitHub (ADR-090 / D-STZ-50)",
                 });
             }
         }
@@ -3457,11 +3484,13 @@ pub fn classify_indexer_unguarded_clients(source: &str) -> Vec<String> {
         .collect()
 }
 
-/// Effect shell for `indexer_guarded_clients_only`. Scanning no file at all
-/// is itself a finding (the rule must never pass vacuously).
+/// Effect shell for `indexer_guarded_clients_only`, over both indexer roots.
+/// Scanning no file at all is itself a finding (the rule must never pass
+/// vacuously).
 pub fn scan_indexer_guarded_clients_only(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
-    scan_indexer_sources(
+    scan_sources_under(
         workspace_root,
+        &[INDEXER_SOURCE_DIR, INDEXER_LAMBDA_SOURCE_DIR],
         "indexer_guarded_clients_only",
         classify_indexer_unguarded_clients,
         "the indexer wires only the ::guarded constructors (ADR-077 §4 SSRF guard)",
@@ -3476,10 +3505,26 @@ fn scan_indexer_sources(
     classify: fn(&str) -> Vec<String>,
     why: &str,
 ) -> anyhow::Result<Vec<String>> {
-    let sources = rust_sources_under(&workspace_root.join(INDEXER_SOURCE_DIR));
+    scan_sources_under(workspace_root, &[INDEXER_SOURCE_DIR], rule, classify, why)
+}
+
+/// Run one pure source rule over every Rust source under `dirs`, prefixing each
+/// finding with the rule and file and suffixing it with `why`.
+fn scan_sources_under(
+    workspace_root: &Path,
+    dirs: &[&str],
+    rule: &str,
+    classify: fn(&str) -> Vec<String>,
+    why: &str,
+) -> anyhow::Result<Vec<String>> {
+    let sources: Vec<PathBuf> = dirs
+        .iter()
+        .flat_map(|dir| rust_sources_under(&workspace_root.join(dir)))
+        .collect();
     if sources.is_empty() {
+        let dirs = dirs.join(", ");
         return Ok(vec![format!(
-            "{rule}: no Rust source under {INDEXER_SOURCE_DIR} — the rule would pass vacuously"
+            "{rule}: no Rust source under {dirs} — the rule would pass vacuously"
         )]);
     }
     let mut findings = Vec::new();
@@ -6143,6 +6188,23 @@ mod review_app_rule_tests {
         assert_eq!(check_workspace(&ws(&compliant())), Vec::new());
     }
 
+    /// `indexer_lambda_holds_no_signing_or_local_store`, graph half (XS-5's
+    /// forbidden set): a transitive edge is enough.
+    #[test]
+    fn the_lambda_root_reaching_a_cli_capability_is_a_violation() {
+        for forbidden in INDEXER_FORBIDDEN_DEPS {
+            let v = check_indexer_capability_boundary(&ws(&[
+                (INDEXER_LAMBDA_ROOT, &["shared"]),
+                ("shared", std::slice::from_ref(forbidden)),
+            ]));
+            assert!(
+                v.iter()
+                    .any(|x| x.package == INDEXER_LAMBDA_ROOT && x.forbidden == *forbidden),
+                "{forbidden}: {v:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_review_app_reaching_a_cli_capability_is_a_violation() {
         for forbidden in REVIEW_APP_FORBIDDEN_DEPS {
@@ -6361,6 +6423,21 @@ mod indexer_origin_rule_tests {
         let root = locate_workspace_root().expect("workspace root");
         let findings = scan_indexer_guarded_clients_only(&root).expect("scan");
         assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    /// A synthetic violation in the Lambda root reaches the shell's findings.
+    #[test]
+    fn an_unguarded_client_in_the_lambda_root_is_a_violation() {
+        let tree = tempfile::tempdir().expect("temp dir");
+        let dir = tree.path().join(INDEXER_LAMBDA_SOURCE_DIR);
+        std::fs::create_dir_all(&dir).expect("source dir");
+        std::fs::write(
+            dir.join("pass.rs"),
+            "fn wire() {\n    let l = IdentityLookup::new(plc, plc);\n}\n",
+        )
+        .expect("planted source");
+        let findings = scan_indexer_guarded_clients_only(tree.path()).expect("scan");
+        assert_eq!(findings.len(), 1, "{findings:?}");
     }
 
     #[test]

@@ -318,7 +318,6 @@ fn the_lambda_root_holds_no_claim_store_no_pds_write_path_and_no_github_client()
 ///   And the pass mode is the one that publishes
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes the pass mode (publish)"]
 fn only_the_pass_can_publish_the_index() {
     let src = root().join("crates/openlore-indexer-lambda/src");
     for mode in ["search.rs", "probe.rs"] {

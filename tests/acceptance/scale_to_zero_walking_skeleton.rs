@@ -19,7 +19,7 @@
 //!
 //! RED at hand-off: the Lambda root is a scaffold (`panic!` bodies), so the
 //! skeletons are `#[ignore]`d like indexer-deployment's (DWD-IXD precedent);
-//! DELIVER's first step un-ignores them.
+//! DELIVER step 01-04 un-ignores WS-1 and step 01-10 un-ignores WS-2.
 #![cfg(unix)]
 
 #[path = "../common/state_delta.rs"]
@@ -47,7 +47,6 @@ use indexer_lambda::*;
 ///   And it reports the index as published at 14:00
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER step 1 (Lambda root) un-ignores the walking skeleton"]
 fn maria_finds_priyas_claim_after_the_scheduled_pass_published_the_index() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     world.publishes(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);

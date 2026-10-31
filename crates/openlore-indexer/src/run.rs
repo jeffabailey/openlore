@@ -33,9 +33,10 @@ use adapter_atproto_did::{AtProtoDidAdapter, IdentityLookup};
 use adapter_atproto_ingest::AtProtoIngestAdapter;
 use adapter_index_store::{DuckDbCaps, IndexStoreAdapter, UnusableReason};
 use adapter_system_clock::SystemClockAdapter;
-use adapter_xrpc_query_server::{RateLimit, ServeLimits, TrustedProxies, XrpcQueryServer};
+use adapter_xrpc_query_server::{
+    QueryHandler, RateLimit, ServeLimits, TrustedProxies, XrpcQueryServer,
+};
 
-use appview_domain::health::StoreHealth;
 use appview_domain::FallbackUrl;
 use chrono::{DateTime, Utc};
 use claim_domain::Did;
@@ -47,14 +48,14 @@ use ports::{
 
 use crate::config::{parse_config, BuildProfile, ConfigError, IndexerConfig, TestFault};
 use crate::events::{Events, StdoutEvents};
-use crate::health::{health_handler, LastPublishedAt, StoreUsability};
-use crate::ingest_pass::{in_serve_pass, ingest};
+use crate::health::{health_handler, store_usability, LastPublishedAt};
+use crate::ingest_pass::{caught_pass_work, in_serve_pass, ingest, EndedPass};
 use crate::pass_runner::{PassRunner, StatusReader};
 use crate::probe_gauntlet::{
     capability_boundary_probe, check_probe, control_channel_probe, origin_classification_probe,
     probe_gauntlet, ProbeRefusal,
 };
-use crate::runner_contract::failing_first_purge;
+use crate::runner_contract::{failing_first_purge, PassLabel, RunnerPurge};
 use crate::search_handler::{
     search_handler, unreadable_index, SearchStoreError, SearchTruncated, SharedIndexReads,
 };
@@ -87,6 +88,17 @@ pub type SharedIndexPurge = Arc<dyn IndexPurgePort + Send + Sync>;
 pub struct Wired {
     pub wiring: IndexerWiring,
     purge_capability: Option<SharedIndexPurge>,
+}
+
+impl Wired {
+    /// One pass's work over this wiring, for a root with no pass runner. It
+    /// takes the wiring, so the store is closed when the work ends and the file
+    /// can be published (D-STZ-40a); the pass's summary is still to be written.
+    #[must_use]
+    pub fn pass_work(self, pass: PassLabel, started: Instant) -> EndedPass {
+        let purge = self.purge_capability.as_deref().map(RunnerPurge::lent);
+        caught_pass_work(&self.wiring, pass, purge, started)
+    }
 }
 
 /// Refused to start (bad config, wiring, probe) or a fatal runtime/store failure.
@@ -169,8 +181,13 @@ impl IndexerWiring {
     ///
     /// The purge capability (`OPENLORE_INDEXER_PURGE_UNLISTED=1`, ADR-082) is
     /// returned beside the wiring, for the pass runner; `None` = removed
-    /// authors keep their claims.
-    pub fn production(cfg: IndexerConfig, events: Events) -> anyhow::Result<Wired> {
+    /// authors keep their claims. The root builds `identity_resolve` itself
+    /// (D-STZ-50): the verify-only path, never the signing `IdentityPort`.
+    pub fn production(
+        cfg: IndexerConfig,
+        events: Events,
+        identity_resolve: Box<dyn IdentityResolvePort>,
+    ) -> anyhow::Result<Wired> {
         let fallback_base = cfg
             .fallback
             .as_ref()
@@ -206,8 +223,6 @@ impl IndexerWiring {
         let repo_listing = AtProtoIngestAdapter::guarded(fallback_base, cfg.policy);
         // DID → PDS, SSRF-guarded like every other outbound request.
         let pds_lookup = IdentityLookup::guarded(&cfg.plc_endpoint, &cfg.plc_endpoint, cfg.policy);
-        // VERIFY-ONLY resolve path (ADR-026) — never the signing `IdentityPort`.
-        let identity_resolve = AtProtoDidAdapter::resolve_only();
         // The query server is bound only for `serve` (Phase 04); the `ingest`
         // one-shot pass leaves it `None` (it never listens). `XrpcQueryServer::bind`
         // itself is still a scaffold (step 04-06) — NOT called on the ingest path.
@@ -223,7 +238,7 @@ impl IndexerWiring {
             repo_dids: cfg.repo_dids,
             repo_dids_file: cfg.repo_dids_file,
             control_socket: cfg.control_socket,
-            identity_resolve: Box::new(identity_resolve),
+            identity_resolve,
             query_server,
             clock: Box::new(clock),
             events,
@@ -301,7 +316,7 @@ pub fn run(command: Command) -> i32 {
     let Wired {
         wiring,
         purge_capability,
-    } = match IndexerWiring::production(cfg, events) {
+    } = match IndexerWiring::production(cfg, events, verify_only_resolver()) {
         Ok(wired) => wired,
         Err(err) => {
             eprintln!("openlore-indexer: failed to construct adapter wiring: {err:#}");
@@ -330,6 +345,11 @@ pub fn run(command: Command) -> i32 {
         // `trigger` is dispatched by `main` before any of the above (M4).
         Command::Trigger => EXIT_FATAL,
     }
+}
+
+/// VERIFY-ONLY resolve path (ADR-026) — never the signing `IdentityPort`.
+fn verify_only_resolver() -> Box<dyn IdentityResolvePort> {
+    Box::new(AtProtoDidAdapter::resolve_only())
 }
 
 /// `trigger` reads ONLY the control-socket variable — no config, no probes, no
@@ -426,15 +446,6 @@ fn store_unusable_event(reason: UnusableReason) -> serde_json::Value {
     })
 }
 
-/// Whether the store is usable, as `/healthz` reports it.
-fn store_usability(wiring: &IndexerWiring) -> StoreUsability {
-    let store = Arc::clone(&wiring.store_condition);
-    Arc::new(move || match store.unusable_reason() {
-        None => StoreHealth::Usable,
-        Some(_) => StoreHealth::Unusable,
-    })
-}
-
 /// The self-host's last publication, as `/healthz` reports it: the end of the
 /// runner's last exit-0 pass.
 fn last_successful_pass(status: StatusReader) -> LastPublishedAt {
@@ -505,13 +516,7 @@ fn control_round_trip(_: &Path) -> std::io::Result<()> {
 /// Bind the query server and answer searches (and `/healthz`, from the
 /// runner's `status`) until the process is killed.
 fn serve_searches(wiring: &IndexerWiring, status: StatusReader) -> i32 {
-    let truncations = wiring.events.clone();
-    let store_errors = wiring.events.clone();
-    let handler = search_handler(
-        Arc::clone(&wiring.index_reads),
-        Arc::new(move |cut| truncations.emit(&search_truncated_event(cut))),
-        Arc::new(move |failed| store_errors.emit(&search_store_error_event(failed))),
-    );
+    let handler = search_answers(Arc::clone(&wiring.index_reads), &wiring.events);
 
     let listen_addr: std::net::SocketAddr = match wiring.listen_addr.parse() {
         Ok(addr) => addr,
@@ -541,7 +546,7 @@ fn serve_searches(wiring: &IndexerWiring, status: StatusReader) -> i32 {
             Ok(server) => server
                 .with_health(health_handler(
                     last_successful_pass(status),
-                    store_usability(wiring),
+                    store_usability(Arc::clone(&wiring.store_condition)),
                 ))
                 .with_limits(ServeLimits {
                     rate: wiring.rate_limit,
@@ -570,6 +575,19 @@ fn serve_searches(wiring: &IndexerWiring, status: StatusReader) -> i32 {
             }
         }
     })
+}
+
+/// Searches answered from `reads`, their truncations and store errors logged
+/// through `events`: the query handler of both roots.
+#[must_use]
+pub fn search_answers(reads: SharedIndexReads, events: &Events) -> QueryHandler {
+    let truncations = events.clone();
+    let store_errors = events.clone();
+    search_handler(
+        reads,
+        Arc::new(move |cut| truncations.emit(&search_truncated_event(cut))),
+        Arc::new(move |failed| store_errors.emit(&search_store_error_event(failed))),
+    )
 }
 
 /// The single-threaded runtime both `serve` and `ingest` run on.
