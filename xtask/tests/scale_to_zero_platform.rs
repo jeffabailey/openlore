@@ -313,6 +313,8 @@ esac"#
             .args(args)
             .env("PATH", path)
             .env("HOME", self.dir.path())
+            // `instance_id` reads this first, so a host verb never reaches the real tofu.
+            .env("INDEXER_INSTANCE_ID", "i-test")
             .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -2057,7 +2059,6 @@ fn no_lambda_operation_reaches_the_shared_host() {
 ///     | its container | the container              | the timers    |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh standby"]
 fn standby_stops_what_it_names_and_leaves_the_rest() {
     each_row(["--timers", "--container"], |flag| {
         let laptop = Stubs::new(Posture::default());
@@ -2599,7 +2600,6 @@ fn measure_stops_first_when_search_is_not_at_its_concurrency() {
 ///     | a wrong one |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh standby"]
 fn standby_needs_to_be_told_what_to_stop() {
     each_row([vec!["standby"], vec!["standby", "--all"]], |args| {
         let stubs = Stubs::new(Posture::default());
@@ -2614,4 +2614,69 @@ fn standby_needs_to_be_told_what_to_stop() {
             stubs.calls()
         );
     });
+}
+
+/// Crafter-owned (step 08-09). `resume` has no scenario, since only a real host
+/// can show it working, and the runbook covers that. What stubs can pin is the
+/// order: isolation before any host file, the container serving before the pass
+/// timer, and no pass of its own, which is the runbook's `trigger`.
+#[test]
+fn resume_brings_the_container_back_before_the_timers_and_runs_no_pass() {
+    let laptop = Stubs::new(Posture::default());
+    let run = laptop.run(&["resume"], &[], "");
+    assert_eq!(run.status, 0, "{}\n{}", run.out, laptop.calls());
+    assert_reached(&laptop, &["ssm send-command", "host resume"]);
+    assert!(run.out.contains("PDS _health:"), "{}", run.out);
+
+    let base = tempfile::tempdir().expect("base dir");
+    let sites = tempfile::tempdir().expect("sites dir");
+    let base_path = base.path().display().to_string();
+    let sites_path = sites.path().display().to_string();
+    let env = [
+        ("INDEXER_BASE_DIR", base_path.as_str()),
+        ("INDEXER_CADDY_SITES_DIR", sites_path.as_str()),
+    ];
+    let host = Stubs::new(Posture::default());
+    host.add("install", "exit 0");
+    host.add(
+        "docker",
+        &format!(
+            r#"case "$*" in
+  run*169.254.169.254*) exit 7 ;;
+  *' ps -q caddy'*) echo pds-caddy-1 ;;
+  inspect*) echo '{sites_path}:/etc/caddy/sites' ;;
+  *'cat /etc/caddy/Caddyfile'*) echo 'import /etc/caddy/sites/*.caddy' ;;
+  *'caddy adapt'*) echo '"index.openlore.jeffbailey.us"' ;;
+esac"#
+        ),
+    );
+    let state = base.path().join("state");
+    std::fs::create_dir(&state).expect("state dir");
+
+    let nothing_deployed = host.run(&["host", "resume"], &env, "");
+    assert_ne!(nothing_deployed.status, 0, "{}", nothing_deployed.out);
+    assert_refused(&nothing_deployed);
+    assert!(!called(&host.calls(), &["up -d"]), "{}", host.calls());
+
+    let release = format!("2026-10-01T00:00:00Z {SHA} {} ready_s=4\n", digest());
+    std::fs::write(state.join("releases"), release).expect("releases");
+    let run = host.run(&["host", "resume"], &env, "");
+    assert_eq!(run.status, 0, "{}\n{}", run.out, host.calls());
+
+    let calls = host.calls();
+    let order = [
+        "169.254.169.254",
+        "daemon-reload",
+        "enable --now openlore-indexer-health.timer",
+        "up -d indexer",
+        "--resolve",
+        "enable --now openlore-indexer-pass.timer",
+    ]
+    .map(|step| line_of(&calls, &[step]).unwrap_or_else(|| panic!("no {step}\n{calls}")));
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{calls}");
+    assert!(!called(&calls, &["--force-recreate"]), "{calls}");
+    assert!(
+        !called(&calls, &["openlore-indexer-pass.service"]),
+        "{calls}"
+    );
 }

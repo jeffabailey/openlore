@@ -17,7 +17,10 @@
 #                                        over the last 1-30 days (default 7; Logs + alarm history)
 #   deploy.sh test-alarm a1|a2|a3        test-fire one alarm end to end and wait for ALARM, then OK
 #                                        (go-live step 15; a2 always restores the DID list)
-#   deploy.sh lambda deploy <git-sha|digest>   the Lambda path: lambda.sh, every gate, `live` last
+#   deploy.sh standby --timers           stop the pass and health timers; the container keeps serving
+#   deploy.sh standby --container        stop the container; files, units, Caddy site, releases stay
+#   deploy.sh resume                     reinstall, start the container, then both timers (no pass)
+#   deploy.sh lambda <verb>              the Lambda path; lambda.sh's header lists its verbs
 #
 # DIGEST ONLY. <git-sha> must be the full 40-hex commit; it is resolved to the digest CI pushed
 # for it, and from then on only `image@sha256:...` is used. A `sha256:<64 hex>` digest is also
@@ -67,6 +70,13 @@ die() {
 is_digest() { [[ "$1" =~ ^sha256:[0-9a-f]{64}$ ]]; }
 is_git_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
 is_wait() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 2 ]; }
+
+refuse_unless_one_standby_flag() { # $@ = standby's arguments, read on the laptop and on the host
+  case "$*" in
+    --timers | --container) ;;
+    *) die "refusing standby '$*': name what stops, --timers or --container" ;;
+  esac
+}
 
 # --------------------------------------------------------------------------------------------
 # Laptop side
@@ -165,7 +175,7 @@ remote() { # $@ = host mode and args; ships host/ + this script, runs it as root
     "$here/deploy.sh" "$payload/"
   b64=$(COPYFILE_DISABLE=1 tar --no-xattrs -C "$payload" -cz . | base64 | tr -d '\n')
   iid=$(instance_id)
-  params=$(jq -n --arg b64 "$b64" --arg args "$*" '{
+  params=$(jq -cn --arg b64 "$b64" --arg args "$*" '{
     commands: [
       "set -eu",
       "d=$(mktemp -d)",
@@ -234,13 +244,13 @@ start_pds_poller() { # samples the PDS _health every 2 s for the whole deploy (K
   POLL_PID=$!
 }
 
-stop_pds_poller() {
+stop_pds_poller() { # $1 = what it watched (default: deploy)
   local total ok
   if [ -n "$POLL_PID" ]; then kill "$POLL_PID" 2>/dev/null || true; fi
   POLL_PID=""
   total=$(wc -l <"$PDS_POLL_LOG" | tr -d ' ')
   ok=$(grep -c '^ok$' "$PDS_POLL_LOG" || true)
-  echo "PDS _health: $ok/$total ok during deploy"
+  echo "PDS _health: $ok/$total ok during ${1:-deploy}"
 }
 
 post_checks() { # $1 = base URL of the search under test
@@ -286,6 +296,12 @@ laptop_deploy() { # $1 = git sha or digest
   post_check_pds
   stop_pds_poller
   echo "deployed $IMAGE@$BUILD_DIGEST"
+}
+
+watched_host_step() { # $@ = host mode and args: a step on the shared host, under KPI-IXD-6's watch
+  start_pds_poller
+  remote "$@"
+  stop_pds_poller "$1"
 }
 
 # Logs Insights over the shipped log group: no host shell, no claim content (AC-005.1..4).
@@ -750,6 +766,37 @@ host_start() {
   echo "started $cur"
 }
 
+# Stops what it names and nothing else: files, units, the Caddy site, .env and releases stay, so
+# `resume` can bring it all back. Unlike `stop_indexer`, it fails loud if nothing is deployed.
+host_standby() { # $1 = --timers | --container
+  refuse_unless_one_standby_flag "$@"
+  case "$1" in
+    --timers)
+      systemctl stop openlore-indexer-pass.timer openlore-indexer-health.timer
+      echo "timers stopped (the container keeps serving)"
+      ;;
+    --container)
+      compose stop indexer
+      echo "container stopped (index. answers 503)"
+      ;;
+  esac
+}
+
+# The way back from either standby. `up -d` starts a stopped container and leaves one that still
+# serves alone (an abort before `standby --container`), so it is not start_digest's recreate. It
+# runs no pass: the runbook's `trigger` does that, once Lambda's pass is off.
+host_resume() {
+  [ -n "$(releases_digest 1)" ] || die "refusing to resume: nothing deployed yet; use deploy.sh deploy <git-sha>"
+  host_install
+  compose up -d indexer
+  wait_ready >/dev/null || {
+    echo "resume not ready; see deploy.sh host-status" >&2
+    exit 1
+  }
+  systemctl enable --now openlore-indexer-pass.timer
+  echo "resumed: container and both timers running"
+}
+
 host_trigger() {
   local result=0
   systemctl start openlore-indexer-pass.service || result=$?
@@ -834,6 +881,8 @@ host_main() {
     rollback) host_rollback "$@" ;;
     stop) host_stop ;;
     start) host_start ;;
+    standby) host_standby "$@" ;;
+    resume) host_resume ;;
     trigger) host_trigger ;;
     host-status) host_status ;;
     measure) host_measure "$@" ;;
@@ -854,6 +903,11 @@ case "$cmd" in
     case "${1:-}" in "" | --reset-index) ;; *) die "usage: deploy.sh rollback [--reset-index]" ;; esac
     remote rollback "$@"
     ;;
+  standby)
+    refuse_unless_one_standby_flag "$@"
+    watched_host_step standby "$1"
+    ;;
+  resume) watched_host_step resume ;;
   status) laptop_status ;;
   measure) remote measure "$@" ;;
   host-timer) remote host-timer "$@" ;;
@@ -868,7 +922,7 @@ case "$cmd" in
     lambda_main "$@"
     ;;
   *)
-    sed -n '2,21p' "$0" >&2
+    sed -n '2,24p' "$0" >&2
     exit 2
     ;;
 esac
