@@ -194,6 +194,8 @@ struct Posture {
     /// deployed. Otherwise they hold another one, so the deploy's own digest is
     /// referenced only where a scenario says so.
     live_runs_the_build: bool,
+    /// What the search function's reserved concurrency reads.
+    search_concurrency: u8,
 }
 
 impl Default for Posture {
@@ -220,6 +222,7 @@ impl Default for Posture {
             candidate_5xx_seen: true,
             code_update_fails: false,
             live_runs_the_build: true,
+            search_concurrency: 3,
         }
     }
 }
@@ -316,12 +319,16 @@ esac"#
             .stderr(Stdio::piped())
             .spawn()
             .expect("run bash");
-        child
+        // A verb that reads nothing can be gone before this write lands.
+        match child
             .stdin
             .take()
             .expect("stdin")
             .write_all(input.as_bytes())
-            .expect("write stdin");
+        {
+            Err(cause) if cause.kind() == std::io::ErrorKind::BrokenPipe => {}
+            written => written.expect("write stdin"),
+        }
         let output = child.wait_with_output().expect("wait for bash");
         Run {
             status: output.status.code().unwrap_or(-1),
@@ -463,6 +470,7 @@ fn aws(posture: Posture, digest: &str) -> String {
         format!(r#"echo '{{"CodeSha256":"{latest_sha}","RevisionId":"r"}}'"#)
     };
     let published_at = posture.object_published_at;
+    let search_concurrency = posture.search_concurrency;
     format!(
         r#"
 in_ecr={in_ecr}
@@ -484,7 +492,10 @@ case "$*" in
   *"lambda get-function-url-config"*)
     echo '{{"FunctionUrl":"https://candidate.lambda-url.us-east-1.on.aws/"}}' ;;
   *"lambda get-function-configuration"*)
-    echo '{{"Version":"7","Description":"{SHA} {digest}","CodeSha256":"{latest_sha}","RevisionId":"r","State":"Active","LastUpdateStatus":"Successful"}}' ;;
+    echo '{{"Version":"7","Description":"{SHA} {digest}","CodeSha256":"{latest_sha}","RevisionId":"r","State":"Active","LastUpdateStatus":"Successful","LoggingConfig":{{"LogGroup":"/openlore/prod/indexer-lambda"}}}}' ;;
+  *"lambda get-function-concurrency"*openlore-indexer-search*)
+    echo '{{"ReservedConcurrentExecutions":{search_concurrency}}}' ;;
+  *"lambda get-function-concurrency"*) echo '{{"ReservedConcurrentExecutions":1}}' ;;
   *"lambda get-function "*"--qualifier"*)
     {live_image} ;;
   *"lambda get-function "*)
@@ -511,7 +522,12 @@ case "$*" in
   *"cloudwatch describe-alarms"*)
     seen=$(grep -c 'cloudwatch describe-alarms' "$CALLS")
     if [ "$seen" -le 1 ]; then state=ALARM; else state=OK; fi
-    echo "{{\"MetricAlarms\":[{{\"StateValue\":\"$state\"}}]}}" ;;
+    case "$*" in
+      *--query*) echo "$state" ;;
+      *) echo "{{\"MetricAlarms\":[{{\"StateValue\":\"$state\"}}]}}" ;;
+    esac ;;
+  *"cloudwatch describe-alarm-history"*) echo '{{"AlarmHistoryItems":[]}}' ;;
+  *"logs get-query-results"*) echo '{{"status":"Complete","results":[]}}' ;;
   *"cloudwatch list-metrics"*Url5xxCount*candidate*) echo '{candidate_series}' ;;
   *"cloudwatch list-metrics"*) echo '{{"Metrics":[]}}' ;;
   *"ec2 describe-instances"*) echo i-0123456789abcdef0 ;;
@@ -1919,7 +1935,6 @@ fn a_candidate_that_fails_its_checks_stops_the_deploy_before_any_gate() {
 ///     | test-fires the error alarm  | the probe | a list             |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda verbs"]
 fn each_operator_action_sends_exactly_its_own_event() {
     const NO_PUBLISH: &str = r#"{"mode":"no-publish"}"#;
     let (pass, probe) = (FUNCTIONS[1], FUNCTIONS[2]);
@@ -1984,7 +1999,6 @@ fn each_operator_action_sends_exactly_its_own_event() {
 ///     | restore-index |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda verbs"]
 fn no_lambda_operation_reaches_the_shared_host() {
     let in_ecr = Posture {
         image_in_ecr: true,
@@ -2161,7 +2175,6 @@ fn the_probe_watches_the_same_address_before_and_after_the_cut_over() {
 ///     | has no data  | not seen |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda status"]
 fn the_status_report_looks_for_the_search_error_metric_where_a_test_put_it() {
     each_row([(true, "seen"), (false, "not seen")], |(has_data, seen)| {
         let stubs = Stubs::new(Posture {
@@ -2349,7 +2362,6 @@ fn a_deploy_stopped_before_the_flip_puts_its_candidate_back() {
 ///   And it sees the alarm fire and clear
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda test-alarm errors"]
 fn the_error_alarm_drill_waits_out_a_busy_probe() {
     let stubs = Stubs::new(Posture {
         throttled_probe_gates: 1,
@@ -2370,6 +2382,208 @@ fn the_error_alarm_drill_waits_out_a_busy_probe() {
     assert!(
         calls.matches("cloudwatch describe-alarms").count() >= 2,
         "{calls}"
+    );
+}
+
+/// Everything on the real `PATH` less `absent`, after the stubs (less `absent`).
+/// A stub alone cannot hide a tool: the real `PATH` follows the stubs, and on CI
+/// `gh` sits in `/usr/bin` beside what the script does need.
+fn path_without(stubs: &Stubs, absent: &[&str]) -> String {
+    for tool in absent {
+        std::fs::remove_file(stubs.dir.path().join(tool)).expect("remove the stub");
+    }
+    let rest = stubs.dir.path().join("rest");
+    std::fs::create_dir(&rest).expect("make the rest of the PATH");
+    let real_path = std::env::var_os("PATH").unwrap_or_default();
+    for dir in std::env::split_paths(&real_path) {
+        for tool in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let name = tool.file_name();
+            if !absent.iter().any(|gone| name == *gone) {
+                // The first on the `PATH` wins, as it would have.
+                let _ = std::os::unix::fs::symlink(tool.path(), rest.join(name));
+            }
+        }
+    }
+    format!("{}:{}", stubs.dir.path().display(), rest.display())
+}
+
+/// Crafter-owned. The kill switch must work on a bare machine during an incident,
+/// so a verb requires only what it runs; the verbs that handle a build still
+/// require the tools that verify and copy it.
+#[test]
+fn the_operator_verbs_need_no_image_tools_and_the_build_verbs_need_them_all() {
+    const IMAGE_TOOLS: [&str; 3] = ["gh", "cosign", "crane"];
+    let in_ecr = Posture {
+        image_in_ecr: true,
+        ..Posture::default()
+    };
+    each_row(
+        [
+            vec!["stop"],
+            vec!["start"],
+            vec!["pass-off"],
+            vec!["pass-on"],
+            vec!["probe-off"],
+            vec!["probe-on"],
+            vec!["rollback"],
+            vec!["reset-index"],
+            vec!["restore-index", "v1"],
+            vec!["trigger"],
+            vec!["probe"],
+            vec!["status"],
+            vec!["kpi"],
+        ],
+        |verb| {
+            let stubs = Stubs::new(in_ecr);
+            let path = path_without(&stubs, &IMAGE_TOOLS);
+            let mut args = vec!["lambda"];
+            args.extend(verb);
+
+            let run = stubs.run(&args, &[("PATH", &path)], "reset\n");
+
+            assert_eq!(run.status, 0, "{}\n{}", run.out, stubs.calls());
+            assert_reached(&stubs, &["aws "]);
+        },
+    );
+
+    let stubs = Stubs::new(in_ecr);
+    let path = path_without(&stubs, &IMAGE_TOOLS);
+    stubs.run(&["lambda", "stop"], &[("PATH", &path)], "");
+    assert_reached(&stubs, &["put-function-concurrency", FUNCTIONS[0], "0"]);
+    assert_reached(&stubs, &["update-distribution"]);
+
+    let verbs = [vec!["deploy", SHA], vec!["republish"], vec!["seed", SHA]];
+    let rows = verbs
+        .iter()
+        .flat_map(|verb| IMAGE_TOOLS.map(|tool| (verb.clone(), tool)));
+    each_row(rows, |(verb, tool)| {
+        let stubs = Stubs::new(in_ecr);
+        let path = path_without(&stubs, &[tool]);
+        let mut args = vec!["lambda"];
+        args.extend(verb);
+
+        let run = stubs.run(&args, &[("PATH", &path)], "");
+
+        assert_ne!(run.status, 0, "{}\n{}", run.out, stubs.calls());
+        assert!(
+            run.out.contains(&format!("missing tool: {tool}")),
+            "{}",
+            run.out
+        );
+    });
+}
+
+/// `curl` as `lambda measure` sees it: every call quick and 200, but for the one
+/// `(path, nth call on that path)` that answers `status` in `seconds`. On the raw
+/// path 1-5 are the cold calls, 6 warms up, and 7-26 are the warm calls; on the
+/// edge 1 warms up, and 2-21 are the warm calls.
+fn measured_curl(call: (&str, u32), status: u16, seconds: &str) -> String {
+    let (slow_path, slow_call) = call;
+    format!(
+        r#"
+url=""
+for a in "$@"; do
+  case "$a" in http*) url="$a" ;; esac
+done
+case "$url" in
+  *searchClaims) ;;
+  *) printf '404 0.05'; exit 0 ;;
+esac
+case "$url" in
+  *cloudfront*) path=edge; host=cloudfront ;;
+  *) path=raw; host=lambda-url ;;
+esac
+call=$(grep -c "^curl .*$host.*searchClaims" "$CALLS")
+if [ "$path" = {slow_path} ] && [ "$call" = {slow_call} ]; then
+  printf '%s %s' {status} {seconds}
+else
+  printf '200 0.05'
+fi
+"#
+    )
+}
+
+/// Crafter-owned. `lambda measure` is the gate on R-STZ-1 and R-STZ-2: it passes
+/// only when each measured call answers 200 under its limit, and whatever it
+/// decides, the candidate and `$LATEST` end up as it found them.
+#[test]
+fn measure_passes_only_when_every_call_meets_its_limit_on_each_path() {
+    let in_ecr = Posture {
+        image_in_ecr: true,
+        ..Posture::default()
+    };
+    each_row(
+        [
+            (("nowhere", 0), 200, "0.05", 0),
+            (("raw", 5), 200, "2.999", 0),
+            (("raw", 5), 200, "3.000", 1),
+            (("raw", 1), 503, "0.05", 1),
+            (("raw", 6), 200, "9.000", 0),
+            (("raw", 26), 200, "0.199", 0),
+            (("raw", 26), 200, "0.200", 1),
+            (("raw", 7), 500, "0.05", 1),
+            (("edge", 1), 200, "9.000", 0),
+            (("edge", 21), 200, "0.199", 0),
+            (("edge", 21), 200, "0.200", 1),
+            (("edge", 2), 429, "0.05", 1),
+        ],
+        |(call, status, seconds, exit)| {
+            let stubs = Stubs::new(in_ecr);
+            stubs.add("curl", &measured_curl(*call, *status, seconds));
+
+            let run = stubs.run(&["lambda", "measure"], &[], "");
+
+            assert_eq!(run.status, *exit, "{}\n{}", run.out, stubs.calls());
+            let verdict = if *exit == 0 { "PASS" } else { "FAIL" };
+            assert!(
+                run.out
+                    .contains(&format!("measure: {verdict} {}", digest())),
+                "{}",
+                run.out
+            );
+            let calls = stubs.calls();
+            let (publishes, deletes) = (
+                calls.matches("lambda publish-version").count(),
+                calls.matches("lambda delete-function").count(),
+            );
+            assert_eq!((publishes, deletes), (5, 5), "{calls}");
+            let last = |tokens: &[&str]| {
+                calls
+                    .lines()
+                    .rfind(|line| tokens.iter().all(|token| line.contains(token)))
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            assert!(
+                last(&["update-alias", "candidate"]).contains("--function-version 7"),
+                "{calls}"
+            );
+            assert!(
+                last(&["update-function-code"]).contains(&"c".repeat(64)),
+                "{calls}"
+            );
+            assert!(!called(&calls, &["update-alias", "live"]), "{calls}");
+        },
+    );
+}
+
+/// Crafter-owned. The check comes first, so a wrong setting costs no version.
+#[test]
+fn measure_stops_first_when_search_is_not_at_its_concurrency() {
+    let stubs = Stubs::new(Posture {
+        image_in_ecr: true,
+        search_concurrency: 0,
+        ..Posture::default()
+    });
+
+    let run = stubs.run(&["lambda", "measure"], &[], "");
+
+    assert_eq!(run.status, 1, "{}\n{}", run.out, stubs.calls());
+    assert_refused(&run);
+    assert!(
+        !called(&stubs.calls(), &["publish-version"]),
+        "{}",
+        stubs.calls()
     );
 }
 
