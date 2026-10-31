@@ -468,6 +468,43 @@ mod tests {
             prop_assert!(development.is_ok());
         }
 
+        // Space around a value must not reach a bucket name or a parameter path. The
+        // DID file is `parse_config`'s to read, and it stays out of this.
+        #[test]
+        fn a_setting_is_read_without_the_space_around_it(
+            (mode, variable) in any_mode().prop_flat_map(|mode| {
+                let own: Vec<String> = required_of(mode)
+                    .into_iter()
+                    .filter(|variable| variable != REPO_DIDS_FILE_VAR)
+                    .collect();
+                (Just(mode), prop::sample::select(own))
+            }),
+            padding in " {1,3}|\n|\t ",
+        ) {
+            let mut env = production_environment(mode);
+            let plain = release_parse(env.clone(), mode);
+            let value = env[&variable].clone();
+            env.insert(variable, format!("{padding}{value}{padding}"));
+
+            prop_assert_eq!(release_parse(env, mode), plain);
+        }
+
+        // Spelled out here, because `any_fault` builds its typos from the very prefix
+        // this holds to, so a changed prefix would still catch those.
+        #[test]
+        fn a_name_in_this_roots_namespace_that_nothing_reads_is_refused(
+            mode in any_mode(),
+            typo in "TYPO_[A-Z]{1,8}",
+        ) {
+            let variable = format!("OPENLORE_INDEXER_LAMBDA_{typo}");
+            let mut env = production_environment(mode);
+            env.insert(variable.clone(), "1".to_string());
+
+            let refused = release_parse(env, mode).expect_err("nothing reads this name");
+
+            prop_assert_eq!(refused.variable, variable);
+        }
+
         // Exactly one word, spelled exactly: anything else starts nothing.
         #[test]
         fn only_a_mode_by_its_exact_name_starts_a_function(

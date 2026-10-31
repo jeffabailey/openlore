@@ -216,15 +216,52 @@ fn refused(error: impl std::fmt::Display) -> InitRefused {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::sync::mpsc;
     use std::time::Duration;
 
+    use async_trait::async_trait;
+    use openlore_indexer::config::{parse_config, BuildProfile};
+    use ports::{HeadOutcome, IndexObjectError, LastPass, ProbeOutcome};
     use proptest::prelude::*;
 
     use super::*;
 
     const CONFIGURED: &str = "/tmp/index.duckdb";
+
+    /// A bucket with no index in it, so a copy is a new, empty store.
+    struct EmptyBucket;
+
+    #[async_trait]
+    impl IndexObjectReadPort for EmptyBucket {
+        fn probe(&self) -> ProbeOutcome {
+            ProbeOutcome::Ok
+        }
+
+        async fn head(&self) -> Result<HeadOutcome, IndexObjectError> {
+            Ok(HeadOutcome::Absent)
+        }
+
+        async fn fetch_to(&self, _dest: &Path) -> Result<Option<ObjectVersion>, IndexObjectError> {
+            Ok(None)
+        }
+
+        async fn get_last_pass(&self) -> Result<Option<LastPass>, IndexObjectError> {
+            Ok(None)
+        }
+    }
+
+    fn config_at(index_path: &Path) -> IndexerConfig {
+        let environment = HashMap::from([(
+            "OPENLORE_INDEXER_INDEX_PATH",
+            index_path.display().to_string(),
+        )]);
+        parse_config(
+            |name| environment.get(name).cloned(),
+            BuildProfile::of_this_build(),
+        )
+        .expect("a configuration")
+    }
 
     proptest! {
         #[test]
@@ -266,6 +303,37 @@ mod tests {
 
         assert!(!path.exists(), "the copy");
         assert!(!log.exists(), "its log");
+    }
+
+    // bypass: two fixed caps DuckDB will not take. Nothing reads a copy's caps back, so
+    // a cap it refuses is how one is seen to reach the store (`config` keeps them out
+    // of a deployment).
+    #[tokio::test]
+    async fn a_copy_is_opened_under_the_configured_caps() {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let path = scratch.path().join("index.duckdb");
+        let config = config_at(&path);
+        let no_threads = IndexerConfig {
+            duckdb_threads: Some(0),
+            ..config.clone()
+        };
+        let no_such_memory = IndexerConfig {
+            duckdb_memory_limit_mb: Some(u64::MAX),
+            ..config.clone()
+        };
+
+        let plain = HeldIndex::fetched(&EmptyBucket, &config).await;
+        drop(
+            plain
+                .map_err(|refused| refused.reason)
+                .expect("no caps set"),
+        );
+
+        for (cap, capped) in [("threads", no_threads), ("memory_limit", no_such_memory)] {
+            let refused = HeldIndex::fetched(&EmptyBucket, &capped).await.err();
+            let reason = refused.map(|refused| refused.reason).expect("refused");
+            assert!(reason.contains(cap), "{cap}: {reason}");
+        }
     }
 
     // bypass: the contract is how one stuck open meets a timer; it has no input space.

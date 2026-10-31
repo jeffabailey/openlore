@@ -614,6 +614,19 @@ mod tests {
             prop_assert_eq!(write_answer(status), expected);
         }
 
+        // Where a refusal stops being one. `any_status` reaches these only by chance,
+        // and a 400 read as an outage says "try again" about a call that cannot pass.
+        #[test]
+        fn a_refusal_is_exactly_the_4xx_statuses(
+            status in prop::sample::select(vec![399_u16, 400, 401, 498, 499, 500]),
+        ) {
+            let refused = (400..500).contains(&status);
+            let expected = if refused { StoreFailure::Refused } else { StoreFailure::Unavailable };
+
+            prop_assert_eq!(read_answer(Some(status), None), ReadAnswer::Failed(expected));
+            prop_assert_eq!(write_answer(Some(status)), WriteAnswer::Failed(expected));
+        }
+
         // D-STZ-39: a 412 is the only proof of a condition, and no failure reads
         // as a write the store took.
         #[test]

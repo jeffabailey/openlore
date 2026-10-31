@@ -571,6 +571,42 @@ async fn a_pass_record_that_is_refused_is_a_failure_and_goes_to_its_own_key() {
     }
 }
 
+/// RIO-2 against moto proves the record's round trip, but CI's `test` job has no
+/// moto: this holds the key each way, and what the record is sent as.
+#[tokio::test]
+async fn a_pass_record_is_json_at_its_own_key_both_ways() {
+    const STORED: &str = r#"{"pass_id":"pass-1","exit_code":0,"finished_at":"2026-10-27T14:15:01Z","published":false,"index_published_at":null}"#;
+    let store = LoopbackStore::answering(|seen, stream| {
+        let body = if seen.method() == "GET" { STORED } else { "" };
+        answer_with(stream, "200 OK", &[], body);
+    });
+    let adapter = store.adapter().await;
+    let record = LastPass {
+        pass_id: "pass-1".to_string(),
+        exit_code: 0,
+        finished_at: "2026-10-27T14:15:01Z".to_string(),
+        published: false,
+        index_published_at: None,
+    };
+
+    let written = adapter.put_last_pass(&record).await;
+    let read = adapter.get_last_pass().await;
+
+    assert_eq!(written, Ok(()));
+    assert_eq!(read, Ok(Some(record)));
+    let sent = store.requests();
+    assert_eq!(sent[0].method(), "PUT");
+    assert_eq!(sent[0].header("content-type"), Some("application/json"));
+    assert_eq!(sent[1].method(), "GET");
+    for request in &sent {
+        assert!(
+            request.head.contains("/index/last-pass.json"),
+            "{}",
+            request.head
+        );
+    }
+}
+
 /// A connection that is taken and never answered.
 fn hold_silently(stream: &mut TcpStream) {
     let mut held = [0u8; 1];
@@ -647,6 +683,69 @@ async fn a_silent_store_refuses_a_read_probe_at_its_two_seconds() {
     );
     assert!(took >= TWO_SECONDS - Duration::from_millis(200), "{took:?}");
     assert!(took < TWO_SECONDS + MARGIN, "{took:?}");
+}
+
+/// § Timeouts: a warm search waits 1 s for this, so a reload's 3 s is too long. The
+/// bound sits between the two, as `MARGIN` would let the 3 s through.
+#[tokio::test]
+async fn a_silent_store_fails_a_freshness_check_before_a_reloads_budget() {
+    let store = LoopbackStore::answering(|_, stream| hold_silently(stream));
+    let adapter = store.adapter().await;
+    let started = Instant::now();
+
+    let checked = adapter.head().await;
+
+    let took = started.elapsed();
+    assert!(
+        matches!(checked, Err(IndexObjectError::Unavailable { .. })),
+        "{checked:?}"
+    );
+    assert!(
+        took < THREE_SECONDS - Duration::from_millis(500),
+        "{took:?}"
+    );
+}
+
+/// § Timeouts: the record's 5 s is part of what a publish leaves over (D-STZ-40a).
+#[tokio::test]
+async fn a_silent_store_fails_a_pass_record_write_at_its_five_seconds() {
+    let store = LoopbackStore::answering(|_, stream| hold_silently(stream));
+    let adapter = store.adapter().await;
+    let started = Instant::now();
+
+    let written = adapter
+        .put_last_pass(&LastPass {
+            pass_id: "pass-1".to_string(),
+            exit_code: 0,
+            finished_at: "2026-10-27T14:15:01Z".to_string(),
+            published: false,
+            index_published_at: None,
+        })
+        .await;
+
+    let took = started.elapsed();
+    assert!(
+        matches!(written, Err(IndexObjectError::Unavailable { .. })),
+        "{written:?}"
+    );
+    assert!(took < FIVE_SECONDS + MARGIN, "{took:?}");
+}
+
+/// § Timeouts: unless composed otherwise a fetch is a pass's, so a store that is
+/// slower than search init's 8 s still delivers.
+#[tokio::test]
+async fn a_fetch_outlasts_search_inits_budget_unless_it_was_composed_for_search() {
+    let store = LoopbackStore::answering(|_, stream| {
+        thread::sleep(Duration::from_secs(9));
+        answer_with(stream, "200 OK", &["ETag: \"e\""], "index");
+    });
+    let adapter = store.adapter().await;
+    let scratch = tempfile::tempdir().expect("scratch");
+    let dest = scratch.path().join("copy.duckdb");
+
+    let fetched = adapter.fetch_to(&dest).await;
+
+    assert!(matches!(fetched, Ok(Some(_))), "{fetched:?}");
 }
 
 /// A store that gives each request the next of `answers`, and the last for good.
