@@ -4,13 +4,11 @@
 //! these, and write.
 //!
 //! Contracts: `tests/acceptance/scale_to_zero_core.rs`.
-//
-// SCAFFOLD: true  (DISTILL 2026-10-27: signatures only; every body panics)
 
 use std::time::Duration;
 
-use appview_domain::ingest_pass::PassExit;
-use chrono::{DateTime, Utc};
+use appview_domain::ingest_pass::{PassExit, PassFailure};
+use chrono::{DateTime, FixedOffset, Utc};
 use ports::IndexFingerprint;
 
 /// A warm search instance re-checks the index object at most this often (D-STZ-10).
@@ -30,8 +28,10 @@ pub fn freshness_due(
     last_checked: Option<DateTime<Utc>>,
     ttl: Duration,
 ) -> bool {
-    let _ = (now, last_checked, ttl);
-    panic!("Not yet implemented -- RED scaffold")
+    last_checked.is_none_or(|last| {
+        // A clock that went backwards checks now, which also resets `last`.
+        (now - last).to_std().map_or(true, |elapsed| elapsed >= ttl)
+    })
 }
 
 /// What a `HEAD` of the index object told the search instance.
@@ -61,8 +61,13 @@ pub enum Reload {
 /// Decide from the ETag the instance serves (`None` = an empty index) and the
 /// `HEAD` it just made.
 pub fn reload_needed(current: Option<&str>, head: &HeadSeen) -> Reload {
-    let _ = (current, head);
-    panic!("Not yet implemented -- RED scaffold")
+    match (current, head) {
+        (_, HeadSeen::Failed) => Reload::KeepAndReport,
+        (Some(served), HeadSeen::Present(etag)) if served == etag => Reload::Keep,
+        (_, HeadSeen::Present(etag)) => Reload::Fetch(etag.clone()),
+        (Some(_), HeadSeen::Absent) => Reload::OpenEmpty,
+        (None, HeadSeen::Absent) => Reload::Keep,
+    }
 }
 
 /// Whether the pass publishes the store it worked on.
@@ -75,13 +80,16 @@ pub enum Publish {
 /// D-STZ-7 / D-STZ-9: publish iff the fingerprint changed and the store is
 /// still usable, whatever the exit code.
 pub fn publish_decision(
-    exit: PassExit,
+    _exit: PassExit,
     before: IndexFingerprint,
     after: IndexFingerprint,
     store_usable: bool,
 ) -> Publish {
-    let _ = (exit, before, after, store_usable);
-    panic!("Not yet implemented -- RED scaffold")
+    if before != after && store_usable {
+        Publish::Publish
+    } else {
+        Publish::Skip
+    }
 }
 
 /// What one probe run observed.
@@ -110,14 +118,23 @@ pub struct Liveness {
 /// D-STZ-23 / U-STZ-3: not live when `/healthz` or the canned search failed,
 /// or when no pass ran within `stale_after`.
 pub fn not_live(facts: &ProbeFacts, stale_after: Duration) -> Liveness {
-    let _ = (facts, stale_after);
-    panic!("Not yet implemented -- RED scaffold")
+    let pass_is_recent = facts.last_pass_age.is_some_and(|age| age <= stale_after);
+    let checks = [
+        (facts.healthz_ok, NotLiveCause::HealthzFailed),
+        (facts.search_ok, NotLiveCause::SearchFailed),
+        (pass_is_recent, NotLiveCause::NoRecentPass),
+    ];
+    Liveness {
+        causes: checks
+            .into_iter()
+            .filter_map(|(good, cause)| (!good).then_some(cause))
+            .collect(),
+    }
 }
 
 /// D-STZ-16: may a warm pass reuse its last good DID list of this age?
 pub fn dids_copy_usable(age: Duration, max: Duration) -> bool {
-    let _ = (age, max);
-    panic!("Not yet implemented -- RED scaffold")
+    age <= max
 }
 
 /// How the publish step of a pass ended (D-STZ-40).
@@ -145,8 +162,15 @@ pub enum RecordStep {
 /// keeps its cause (first failure wins); then a publish failure; then a record
 /// failure; then the pass exit.
 pub fn final_exit(pass_exit: PassExit, publish: PublishStep, record: RecordStep) -> PassExit {
-    let _ = (pass_exit, publish, record);
-    panic!("Not yet implemented -- RED scaffold")
+    match (pass_exit, publish, record) {
+        (PassExit::Failed(_), _, _) => pass_exit,
+        (_, PublishStep::Conflict, _) => PassExit::Failed(PassFailure::PublishConflict),
+        (_, PublishStep::Failed, _) => PassExit::Failed(PassFailure::PublishFailed),
+        (_, PublishStep::NoFailure, RecordStep::Failed) => {
+            PassExit::Failed(PassFailure::PassRecordFailed)
+        }
+        (_, PublishStep::NoFailure, RecordStep::NoFailure) => pass_exit,
+    }
 }
 
 /// Whether this invocation may write (D-STZ-44).
@@ -165,8 +189,13 @@ pub struct EventRefused;
 /// `mode` with the known value `no-publish` is no-publish. Everything else is
 /// refused: a non-object, `null`, a misspelled key, an extra key, an unknown mode.
 pub fn pass_mode(event: &serde_json::Value) -> Result<PassMode, EventRefused> {
-    let _ = event;
-    panic!("Not yet implemented -- RED scaffold")
+    let fields = event.as_object().ok_or(EventRefused)?;
+    let mode = fields.get("mode").and_then(serde_json::Value::as_str);
+    match (fields.len(), mode) {
+        (0, _) => Ok(PassMode::Normal),
+        (1, Some("no-publish")) => Ok(PassMode::NoPublish),
+        _ => Err(EventRefused),
+    }
 }
 
 /// What the public `/healthz` said about the index it serves (D-STZ-48).
@@ -188,6 +217,16 @@ pub struct StaleServedIndex {
     pub lag: Option<Duration>,
 }
 
+fn read_instant(text: &str) -> Option<DateTime<FixedOffset>> {
+    DateTime::parse_from_rfc3339(text).ok()
+}
+
+/// How far `served` is behind `recorded`; `None` when it is not behind.
+fn lag_behind(served: DateTime<FixedOffset>, recorded: DateTime<FixedOffset>) -> Option<Duration> {
+    let lag = recorded.signed_duration_since(served).to_std().ok()?;
+    (!lag.is_zero()).then_some(lag)
+}
+
 /// D-STZ-48, U-STZ-6. `recorded` is the record's `index_published_at`;
 /// `record_age` is `None` when the record is missing or unreadable.
 ///
@@ -202,6 +241,40 @@ pub fn served_index_stale(
     record_age: Option<Duration>,
     margin: Duration,
 ) -> Option<StaleServedIndex> {
-    let _ = (served, recorded, record_age, margin);
-    panic!("Not yet implemented -- RED scaffold")
+    let recorded_at = read_instant(recorded?)?;
+    if record_age? <= margin {
+        return None;
+    }
+    match served {
+        ServedIndex::Unknown => None,
+        ServedIndex::NothingPublished => Some(StaleServedIndex { lag: None }),
+        ServedIndex::PublishedAt(text) => {
+            let lag = lag_behind(read_instant(text)?, recorded_at)?;
+            Some(StaleServedIndex { lag: Some(lag) })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // bypass: CORE-8's generators reach a later-sorting older instant only when
+    // two random instants fall within a day, so one fixed row pins that direction.
+    #[test]
+    fn a_served_index_behind_the_record_is_stale_even_when_its_text_sorts_later() {
+        let ten_utc_written_at_fifteen = ServedIndex::PublishedAt("2026-10-27T15:00:00+05:00");
+        let found = served_index_stale(
+            ten_utc_written_at_fifteen,
+            Some("2026-10-27T14:00:00Z"),
+            Some(Duration::from_secs(600)),
+            SERVED_INDEX_MARGIN,
+        );
+        assert_eq!(
+            found,
+            Some(StaleServedIndex {
+                lag: Some(Duration::from_secs(4 * 60 * 60)),
+            })
+        );
+    }
 }

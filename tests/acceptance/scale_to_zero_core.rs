@@ -140,7 +140,6 @@ mod core_1_freshness_due {
 
     proptest! {
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::freshness_due"]
         fn due_iff_at_least_the_ttl_has_passed(last in instant(), elapsed in 0u64..600, ttl in 1u64..300) {
             let now = last + chrono::Duration::seconds(elapsed as i64);
             prop_assert_eq!(
@@ -150,7 +149,6 @@ mod core_1_freshness_due {
         }
 
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::freshness_due"]
         fn due_before_the_first_check(now in instant(), ttl in 1u64..300) {
             prop_assert!(sut_freshness_due(now, None, Duration::from_secs(ttl)));
         }
@@ -159,7 +157,6 @@ mod core_1_freshness_due {
         /// only that it answers. Subtracting into a `std::time::Duration` is the
         /// mistake it catches.
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::freshness_due"]
         fn does_not_panic_when_the_clock_goes_backwards(last in instant(), back in 1u64..600, ttl in 1u64..300) {
             let now = last - chrono::Duration::seconds(back as i64);
             let _ = sut_freshness_due(now, Some(last), Duration::from_secs(ttl));
@@ -167,7 +164,6 @@ mod core_1_freshness_due {
     }
 
     #[test]
-    #[ignore = "RED scaffold: DELIVER decide::freshness_due"]
     fn the_60_second_boundary() {
         let last = Utc.with_ymd_and_hms(2026, 10, 27, 14, 0, 0).unwrap();
         let ttl = decide::FRESHNESS_TTL;
@@ -224,20 +220,17 @@ mod core_2_reload_needed {
 
     proptest! {
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::reload_needed"]
         fn matches_the_decision_table(current in proptest::option::of(etag()), head in head()) {
             prop_assert_eq!(sut_reload_needed(current.as_deref(), &head), oracle(current.as_deref(), &head));
         }
 
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::reload_needed"]
         fn the_same_version_is_never_downloaded_again(e in etag()) {
             prop_assert_eq!(sut_reload_needed(Some(&e), &HeadSeen::Present(e.clone())), Reload::Keep);
         }
     }
 
     #[test]
-    #[ignore = "RED scaffold: DELIVER decide::reload_needed"]
     fn every_row_of_the_table() {
         let rows: [(Option<&str>, HeadSeen, Reload); 7] = [
             (
@@ -287,7 +280,6 @@ mod core_3_publish_decision {
 
     proptest! {
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::publish_decision"]
         fn publish_iff_changed_and_usable(
             exit in exit(), before in fingerprint(), after in fingerprint(), usable in any::<bool>()
         ) {
@@ -296,20 +288,17 @@ mod core_3_publish_decision {
         }
 
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::publish_decision"]
         fn an_unchanged_index_is_never_published(exit in exit(), same in fingerprint(), usable in any::<bool>()) {
             prop_assert_eq!(sut_publish(exit, same, same, usable), Publish::Skip);
         }
 
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::publish_decision"]
         fn an_unusable_store_is_never_published(exit in exit(), before in fingerprint(), after in fingerprint()) {
             prop_assert_eq!(sut_publish(exit, before, after, false), Publish::Skip);
         }
     }
 
     #[test]
-    #[ignore = "RED scaffold: DELIVER decide::publish_decision"]
     fn every_exit_code_by_change_by_usability() {
         let a = IndexFingerprint {
             claims: 1,
@@ -372,7 +361,6 @@ mod core_4_not_live {
 
     proptest! {
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::not_live"]
         fn causes_are_exactly_the_failing_facts(
             healthz_ok in any::<bool>(), search_ok in any::<bool>(),
             age in proptest::option::of(0u64..10_000)
@@ -385,7 +373,6 @@ mod core_4_not_live {
     }
 
     #[test]
-    #[ignore = "RED scaffold: DELIVER decide::not_live"]
     fn the_45_minute_boundary() {
         let at = |s| ProbeFacts {
             healthz_ok: true,
@@ -418,14 +405,12 @@ mod core_5_dids_copy_usable {
 
     proptest! {
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::dids_copy_usable"]
         fn usable_iff_at_most_two_hours_old(age in 0u64..20_000) {
             prop_assert_eq!(sut_dids_copy_usable(Duration::from_secs(age)), age <= 7200);
         }
     }
 
     #[test]
-    #[ignore = "RED scaffold: DELIVER decide::dids_copy_usable"]
     fn the_two_hour_boundary() {
         assert!(sut_dids_copy_usable(Duration::from_secs(7199)));
         assert!(sut_dids_copy_usable(Duration::from_secs(7200)));
@@ -478,13 +463,11 @@ mod core_6_final_exit {
 
     proptest! {
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::final_exit"]
         fn matches_the_decision_table(pass in exit(), publish in publish(), record in record()) {
             prop_assert_eq!(sut_final_exit(pass, publish, record), oracle(pass, publish, record));
         }
 
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::final_exit"]
         fn a_failed_pass_keeps_its_cause(cause in failure(), publish in publish(), record in record()) {
             prop_assert_eq!(
                 sut_final_exit(PassExit::Failed(cause), publish, record),
@@ -494,7 +477,6 @@ mod core_6_final_exit {
     }
 
     #[test]
-    #[ignore = "RED scaffold: DELIVER decide::final_exit"]
     fn every_row_of_the_table() {
         for pass in EXITS {
             for publish in PUBLISHES {
@@ -510,7 +492,6 @@ mod core_6_final_exit {
     }
 
     #[test]
-    #[ignore = "RED scaffold: DELIVER decide::final_exit"]
     fn a_412_on_an_exit_3_pass_is_exit_2_with_its_cause() {
         let exit = sut_final_exit(
             PassExit::TotalOutage,
@@ -565,20 +546,17 @@ mod core_7_pass_mode {
 
     proptest! {
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::pass_mode"]
         fn a_richer_object_is_refused(event in other_keys()) {
             prop_assert_eq!(sut_pass_mode(&Value::Object(event)), REFUSED);
         }
 
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::pass_mode"]
         fn a_key_beside_a_good_mode_is_refused(mut event in other_keys()) {
             event.insert("mode".to_string(), json!("no-publish"));
             prop_assert_eq!(sut_pass_mode(&Value::Object(event)), REFUSED);
         }
 
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::pass_mode"]
         fn any_other_mode_value_is_refused(
             mode in json_value().prop_filter("not the known mode", |m| m != "no-publish")
         ) {
@@ -587,7 +565,6 @@ mod core_7_pass_mode {
     }
 
     #[test]
-    #[ignore = "RED scaffold: DELIVER decide::pass_mode"]
     fn the_events_that_matter() {
         let rows = [
             (json!({}), Ok(PassMode::Normal)),
@@ -644,7 +621,6 @@ mod core_8_served_index_stale {
 
     proptest! {
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::served_index_stale"]
         fn compares_instants_never_their_text(
             served in instant(), recorded in instant(),
             served_offset in -11i32..=11, recorded_offset in -11i32..=11,
@@ -667,7 +643,6 @@ mod core_8_served_index_stale {
         }
 
         #[test]
-        #[ignore = "RED scaffold: DELIVER decide::served_index_stale"]
         fn nothing_to_compare_means_no_line(
             served in proptest::option::of(instant()), age in proptest::option::of(0u64..1_000)
         ) {
@@ -681,7 +656,6 @@ mod core_8_served_index_stale {
     }
 
     #[test]
-    #[ignore = "RED scaffold: DELIVER decide::served_index_stale"]
     fn every_row_of_the_truth_table() {
         let older = ServedIndex::PublishedAt("2026-10-27T13:45:00Z");
         let same = ServedIndex::PublishedAt(RECORDED);
@@ -724,7 +698,6 @@ mod core_8_served_index_stale {
     }
 
     #[test]
-    #[ignore = "RED scaffold: DELIVER decide::served_index_stale"]
     fn the_120_second_boundary() {
         let older = ServedIndex::PublishedAt("2026-10-27T13:45:00Z");
         let aged = |s| sut_served_index_stale(older, Some(RECORDED), Some(Duration::from_secs(s)));
