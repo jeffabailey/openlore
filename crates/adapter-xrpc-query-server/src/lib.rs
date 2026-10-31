@@ -29,6 +29,7 @@
 
 #![forbid(unsafe_code)]
 
+mod dispatch;
 pub mod rate_limit;
 
 use std::net::{IpAddr, SocketAddr};
@@ -46,6 +47,7 @@ use ports::{ProbeOutcome, ProbeRefusalReason};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
+pub use dispatch::{dispatch, BodyRead, Handlers, PublicAnswer, PublicRequest};
 use rate_limit::{client_ip, RateDecision, RateLimiter};
 pub use rate_limit::{RateLimit, TrustedProxies};
 
@@ -62,9 +64,6 @@ pub type QueryHandler =
 /// request: the 500 it becomes names no query value (ADR-083 §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IndexUnavailable;
-
-/// The 500 body of a search the index could not answer (a short reason only).
-const INDEX_UNAVAILABLE_BODY: &str = r#"{"error":"index_unavailable"}"#;
 
 /// The health reader the composition root wires behind `GET /healthz` (ADR-083
 /// §2): it reads the process's state and projects it, never changing it.
@@ -89,9 +88,6 @@ pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// body (a slower body is 408 and the connection closes) and running the
 /// query (a slower query is 503) (review H2).
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// The 503 body of a search the index did not answer in time.
-const INDEX_BUSY_BODY: &str = r#"{"error":"index_busy"}"#;
 
 /// The public listener's bounds: how long a connection may idle or take, how
 /// often one client may ask, and whose `X-Forwarded-For` names the client.
@@ -196,8 +192,7 @@ pub struct XrpcQueryServer {
 
 /// What every connection's requests are answered with.
 struct Answering {
-    handler: QueryHandler,
-    health: Option<HealthHandler>,
+    handlers: Handlers,
     timeouts: ServeTimeouts,
     trusted_proxies: TrustedProxies,
     limiter: RateLimiter,
@@ -311,14 +306,16 @@ impl XrpcQueryServer {
     }
 
     /// Serve `org.openlore.appview.searchClaims` until the process is killed.
-    /// Runs the hyper accept loop: each connection is handled by [`route`], which
-    /// parses the request, calls the wired handler, and serializes the lexicon
-    /// `SearchQueryResponse`. Must be called inside a tokio runtime.
+    /// Runs the hyper accept loop under the connection cap: each connection is
+    /// handled by [`route`], which applies the rate limit and calls [`dispatch`].
+    /// Must be called inside a tokio runtime.
     pub async fn serve(self) -> Result<(), QueryServerError> {
         let connection_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
         let answering = Arc::new(Answering {
-            handler: self.handler,
-            health: self.health,
+            handlers: Handlers {
+                query: self.handler,
+                health: self.health,
+            },
             timeouts: self.limits.timeouts,
             trusted_proxies: self.limits.trusted_proxies,
             limiter: RateLimiter::new(self.limits.rate),
@@ -353,17 +350,15 @@ impl XrpcQueryServer {
     }
 }
 
-/// Route one HTTP request through the public allowlist ([`public_route`]):
-/// `GET /healthz` (when wired) and `POST searchClaims` are served; everything
-/// else is 404. Every request but `/healthz` first spends one of its client's
-/// tokens (429 when there is none).
+/// Answer one HTTP request: every request but `/healthz` first spends one of
+/// its client's tokens (429 when there is none), then [`dispatch`] answers it.
+/// The rate limit lives here, in front of the transport-free surface (D-STZ-19).
 async fn route(
     req: Request<Incoming>,
     answering: Arc<Answering>,
     peer: IpAddr,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
-    let route = public_route(req.method().as_str(), req.uri().path());
-    if route != PublicRoute::Health {
+    if public_route(req.method().as_str(), req.uri().path()) != PublicRoute::Health {
         let client = client_ip(peer, forwarded_for(&req), &answering.trusted_proxies);
         if let RateDecision::Limited { retry_after } =
             answering.limiter.check(client, Instant::now())
@@ -371,14 +366,14 @@ async fn route(
             return Ok(too_many_requests(retry_after));
         }
     }
-    Ok(match route {
-        PublicRoute::Health => answering
-            .health
-            .as_ref()
-            .map_or_else(not_found, |health| health_answer(&health())),
-        PublicRoute::Search => search(req, &answering).await,
-        PublicRoute::NotFound => not_found(),
-    })
+    let (parts, body) = req.into_parts();
+    let request = PublicRequest {
+        method: parts.method.as_str(),
+        path: parts.uri.path(),
+        body: read_bounded(body),
+        time_allowed: answering.timeouts.request,
+    };
+    Ok(http_response(dispatch(request, &answering.handlers).await))
 }
 
 /// The last `X-Forwarded-For` header, when it is text.
@@ -390,107 +385,27 @@ fn forwarded_for(req: &Request<Incoming>) -> Option<&str> {
         .and_then(|value| value.to_str().ok())
 }
 
-/// Answer one search within [`ServeTimeouts::request`]: read the body up to
-/// [`MAX_REQUEST_BODY_BYTES`] (408 when it is too slow), parse it, admit it
-/// ([`admit`]), and run the handler off the HTTP executor (a blocking store
-/// call never stalls the accept loop or `/healthz`; 503 when it is too slow).
-async fn search(req: Request<Incoming>, answering: &Answering) -> Response<Full<Bytes>> {
-    let deadline = tokio::time::Instant::now() + answering.timeouts.request;
-    let body = Limited::new(req.into_body(), MAX_REQUEST_BODY_BYTES).collect();
-    let body_bytes = match tokio::time::timeout_at(deadline, body).await {
-        Ok(Ok(collected)) => collected.to_bytes(),
-        Ok(Err(err)) if err.downcast_ref::<LengthLimitError>().is_some() => return too_large(),
-        Ok(Err(err)) => return bad_request(&format!("read body: {err}")),
-        Err(_too_slow) => return request_timeout(),
-    };
-    let request: SearchQueryRequest = match serde_json::from_slice(&body_bytes) {
-        Ok(parsed) => parsed,
-        Err(err) => return bad_request(&format!("parse request: {err}")),
-    };
-    match admit(body_bytes.len(), request.value.len()) {
-        Admission::Admitted => {}
-        Admission::TooLarge => return too_large(),
-        Admission::BadRequest => {
-            return bad_request(&format!("value exceeds {MAX_SEARCH_VALUE_BYTES} bytes"))
-        }
-    }
-    let handler = Arc::clone(&answering.handler);
-    let answer = tokio::task::spawn_blocking(move || handler(request));
-    let response = match tokio::time::timeout_at(deadline, answer).await {
-        Ok(Ok(Ok(response))) => response,
-        Ok(Ok(Err(IndexUnavailable))) => return index_unavailable(),
-        Ok(Err(join)) => return internal_error(&format!("search task: {join}")),
-        Err(_too_slow) => return index_busy(),
-    };
-    match serde_json::to_vec(&response) {
-        Ok(json) => Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(json)))
-            .expect("static response is well-formed"),
-        Err(err) => internal_error(&format!("serialize response: {err}")),
+/// Read a body off the connection, never buffering past
+/// [`MAX_REQUEST_BODY_BYTES`].
+async fn read_bounded(body: Incoming) -> BodyRead {
+    match Limited::new(body, MAX_REQUEST_BODY_BYTES).collect().await {
+        Ok(collected) => BodyRead::Complete(collected.to_bytes()),
+        Err(err) if err.downcast_ref::<LengthLimitError>().is_some() => BodyRead::TooLarge,
+        Err(err) => BodyRead::Unreadable(err.to_string()),
     }
 }
 
-/// The health projection as an HTTP response.
-fn health_answer(health: &HealthResponse) -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(health.status_code())
-        .header("content-type", "application/json")
-        .body(Full::new(Bytes::from(health.body().to_string())))
-        .expect("static response is well-formed")
-}
-
-fn not_found() -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .body(Full::new(Bytes::from_static(b"not found")))
-        .expect("static response is well-formed")
-}
-
-fn too_large() -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(StatusCode::PAYLOAD_TOO_LARGE)
-        .body(Full::new(Bytes::from(format!(
-            "request body exceeds {MAX_REQUEST_BODY_BYTES} bytes"
-        ))))
-        .expect("static response is well-formed")
-}
-
-fn bad_request(message: &str) -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(StatusCode::BAD_REQUEST)
-        .body(Full::new(Bytes::from(message.to_string())))
-        .expect("static response is well-formed")
-}
-
-/// A search the index could not answer: 500 with a short reason, no query value.
-fn index_unavailable() -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(StatusCode::INTERNAL_SERVER_ERROR)
-        .header("content-type", "application/json")
-        .body(Full::new(Bytes::from_static(
-            INDEX_UNAVAILABLE_BODY.as_bytes(),
-        )))
-        .expect("static response is well-formed")
-}
-
-/// A body that did not arrive in time: 408, and the connection is closed.
-fn request_timeout() -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(StatusCode::REQUEST_TIMEOUT)
-        .header("connection", "close")
-        .body(Full::new(Bytes::from_static(b"request body too slow")))
-        .expect("static response is well-formed")
-}
-
-/// A search the index did not answer in time: 503, retry shortly.
-fn index_busy() -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(StatusCode::SERVICE_UNAVAILABLE)
-        .header("content-type", "application/json")
-        .header("retry-after", "1")
-        .body(Full::new(Bytes::from_static(INDEX_BUSY_BODY.as_bytes())))
+/// A transport-free answer as an HTTP response.
+fn http_response(answer: PublicAnswer) -> Response<Full<Bytes>> {
+    let builder = Response::builder().status(answer.status);
+    let builder = answer
+        .headers
+        .into_iter()
+        .fold(builder, |builder, (name, value)| {
+            builder.header(name, value)
+        });
+    builder
+        .body(Full::new(answer.body))
         .expect("static response is well-formed")
 }
 
@@ -500,13 +415,6 @@ fn too_many_requests(retry_after: Duration) -> Response<Full<Bytes>> {
         .status(StatusCode::TOO_MANY_REQUESTS)
         .header("retry-after", retry_after.as_secs().max(1).to_string())
         .body(Full::new(Bytes::from_static(b"too many requests")))
-        .expect("static response is well-formed")
-}
-
-fn internal_error(message: &str) -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(StatusCode::INTERNAL_SERVER_ERROR)
-        .body(Full::new(Bytes::from(message.to_string())))
         .expect("static response is well-formed")
 }
 

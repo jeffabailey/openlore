@@ -37,6 +37,7 @@ use adapter_xrpc_query_server::{RateLimit, ServeLimits, TrustedProxies, XrpcQuer
 
 use appview_domain::health::StoreHealth;
 use appview_domain::FallbackUrl;
+use chrono::{DateTime, Utc};
 use claim_domain::Did;
 use ports::net_policy::TransportPolicy;
 use ports::{
@@ -46,7 +47,7 @@ use ports::{
 
 use crate::config::{parse_config, BuildProfile, ConfigError, IndexerConfig, TestFault};
 use crate::events::{Events, StdoutEvents};
-use crate::health::{health_handler, StoreUsability};
+use crate::health::{health_handler, LastPublishedAt, StoreUsability};
 use crate::ingest_pass::{in_serve_pass, ingest};
 use crate::pass_runner::{PassRunner, StatusReader};
 use crate::probe_gauntlet::{
@@ -434,6 +435,17 @@ fn store_usability(wiring: &IndexerWiring) -> StoreUsability {
     })
 }
 
+/// The self-host's last publication, as `/healthz` reports it: the end of the
+/// runner's last exit-0 pass.
+fn last_successful_pass(status: StatusReader) -> LastPublishedAt {
+    Arc::new(move || {
+        status
+            .status()
+            .last_successful_pass_at()
+            .map(DateTime::<Utc>::from)
+    })
+}
+
 /// The bound control socket, when one is configured.
 #[cfg(unix)]
 type ControlChannel = (PathBuf, std::os::unix::net::UnixListener);
@@ -527,7 +539,10 @@ fn serve_searches(wiring: &IndexerWiring, status: StatusReader) -> i32 {
     runtime.block_on(async move {
         let server = match XrpcQueryServer::bind(listen_addr, handler) {
             Ok(server) => server
-                .with_health(health_handler(status, store_usability(wiring)))
+                .with_health(health_handler(
+                    last_successful_pass(status),
+                    store_usability(wiring),
+                ))
                 .with_limits(ServeLimits {
                     rate: wiring.rate_limit,
                     trusted_proxies: wiring.trusted_proxies.clone(),
