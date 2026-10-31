@@ -141,6 +141,10 @@ What a searcher or an operator sees change after cut-over:
 
 Every AWS call below sets an **operation timeout** (the SDK's whole-operation timeout) and `max_attempts = 1`, so each figure is the real worst case and there is no retry budget to add. **To confirm in DELIVER**: the SDK's default retry mode and attempt count, and its stalled-stream protection, must be read from the pinned SDK and overridden in one place. All figures are design budgets; none has been measured at the 140 MB ceiling.
 
+**Confirmed in 01-07 from the pinned SDK source** (`aws-sdk-s3` 1.157.0, `aws-smithy-runtime` 1.16.2, `BehaviorVersion` `v2026_01_12`): the default is standard retry with 3 attempts, no operation timeout, a 3.1 s connect timeout, and stalled-stream protection on with a 5 s grace. `client_settings(call)` sets `max_attempts = 1` and the table figure per call, and caps the stall grace at `min(5 s, budget)`.
+
+**The operation timeout does not cover a `GetObject` body.** The SDK deserializes that operation as a stream, so `send()` returns once headers arrive, and the body is read afterwards. Stalled-stream protection stops a stall, but a body trickling at 1 byte/s or more passes it. So `fetch_to` wraps the send and the whole body read in its own `tokio::time::timeout` from the same budget. That applies to the `GetObject` rows below; `HeadObject`, `PutObject` and `GetParameter` are bounded by the operation timeout alone.
+
 | Call | Where | Timeout | When it fires |
 |---|---|---|---|
 | Write probe, each `PutObject` | pass init | 2 s | Not a refusal; the pass runs (D-STZ-39) |
