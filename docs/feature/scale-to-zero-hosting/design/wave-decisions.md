@@ -103,7 +103,7 @@ Alarms A1/A2 are reused through the same `pass_summary` events. A4 (invocation s
 | Index holder | `SharedIndexReads` | It shares one handle that never changes; the holder swaps it over the same seam |
 | `no_publish.rs` | `pass.rs` | Its own file is what lets an xtask token rule check it |
 | `search.rs`, `pass.rs`, `probe.rs` | The `serve` path, `ingest_pass.rs` | They hold Lambda event handling only |
-| `pass_contract` module | `pass_runner.rs` | The Lambda root must not depend on `pass_runner` |
+| `runner_contract` module | `pass_runner.rs` | The Lambda root must not depend on `pass_runner` |
 
 The full table, with contract shapes, is in `../feature-delta.md` § Reuse Analysis. `decide.rs` is pure-function. The universes and deltas of the bounded-change writes are in § Component decomposition.
 

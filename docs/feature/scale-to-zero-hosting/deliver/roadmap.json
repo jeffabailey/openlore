@@ -143,7 +143,7 @@
             "xtask/src/check_arch.rs"
           ],
           "files_to_create": [
-            "crates/openlore-indexer/src/pass_contract.rs"
+            "crates/openlore-indexer/src/runner_contract.rs"
           ],
           "mutation_note": "Kill: summary written before the work ends; a second summary; a dropped purge."
         },
