@@ -20,6 +20,9 @@ use ports::{
 };
 use serde_json::json;
 
+/// What a publish is given, when the time it has is not what is under test.
+const LIMIT: std::time::Duration = std::time::Duration::from_secs(35);
+
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -63,18 +66,23 @@ fn the_fake_bucket_keeps_the_conditional_write_contract() {
     );
 
     let first = rt
-        .block_on(bucket.publish_if_match(&src, WriteCondition::IfNoneMatch, metadata("p1")))
+        .block_on(bucket.publish_if_match(&src, WriteCondition::IfNoneMatch, metadata("p1"), LIMIT))
         .expect("publish");
     let PublishOutcome::Published(v1) = first else {
         panic!("creates the object: {first:?}")
     };
-    let created_again =
-        rt.block_on(bucket.publish_if_match(&src, WriteCondition::IfNoneMatch, metadata("p2")));
+    let created_again = rt.block_on(bucket.publish_if_match(
+        &src,
+        WriteCondition::IfNoneMatch,
+        metadata("p2"),
+        LIMIT,
+    ));
     assert_eq!(created_again, Ok(PublishOutcome::Conflict));
     let stale = rt.block_on(bucket.publish_if_match(
         &src,
         WriteCondition::IfMatch("\"stale\"".to_string()),
         metadata("p3"),
+        LIMIT,
     ));
     assert_eq!(stale, Ok(PublishOutcome::Conflict));
 
@@ -83,6 +91,7 @@ fn the_fake_bucket_keeps_the_conditional_write_contract() {
         &src,
         WriteCondition::IfMatch(v1.etag.clone()),
         metadata("p4"),
+        LIMIT,
     ));
     assert_eq!(lost, Ok(PublishOutcome::Conflict));
     assert_eq!(
@@ -107,8 +116,13 @@ fn each_narrow_trouble_fails_only_its_own_request() {
     let dest = dir.path().join("copy.duckdb");
     let seeded = || {
         let bucket = FakeIndexBucket::default();
-        rt.block_on(bucket.publish_if_match(&src, WriteCondition::IfNoneMatch, metadata("p1")))
-            .expect("publish");
+        rt.block_on(bucket.publish_if_match(
+            &src,
+            WriteCondition::IfNoneMatch,
+            metadata("p1"),
+            LIMIT,
+        ))
+        .expect("publish");
         bucket
     };
 
@@ -130,7 +144,12 @@ fn each_narrow_trouble_fails_only_its_own_request() {
     bucket.has_trouble(ObjectTrouble::PublishFails);
     let etag = bucket.current().expect("an object").etag;
     assert!(matches!(
-        rt.block_on(bucket.publish_if_match(&src, WriteCondition::IfMatch(etag), metadata("p2"))),
+        rt.block_on(bucket.publish_if_match(
+            &src,
+            WriteCondition::IfMatch(etag),
+            metadata("p2"),
+            LIMIT
+        )),
         Err(IndexObjectError::Unavailable { .. })
     ));
     assert!(rt.block_on(bucket.put_last_pass(&record())).is_ok());
@@ -236,7 +255,7 @@ fn forbidden_writes_count_every_object_write_and_leave_the_write_check_alone() {
     assert_eq!(writes.attempts(), 0);
 
     assert!(rt
-        .block_on(writes.publish_if_match(&src, WriteCondition::IfNoneMatch, metadata("p")))
+        .block_on(writes.publish_if_match(&src, WriteCondition::IfNoneMatch, metadata("p"), LIMIT))
         .is_err());
     assert!(rt.block_on(writes.put_last_pass(&record())).is_err());
     assert_eq!(writes.attempts(), 2);
@@ -253,11 +272,12 @@ fn the_timeline_orders_bucket_writes_and_event_lines_together() {
     std::fs::write(&src, b"v1").expect("v1");
     let mark = world.timeline.mark();
 
-    rt.block_on(
-        world
-            .bucket
-            .publish_if_match(&src, WriteCondition::IfNoneMatch, metadata("p")),
-    )
+    rt.block_on(world.bucket.publish_if_match(
+        &src,
+        WriteCondition::IfNoneMatch,
+        metadata("p"),
+        LIMIT,
+    ))
     .expect("publish");
     rt.block_on(world.bucket.put_last_pass(&record()))
         .expect("record");
@@ -280,7 +300,7 @@ fn a_stalled_check_fails_after_the_operation_timeout_and_a_stalled_download_outl
     let dir = tempfile::tempdir().expect("scratch");
     let src = dir.path().join("index.duckdb");
     std::fs::write(&src, b"v1 and some more").expect("v1");
-    rt.block_on(bucket.publish_if_match(&src, WriteCondition::IfNoneMatch, metadata("p1")))
+    rt.block_on(bucket.publish_if_match(&src, WriteCondition::IfNoneMatch, metadata("p1"), LIMIT))
         .expect("publish");
 
     bucket.has_trouble(ObjectTrouble::HeadStalls);
@@ -305,7 +325,7 @@ fn a_damaged_index_is_as_large_as_the_one_it_replaced() {
     let dir = tempfile::tempdir().expect("scratch");
     let src = dir.path().join("index.duckdb");
     std::fs::write(&src, vec![b'i'; 4096]).expect("v1");
-    rt.block_on(bucket.publish_if_match(&src, WriteCondition::IfNoneMatch, metadata("p1")))
+    rt.block_on(bucket.publish_if_match(&src, WriteCondition::IfNoneMatch, metadata("p1"), LIMIT))
         .expect("publish");
 
     bucket.holds_a_damaged_index();

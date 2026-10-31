@@ -417,6 +417,7 @@ struct BucketState {
     another_writer_before_next_publish: bool,
     write_probe_versions: usize,
     ignores_write_conditions: bool,
+    publish_limits: Vec<Duration>,
 }
 
 impl BucketState {
@@ -592,6 +593,11 @@ impl FakeIndexBucket {
         self.state.lock().unwrap().requests.clone()
     }
 
+    /// The limit each publish was handed, in order.
+    pub fn publish_limits(&self) -> Vec<Duration> {
+        self.state.lock().unwrap().publish_limits.clone()
+    }
+
     /// How many versions of the write probe's key exist (0 or 1 in a store that
     /// honours conditions; a store that ignores them gains 2 per run).
     pub fn write_check_marker_versions(&self) -> usize {
@@ -710,7 +716,14 @@ impl IndexObjectWritePort for FakeIndexBucket {
         src: &Path,
         condition: WriteCondition,
         metadata: PublishMetadata,
+        limit: Duration,
     ) -> Result<PublishOutcome, IndexObjectError> {
+        self.state.lock().unwrap().publish_limits.push(limit);
+        if limit.is_zero() {
+            return Err(IndexObjectError::Unavailable {
+                detail: "no time left to publish (fake)".to_string(),
+            });
+        }
         let bytes = std::fs::read(src).map_err(|err| IndexObjectError::LocalWrite {
             detail: format!("read the file to publish: {err}"),
         })?;
@@ -795,6 +808,7 @@ impl IndexObjectWritePort for ForbiddenWrites {
         _src: &Path,
         _condition: WriteCondition,
         _metadata: PublishMetadata,
+        _limit: Duration,
     ) -> Result<PublishOutcome, IndexObjectError> {
         Err(self.attempted())
     }

@@ -211,6 +211,7 @@ mod repo_did_list;
 pub use index_object::{
     HeadOutcome, IndexFingerprint, IndexObjectError, IndexObjectReadPort, IndexObjectWritePort,
     LastPass, ObjectVersion, PublishMetadata, PublishOutcome, WriteCondition,
+    PUBLISH_OPERATION_TIMEOUT,
 };
 pub use repo_did_list::{RepoDidListError, RepoDidListSourcePort};
 

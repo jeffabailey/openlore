@@ -18,7 +18,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use adapter_index_store::UnusableReason;
 use appview_domain::ingest_pass::{PassExit, PassFailure};
@@ -31,14 +31,14 @@ use openlore_indexer::run::Wired;
 use openlore_indexer::runner_contract::{BootNonce, PassLabel};
 use ports::{
     IndexFingerprint, IndexObjectError, IndexObjectReadPort, LastPass, ObjectVersion, ProbeOutcome,
-    ProbeRefused, PublishMetadata, PublishOutcome, WriteCondition,
+    ProbeRefused, PublishMetadata, PublishOutcome, WriteCondition, PUBLISH_OPERATION_TIMEOUT,
 };
 use serde_json::json;
 use tokio::task::JoinError;
 
 use crate::decide::{
-    dids_copy_usable, final_exit, pass_mode, publish_decision, EventRefused, PassMode, Publish,
-    PublishStep, RecordStep, DIDS_COPY_MAX_AGE,
+    dids_copy_usable, final_exit, pass_mode, publish_decision, publish_time_limit, EventRefused,
+    PassMode, Publish, PublishStep, RecordStep, DIDS_COPY_MAX_AGE,
 };
 use crate::no_publish::run_no_publish;
 use crate::{
@@ -48,6 +48,10 @@ use crate::{
 
 /// How a pass whose work panicked ended (D-STZ-43).
 const PANICKED: PassExit = PassExit::Failed(PassFailure::PassPanicked);
+
+/// The function's timeout (D-STZ-40a). The deadline clock starts at handler entry,
+/// so what a publish may take is measured from there.
+const FUNCTION_TIMEOUT: Duration = Duration::from_secs(840);
 
 /// The plan value both arms read: the object the pass saw at its start, the
 /// reused pass's work, and whether its store is to be published.
@@ -184,7 +188,10 @@ impl PassFunction {
         .await?;
         let events = events_through(self.driven.events.clone());
         let PublishEnd { published, step } = match publish {
-            Publish::Publish => self.publish(pass, seen.as_ref(), &events).await,
+            Publish::Publish => {
+                let limit = publish_limit(started.elapsed());
+                self.publish(pass, seen.as_ref(), limit, &events).await
+            }
             Publish::Skip => PublishEnd::nothing_attempted(),
         };
         let exit_so_far = final_exit(ended.exit(), step, RecordStep::NoFailure);
@@ -246,6 +253,7 @@ impl PassFunction {
         &self,
         pass: PassLabel,
         seen: Option<&ObjectVersion>,
+        limit: Duration,
         events: &Events,
     ) -> PublishEnd {
         let published_at = self.now_stamp();
@@ -256,7 +264,12 @@ impl PassFunction {
         let outcome = self
             .driven
             .index_write
-            .publish_if_match(&self.config.index_path, publish_condition(seen), metadata)
+            .publish_if_match(
+                &self.config.index_path,
+                publish_condition(seen),
+                metadata,
+                limit,
+            )
             .await
             .inspect_err(|failed| eprintln!("openlore-indexer-lambda: not published: {failed}"));
         let end = PublishEnd::of(outcome, published_at);
@@ -477,6 +490,14 @@ fn publish_condition(seen: Option<&ObjectVersion>) -> WriteCondition {
     })
 }
 
+/// `decide::publish_time_limit`, `elapsed` after handler entry.
+fn publish_limit(elapsed: Duration) -> Duration {
+    publish_time_limit(
+        FUNCTION_TIMEOUT.saturating_sub(elapsed),
+        PUBLISH_OPERATION_TIMEOUT,
+    )
+}
+
 /// D-STZ-48: this pass's publish, otherwise the object seen at the start.
 fn index_published_at(
     published: Option<&PublishedIndex>,
@@ -687,6 +708,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    // bypass: D-STZ-40a's budget has three fixed regions, and the rule across all
+    // of `time_left` is `publish_time_limit`'s own property.
+    #[test]
+    fn a_late_publish_gets_the_time_left_less_the_reserve_then_none() {
+        let seconds = Duration::from_secs;
+
+        assert_eq!(publish_limit(Duration::ZERO), seconds(35));
+        assert_eq!(publish_limit(seconds(795)), seconds(35));
+        assert_eq!(publish_limit(seconds(800)), seconds(30));
+        assert_eq!(publish_limit(seconds(829)), seconds(1));
+        assert_eq!(publish_limit(seconds(830)), Duration::ZERO);
+        assert_eq!(publish_limit(seconds(900)), Duration::ZERO);
     }
 
     // bypass: the port's two answers and a crash are three fixed cases, not a

@@ -5,8 +5,9 @@
 //!   `IndexObjectWritePort` over S3 (D-STZ-38): `HeadObject`, `GetObject`,
 //!   conditional `PutObject` with `If-Match` / `If-None-Match: *`, metadata
 //!   `published-at` and `pass-id`. A missing object is `Absent` (the role has
-//!   `s3:ListBucket`, so S3 answers 404, not 403); a 412 is
-//!   `PublishOutcome::Conflict`. The write probe (D-STZ-39) writes only
+//!   `s3:ListBucket`, so S3 answers 404, not 403); a missing bucket is a store
+//!   failure; a 412 is `PublishOutcome::Conflict`. See `s3`, which holds the
+//!   mapping. The write probe (D-STZ-39) writes only
 //!   `index/.write-probe`, and the pure [`write_probe_outcome`] reads its PUTs.
 //! * [`SsmRepoDidListAdapter`] implements `RepoDidListSourcePort` over SSM
 //!   `GetParameter`, returning the raw text.
@@ -14,12 +15,13 @@
 //! The only crate besides the Lambda root that may link `aws-*` (xtask
 //! `aws_sdk_only_in_lambda_edge`).
 //
-// SCAFFOLD: true  (DISTILL 2026-10-27: signatures only; every port body panics.
+// SCAFFOLD: true  (the port probes and the SSM adapter still panic: 06-02, 06-03.
 // Contract: tests/acceptance/scale_to_zero_object_store_real_io.rs)
 
 #![forbid(unsafe_code)]
 
 mod client_settings;
+mod s3;
 
 use std::path::Path;
 use std::time::Duration;
@@ -28,7 +30,7 @@ use async_trait::async_trait;
 use ports::{
     HeadOutcome, IndexObjectError, IndexObjectReadPort, IndexObjectWritePort, LastPass,
     ObjectVersion, ProbeOutcome, PublishMetadata, PublishOutcome, RepoDidListError,
-    RepoDidListSourcePort, WriteCondition,
+    RepoDidListSourcePort, WriteCondition, PUBLISH_OPERATION_TIMEOUT,
 };
 
 pub use client_settings::{client_settings, ClientSettings};
@@ -68,7 +70,7 @@ pub fn call_budget(call: StoreCall) -> CallBudget {
         StoreCall::Reload | StoreCall::GetLastPass => 3,
         StoreCall::GetParameter | StoreCall::PutLastPass => 5,
         StoreCall::SearchInitGet => 8,
-        StoreCall::Publish => 35,
+        StoreCall::Publish => PUBLISH_OPERATION_TIMEOUT.as_secs(),
         StoreCall::PassGet => 60,
     };
     CallBudget {
@@ -101,7 +103,7 @@ pub struct SsmLocation {
 
 /// `IndexObjectReadPort` and `IndexObjectWritePort` over S3.
 pub struct S3IndexObjectAdapter {
-    _location: S3Location,
+    store: s3::IndexObjectStore,
 }
 
 impl S3IndexObjectAdapter {
@@ -114,7 +116,18 @@ impl S3IndexObjectAdapter {
                 detail: format!("a configured key is the write probe's key {WRITE_PROBE_KEY}"),
             });
         }
-        panic!("Not yet implemented -- RED scaffold")
+        Ok(Self {
+            store: s3::IndexObjectStore::connect(location).await,
+        })
+    }
+
+    /// The budget `fetch_to` runs under, by default [`StoreCall::PassGet`]. Search
+    /// composes [`StoreCall::SearchInitGet`], and holds a reload to its own bound.
+    #[must_use]
+    pub fn fetching_as(self, call: StoreCall) -> Self {
+        Self {
+            store: self.store.fetching_as(call),
+        }
     }
 }
 
@@ -125,16 +138,15 @@ impl IndexObjectReadPort for S3IndexObjectAdapter {
     }
 
     async fn head(&self) -> Result<HeadOutcome, IndexObjectError> {
-        panic!("Not yet implemented -- RED scaffold")
+        self.store.head().await
     }
 
     async fn fetch_to(&self, dest: &Path) -> Result<Option<ObjectVersion>, IndexObjectError> {
-        let _ = dest;
-        panic!("Not yet implemented -- RED scaffold")
+        self.store.fetch_to(dest).await
     }
 
     async fn get_last_pass(&self) -> Result<Option<LastPass>, IndexObjectError> {
-        panic!("Not yet implemented -- RED scaffold")
+        self.store.get_last_pass().await
     }
 }
 
@@ -149,14 +161,13 @@ impl IndexObjectWritePort for S3IndexObjectAdapter {
         src: &Path,
         condition: WriteCondition,
         metadata: PublishMetadata,
+        limit: Duration,
     ) -> Result<PublishOutcome, IndexObjectError> {
-        let _ = (src, condition, metadata);
-        panic!("Not yet implemented -- RED scaffold")
+        self.store.publish(src, condition, metadata, limit).await
     }
 
     async fn put_last_pass(&self, last: &LastPass) -> Result<(), IndexObjectError> {
-        let _ = last;
-        panic!("Not yet implemented -- RED scaffold")
+        self.store.put_last_pass(last).await
     }
 }
 

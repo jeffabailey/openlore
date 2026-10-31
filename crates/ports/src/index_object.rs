@@ -16,15 +16,17 @@
 //!
 //! Also here: [`IndexFingerprint`], what the pass compares before and after a
 //! run to decide whether anything changed (D-STZ-8).
-//
-// SCAFFOLD: true  (trait surface only, DISTILL-proposed names; the S3 adapter
-// lands in DELIVER in `adapter-s3-index-object`)
 
 use std::path::Path;
+use std::time::Duration;
 
 use async_trait::async_trait;
 
 use crate::ProbeOutcome;
+
+/// The longest a publish may take (D-STZ-40a). The pass narrows it by the time it
+/// has left, and the adapter's call table reads the same figure.
+pub const PUBLISH_OPERATION_TIMEOUT: Duration = Duration::from_secs(35);
 
 /// The version of the index object as the store reports it (`HEAD` / `GET`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,7 +117,9 @@ pub trait IndexObjectReadPort: Send + Sync {
     async fn head(&self) -> Result<HeadOutcome, IndexObjectError>;
 
     /// Download the current index object to `dest` (a new file). `Ok(None)`
-    /// when no object exists.
+    /// when no object exists. A fetch that fails, runs out of time, or is dropped
+    /// by its caller leaves no file, and a body shorter than the object is a
+    /// failed fetch.
     async fn fetch_to(&self, dest: &Path) -> Result<Option<ObjectVersion>, IndexObjectError>;
 
     /// Read `index/last-pass.json`; `Ok(None)` when no pass recorded one yet,
@@ -139,12 +143,14 @@ pub trait IndexObjectWritePort: Send + Sync {
     /// `spawn_blocking`.
     fn probe(&self) -> ProbeOutcome;
 
-    /// Publish the file at `src` as the new index object, under `condition`.
+    /// Publish the file at `src` as the new index object, under `condition`,
+    /// within `limit` (D-STZ-40a). A zero `limit` fails at once and sends nothing.
     async fn publish_if_match(
         &self,
         src: &Path,
         condition: WriteCondition,
         metadata: PublishMetadata,
+        limit: Duration,
     ) -> Result<PublishOutcome, IndexObjectError>;
 
     /// Write `index/last-pass.json` (unconditional).

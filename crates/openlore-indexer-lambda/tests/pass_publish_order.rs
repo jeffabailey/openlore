@@ -1,5 +1,6 @@
-//! Crafter-owned guards (steps 01-04, 01-10, 04-03): the warm copy, the closed file
-//! and the no-publish arm with no usable starting index.
+//! Crafter-owned guards (steps 01-04, 01-10, 04-03, 06-01): the warm copy, the
+//! closed file, the publish's time limit and the no-publish arm with no usable
+//! starting index.
 //! The D-STZ-40 order is PA-11's.
 #![cfg(unix)]
 
@@ -46,6 +47,21 @@ fn a_pass_that_changes_nothing_names_the_index_it_saw_and_publishes_nothing() {
     let record = world.bucket.last_pass().expect("a record");
     assert!(!record.published);
     assert_eq!(record.index_published_at, stamped);
+}
+
+/// D-STZ-40a: the limit reaches the port. A pass this quick still has the whole
+/// budget; `publish_limit` holds how it shrinks, and `publish_time_limit` the rule.
+#[test]
+fn a_publish_is_handed_its_time_limit() {
+    let world = LambdaWorld::listing(&[Author::Priya]);
+    world.publishes(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
+
+    world.cold_pass_instance().schedule_fires();
+
+    assert_eq!(
+        world.bucket.publish_limits(),
+        [std::time::Duration::from_secs(35)]
+    );
 }
 
 /// A warm instance's copy does not outlive `reset-index`: the pass starts from

@@ -39,6 +39,9 @@ use ports::{
 
 const ENDPOINT_VAR: &str = "OPENLORE_TEST_MOTO_ENDPOINT";
 
+/// What a publish is given: moto answers at once, so this is never the limit.
+const LIMIT: Duration = Duration::from_secs(35);
+
 fn moto() -> String {
     match std::env::var(ENDPOINT_VAR) {
         Ok(url) if !url.trim().is_empty() => url.trim_end_matches('/').to_string(),
@@ -208,7 +211,7 @@ fn metadata(pass_id: &str) -> PublishMetadata {
 ///   And a second create-only publish is refused as a conflict too
 /// ```
 #[test]
-#[ignore = "requires_external: moto; RED scaffold: DELIVER adapter-s3-index-object"]
+#[ignore = "requires_external: moto"]
 fn the_index_object_round_trips_through_a_real_object_store_and_a_lost_update_is_refused() {
     let endpoint = moto();
     moto_credentials();
@@ -236,6 +239,7 @@ fn the_index_object_round_trips_through_a_real_object_store_and_a_lost_update_is
             &published,
             WriteCondition::IfNoneMatch,
             metadata("pass-1"),
+            LIMIT,
         ))
         .expect("publish");
     let PublishOutcome::Published(v1) = first else {
@@ -262,6 +266,7 @@ fn the_index_object_round_trips_through_a_real_object_store_and_a_lost_update_is
             &published,
             WriteCondition::IfMatch("\"not-the-current-etag\"".to_string()),
             metadata("pass-2"),
+            LIMIT,
         ))
         .expect("conditional publish answers");
     assert_eq!(stale, PublishOutcome::Conflict);
@@ -270,6 +275,7 @@ fn the_index_object_round_trips_through_a_real_object_store_and_a_lost_update_is
             &published,
             WriteCondition::IfNoneMatch,
             metadata("pass-3"),
+            LIMIT,
         ))
         .expect("create-only publish answers");
     assert_eq!(again, PublishOutcome::Conflict);
@@ -283,6 +289,7 @@ fn the_index_object_round_trips_through_a_real_object_store_and_a_lost_update_is
             &published,
             WriteCondition::IfMatch(v1.etag.clone()),
             metadata("pass-4"),
+            LIMIT,
         ))
         .expect("publish");
     assert!(
@@ -301,7 +308,7 @@ fn the_index_object_round_trips_through_a_real_object_store_and_a_lost_update_is
 ///   And a record naming no index reads back the same way
 /// ```
 #[test]
-#[ignore = "requires_external: moto; RED scaffold: DELIVER adapter-s3-index-object"]
+#[ignore = "requires_external: moto"]
 fn the_pass_record_round_trips_through_a_real_object_store() {
     let endpoint = moto();
     moto_credentials();
@@ -343,7 +350,7 @@ fn the_pass_record_round_trips_through_a_real_object_store() {
 ///   Then the check fails, rather than reporting that no index was published
 /// ```
 #[test]
-#[ignore = "requires_external: moto; RED scaffold: DELIVER adapter-s3-index-object"]
+#[ignore = "requires_external: moto"]
 fn a_bucket_that_does_not_exist_is_a_store_failure_never_no_index_yet() {
     let endpoint = moto();
     moto_credentials();
@@ -493,7 +500,7 @@ fn the_write_check_creates_one_empty_marker_and_never_touches_the_index() {
 ///   Then both fail, and the publish is not reported as a conflict
 /// ```
 #[test]
-#[ignore = "requires_external: moto; RED scaffold: DELIVER adapter-s3-index-object"]
+#[ignore = "requires_external: moto"]
 fn a_write_the_store_cannot_take_is_a_failure_never_a_lost_update() {
     let endpoint = moto();
     moto_credentials();
@@ -513,8 +520,12 @@ fn a_write_the_store_cannot_take_is_a_failure_never_a_lost_update() {
         index_published_at: None,
     };
 
-    let publish =
-        rt.block_on(store.publish_if_match(&published, WriteCondition::IfNoneMatch, metadata("p")));
+    let publish = rt.block_on(store.publish_if_match(
+        &published,
+        WriteCondition::IfNoneMatch,
+        metadata("p"),
+        LIMIT,
+    ));
     let recorded = rt.block_on(store.put_last_pass(&record));
 
     assert!(publish.is_err(), "{publish:?}");
@@ -530,7 +541,7 @@ fn a_write_the_store_cannot_take_is_a_failure_never_a_lost_update() {
 ///   Then the read fails, rather than reporting that no pass ran
 /// ```
 #[test]
-#[ignore = "requires_external: moto; RED scaffold: DELIVER adapter-s3-index-object"]
+#[ignore = "requires_external: moto"]
 fn a_pass_record_nobody_can_read_is_an_error_never_no_pass_yet() {
     let endpoint = moto();
     moto_credentials();
