@@ -1999,3 +1999,154 @@ fn the_image_shows_no_aws_credential_and_trivy_looks_for_secrets_too() {
     assert!(image[secret_at].contains("^AWS_"));
     assert_eq!(pinned(image[scanned_at], "scanners"), "vuln,secret");
 }
+
+// ---------------------------------------------------------------------------------------------
+// The operator runbook against the scripts it describes
+// ---------------------------------------------------------------------------------------------
+
+const RUNBOOK: &str = "deploy/indexer/README.md";
+const LAMBDA_SCRIPT: &str = "deploy/indexer/lambda.sh";
+const DEPLOY_SCRIPT: &str = "deploy/indexer/deploy.sh";
+const EVIDENCE_FILE: &str = "docs/evolution/scale-to-zero-hosting-evidence.md";
+const LAMBDA_DISPATCH: &str = "lambda_main() {";
+const TARGET_CHECK: &str = "lambda_test_alarm() {";
+
+/// The arms of the first `case` after `opening`, without the `*` that refuses.
+fn case_arms(script: &str, opening: &str) -> Vec<String> {
+    script[position(script, opening)..]
+        .lines()
+        .skip_while(|line| !line.trim_start().starts_with("case "))
+        .skip(1)
+        .take_while(|line| line.trim() != "esac")
+        .filter_map(|line| line.trim().split_once(')'))
+        .map(|(pattern, _)| pattern)
+        .filter(|pattern| *pattern != "*" && !pattern.starts_with('"'))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// What `deploy.sh lambda` dispatches to, read from the script itself.
+fn dispatched_verbs(lambda_script: &str) -> BTreeSet<String> {
+    case_arms(lambda_script, LAMBDA_DISPATCH)
+        .into_iter()
+        .collect()
+}
+
+/// The verb of each row in the runbook's verb table.
+fn verbs_with_a_row(runbook: &str) -> BTreeSet<String> {
+    runbook
+        .lines()
+        .filter_map(|line| line.strip_prefix("| `lambda "))
+        .map(verb_at)
+        .collect()
+}
+
+fn verb_at(text: &str) -> String {
+    text.chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect()
+}
+
+/// Every verb the runbook names anywhere, in a command or in a sentence.
+fn verbs_named(runbook: &str) -> BTreeSet<String> {
+    ["deploy.sh lambda ", "`lambda "]
+        .into_iter()
+        .flat_map(|prefix| runbook.split(prefix).skip(1).map(verb_at))
+        .filter(|verb| !verb.is_empty())
+        .collect()
+}
+
+fn verbs_without_a_row(lambda_script: &str, runbook: &str) -> BTreeSet<String> {
+    dispatched_verbs(lambda_script)
+        .difference(&verbs_with_a_row(runbook))
+        .cloned()
+        .collect()
+}
+
+/// The verb list is read from the real dispatch, so a new verb cannot ship unnamed, and
+/// a planted verb and a dropped row show the check can fail.
+#[test]
+fn the_runbook_names_every_lambda_verb() {
+    let (script, runbook) = (read(LAMBDA_SCRIPT), read(RUNBOOK));
+    let verbs = dispatched_verbs(&script);
+    assert!(verbs.len() >= 20, "the dispatch was not read: {verbs:?}");
+    assert!(verbs.contains("pass-off") && verbs.contains("cutover-watch"));
+
+    assert_eq!(verbs_with_a_row(&runbook), verbs, "one row per verb");
+    let unknown: Vec<_> = verbs_named(&runbook).difference(&verbs).cloned().collect();
+    assert!(unknown.is_empty(), "the script takes no verb {unknown:?}");
+
+    let planted = script.replace(
+        "    status) lambda_status",
+        "    fly-away) lambda_fly_away \"$@\" ;;\n    status) lambda_status",
+    );
+    assert_eq!(
+        verbs_without_a_row(&planted, &runbook),
+        BTreeSet::from(["fly-away".to_owned()]),
+        "a verb added without a row fails"
+    );
+    let dropped: String = runbook
+        .lines()
+        .filter(|line| !line.starts_with("| `lambda status"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        verbs_without_a_row(&script, &dropped),
+        BTreeSet::from(["status".to_owned()]),
+        "a row removed from the runbook fails"
+    );
+
+    let targets = case_arms(&script, TARGET_CHECK);
+    let targets = targets.first().expect("the targets test-alarm accepts");
+    let row = runbook
+        .lines()
+        .find(|line| line.starts_with("| `lambda test-alarm"))
+        .expect("the test-alarm row");
+    for target in targets.split(" | ") {
+        let target = target.trim_matches('"');
+        assert!(row.contains(&format!("`{target}`")), "test-alarm {target}");
+    }
+}
+
+#[test]
+fn the_runbook_names_the_two_host_verbs_as_the_host_takes_them() {
+    let (script, runbook) = (read(DEPLOY_SCRIPT), read(RUNBOOK));
+    let verbs = case_arms(&script, "\ncmd=\"${1:-}\"");
+    for verb in ["standby", "resume"] {
+        assert!(verbs.iter().any(|arm| arm == verb), "deploy.sh {verb}");
+    }
+    let flags = case_arms(&script, "refuse_unless_one_standby_flag() {");
+    assert_eq!(flags, ["--timers | --container"]);
+    for command in ["standby --timers", "standby --container", "resume"] {
+        let row = format!("| `deploy.sh {command}` |");
+        assert!(runbook.contains(&row), "the runbook lists {command}");
+    }
+}
+
+/// Each evidence item owed to the operator stages, by the name its row starts with.
+#[test]
+fn each_evidence_item_names_its_stage_and_how_to_record_it() {
+    let runbook = read(RUNBOOK);
+    assert!(runbook.contains(EVIDENCE_FILE));
+    for item in [
+        "P-5",
+        "P-15",
+        "P-17",
+        "P-18",
+        "140 MB post-pass steps",
+        "140 MB query",
+        "Metric check",
+    ] {
+        let row = runbook
+            .lines()
+            .find(|line| line.starts_with(&format!("| {item} |")))
+            .unwrap_or_else(|| panic!("no evidence row for {item}"));
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        let (stage, how) = (cells[2], cells[3]);
+        assert!(
+            stage.starts_with("Stage "),
+            "{item} names no stage: {stage}"
+        );
+        assert!(how.len() > 20, "{item} does not say how to record it");
+    }
+}
