@@ -46,7 +46,8 @@ pub struct PublicRequest<'request, Body> {
     pub path: &'request str,
     /// Awaited only by a search.
     pub body: Body,
-    /// How long a search may take: its body read plus its query.
+    /// How long a search may take: its body read plus its query. A caller that
+    /// spent part of its limit before this call passes what is left (D-STZ-10).
     pub time_allowed: Duration,
 }
 
@@ -572,6 +573,25 @@ mod tests {
             Duration::from_millis(400),
             std::future::ready(whole_body()),
             Duration::from_millis(40),
+        );
+        assert_eq!(
+            answered,
+            answer(
+                503,
+                &[JSON, ("retry-after", "1")],
+                r#"{"error":"index_busy"}"#
+            )
+        );
+    }
+
+    /// A caller can arrive with its limit spent (D-STZ-10). A body already here
+    /// is still read, so the answer is the usual retry and not a slow-body 408.
+    #[test]
+    fn a_search_with_no_time_left_is_503_index_busy() {
+        let answered = timed_search(
+            Duration::from_millis(400),
+            std::future::ready(whole_body()),
+            Duration::ZERO,
         );
         assert_eq!(
             answered,

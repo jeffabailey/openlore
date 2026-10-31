@@ -828,7 +828,6 @@ fn a_reload_that_stalls_is_abandoned_and_maria_stays_on_the_current_copy() {
 ///   And she is told that at about 5 seconds, not 5 seconds after the check gave up
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (the deadline passed to dispatch after the gate, D-STZ-10)"]
 fn after_a_slow_freshness_check_a_search_has_only_what_is_left_of_its_5_seconds() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = given_a_warm_instance_under_fault(&world, Fault::SearchStoreIsSlow);

@@ -17,7 +17,7 @@ use openlore_indexer::run::search_answers;
 use openlore_indexer::search_handler::{slow_index, unreadable_index, SharedIndexReads};
 use ports::{HeadOutcome, IndexObjectError};
 use serde_json::{json, Map, Value};
-use tokio::time::timeout;
+use tokio::time::{timeout, Instant};
 
 use crate::decide::{freshness_due, reload_needed, HeadSeen, Reload, FRESHNESS_TTL};
 use crate::index_holder::{HeldIndex, IndexHolder};
@@ -55,15 +55,17 @@ impl SearchFunction {
     }
 
     /// Answer one Function URL event (payload format 2.0) with a Function URL
-    /// response.
+    /// response. The 5 s cover the freshness gate and the query together
+    /// (D-STZ-10), so the search gets what the gate left.
     pub async fn handle(&self, event: Value) -> Value {
+        let arrived = Instant::now();
         self.freshen().await;
         let handlers = handlers_over(&self.index.current(), &self.events, self.config.test_fault);
         let request = PublicRequest {
             method: text_at(&event, "/requestContext/http/method"),
             path: text_at(&event, "/rawPath"),
             body: std::future::ready(body_of(&event)),
-            time_allowed: REQUEST_TIMEOUT,
+            time_allowed: REQUEST_TIMEOUT.saturating_sub(arrived.elapsed()),
         };
         function_url_response(&dispatch(request, &handlers).await)
     }
