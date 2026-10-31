@@ -1,6 +1,5 @@
-//! Crafter-owned guards (steps 01-04, 01-10): the D-STZ-40 order, the warm copy
-//! and the closed file. WS-1 and PA-1 read only the end state, so nothing else
-//! pins the order until PA-11 (02-03).
+//! Crafter-owned guards (steps 01-04, 01-10): the warm copy and the closed file.
+//! The D-STZ-40 order is PA-11's.
 #![cfg(unix)]
 
 #[path = "../../../tests/common/state_delta.rs"]
@@ -11,23 +10,6 @@ mod indexer_lambda;
 
 use indexer_lambda::claims::*;
 use indexer_lambda::*;
-
-#[test]
-fn the_pass_publishes_then_records_itself_then_writes_its_summary() {
-    let world = LambdaWorld::listing(&[Author::Priya]);
-    world.publishes(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
-    let mark = world.timeline.mark();
-
-    world.cold_pass_instance().schedule_fires();
-
-    let at = |step| world.timeline.position_since(mark, step);
-    let (publish, record, summary) = (at(step::PUBLISH), at(step::RECORD), at(step::SUMMARY));
-    assert!(
-        publish.is_some() && publish < record && record < summary,
-        "{:?}",
-        world.timeline.since(mark)
-    );
-}
 
 /// P-7, on the real store: what a pass uploads is its closed file, with nothing
 /// left in the log. `ready_to_upload` holds the rule for a log that is not empty.

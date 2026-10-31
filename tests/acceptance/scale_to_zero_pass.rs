@@ -249,7 +249,6 @@ fn an_edit_to_the_did_list_takes_effect_on_the_next_pass_with_no_redeploy() {
 ///   And the pass record says exit 2, published
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (publish on exit 2 with a usable store)"]
 fn a_pass_that_fails_part_way_still_publishes_the_claims_it_committed() {
     let world = LambdaWorld::listing(&[Author::Priya, Author::Dmitri]);
     given_the_first_pass_published_priyas_claim(&world);
@@ -285,7 +284,6 @@ fn a_pass_that_fails_part_way_still_publishes_the_claims_it_committed() {
 ///   And the pass record says exit 3, not published
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (exit 3 is an answer, not a function error)"]
 fn a_pass_that_reaches_nobody_publishes_nothing_and_still_records_itself() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     given_the_first_pass_published_priyas_claim(&world);
@@ -480,7 +478,6 @@ fn a_pass_on_an_empty_bucket_with_nothing_to_publish_records_that_no_index_exist
 ///     | the store fails the publish           | 2    |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (publish, record, summary, D-STZ-40)"]
 fn a_pass_reports_itself_last_after_publishing_and_recording() {
     each_row(
         [

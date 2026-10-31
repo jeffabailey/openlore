@@ -2,7 +2,7 @@
 //! parameter store, fetch the starting index, run the reused ADR-077/078 pass
 //! off the async runtime (D-STZ-42, UI-11) and take its exit, publish on change
 //! under a version condition (D-STZ-6, D-STZ-7), write `last-pass.json`, then
-//! write the ONE `pass_summary`.
+//! write the ONE `pass_summary`, with the exit `decide::final_exit` settles.
 //!
 //! Thin for now, each closed by a named step: init ignores what the write probe
 //! found (T5, 03-01); the pass ignores its event (T2, 03-02). A no-publish run
@@ -25,11 +25,15 @@ use openlore_indexer::ingest_pass::{write_pass_summary, EndedPass};
 use openlore_indexer::run::Wired;
 use openlore_indexer::runner_contract::{BootNonce, PassLabel};
 use ports::{
-    IndexFingerprint, LastPass, ObjectVersion, PublishMetadata, PublishOutcome, WriteCondition,
+    IndexFingerprint, IndexObjectError, LastPass, ObjectVersion, PublishMetadata, PublishOutcome,
+    WriteCondition,
 };
 use serde_json::json;
 
-use crate::decide::{dids_copy_usable, publish_decision, Publish, DIDS_COPY_MAX_AGE};
+use crate::decide::{
+    dids_copy_usable, final_exit, publish_decision, Publish, PublishStep, RecordStep,
+    DIDS_COPY_MAX_AGE,
+};
 use crate::{events_through, pass_wiring, Environment, FunctionError, InitRefused, PassDriven};
 
 /// The reused pass's work, and whether its store is to be published.
@@ -42,6 +46,43 @@ struct WorkedPass {
 struct PublishedIndex {
     bytes: u64,
     published_at: String,
+}
+
+/// How a pass's publish ended: what landed, and what it means for the exit.
+struct PublishEnd {
+    published: Option<PublishedIndex>,
+    step: PublishStep,
+}
+
+impl PublishEnd {
+    const fn nothing_attempted() -> Self {
+        Self {
+            published: None,
+            step: PublishStep::NoFailure,
+        }
+    }
+
+    const fn not_landed(step: PublishStep) -> Self {
+        Self {
+            published: None,
+            step,
+        }
+    }
+
+    /// What the store's answer means, stamped as the publish asked.
+    fn of(outcome: Result<PublishOutcome, IndexObjectError>, published_at: String) -> Self {
+        match outcome {
+            Ok(PublishOutcome::Published(version)) => Self {
+                published: Some(PublishedIndex {
+                    bytes: version.size_bytes,
+                    published_at,
+                }),
+                step: PublishStep::NoFailure,
+            },
+            Ok(PublishOutcome::Conflict) => Self::not_landed(PublishStep::Conflict),
+            Err(_) => Self::not_landed(PublishStep::Failed),
+        }
+    }
 }
 
 /// One pass instance (warm across scheduled events).
@@ -88,13 +129,16 @@ impl PassFunction {
         let seen = self.fetch_starting_index().await;
         let WorkedPass { ended, publish } = self.pass_work(pass, started).await?;
         let events = events_through(self.driven.events.clone());
-        let published = match publish {
+        let PublishEnd { published, step } = match publish {
             Publish::Publish => self.publish(pass, seen.as_ref(), &events).await,
-            Publish::Skip => None,
+            Publish::Skip => PublishEnd::nothing_attempted(),
         };
-        self.record(pass, ended.exit(), published.as_ref(), seen.as_ref())
+        let exit_so_far = final_exit(ended.exit(), step, RecordStep::NoFailure);
+        let recorded = self
+            .record(pass, exit_so_far, published.as_ref(), seen.as_ref())
             .await;
-        let exit_code = write_pass_summary(&events, pass, &ended, ended.exit(), started);
+        let exit = final_exit(ended.exit(), step, recorded);
+        let exit_code = write_pass_summary(&events, pass, &ended, exit, started);
         Ok(json!({
             "pass_id": pass.to_string(),
             "exit_code": exit_code,
@@ -162,13 +206,13 @@ impl PassFunction {
 
     /// Publish the closed index file over the version this pass saw, stamped
     /// with this function's clock (D-STZ-6, D-STZ-12), and log its size for the
-    /// size alarm (D-STZ-33). `None` when it did not land.
+    /// size alarm (D-STZ-33).
     async fn publish(
         &self,
         pass: PassLabel,
         seen: Option<&ObjectVersion>,
         events: &Events,
-    ) -> Option<PublishedIndex> {
+    ) -> PublishEnd {
         let published_at = self.now_stamp();
         let metadata = PublishMetadata {
             published_at: published_at.clone(),
@@ -180,28 +224,25 @@ impl PassFunction {
             .publish_if_match(&self.config.index_path, publish_condition(seen), metadata)
             .await
             .inspect_err(|failed| eprintln!("openlore-indexer-lambda: not published: {failed}"));
-        let Ok(PublishOutcome::Published(version)) = outcome else {
-            return None;
-        };
-        events.emit_in(
-            Some(pass),
-            json!({"event": "indexer.lambda.published", "index_bytes": version.size_bytes}),
-        );
-        Some(PublishedIndex {
-            bytes: version.size_bytes,
-            published_at,
-        })
+        let end = PublishEnd::of(outcome, published_at);
+        if let Some(index) = &end.published {
+            events.emit_in(
+                Some(pass),
+                json!({"event": "indexer.lambda.published", "index_bytes": index.bytes}),
+            );
+        }
+        end
     }
 
-    /// Write `last-pass.json`, every pass (U-STZ-3). What a failed write means
-    /// for the exit is `decide::final_exit` (02-03).
+    /// Write `last-pass.json`, every pass (U-STZ-3), carrying the exit decided
+    /// before this write. A failed write changes only the summary (D-STZ-40).
     async fn record(
         &self,
         pass: PassLabel,
         exit: PassExit,
         published: Option<&PublishedIndex>,
         seen: Option<&ObjectVersion>,
-    ) {
+    ) -> RecordStep {
         let record = LastPass {
             pass_id: pass.to_string(),
             exit_code: exit.code(),
@@ -209,9 +250,12 @@ impl PassFunction {
             published: published.is_some(),
             index_published_at: index_published_at(published, seen),
         };
-        let written = self.driven.index_write.put_last_pass(&record).await;
-        if let Err(failed) = written {
-            eprintln!("openlore-indexer-lambda: pass not recorded: {failed}");
+        match self.driven.index_write.put_last_pass(&record).await {
+            Ok(()) => RecordStep::NoFailure,
+            Err(failed) => {
+                eprintln!("openlore-indexer-lambda: pass not recorded: {failed}");
+                RecordStep::Failed
+            }
         }
     }
 
