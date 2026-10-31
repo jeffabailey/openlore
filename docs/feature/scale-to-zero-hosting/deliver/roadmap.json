@@ -1477,7 +1477,7 @@
             "cargo deny check",
             "conventions.test_runs step_gate"
           ],
-          "implementation_notes": "No cargo scenario starts this binary (waiver DWD-STZ-3); lambda-smoke in 07-05 is its proof. The root gains its adapter-s3-index-object dependency here. Crafter-owned proptests over the parser, which is in mutation scope. Env names per UI-5, with bucket and parameter names chosen here and mirrored in lambda-env.json. lambda_http 1.3.2, lambda_runtime 1.5.0. TEST PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "No cargo scenario starts this binary (waiver DWD-STZ-3); lambda-smoke in 07-05 is its proof. The root gains its adapter-s3-index-object dependency here. Crafter-owned proptests over the parser, which is in mutation scope. Env names per UI-5, with bucket and parameter names chosen here and mirrored in lambda-env.json. lambda_http 1.3.2, lambda_runtime 1.5.0. TEST PARADIGM: conventions.test_paradigm. ALSO (from 01-04): the Lambda pass does not call wiring.probe_all() yet, so wire, probe, use is unenforced on the Lambda path. This step wires it in the real main, with a test that a failing probe stops the pass.",
           "estimate_hours": 5,
           "depends_on": [
             "05-03",
