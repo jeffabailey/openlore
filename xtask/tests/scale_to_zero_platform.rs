@@ -49,6 +49,7 @@
 //! | OP-E22 | `standby` needs a flag | U-STZ-1 |
 //! | OP-E23 | A publish that changed nothing is refused before anything moves | review B1 |
 //! | OP-E24 | A failed flip of the pass or the probe undoes what flipped, and says where each is | review H1 |
+//! | OP-E25 | Only a missing object reads as an empty bucket; any other failed read stops the verb | review H2 |
 //!
 //! ## Testability contract for `deploy.sh lambda`
 //!
@@ -205,6 +206,8 @@ struct Posture {
     publish_answers_live: [bool; 3],
     /// The `live` moves that fail, each as (index into [`FUNCTIONS`], target version).
     live_moves_that_fail: &'static [(usize, u32)],
+    /// From which `head-object` call on the index it fails, and with what on stderr.
+    index_head_fails: Option<(u32, &'static str)>,
 }
 
 impl Default for Posture {
@@ -234,6 +237,7 @@ impl Default for Posture {
             search_concurrency: 3,
             publish_answers_live: [false; 3],
             live_moves_that_fail: &[],
+            index_head_fails: None,
         }
     }
 }
@@ -507,6 +511,13 @@ fn aws(posture: Posture, digest: &str) -> String {
             )
         })
         .collect();
+    let index_head_fault = posture.index_head_fails.map_or_else(String::new, |(from, text)| {
+        format!(
+            r#"if [ "$(grep -c 's3api head-object' "$CALLS")" -ge {from} ]; then
+      echo '{text}' >&2; exit 254
+    fi"#
+        )
+    });
     format!(
         r#"
 in_ecr={in_ecr}
@@ -552,7 +563,9 @@ case "$*" in
     echo '{{}}' >"$last"
     log=$(printf '%s\n' '{{"event":"indexer.host.health","not_live":{not_live}}}' | base64 | tr -d '\n')
     echo "{{\"StatusCode\":200,\"LogResult\":\"$log\"}}" ;;
-  *"s3api head-object"*) echo '{{"ETag":"\"e\"","Metadata":{{"published-at":"{published_at}"}},"VersionId":"v1","ContentLength":3145728}}' ;;
+  *"s3api head-object"*)
+    {index_head_fault}
+    echo '{{"ETag":"\"e\"","Metadata":{{"published-at":"{published_at}"}},"VersionId":"v1","ContentLength":3145728}}' ;;
   *"s3api delete-object"*) echo '{{"VersionId":"v2","DeleteMarker":true}}' ;;
   *"s3api copy-object"*) echo '{{"VersionId":"v3"}}' ;;
   *"cloudwatch describe-alarms"*)
@@ -2778,6 +2791,106 @@ fn a_flip_that_stops_at_the_pass_or_the_probe_is_undone_and_names_what_is_where(
             "a stopped deploy prunes nothing\n{calls}"
         );
     });
+}
+
+const NOT_FOUND: &str = "An error occurred (404) when calling the HeadObject operation: Not Found";
+const NO_SUCH_KEY: &str = "An error occurred (NoSuchKey) when calling the HeadObject operation";
+const FORBIDDEN: &str = "An error occurred (403) when calling the HeadObject operation: Forbidden";
+const SLOW_DOWN: &str = "An error occurred (503) when calling the HeadObject operation: SlowDown";
+const NO_NETWORK: &str = "Could not connect to the endpoint URL";
+
+/// OP-E25, crafter-owned (review H2). A deploy, a reset and the report each read a failed read as
+/// an empty bucket before: `pre-publish index none` in the record, and the id a reset prints gone.
+/// A `die` in a command substitution ends only the subshell, so each caller is run to its own
+/// stop: step 7 and step 11 of a deploy, then a reset. Each error is one row of step 7.
+#[test]
+fn a_failed_read_of_the_index_stops_the_verb() {
+    each_row([FORBIDDEN, SLOW_DOWN, NO_NETWORK], |error| {
+        let stubs = Stubs::new(Posture {
+            index_head_fails: Some((1, error)),
+            ..Posture::default()
+        });
+
+        let run = stubs.run(&["lambda", "deploy", SHA], &[], "");
+
+        assert_stopped_with_nothing_flipped(&run, &stubs);
+        assert_refused(&run);
+        assert!(run.out.contains(*error), "{}", run.out);
+        assert_reached(&stubs, &["s3api head-object"]);
+        let calls = stubs.calls();
+        assert!(!called(&calls, &["update-function-code"]), "{calls}");
+    });
+
+    let at_step_11 = Stubs::new(Posture {
+        index_head_fails: Some((2, FORBIDDEN)),
+        ..Posture::default()
+    });
+    let run = at_step_11.run(&["lambda", "deploy", SHA], &[], "");
+    assert_stopped_with_nothing_flipped(&run, &at_step_11);
+    assert_refused(&run);
+    let calls = at_step_11.calls();
+    assert!(!called(&calls, &["lambda invoke"]), "{calls}");
+    let candidate = |version: &str| {
+        let version = format!("--function-version {version}");
+        line_of(
+            &calls,
+            &["update-alias", FUNCTIONS[0], "candidate", &version],
+        )
+    };
+    let forward = candidate("8");
+    assert!(forward.is_some() && forward < candidate("7"), "{calls}");
+
+    let reset = Stubs::new(Posture {
+        index_head_fails: Some((1, FORBIDDEN)),
+        ..Posture::default()
+    });
+    let run = reset.run(&["lambda", "reset-index", "--trigger"], &[], "reset\n");
+    assert_ne!(run.status, 0, "{}\n{}", run.out, reset.calls());
+    assert_refused(&run);
+    let calls = reset.calls();
+    assert!(!called(&calls, &["delete-object"]), "{calls}");
+    assert!(!called(&calls, &["lambda invoke"]), "{calls}");
+}
+
+/// OP-E25, the other side: a missing object is what an empty bucket really answers.
+#[test]
+fn a_missing_index_object_is_an_empty_bucket() {
+    each_row([NOT_FOUND, NO_SUCH_KEY], |error| {
+        let stubs = Stubs::new(Posture {
+            index_head_fails: Some((1, error)),
+            ..Posture::default()
+        });
+
+        let run = stubs.run(&["lambda", "reset-index"], &[], "reset\n");
+
+        assert_eq!(run.status, 0, "{}\n{}", run.out, stubs.calls());
+        assert!(run.out.contains("noncurrent: none"), "{}", run.out);
+        assert_eq!(
+            stubs.calls().matches("delete-object").count(),
+            1,
+            "{}",
+            stubs.calls()
+        );
+    });
+}
+
+/// OP-E25 in the report: the section says it stopped, and the others still print.
+#[test]
+fn the_status_report_does_not_show_a_failed_read_of_the_index_as_empty() {
+    let stubs = Stubs::new(Posture {
+        index_head_fails: Some((1, FORBIDDEN)),
+        ..Posture::default()
+    });
+
+    let run = stubs.run(&["lambda", "status"], &[], "");
+
+    assert!(!run.out.contains("etag none"), "{}", run.out);
+    assert!(
+        run.out.contains("(this section stopped early"),
+        "{}",
+        run.out
+    );
+    assert!(run.out.contains("--- alarms"), "{}", run.out);
 }
 
 /// Crafter-owned (step 08-09). `resume` has no scenario, since only a real host

@@ -575,6 +575,7 @@ So flip the rest by hand:
 |---|---|
 | Bad code, any function | `deploy.sh lambda rollback` |
 | Abuse or runaway spend | `deploy.sh lambda stop` |
+| `refusing: could not read the index object` | The read failed, and only a 404 counts as an empty bucket. Read the error. Without `s3:ListBucket` a missing object answers 403. Nothing flipped; fix it and run the verb again |
 | A bad index | `lambda rollback` first if new code wrote it. Then `lambda reset-index --trigger`, or `lambda restore-index <id>`. The id is in the deploy summary, the pass alias's `idx=`, or the rollback output |
 | Traffic after cut-over | Rollback to the host, §12 Stage 3 |
 | Infrastructure | Revert the commit, saved plan, `check-plan.sh`, apply; then `lambda republish` if function config changed |
