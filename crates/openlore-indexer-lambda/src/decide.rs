@@ -1,5 +1,5 @@
 //! `decide` — the PURE decisions of the Lambda root (ADR-090, D-STZ-10/11,
-//! D-STZ-7/9, D-STZ-16, D-STZ-23, D-STZ-40, D-STZ-44, D-STZ-48). No I/O: `now`,
+//! D-STZ-7/9, D-STZ-16, D-STZ-23, D-STZ-40, D-STZ-40a, D-STZ-44, D-STZ-48). No I/O: `now`,
 //! every age and every outcome are arguments. The handlers only read, call
 //! these, and write.
 //!
@@ -21,6 +21,9 @@ pub const LAST_PASS_STALE_AFTER: Duration = Duration::from_secs(45 * 60);
 /// The probe compares the served index with the record only when the record is
 /// older than this (D-STZ-48).
 pub const SERVED_INDEX_MARGIN: Duration = Duration::from_secs(120);
+
+/// What a publish leaves for the 5 s record and the 5 s summary (D-STZ-40a).
+pub const AFTER_PUBLISH_RESERVE: Duration = Duration::from_secs(10);
 
 /// Is a freshness check due? `last_checked` is `None` before the first check.
 pub fn freshness_due(
@@ -90,6 +93,13 @@ pub fn publish_decision(
     } else {
         Publish::Skip
     }
+}
+
+/// D-STZ-40a: the longest a publish may take when `time_left` remains. The
+/// record and the summary keep their reserve, even if the pass's local steps ran
+/// long. With less than the reserve left, the limit is zero.
+pub fn publish_time_limit(time_left: Duration, operation_timeout: Duration) -> Duration {
+    operation_timeout.min(time_left.saturating_sub(AFTER_PUBLISH_RESERVE))
 }
 
 /// What one probe run observed.
@@ -257,7 +267,35 @@ pub fn served_index_stale(
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
+
+    /// § Timeouts, stated here so a changed reserve shows.
+    const OPERATION_TIMEOUT: Duration = Duration::from_secs(35);
+    const TEN_SECONDS: Duration = Duration::from_secs(10);
+
+    proptest! {
+        // Any time left: the limit is the most the 35 s and the reserve allow.
+        #[test]
+        fn a_publish_gets_all_the_time_it_may_and_never_the_records_and_summarys_seconds(
+            time_left in prop_oneof![
+                prop::sample::select(vec![0, 1, 9_999, 10_000, 10_001, 44_999, 45_000, 45_001]),
+                0_u64..=900_000,
+            ].prop_map(Duration::from_millis),
+        ) {
+            let limit = publish_time_limit(time_left, OPERATION_TIMEOUT);
+
+            prop_assert!(limit <= OPERATION_TIMEOUT);
+            prop_assert!(limit.is_zero() || limit + TEN_SECONDS <= time_left);
+            prop_assert!(
+                limit == OPERATION_TIMEOUT
+                    || limit + TEN_SECONDS == time_left
+                    || (limit.is_zero() && time_left <= TEN_SECONDS),
+                "{limit:?} wastes time out of {time_left:?}"
+            );
+        }
+    }
 
     // bypass: CORE-8's generators reach a later-sorting older instant only when
     // two random instants fall within a day, so one fixed row pins that direction.

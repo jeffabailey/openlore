@@ -209,8 +209,7 @@ impl PassFunction {
     }
 
     /// Publish the closed index file over the version this pass saw, stamped
-    /// with this function's clock (D-STZ-6, D-STZ-12), and log its size for the
-    /// size alarm (D-STZ-33).
+    /// with this function's clock (D-STZ-6, D-STZ-12), and log how it ended.
     async fn publish(
         &self,
         pass: PassLabel,
@@ -229,12 +228,7 @@ impl PassFunction {
             .await
             .inspect_err(|failed| eprintln!("openlore-indexer-lambda: not published: {failed}"));
         let end = PublishEnd::of(outcome, published_at);
-        if let Some(index) = &end.published {
-            events.emit_in(
-                Some(pass),
-                json!({"event": "indexer.lambda.published", "index_bytes": index.bytes}),
-            );
-        }
+        log_publish_end(events, pass, &end);
         end
     }
 
@@ -268,6 +262,23 @@ impl PassFunction {
             .clock
             .now_utc()
             .to_rfc3339_opts(SecondsFormat::Secs, true)
+    }
+}
+
+/// A published size feeds the size alarm (D-STZ-33). A conflict is logged here,
+/// and its page comes from the one summary's cause (D-STZ-6).
+fn log_publish_end(events: &Events, pass: PassLabel, end: &PublishEnd) {
+    if let Some(index) = &end.published {
+        events.emit_in(
+            Some(pass),
+            json!({"event": "indexer.lambda.published", "index_bytes": index.bytes}),
+        );
+    }
+    if end.step == PublishStep::Conflict {
+        events.emit_in(
+            Some(pass),
+            json!({"event": "indexer.lambda.publish_conflict"}),
+        );
     }
 }
 

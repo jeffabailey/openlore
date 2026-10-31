@@ -637,7 +637,6 @@ fn the_write_check_leaves_one_marker_in_a_buckets_life() {
 ///   And the pass record says exit 2, not published, seeing the 14:00 index
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (If-Match, 412 → publish_conflict)"]
 fn a_pass_never_overwrites_an_index_somebody_else_published_while_it_ran() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     given_the_first_pass_published_priyas_claim(&world);
@@ -924,7 +923,6 @@ fn a_pass_during_a_full_store_outage_still_reports_a_failed_pass() {
 ///   And the pass record says exit 2, not published, seeing the 14:00 index
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (publish store error → exit 2 publish_failed)"]
 fn a_pass_that_cannot_publish_its_changes_fails_and_keeps_the_index_as_it_was() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     given_the_first_pass_published_priyas_claim(&world);
