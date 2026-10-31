@@ -7,10 +7,6 @@
 //! `purge_properties.rs`: the `cli` test target may not link the index store.
 //! Layer 3 (real DuckDB) → example-based (Mandate 9); the XOR's order
 //! independence is covered by permutations of a fixed set.
-//!
-//! RED at hand-off: `IndexStoreAdapter::fingerprint` is a scaffold.
-//
-// SCAFFOLD: true  (the tests are final; the method they call is the scaffold)
 
 use adapter_index_store::IndexStoreAdapter;
 use chrono::{DateTime, Utc};
@@ -84,7 +80,6 @@ fn fingerprint_after(claims: &[IndexedClaim]) -> IndexFingerprint {
 ///   Then the fingerprint counts 0/0, 1/1 and 3/2
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER IndexStoreAdapter::fingerprint"]
 fn an_empty_index_has_the_zero_fingerprint_and_counts_claims_and_authors() {
     let empty = fingerprint_after(&[]);
     let one = fingerprint_after(&[priya_cargo_pin()]);
@@ -105,7 +100,6 @@ fn an_empty_index_has_the_zero_fingerprint_and_counts_claims_and_authors() {
 ///   Then the fingerprint is unchanged
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER IndexStoreAdapter::fingerprint"]
 fn indexing_the_same_claim_again_does_not_change_the_fingerprint() {
     let dir = tempfile::tempdir().expect("temp index dir");
     let store = IndexStoreAdapter::open(&dir.path().join("index.duckdb")).expect("open");
@@ -125,7 +119,6 @@ fn indexing_the_same_claim_again_does_not_change_the_fingerprint() {
 ///   Then every order gives the same fingerprint
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER IndexStoreAdapter::fingerprint"]
 fn the_fingerprint_does_not_depend_on_the_order_claims_were_indexed_in() {
     let (a, b, c) = (priya_cargo_pin(), priya_tidepool(), dmitri_ferrite());
     let orders = [
@@ -149,7 +142,6 @@ fn the_fingerprint_does_not_depend_on_the_order_claims_were_indexed_in() {
 ///   Then the fingerprint changed after the add and is back to the original after the purge
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER IndexStoreAdapter::fingerprint"]
 fn adding_a_claim_changes_the_fingerprint_and_purging_its_author_restores_it() {
     let dir = tempfile::tempdir().expect("temp index dir");
     let store = IndexStoreAdapter::open(&dir.path().join("index.duckdb")).expect("open");
@@ -173,7 +165,6 @@ fn adding_a_claim_changes_the_fingerprint_and_purging_its_author_restores_it() {
 ///   Then both count 1 claim by 1 author, and their fingerprints differ
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER IndexStoreAdapter::fingerprint"]
 fn two_indexes_with_the_same_counts_but_different_claims_have_different_fingerprints() {
     let one = fingerprint_after(&[priya_cargo_pin()]);
     let other = fingerprint_after(&[priya_tidepool()]);

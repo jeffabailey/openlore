@@ -16,6 +16,8 @@
 //! `no_cross_table_join_elides_author` `xtask check-arch` rule scans THIS
 //! crate's SQL literals and fails CI on any `indexed_claims` aggregate that
 //! drops `author_did`. De-dup at `upsert` is by CID only (ADR-025).
+//! [`IndexStoreAdapter::fingerprint`] reads counts and a CID hash in SQL, but
+//! it returns three numbers and no claim data (D-STZ-46).
 //!
 //! ## Architecture (nw-fp-hexagonal-architecture)
 //!
@@ -24,9 +26,6 @@
 //! `IndexStorePort` interface. `appview_domain::compose_results` consumes the
 //! attributed rows this adapter returns (the dependency on `appview-domain` is
 //! the shared boundary-value home, not a behavioral coupling).
-//
-// The bodies are live, except `fingerprint`, which carries its own scaffold
-// marker until DELIVER.
 
 #![allow(dead_code)]
 #![forbid(unsafe_code)]
@@ -186,11 +185,18 @@ impl IndexStoreAdapter {
     /// The store's fingerprint (scale-to-zero-hosting D-STZ-8): claim count,
     /// distinct author count, XOR of a 64-bit hash of every CID. One read-only
     /// query; it returns no claim data.
-    //
-    // SCAFFOLD: true  (DISTILL 2026-10-27; DELIVER implements; contract in
-    // `tests/fingerprint_contract.rs`)
     pub fn fingerprint(&self) -> Result<ports::IndexFingerprint, IndexStoreError> {
-        panic!("Not yet implemented -- RED scaffold")
+        self.lock()?
+            .query_row(FINGERPRINT_SQL, [], |row| {
+                Ok(ports::IndexFingerprint {
+                    claims: row.get(0)?,
+                    authors: row.get(1)?,
+                    cid_hash_xor: row.get(2)?,
+                })
+            })
+            .map_err(|err| IndexStoreError::QueryFailed {
+                message: format!("fingerprint: {err}"),
+            })
     }
 
     /// What DuckDB reports for the capped settings now.
@@ -554,6 +560,15 @@ impl IndexStorePort for IndexStoreAdapter {
             })
     }
 }
+
+/// The fingerprint's one read (D-STZ-46). It must stay one literal: a separate
+/// `count(*)` would name no `author_did`, and the anti-merging scan would flag it.
+///
+/// The hash is the low half of the CID's MD5, because MD5 fixes the value;
+/// DuckDB's own `hash()` is free to change between releases. `bit_xor` over no
+/// rows is NULL, so `COALESCE` gives an empty index the zero fingerprint.
+const FINGERPRINT_SQL: &str = "SELECT count(*), count(DISTINCT author_did), \
+     COALESCE(bit_xor(md5_number_lower(cid)), 0) FROM indexed_claims";
 
 /// The most rows one search answers with (ADR-083 §3).
 pub const SEARCH_ROW_CAP: usize = 1000;
@@ -1270,6 +1285,42 @@ mod tests {
             assert_eq!(row.provenance, PeerClaimProvenance::AppSigned);
             assert_eq!(row.author_did, Did("did:plc:priya-test".to_string()));
         }
+    }
+
+    /// The fingerprint a store reports is the one MD5 defines, whichever handle
+    /// reads it. The expected XOR is computed outside DuckDB: the XOR of each
+    /// CID's MD5 bytes 8..16, read little-endian.
+    // bypass: real-DuckDB integration; a fixed oracle is the point of the test.
+    #[test]
+    fn the_fingerprint_is_the_md5_xor_of_the_cids_and_survives_a_new_handle() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("index.duckdb");
+        let expected = ports::IndexFingerprint {
+            claims: 3,
+            authors: 2,
+            cid_hash_xor: 17_856_892_998_359_746_953,
+        };
+        {
+            let store = IndexStoreAdapter::open(&db_path).expect("open");
+            for (author, cid) in [
+                ("did:plc:priyaraman7x2k", "bafypriyacargopin0001"),
+                ("did:plc:priyaraman7x2k", "bafypriyatidepool0002"),
+                ("did:plc:dvolkov3m9q", "bafydmitriferrite0003"),
+            ] {
+                store
+                    .upsert(&IndexedClaim {
+                        author_did: Did(author.to_string()),
+                        cid: Cid(cid.to_string()),
+                        ..sample_claim()
+                    })
+                    .expect("upsert");
+            }
+            assert_eq!(store.fingerprint().expect("fingerprint"), expected);
+        }
+
+        let reopened = IndexStoreAdapter::open(&db_path).expect("reopen");
+
+        assert_eq!(reopened.fingerprint().expect("fingerprint"), expected);
     }
 }
 
