@@ -116,3 +116,32 @@ fn a_no_publish_run_with_no_usable_starting_index_fails_and_writes_nothing() {
         assert_eq!(before, world.bucket_universe(), "{trouble}");
     }
 }
+
+/// ADR-009 on the Lambda path: the pass probes its wiring before it uses it. A
+/// store the boundary probe refuses (the user's own file) stops the pass: no work,
+/// nothing published, the record and the one summary still written (D-STZ-41),
+/// and the refusal on its startup line.
+#[test]
+fn a_wiring_that_fails_its_probe_stops_the_pass_before_any_work() {
+    let world = LambdaWorld::listing(&[Author::Priya]);
+    world.publishes(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let users_store = scratch.path().join("openlore.duckdb");
+    world.setting(var::INDEX_PATH, &users_store.display().to_string());
+
+    let run = world.cold_pass_instance().schedule_fires();
+
+    let summary = run.assert_exit(Exit::Failed);
+    assert_eq!(
+        summary["cause"],
+        "starting_index_unusable",
+        "{}",
+        run.dump()
+    );
+    let refusals = named(&run.events, "health.startup.refused");
+    assert_eq!(refusals.len(), 1, "{}", run.dump());
+    assert_eq!(refusals[0]["adapter"], "capability_boundary");
+    assert!(!run.published(), "{}", run.dump());
+    assert!(world.bucket.current().is_none(), "nothing went out");
+    assert_eq!(world.bucket.last_pass().expect("a record").exit_code, 2);
+}

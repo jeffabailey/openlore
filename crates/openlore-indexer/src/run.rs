@@ -51,9 +51,10 @@ use crate::events::{Events, StdoutEvents};
 use crate::health::{health_handler, store_usability, LastPublishedAt};
 use crate::ingest_pass::{caught_pass_work, in_serve_pass, ingest, EndedPass};
 use crate::pass_runner::{PassRunner, StatusReader};
+pub use crate::probe_gauntlet::ProbeRefusal;
 use crate::probe_gauntlet::{
     capability_boundary_probe, check_probe, control_channel_probe, origin_classification_probe,
-    probe_gauntlet, ProbeRefusal,
+    probe_gauntlet,
 };
 use crate::runner_contract::{failing_first_purge, PassLabel, RunnerPurge};
 use crate::search_handler::{
@@ -91,6 +92,27 @@ pub struct Wired {
 }
 
 impl Wired {
+    /// wire -> PROBE: every probe of the wiring, then the purge capability's
+    /// (ADR-009). The only way to the wiring's use.
+    pub fn probed(self) -> Result<ProbedWiring, ProbeRefusal> {
+        self.wiring.probe_all()?;
+        if let Some(purge) = &self.purge_capability {
+            check_probe("index_purge", purge.probe())?;
+        }
+        Ok(ProbedWiring {
+            wiring: self.wiring,
+            purge_capability: self.purge_capability,
+        })
+    }
+}
+
+/// A wiring that passed its probes, so it can be used.
+pub struct ProbedWiring {
+    pub wiring: IndexerWiring,
+    purge_capability: Option<SharedIndexPurge>,
+}
+
+impl ProbedWiring {
     /// One pass's work over this wiring, for a root with no pass runner. It
     /// takes the wiring, so the store is closed when the work ends and the file
     /// can be published (D-STZ-40a); the pass's summary is still to be written.
@@ -313,10 +335,7 @@ pub fn run(command: Command) -> i32 {
     events.emit(&config_loaded_event(&cfg));
 
     // Step 1: WIRE.
-    let Wired {
-        wiring,
-        purge_capability,
-    } = match IndexerWiring::production(cfg, events, verify_only_resolver()) {
+    let wired = match IndexerWiring::production(cfg, events, verify_only_resolver()) {
         Ok(wired) => wired,
         Err(err) => {
             eprintln!("openlore-indexer: failed to construct adapter wiring: {err:#}");
@@ -326,15 +345,16 @@ pub fn run(command: Command) -> i32 {
 
     // Step 2: PROBE (capability boundary + the per-adapter gauntlet). REFUSE to
     // start on any probe failure — emit `health.startup.refused` + exit 2.
-    let probed = wiring.probe_all().and_then(|()| {
-        purge_capability
-            .as_ref()
-            .map_or(Ok(()), |purge| check_probe("index_purge", purge.probe()))
-    });
-    if let Err(refusal) = probed {
-        emit_health_startup_refused(&refusal);
-        return EXIT_FATAL;
-    }
+    let ProbedWiring {
+        wiring,
+        purge_capability,
+    } = match wired.probed() {
+        Ok(probed) => probed,
+        Err(refusal) => {
+            emit_health_startup_refused(&refusal);
+            return EXIT_FATAL;
+        }
+    };
 
     // Step 3: USE — dispatch the subcommand. Only `serve` runs passes that
     // purge, so only `serve` receives the purge capability.
@@ -681,4 +701,55 @@ fn emit_health_startup_refused(refusal: &ProbeRefusal) {
         "openlore-indexer: refusing to start — {} adapter: {}",
         refusal.adapter, refusal.detail
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeSet, HashMap};
+
+    use ports::{IndexStoreError, ProbeOutcome, ProbeRefusalReason, PurgeReport};
+
+    use super::*;
+
+    /// A purge handle that fails its probe and may not be used.
+    struct RefusingPurge;
+
+    impl IndexPurgePort for RefusingPurge {
+        fn probe(&self) -> ProbeOutcome {
+            ProbeOutcome::Refused {
+                reason: ProbeRefusalReason::StorageSchemaMismatch,
+                detail: "the purge does not know this schema".to_string(),
+                structured: serde_json::json!({}),
+            }
+        }
+
+        fn indexed_authors(&self) -> Result<BTreeSet<String>, IndexStoreError> {
+            panic!("a refused purge was used")
+        }
+
+        fn purge_author(&self, _bare_did: &str) -> Result<PurgeReport, IndexStoreError> {
+            panic!("a refused purge was used")
+        }
+    }
+
+    // bypass: one fixed wiring; the contract is which handle gets asked.
+    #[test]
+    fn a_purge_handle_that_fails_its_probe_stops_the_wiring_being_used() {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let index_path = scratch.path().join("index.duckdb").display().to_string();
+        let env = HashMap::from([("OPENLORE_INDEXER_INDEX_PATH", index_path)]);
+        let config = parse_config(|name| env.get(name).cloned(), BuildProfile::Development)
+            .expect("a configuration");
+        let events = Events::new(Arc::new(StdoutEvents));
+        let wired =
+            IndexerWiring::production(config, events, verify_only_resolver()).expect("a wiring");
+        let refusing = Wired {
+            wiring: wired.wiring,
+            purge_capability: Some(Arc::new(RefusingPurge)),
+        };
+
+        let refusal = refusing.probed().err().expect("the purge's refusal");
+
+        assert_eq!(refusal.adapter, "index_purge");
+    }
 }

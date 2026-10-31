@@ -389,7 +389,48 @@ pub fn missing_required_probes(sites: &[ProbeSite]) -> Vec<&'static str> {
 pub fn run() -> Result<u8> {
     let workspace_root = locate_workspace_root()?;
     let sites = collect_probe_sites(&workspace_root)?;
-    report(&sites)
+    let exit = report(&sites)?;
+    let main_path = workspace_root.join(LAMBDA_ROOT_MAIN);
+    let main_source = std::fs::read_to_string(&main_path)
+        .with_context(|| format!("read {}", main_path.display()))?;
+    let order_findings = lambda_root_order_findings(&main_source);
+    for finding in &order_findings {
+        eprintln!("check-probes: {LAMBDA_ROOT_MAIN}: {finding}");
+    }
+    Ok(if order_findings.is_empty() {
+        exit
+    } else {
+        exit.max(1)
+    })
+}
+
+/// The Lambda root's composition file. Its functions probe in their `init`, and
+/// the event loop is what uses them.
+const LAMBDA_ROOT_MAIN: &str = "crates/openlore-indexer-lambda/src/main.rs";
+const LAMBDA_ROOT_INITS: [&str; 3] = [
+    "SearchFunction::init(",
+    "PassFunction::init(",
+    "ProbeFunction::init(",
+];
+const LAMBDA_ROOT_EVENT_LOOPS: [&str; 2] = ["lambda_http::run(", "lambda_runtime::run("];
+
+/// Pure rule, wire then probe then use on the Lambda root: every function's
+/// `init` appears, and comes before the first event loop, in `main.rs`'s
+/// production part. A root with no event loop is a finding too.
+pub fn lambda_root_order_findings(main_source: &str) -> Vec<String> {
+    let production = main_source.split("#[cfg(test)]").next().unwrap_or_default();
+    let first_loop = LAMBDA_ROOT_EVENT_LOOPS
+        .iter()
+        .filter_map(|event_loop| production.find(event_loop))
+        .min();
+    let Some(first_loop) = first_loop else {
+        return vec!["no Lambda event loop".to_string()];
+    };
+    LAMBDA_ROOT_INITS
+        .iter()
+        .filter(|init| production.find(*init).is_none_or(|at| at > first_loop))
+        .map(|init| format!("`{init}..)` must come before the event loop"))
+        .collect()
 }
 
 /// Pure-ish: collect every `impl <Port> for <Adapter>` probe site under
@@ -762,6 +803,46 @@ mod tests {
             matches!(c, Classification::RejectTrivialOk { .. }),
             "only SystemClockAdapter gets the exemption; got {c:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod lambda_root_order_tests {
+    use super::*;
+
+    const WIRED: &str = "SearchFunction::init(a) PassFunction::init(b) ProbeFunction::init(c)";
+
+    #[test]
+    fn a_root_that_inits_every_function_before_its_loop_is_clean() {
+        let source = format!("{WIRED} lambda_http::run(s) lambda_runtime::run(p)");
+
+        assert_eq!(lambda_root_order_findings(&source), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_loop_started_before_an_init_is_a_finding() {
+        let source = "SearchFunction::init(a) lambda_runtime::run(p) \
+                      PassFunction::init(b) ProbeFunction::init(c)";
+
+        let findings = lambda_root_order_findings(source);
+
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        assert!(findings[0].contains("PassFunction"), "{findings:?}");
+    }
+
+    #[test]
+    fn a_missing_init_or_a_missing_loop_is_a_finding() {
+        let no_probe_init = "SearchFunction::init(a) PassFunction::init(b) lambda_http::run(s)";
+
+        assert_eq!(lambda_root_order_findings(no_probe_init).len(), 1);
+        assert_eq!(lambda_root_order_findings(WIRED).len(), 1);
+    }
+
+    #[test]
+    fn test_code_does_not_count() {
+        let source = format!("lambda_http::run(s) #[cfg(test)] {WIRED}");
+
+        assert_eq!(lambda_root_order_findings(&source).len(), 3);
     }
 }
 

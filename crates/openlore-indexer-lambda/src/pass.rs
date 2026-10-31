@@ -27,7 +27,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use openlore_indexer::config::{IndexerConfig, REPO_DIDS_FILE_VAR};
 use openlore_indexer::events::Events;
 use openlore_indexer::ingest_pass::{write_pass_summary, EndedPass};
-use openlore_indexer::run::Wired;
+use openlore_indexer::run::ProbedWiring;
 use openlore_indexer::runner_contract::{BootNonce, PassLabel};
 use ports::{
     IndexFingerprint, IndexObjectError, IndexObjectReadPort, LastPass, ObjectVersion, ProbeOutcome,
@@ -36,14 +36,15 @@ use ports::{
 use serde_json::json;
 use tokio::task::JoinError;
 
+use crate::config::ConfigRefused;
 use crate::decide::{
     dids_copy_usable, final_exit, pass_mode, publish_decision, publish_time_limit, EventRefused,
     PassMode, Publish, PublishStep, RecordStep, DIDS_COPY_MAX_AGE,
 };
 use crate::no_publish::run_no_publish;
 use crate::{
-    events_through, pass_wiring, refuse_start, Environment, EventSink, FunctionError, InitRefused,
-    PassDriven,
+    events_through, pass_wiring, refuse_config, refuse_start, Environment, EventSink,
+    FunctionError, InitRefused, PassDriven,
 };
 
 /// How a pass whose work panicked ended (D-STZ-43).
@@ -135,9 +136,9 @@ impl PassFunction {
     /// configuration with no such file is refused.
     pub async fn init(env: &Environment, driven: PassDriven) -> Result<Self, InitRefused> {
         env.refuse_a_key_naming_the_marker(&driven.events)?;
-        let config = env.indexer_config()?;
-        let did_list_file = config.repo_dids_file.clone().ok_or_else(|| InitRefused {
-            reason: format!("{REPO_DIDS_FILE_VAR} is not set"),
+        let config = env.indexer_config(&driven.events)?;
+        let did_list_file = config.repo_dids_file.clone().ok_or_else(|| {
+            refuse_config(&driven.events, ConfigRefused::missing(REPO_DIDS_FILE_VAR))
         })?;
         run_write_probe(&driven).await?;
         Ok(Self {
@@ -365,9 +366,11 @@ async fn fetch_starting_index(
 }
 
 /// The reused pass, off the async runtime: it blocks on a runtime of its own
-/// (UI-11). Its store is closed when this returns. Opening the store is the only
-/// step of the wiring that can fail, so a refused wiring is a starting index that
-/// will not open: damaged, or no room for what opening writes (D-STZ-41).
+/// (UI-11). Its store is closed when this returns. The wiring can fail at its
+/// store's open or at its probes, which ask mostly about that store, so a refused
+/// wiring is a starting index the pass cannot use: damaged, or no room for what
+/// opening writes, or a store that fails its probe (D-STZ-41). The pass does no
+/// work, and still ends with its record and its summary.
 async fn work_the_pass(
     config: &IndexerConfig,
     sink: Arc<dyn EventSink>,
@@ -377,11 +380,11 @@ async fn work_the_pass(
 ) -> Result<WorkedPass, FunctionError> {
     let config = config.clone();
     let index_path = config.index_path.clone();
-    tokio::task::spawn_blocking(move || match pass_wiring(config, sink) {
+    tokio::task::spawn_blocking(move || match pass_wiring(config, &sink) {
         Ok(wired) => work_on(wired, seen, pass, started, &index_path),
         Err(refused) => {
             let cause = refused.message;
-            eprintln!("openlore-indexer-lambda: starting index not opened: {cause}");
+            eprintln!("openlore-indexer-lambda: starting index not usable: {cause}");
             WorkedPass::no_usable_start(seen)
         }
     })
@@ -432,13 +435,13 @@ fn store_unusable_event(reason: UnusableReason) -> serde_json::Value {
 }
 
 /// One pass's work between two fingerprints, ending with the store closed. The
-/// work carries the purge `Wired` lends it (ADR-082), so a purge shows as a
+/// work carries the purge the wiring lends it (ADR-082), so a purge shows as a
 /// changed fingerprint and reaches the bucket only through this publish. The
 /// store's condition is read once, after the work, for the log and the publish
 /// (D-STZ-9). It is checked closed, because a close is what could still fail to
 /// fold the log into the file (P-7).
 fn work_on(
-    wired: Wired,
+    wired: ProbedWiring,
     seen: Option<ObjectVersion>,
     pass: PassLabel,
     started: Instant,

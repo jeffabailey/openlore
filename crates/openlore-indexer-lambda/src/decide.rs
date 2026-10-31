@@ -11,12 +11,14 @@ use appview_domain::ingest_pass::{PassExit, PassFailure};
 use chrono::{DateTime, FixedOffset, Utc};
 use ports::IndexFingerprint;
 
-/// A warm search instance re-checks the index object at most this often (D-STZ-10).
+/// DESIGN's figure for how often a warm search re-checks the index object
+/// (D-STZ-10). The deployed value comes from the environment (`config`).
 pub const FRESHNESS_TTL: Duration = Duration::from_secs(60);
 /// A warm pass instance may reuse its last good DID list this long when the
 /// parameter store fails (D-STZ-16).
 pub const DIDS_COPY_MAX_AGE: Duration = Duration::from_secs(2 * 60 * 60);
-/// The probe calls the index not live when no pass ran for longer than this (D-STZ-23).
+/// DESIGN's figure for how long no pass may run before the probe calls the index
+/// not live (D-STZ-23). The deployed value comes from the environment (`config`).
 pub const LAST_PASS_STALE_AFTER: Duration = Duration::from_secs(45 * 60);
 /// The probe compares the served index with the record only when the record is
 /// older than this (D-STZ-48).

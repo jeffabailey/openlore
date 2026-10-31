@@ -17,6 +17,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod config;
 pub mod decide;
 mod index_holder;
 pub mod no_publish;
@@ -30,21 +31,18 @@ use std::sync::Arc;
 use adapter_atproto_did::AtProtoDidAdapter;
 use openlore_indexer::config::{parse_config, BuildProfile, IndexerConfig};
 use openlore_indexer::events::{EventWriter, Events};
-use openlore_indexer::run::{IndexerWiring, Wired};
+use openlore_indexer::run::{IndexerWiring, ProbedWiring};
 use ports::{
     location_names_write_probe_key, ClockPort, IdentityResolvePort, IndexObjectReadPort,
     IndexObjectWritePort, ProbeRefusalReason, ProbeRefused, RepoDidListSourcePort, WRITE_PROBE_KEY,
 };
 use serde_json::{json, Value};
 
+use crate::config::{ConfigRefused, INDEX_KEY_VAR, LAST_PASS_KEY_VAR};
+
 pub use pass::PassFunction;
 pub use probe::ProbeFunction;
 pub use search::SearchFunction;
-
-/// The bucket key of the index object, as the function is configured with it.
-const INDEX_KEY_VAR: &str = "OPENLORE_INDEXER_LAMBDA_INDEX_KEY";
-/// The bucket key of `last-pass.json`, as the function is configured with it.
-const LAST_PASS_KEY_VAR: &str = "OPENLORE_INDEXER_LAMBDA_LAST_PASS_KEY";
 
 /// The function's environment as Lambda hands it over (`std::env::vars()` in
 /// `main`). The same variable names as the self-host indexer, plus the Lambda
@@ -54,19 +52,17 @@ pub struct Environment(pub BTreeMap<String, String>);
 
 impl Environment {
     /// The indexer's own configuration, read from this environment.
-    fn indexer_config(&self) -> Result<IndexerConfig, InitRefused> {
+    fn indexer_config(&self, events: &Arc<dyn EventSink>) -> Result<IndexerConfig, InitRefused> {
         parse_config(
             |name| self.0.get(name).cloned(),
             BuildProfile::of_this_build(),
         )
-        .map_err(|refused| InitRefused {
-            reason: refused.to_string(),
-        })
+        .map_err(|refused| refuse_config(events, refused.into()))
     }
 
     /// D-STZ-39, UI-21: the first thing every function does at init, so a key
     /// naming the write probe's marker refuses before any call to the store.
-    fn refuse_a_key_naming_the_marker(
+    pub fn refuse_a_key_naming_the_marker(
         &self,
         events: &Arc<dyn EventSink>,
     ) -> Result<(), InitRefused> {
@@ -83,7 +79,7 @@ impl Environment {
                 (LAST_PASS_KEY_VAR): last_pass_key,
             }),
         };
-        Err(refuse_start(events, "config", refused))
+        Err(refuse_start(events, CONFIG_ADAPTER, refused))
     }
 
     /// A variable's text; an unset one names no key.
@@ -115,9 +111,21 @@ fn events_through(sink: Arc<dyn EventSink>) -> Events {
     Events::new(Arc::new(SinkWriter(sink)))
 }
 
+/// What a refused start names when no adapter was reached.
+const CONFIG_ADAPTER: &str = "config";
+
+/// Refuse this instance over a setting.
+pub fn refuse_config(events: &Arc<dyn EventSink>, refused: ConfigRefused) -> InitRefused {
+    refuse_start(events, CONFIG_ADAPTER, refused.into())
+}
+
 /// Refuse this instance: the one `health.startup.refused` line, flushed, because
 /// nothing else runs after it.
-fn refuse_start(events: &Arc<dyn EventSink>, adapter: &str, refused: ProbeRefused) -> InitRefused {
+pub fn refuse_start(
+    events: &Arc<dyn EventSink>,
+    adapter: &str,
+    refused: ProbeRefused,
+) -> InitRefused {
     let line = startup_refused_event(adapter, &refused);
     events_through(Arc::clone(events)).emit_flushed(&line);
     InitRefused {
@@ -144,13 +152,33 @@ fn verify_only_resolver() -> Box<dyn IdentityResolvePort> {
 }
 
 /// The pass's store, ingest and DID-resolve clients, composed from the
-/// environment (D-STZ-38). Opens the store, so it is called off the async runtime.
-fn pass_wiring(config: IndexerConfig, sink: Arc<dyn EventSink>) -> Result<Wired, FunctionError> {
-    IndexerWiring::production(config, events_through(sink), verify_only_resolver()).map_err(
-        |refused| FunctionError {
-            message: format!("{refused:#}"),
-        },
+/// environment (D-STZ-38), then probed (ADR-009: wire, probe, use), the purge
+/// handle with them. Each pass opens its own store, so this is where it gets its
+/// probes, and a refusal logs the startup line and stops that pass. Opens the
+/// store, so it is called off the async runtime.
+fn pass_wiring(
+    config: IndexerConfig,
+    sink: &Arc<dyn EventSink>,
+) -> Result<ProbedWiring, FunctionError> {
+    let wired = IndexerWiring::production(
+        config,
+        events_through(Arc::clone(sink)),
+        verify_only_resolver(),
     )
+    .map_err(|refused| FunctionError {
+        message: format!("{refused:#}"),
+    })?;
+    wired.probed().map_err(|refusal| {
+        let refused = ProbeRefused {
+            reason: refusal.reason,
+            detail: refusal.detail,
+            structured: refusal.structured,
+        };
+        let stopped = refuse_start(sink, refusal.adapter, refused);
+        FunctionError {
+            message: stopped.reason,
+        }
+    })
 }
 
 /// What the search function is composed with (D-STZ-38): the read port only, so

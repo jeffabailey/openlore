@@ -15,15 +15,10 @@ use ports::{HealthBody, IndexQueryPort, LastPass, SearchDimension};
 use serde_json::{json, Value};
 use tokio::time::Instant;
 
-use crate::decide::{
-    not_live, served_index_stale, ProbeFacts, ServedIndex, LAST_PASS_STALE_AFTER,
-    SERVED_INDEX_MARGIN,
-};
+use crate::config::ProbeSettings;
+use crate::decide::{not_live, served_index_stale, ProbeFacts, ServedIndex, SERVED_INDEX_MARGIN};
 use crate::search::run_read_probe;
-use crate::{events_through, Environment, FunctionError, InitRefused, ProbeDriven};
-
-/// The public edge the probe calls, as the function is configured with it.
-const PROBE_BASE_URL_VAR: &str = "OPENLORE_INDEXER_LAMBDA_PROBE_BASE_URL";
+use crate::{events_through, refuse_config, Environment, FunctionError, InitRefused, ProbeDriven};
 
 /// The canned search health-timer.sh sends: no user data, a value matching nothing.
 const CANNED_SEARCH_DIMENSION: SearchDimension = SearchDimension::Subject;
@@ -37,18 +32,22 @@ pub struct ProbeFunction {
     driven: ProbeDriven,
     edge: HttpIndexQueryAdapter,
     events: Events,
+    last_pass_stale_after: Duration,
 }
 
 impl ProbeFunction {
-    /// Lambda init. Refused on a key naming the write probe's marker and on a
-    /// refused read probe (D-STZ-39).
+    /// Lambda init. Refused on a key naming the write probe's marker, on settings
+    /// it cannot run with, and on a refused read probe (D-STZ-39).
     pub async fn init(env: &Environment, driven: ProbeDriven) -> Result<Self, InitRefused> {
         env.refuse_a_key_naming_the_marker(&driven.events)?;
+        let settings =
+            ProbeSettings::read(env).map_err(|refused| refuse_config(&driven.events, refused))?;
         run_read_probe(&driven.index_object, &driven.events).await?;
         Ok(Self {
-            edge: HttpIndexQueryAdapter::for_url(env.text_of(PROBE_BASE_URL_VAR)),
+            edge: HttpIndexQueryAdapter::for_url(&settings.base_url),
             events: events_through(Arc::clone(&driven.events)),
             driven,
+            last_pass_stale_after: settings.last_pass_stale_after,
         })
     }
 
@@ -60,7 +59,13 @@ impl ProbeFunction {
         let health = passed_health(self.edge.health().await);
         let last_pass = self.last_pass().await;
         let now = self.driven.clock.now_utc();
-        let line = health_line(&search, health.is_some(), last_pass.as_ref(), now);
+        let line = health_line(
+            &search,
+            health.is_some(),
+            last_pass.as_ref(),
+            now,
+            self.last_pass_stale_after,
+        );
         self.events.emit(&line);
         if let Some(stale) = stale_index_line(health.as_ref(), last_pass.as_ref(), now) {
             self.events.emit(&stale);
@@ -129,6 +134,7 @@ fn health_line(
     healthz_ok: bool,
     last_pass: Option<&LastPass>,
     now: DateTime<Utc>,
+    last_pass_stale_after: Duration,
 ) -> Value {
     let last_pass_age = last_pass.and_then(|record| age_of(record, now));
     let facts = ProbeFacts {
@@ -136,7 +142,7 @@ fn health_line(
         search_ok: search.ok,
         last_pass_age,
     };
-    let liveness = not_live(&facts, LAST_PASS_STALE_AFTER);
+    let liveness = not_live(&facts, last_pass_stale_after);
     json!({
         "event": "indexer.host.health",
         "source": "lambda-probe",
@@ -191,6 +197,7 @@ fn age_of(record: &LastPass, now: DateTime<Utc>) -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::Path;
     use std::sync::Mutex;
 
@@ -202,6 +209,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::config::{LAST_PASS_STALE_VAR, PROBE_BASE_URL_VAR};
     use crate::EventSink;
 
     /// A bucket whose read probe refuses, and which nothing may ask anything.
@@ -251,10 +259,19 @@ mod tests {
         }
     }
 
-    // bypass: the probe's answer is a fixed case, and the contract is that the
-    // instance never starts; it has no input space.
-    #[tokio::test]
-    async fn a_refused_read_probe_means_the_probe_never_starts() {
+    /// The probe's settings, less `unset`.
+    fn environment_without(unset: &str) -> Environment {
+        let mut env = BTreeMap::from([
+            (PROBE_BASE_URL_VAR, "http://edge.invalid"),
+            (LAST_PASS_STALE_VAR, "2700"),
+        ]);
+        env.remove(unset);
+        let named = env.into_iter();
+        Environment(named.map(|(k, v)| (k.to_string(), v.to_string())).collect())
+    }
+
+    /// One start against a bucket that refuses, and the lines it logged.
+    async fn start(env: &Environment) -> (Result<ProbeFunction, InitRefused>, Vec<String>) {
         let lines = Arc::new(RecordedLines::default());
         let driven = ProbeDriven {
             index_object: Arc::new(RefusingBucket),
@@ -262,12 +279,36 @@ mod tests {
             events: Arc::clone(&lines) as Arc<dyn EventSink>,
         };
 
-        let started = ProbeFunction::init(&Environment::default(), driven).await;
+        let started = ProbeFunction::init(env, driven).await;
+
+        let logged = lines.0.lock().expect("the lines").clone();
+        (started, logged)
+    }
+
+    // bypass: the probe's answer is a fixed case, and the contract is that the
+    // instance never starts; it has no input space.
+    #[tokio::test]
+    async fn a_refused_read_probe_means_the_probe_never_starts() {
+        let (started, lines) = start(&environment_without("nothing")).await;
 
         assert!(started.is_err(), "init must be refused");
-        let lines = lines.0.lock().expect("the lines");
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].contains("health.startup.refused"), "{lines:?}");
+        assert!(lines[0].contains("the role cannot HEAD"), "{lines:?}");
+    }
+
+    // bypass: two fixed settings. The refusal comes first and names its variable,
+    // so a probe with nowhere to call never reports not live for ever.
+    #[tokio::test]
+    async fn a_probe_with_a_setting_unset_refuses_before_it_asks_the_store() {
+        for variable in [PROBE_BASE_URL_VAR, LAST_PASS_STALE_VAR] {
+            let (started, lines) = start(&environment_without(variable)).await;
+
+            assert!(started.is_err(), "{variable}");
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            assert!(lines[0].contains("health.startup.refused"), "{lines:?}");
+            assert!(lines[0].contains(variable), "{lines:?}");
+        }
     }
 
     // bypass: the two sides of one string comparison, both fixed by the wire.
@@ -319,6 +360,7 @@ mod tests {
             search_ms in 0_u64..30_000,
             age_s in 0_i64..10_000,
             exit_code in 0_i32..4,
+            stale_after_s in 1_u64..10_000,
         ) {
             let now = DateTime::UNIX_EPOCH + chrono::Duration::days(20_000);
             let search = CannedSearch {
@@ -328,9 +370,10 @@ mod tests {
             };
             let record = record_finished(age_s, now, exit_code);
 
-            let line = health_line(&search, healthz_ok, Some(&record), now);
+            let stale_after = Duration::from_secs(stale_after_s);
+            let line = health_line(&search, healthz_ok, Some(&record), now, stale_after);
 
-            let live = healthz_ok && search_ok && age_s <= 45 * 60;
+            let live = healthz_ok && search_ok && age_s.unsigned_abs() <= stale_after_s;
             prop_assert_eq!(line, json!({
                 "event": "indexer.host.health",
                 "source": "lambda-probe",
@@ -388,7 +431,7 @@ mod tests {
         };
         let record = record_finished(-1, now, 0);
 
-        let line = health_line(&search, true, Some(&record), now);
+        let line = health_line(&search, true, Some(&record), now, Duration::from_secs(2700));
 
         assert_eq!(line["last_pass_age_s"], Value::Null, "{line}");
         assert_eq!(line["not_live"], 1, "{line}");

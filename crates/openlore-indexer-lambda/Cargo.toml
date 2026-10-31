@@ -20,8 +20,9 @@ path = "src/main.rs"
 # The fourth composition root (check-arch COMPOSITION_ROOTS). Its capability
 # boundary is the graph rule `indexer_lambda_holds_no_signing_or_local_store`:
 # adapter-atproto-did is here for the verify-only `resolve_only()` alone
-# (D-STZ-50). adapter-index-query is the probe's bounded client (D-STZ-37). Still
-# to come: adapter-s3-index-object, lambda_http, lambda_runtime and aws-config.
+# (D-STZ-50). adapter-index-query is the probe's bounded client (D-STZ-37).
+# adapter-s3-index-object holds the AWS SDK; the root links lambda_http and
+# lambda_runtime for the Lambda event loop (xtask `aws_sdk_only_in_lambda_edge`).
 [dependencies]
 ports = { path = "../ports" }
 appview-domain = { path = "../appview-domain" }
@@ -29,10 +30,15 @@ openlore-indexer = { path = "../openlore-indexer" }
 adapter-atproto-did = { path = "../adapter-atproto-did" }
 adapter-index-query = { path = "../adapter-index-query" }
 adapter-index-store = { path = "../adapter-index-store" }
+adapter-s3-index-object = { path = "../adapter-s3-index-object" }
+adapter-system-clock = { path = "../adapter-system-clock" }
 adapter-xrpc-query-server = { path = "../adapter-xrpc-query-server" }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 chrono = { workspace = true }
+lambda_http = { version = "=1.3.2", default-features = false, features = ["apigw_http"] }
+lambda_runtime = { version = "=1.5.0", default-features = false }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 
 # The acceptance harness drives the entry points in-process with the external
 # ports faked; the PDSes and PLC are the shared FakeAtprotoNetwork. None of
@@ -44,7 +50,6 @@ async-trait = "0.1.92"
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 tempfile = { workspace = true }
 proptest = { workspace = true }
-base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 
 [[test]]
 name = "scale_to_zero_walking_skeleton"

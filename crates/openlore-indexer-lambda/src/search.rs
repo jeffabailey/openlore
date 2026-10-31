@@ -10,7 +10,10 @@ use std::time::Duration;
 use adapter_xrpc_query_server::{
     dispatch, BodyRead, Handlers, PublicAnswer, PublicRequest, QueryHandler, REQUEST_TIMEOUT,
 };
+use base64::prelude::{Engine, BASE64_STANDARD};
 use chrono::{DateTime, Utc};
+use lambda_http::http::StatusCode;
+use lambda_http::{Body, Request, Response};
 use openlore_indexer::config::{IndexerConfig, TestFault};
 use openlore_indexer::events::Events;
 use openlore_indexer::run::search_answers;
@@ -23,9 +26,12 @@ use serde_json::{json, Map, Value};
 use tokio::task::JoinError;
 use tokio::time::{timeout, Instant};
 
-use crate::decide::{freshness_due, reload_needed, HeadSeen, Reload, FRESHNESS_TTL};
+use crate::config::SearchSettings;
+use crate::decide::{freshness_due, reload_needed, HeadSeen, Reload};
 use crate::index_holder::{HeldIndex, IndexHolder};
-use crate::{events_through, refuse_start, Environment, EventSink, InitRefused, SearchDriven};
+use crate::{
+    events_through, refuse_config, refuse_start, Environment, EventSink, InitRefused, SearchDriven,
+};
 
 /// The bound on one reload, the download and the open together (D-STZ-10). It is
 /// the root's: no adapter sees both.
@@ -41,6 +47,7 @@ pub struct SearchFunction {
     events: Events,
     index: IndexHolder,
     last_checked: Mutex<Option<DateTime<Utc>>>,
+    freshness_ttl: Duration,
 }
 
 impl SearchFunction {
@@ -51,7 +58,9 @@ impl SearchFunction {
     /// object is not a refusal (D-STZ-13).
     pub async fn init(env: &Environment, driven: SearchDriven) -> Result<Self, InitRefused> {
         env.refuse_a_key_naming_the_marker(&driven.events)?;
-        let config = env.indexer_config()?;
+        let config = env.indexer_config(&driven.events)?;
+        let settings =
+            SearchSettings::read(env).map_err(|refused| refuse_config(&driven.events, refused))?;
         run_read_probe(&driven.index_object, &driven.events).await?;
         let looked_at = driven.clock.now_utc();
         let index = HeldIndex::fetched(driven.index_object.as_ref(), &config)
@@ -65,23 +74,46 @@ impl SearchFunction {
             config,
             index: IndexHolder::holding(index),
             last_checked: Mutex::new(Some(looked_at)),
+            freshness_ttl: settings.freshness_ttl,
         })
     }
 
     /// Answer one Function URL event (payload format 2.0) with a Function URL
-    /// response. The 5 s cover the freshness gate and the query together
-    /// (D-STZ-10), so the search gets what the gate left.
+    /// response.
     pub async fn handle(&self, event: Value) -> Value {
         let arrived = Instant::now();
+        let method = text_at(&event, "/requestContext/http/method");
+        let path = text_at(&event, "/rawPath");
+        let answer = self.answer(method, path, body_of(&event), arrived).await;
+        function_url_response(&answer)
+    }
+
+    /// Answer the same event as `lambda_http` hands it over, its body decoded.
+    pub async fn handle_request(&self, request: Request) -> Response<Body> {
+        let arrived = Instant::now();
+        let body = BodyRead::Complete(request.body().to_vec().into());
+        let (method, path) = (request.method().as_str(), request.uri().path());
+        http_response(&self.answer(method, path, body, arrived).await)
+    }
+
+    /// The 5 s cover the freshness gate and the query together (D-STZ-10), so
+    /// the search gets what the gate left.
+    async fn answer(
+        &self,
+        method: &str,
+        path: &str,
+        body: BodyRead,
+        arrived: Instant,
+    ) -> PublicAnswer {
         self.freshen().await;
         let handlers = handlers_over(&self.index.current(), &self.events, self.config.test_fault);
         let request = PublicRequest {
-            method: text_at(&event, "/requestContext/http/method"),
-            path: text_at(&event, "/rawPath"),
-            body: std::future::ready(body_of(&event)),
+            method,
+            path,
+            body: std::future::ready(body),
             time_allowed: REQUEST_TIMEOUT.saturating_sub(arrived.elapsed()),
         };
-        function_url_response(&dispatch(request, &handlers).await)
+        dispatch(request, &handlers).await
     }
 
     /// The freshness gate (D-STZ-10): when a check is due, look at the object and
@@ -108,7 +140,7 @@ impl SearchFunction {
             .last_checked
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let due = freshness_due(now, *last_checked, FRESHNESS_TTL);
+        let due = freshness_due(now, *last_checked, self.freshness_ttl);
         if due {
             *last_checked = Some(now);
         }
@@ -226,9 +258,17 @@ fn text_at<'event>(event: &'event Value, pointer: &str) -> &'event str {
         .unwrap_or_default()
 }
 
-/// A Function URL event brings the whole body with it.
+/// A Function URL event brings the whole body with it, as base64 when the URL
+/// says so. Text that does not decode is a request nobody can read.
 fn body_of(event: &Value) -> BodyRead {
-    BodyRead::Complete(text_at(event, "/body").to_owned().into())
+    let body = text_at(event, "/body");
+    if event.pointer("/isBase64Encoded") != Some(&Value::Bool(true)) {
+        return BodyRead::Complete(body.to_owned().into());
+    }
+    BASE64_STANDARD.decode(body).map_or_else(
+        |_| BodyRead::Unreadable("the body is not valid base64".to_string()),
+        |decoded| BodyRead::Complete(decoded.into()),
+    )
 }
 
 fn function_url_response(answer: &PublicAnswer) -> Value {
@@ -245,6 +285,26 @@ fn function_url_response(answer: &PublicAnswer) -> Value {
     })
 }
 
+/// The same answer as a response `lambda_http` can turn into the Function URL's.
+fn http_response(answer: &PublicAnswer) -> Response<Body> {
+    let answered = answer.headers.iter().fold(
+        Response::builder().status(answer.status),
+        |response, (name, value)| response.header(*name, *value),
+    );
+    let body = String::from_utf8_lossy(&answer.body).into_owned();
+    answered
+        .body(Body::Text(body))
+        .unwrap_or_else(|_| unbuilt_response())
+}
+
+/// Dispatch's status and headers are fixed text, so this is never reached by
+/// them, and it must still answer rather than panic.
+fn unbuilt_response() -> Response<Body> {
+    let mut response = Response::new(Body::Empty);
+    *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -253,15 +313,18 @@ mod tests {
 
     use async_trait::async_trait;
     use ports::{ClockPort, LastPass, ObjectVersion};
+    use proptest::prelude::*;
     use tempfile::TempDir;
 
     use super::*;
+    use crate::config::FRESHNESS_TTL_VAR;
 
     /// A bucket whose read probe answers as told, and which holds `object`.
     struct ProbedBucket {
         probe: fn() -> ProbeOutcome,
         object: Option<Vec<u8>>,
         fetches: AtomicUsize,
+        heads: AtomicUsize,
     }
 
     impl ProbedBucket {
@@ -270,6 +333,7 @@ mod tests {
                 probe,
                 object: None,
                 fetches: AtomicUsize::new(0),
+                heads: AtomicUsize::new(0),
             }
         }
 
@@ -288,6 +352,7 @@ mod tests {
         }
 
         async fn head(&self) -> Result<HeadOutcome, IndexObjectError> {
+            self.heads.fetch_add(1, Ordering::Relaxed);
             Ok(HeadOutcome::Absent)
         }
 
@@ -349,9 +414,167 @@ mod tests {
                 ("OPENLORE_INDEXER_REPO_DIDS_FILE", path("repo-dids")),
                 ("OPENLORE_INDEXER_DUCKDB_MEMORY_LIMIT_MB", "48".to_string()),
                 ("OPENLORE_INDEXER_DUCKDB_THREADS", "1".to_string()),
+                (FRESHNESS_TTL_VAR, "60".to_string()),
             ]
             .map(|(name, value)| (name.to_string(), value)),
         ))
+    }
+
+    /// A clock a test moves by hand.
+    struct MovingClock(Mutex<DateTime<Utc>>);
+
+    impl MovingClock {
+        fn move_on(&self, seconds: i64) {
+            let mut now = self.0.lock().expect("the time");
+            *now += chrono::Duration::seconds(seconds);
+        }
+    }
+
+    impl ClockPort for MovingClock {
+        fn probe(&self) -> ProbeOutcome {
+            ProbeOutcome::Ok
+        }
+
+        fn now_utc(&self) -> DateTime<Utc> {
+            *self.0.lock().expect("the time")
+        }
+    }
+
+    const SEARCH_PATH: &str = "/xrpc/org.openlore.appview.searchClaims";
+    const A_SEARCH: &str = r#"{"dimension":"subject","value":"https://example.invalid/a"}"#;
+
+    /// A Function URL event, as the URL sends it (payload format 2.0).
+    fn function_url_event(method: &str, path: &str, body: &str, encoded: bool) -> Value {
+        json!({
+            "version": "2.0",
+            "routeKey": "$default",
+            "rawPath": path,
+            "rawQueryString": "",
+            "headers": {"host": "abc.lambda-url.us-east-1.on.aws"},
+            "requestContext": {
+                "accountId": "anonymous",
+                "apiId": "abc",
+                "domainName": "abc.lambda-url.us-east-1.on.aws",
+                "domainPrefix": "abc",
+                "http": {
+                    "method": method,
+                    "path": path,
+                    "protocol": "HTTP/1.1",
+                    "sourceIp": "203.0.113.1",
+                    "userAgent": "test",
+                },
+                "requestId": "id",
+                "routeKey": "$default",
+                "stage": "$default",
+                "time": "27/Oct/2026:14:00:00 +0000",
+                "timeEpoch": 0,
+            },
+            "body": body,
+            "isBase64Encoded": encoded,
+        })
+    }
+
+    fn lambda_http_request(event: &Value) -> Request {
+        lambda_http::request::from_str(&event.to_string()).expect("a Function URL event")
+    }
+
+    async fn started_on_an_empty_bucket(scratch: &TempDir) -> SearchFunction {
+        let driven = SearchDriven {
+            index_object: Arc::new(ProbedBucket::answering(|| ProbeOutcome::Ok)),
+            clock: Arc::new(StoppedClock),
+            events: Arc::new(RecordedLines::default()),
+        };
+        SearchFunction::init(&environment(scratch), driven)
+            .await
+            .unwrap_or_else(|refused| panic!("init: {refused:?}"))
+    }
+
+    proptest! {
+        // Any text, plain or encoded, is the same body to the search.
+        #[test]
+        fn an_encoded_body_reads_as_the_text_it_encodes(text in "\\PC*") {
+            let plain = json!({"body": text});
+            let encoded = json!({
+                "body": BASE64_STANDARD.encode(&text),
+                "isBase64Encoded": true,
+            });
+
+            prop_assert_eq!(body_of(&encoded), body_of(&plain));
+        }
+
+        // Not base64: the search must hear "unreadable", never read the text.
+        #[test]
+        fn a_body_that_is_not_base64_is_unreadable(text in "[a-z]{1,8}[*!]") {
+            let event = json!({"body": text, "isBase64Encoded": true});
+
+            prop_assert!(matches!(body_of(&event), BodyRead::Unreadable(_)));
+        }
+    }
+
+    // bypass: one fixed event shape on both roads into the function; the body's
+    // space is the property above. This pins that lambda_http decodes for us.
+    #[tokio::test]
+    async fn an_encoded_search_is_answered_alike_on_both_roads_in() {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let function = started_on_an_empty_bucket(&scratch).await;
+        let event =
+            function_url_event("POST", SEARCH_PATH, &BASE64_STANDARD.encode(A_SEARCH), true);
+        let request = lambda_http_request(&event);
+        assert_eq!(request.body().as_ref(), A_SEARCH.as_bytes());
+
+        let through_the_harness = function.handle(event).await;
+        let through_lambda_http = function.handle_request(request).await;
+
+        assert_eq!(through_the_harness["statusCode"], 200);
+        assert_eq!(through_lambda_http.status().as_u16(), 200);
+        assert_eq!(
+            through_the_harness["body"]
+                .as_str()
+                .expect("a text body")
+                .as_bytes(),
+            through_lambda_http.body().as_ref(),
+        );
+    }
+
+    // bypass: the path and status mapping of one fixed route, next to the one
+    // above; every route's own answer is dispatch's and has its own suite.
+    #[tokio::test]
+    async fn a_route_nobody_serves_is_a_404_through_lambda_http_too() {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let function = started_on_an_empty_bucket(&scratch).await;
+        let event = function_url_event("GET", "/xrpc/x", "", false);
+
+        let answer = function.handle_request(lambda_http_request(&event)).await;
+
+        assert_eq!(answer.status().as_u16(), 404);
+    }
+
+    // bypass: the rule over every time and TTL is `freshness_due`'s own property
+    // in the core suite; this pins that the deployed TTL is the one that reaches it.
+    #[tokio::test]
+    async fn the_deployed_ttl_decides_when_a_warm_search_looks_at_the_object() {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let bucket = Arc::new(ProbedBucket::answering(|| ProbeOutcome::Ok));
+        let clock = Arc::new(MovingClock(Mutex::new(DateTime::UNIX_EPOCH)));
+        let mut env = environment(&scratch);
+        env.0
+            .insert(FRESHNESS_TTL_VAR.to_string(), "300".to_string());
+        let driven = SearchDriven {
+            index_object: Arc::clone(&bucket) as Arc<dyn IndexObjectReadPort>,
+            clock: Arc::clone(&clock) as Arc<dyn ClockPort + Send + Sync>,
+            events: Arc::new(RecordedLines::default()),
+        };
+        let function = SearchFunction::init(&env, driven)
+            .await
+            .unwrap_or_else(|refused| panic!("init: {refused:?}"));
+
+        clock.move_on(299);
+        function.handle(json!({})).await;
+        assert_eq!(bucket.heads.load(Ordering::Relaxed), 0, "inside the TTL");
+
+        clock.move_on(1);
+        function.handle(json!({})).await;
+        assert_eq!(bucket.heads.load(Ordering::Relaxed), 1, "at the TTL");
     }
 
     /// One start against `bucket`, and how many refusals it logged.
