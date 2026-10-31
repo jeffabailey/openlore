@@ -209,6 +209,21 @@ impl IndexStoreAdapter {
             })
     }
 
+    /// Read every row of every column a search reads. DuckDB checks a block's
+    /// checksum only when it reads the block, so an open proves nothing about the
+    /// data, and neither does a `count(*)`, which the row groups answer. This is
+    /// the read that makes a damaged file say so. An index block is out of its
+    /// reach: only a lookup that lands on one reads it. Read-only.
+    pub fn read_through(&self) -> Result<(), IndexStoreError> {
+        let conn = self.lock()?;
+        READ_THROUGH_SQL.into_iter().try_for_each(|sql| {
+            conn.query_row(sql, [], |_row| Ok(()))
+                .map_err(|err| IndexStoreError::QueryFailed {
+                    message: format!("read through: {err}"),
+                })
+        })
+    }
+
     /// What DuckDB reports for the capped settings now.
     fn reported_settings(conn: &Connection) -> Result<DuckDbSettings, duckdb::Error> {
         conn.query_row(
@@ -579,6 +594,16 @@ impl IndexStorePort for IndexStoreAdapter {
 /// rows is NULL, so `COALESCE` gives an empty index the zero fingerprint.
 const FINGERPRINT_SQL: &str = "SELECT count(*), count(DISTINCT author_did), \
      COALESCE(bit_xor(md5_number_lower(cid)), 0) FROM indexed_claims";
+
+/// [`IndexStoreAdapter::read_through`]'s two reads, one per table a search reads.
+/// A sum, so every value is decoded and no row comes back.
+const READ_THROUGH_SQL: [&str; 2] = [
+    "SELECT sum(length(author_did) + length(cid) + length(subject) + length(predicate) \
+         + length(object) + length(verified_against) + length(COALESCE(provenance, '')) \
+         + CAST(confidence AS BIGINT) + CAST(epoch(composed_at) AS BIGINT)) FROM indexed_claims",
+    "SELECT sum(length(referencing_cid) + length(referenced_cid) + length(ref_type)) \
+         FROM indexed_claim_references",
+];
 
 /// The most rows one search answers with (ADR-083 §3).
 pub const SEARCH_ROW_CAP: usize = 1000;

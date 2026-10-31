@@ -24,6 +24,8 @@ pub mod no_publish;
 mod pass;
 mod probe;
 mod search;
+#[cfg(test)]
+mod test_index;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

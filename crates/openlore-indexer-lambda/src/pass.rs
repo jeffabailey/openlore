@@ -569,16 +569,14 @@ mod tests {
     use adapter_index_store::IndexStoreAdapter;
     use async_trait::async_trait;
     use chrono::TimeDelta;
-    use claim_domain::{Cid, Did, KeyId};
-    use ports::{
-        AuthorRelationship, HeadOutcome, IndexReadPort, IndexStorePort, IndexedClaim,
-        PeerClaimProvenance, ProbeRefusalReason,
-    };
+    use claim_domain::Cid;
+    use ports::{HeadOutcome, IndexReadPort, IndexStorePort, ProbeRefusalReason};
     use proptest::prelude::*;
     use serde_json::Value;
 
     use super::state_delta::{assert_state_delta, set_to, Delta};
     use super::*;
+    use crate::test_index::a_claim;
 
     /// D-STZ-16's limit, stated here so a changed constant shows.
     const TWO_HOURS_IN_SECONDS: i64 = 2 * 60 * 60;
@@ -644,23 +642,6 @@ mod tests {
 
         async fn get_last_pass(&self) -> Result<Option<LastPass>, IndexObjectError> {
             Ok(None)
-        }
-    }
-
-    fn a_claim(cid: &str) -> IndexedClaim {
-        IndexedClaim {
-            author_did: Did("did:plc:priya".to_string()),
-            cid: Cid(cid.to_string()),
-            subject: "github:bazelbuild/bazel".to_string(),
-            predicate: "embodiesPhilosophy".to_string(),
-            object: "org.openlore.philosophy.reproducible-builds".to_string(),
-            confidence: 0.8,
-            composed_at: fourteen_hundred(),
-            verified_against: KeyId("did:plc:priya".to_string()),
-            evidence: Vec::new(),
-            references: Vec::new(),
-            relationship: AuthorRelationship::NetworkUnfollowed,
-            provenance: PeerClaimProvenance::AppSigned,
         }
     }
 

@@ -299,6 +299,7 @@ mod tests {
 
     use super::*;
     use crate::config::FRESHNESS_TTL_VAR;
+    use crate::test_index::{a_published_index, with_a_damaged_block, SUBJECT};
 
     /// A bucket whose read probe answers as told, and which holds `object`.
     struct ProbedBucket {
@@ -356,6 +357,53 @@ mod tests {
         }
     }
 
+    /// A bucket whose object a test republishes, seen through its ETag.
+    struct RepublishedBucket(Mutex<ObjectVersionAndBytes>);
+
+    type ObjectVersionAndBytes = (ObjectVersion, Vec<u8>);
+
+    impl RepublishedBucket {
+        fn holding(etag: &str, object: Vec<u8>) -> Self {
+            Self(Mutex::new(Self::published(etag, object)))
+        }
+
+        fn republish(&self, etag: &str, object: Vec<u8>) {
+            *self.0.lock().expect("the object") = Self::published(etag, object);
+        }
+
+        fn published(etag: &str, object: Vec<u8>) -> ObjectVersionAndBytes {
+            let version = ObjectVersion {
+                etag: etag.to_string(),
+                published_at: None,
+                pass_id: None,
+                size_bytes: object.len() as u64,
+            };
+            (version, object)
+        }
+    }
+
+    #[async_trait]
+    impl IndexObjectReadPort for RepublishedBucket {
+        fn probe(&self) -> ProbeOutcome {
+            ProbeOutcome::Ok
+        }
+
+        async fn head(&self) -> Result<HeadOutcome, IndexObjectError> {
+            let held = self.0.lock().expect("the object");
+            Ok(HeadOutcome::Present(held.0.clone()))
+        }
+
+        async fn fetch_to(&self, dest: &Path) -> Result<Option<ObjectVersion>, IndexObjectError> {
+            let (version, object) = self.0.lock().expect("the object").clone();
+            std::fs::write(dest, object).expect("a scratch file");
+            Ok(Some(version))
+        }
+
+        async fn get_last_pass(&self) -> Result<Option<LastPass>, IndexObjectError> {
+            Ok(None)
+        }
+    }
+
     struct StoppedClock;
 
     impl ClockPort for StoppedClock {
@@ -379,11 +427,12 @@ mod tests {
 
     impl RecordedLines {
         fn refusals(&self) -> usize {
+            self.count("health.startup.refused")
+        }
+
+        fn count(&self, event: &str) -> usize {
             let lines = self.0.lock().expect("the lines");
-            lines
-                .iter()
-                .filter(|line| line.contains("health.startup.refused"))
-                .count()
+            lines.iter().filter(|line| line.contains(event)).count()
         }
     }
 
@@ -630,5 +679,57 @@ mod tests {
 
         assert!(started.is_err(), "init must be refused");
         assert_eq!(refusals, 1);
+    }
+
+    // bypass: one really damaged file; which block it is does not vary the
+    // contract, and the sweep over blocks is the adapter's read-through contract.
+    #[tokio::test]
+    async fn a_whole_object_with_a_damaged_block_is_refused_at_init_and_never_served() {
+        let damaged = with_a_damaged_block(&a_published_index("bafypublished"));
+        let bucket = Arc::new(ProbedBucket::holding(&damaged));
+
+        let (started, refusals) = start(&bucket).await;
+
+        assert!(started.is_err(), "init must be refused");
+        assert_eq!(refusals, 1);
+    }
+
+    // bypass: one really damaged file, as above; the contract is that a warm
+    // instance keeps answering from what it holds.
+    #[tokio::test]
+    async fn a_damaged_newer_object_leaves_the_served_copy_answering() {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let published = a_published_index("bafypublished");
+        let damaged = with_a_damaged_block(&a_published_index("bafynewer"));
+        let bucket = Arc::new(RepublishedBucket::holding("first", published));
+        let clock = Arc::new(MovingClock(Mutex::new(DateTime::UNIX_EPOCH)));
+        let lines = Arc::new(RecordedLines::default());
+        let driven = SearchDriven {
+            index_object: Arc::clone(&bucket) as Arc<dyn IndexObjectReadPort>,
+            clock: Arc::clone(&clock) as Arc<dyn ClockPort + Send + Sync>,
+            events: Arc::clone(&lines) as Arc<dyn EventSink>,
+        };
+        let function = SearchFunction::init(&environment(&scratch), driven)
+            .await
+            .unwrap_or_else(|refused| panic!("init: {refused:?}"));
+        let a_search = format!(r#"{{"dimension":"subject","value":"{SUBJECT}"}}"#);
+
+        bucket.republish("second", damaged);
+        clock.move_on(60);
+        let answer = function
+            .handle(function_url_event("POST", SEARCH_PATH, &a_search, false))
+            .await;
+
+        assert_eq!(answer["statusCode"], 200, "{answer}");
+        let body = answer["body"].as_str().expect("a text body");
+        assert!(body.contains("bafypublished"), "{body}");
+        assert_eq!(lines.count("indexer.lambda.freshness_check_failed"), 1);
+        assert_eq!(lines.refusals(), 0);
+        assert_eq!(function.index.current().etag(), Some("first"));
+        let copy_of_the_damaged_object = scratch.path().join("index.duckdb.1");
+        assert!(
+            !copy_of_the_damaged_object.exists(),
+            "its file went with it"
+        );
     }
 }

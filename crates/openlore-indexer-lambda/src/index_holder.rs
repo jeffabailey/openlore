@@ -4,11 +4,15 @@
 //! the next copy into a new file, the holder swaps it in, and the old file goes
 //! with the old copy (D-STZ-10).
 //!
+//! A copy is taken only after one read through it (D-STZ-14). The download checks
+//! the length and an open reads little of the file, so this read is what stops a
+//! whole but damaged object: init refuses it, and a reload keeps the served copy.
+//!
 //! The 3 s reload bound is a tokio timeout over the whole reload (the root's, in
 //! `search`), and a timeout acts only when the reload yields. So the download is
-//! dropped where it waits, and the open, which is synchronous, runs on a blocking
-//! thread for the search to wait on. That thread cannot be stopped: at the bound
-//! the search goes on, and the open runs out alone. The copy it is building owns
+//! dropped where it waits, and the open and that read, which are synchronous, run
+//! on a blocking thread for the search to wait on. That thread cannot be stopped:
+//! at the bound the search goes on, and the open runs out alone. The copy it is building owns
 //! the file, so the file goes when the download is dropped or when the abandoned
 //! open ends, and each attempt has its own file, so a retry never meets it.
 
@@ -90,6 +94,7 @@ impl HeldIndex {
         };
         off_the_runtime(move || {
             let store = IndexStoreAdapter::open_capped(&file.0, caps).map_err(refused)?;
+            store.read_through().map_err(refused)?;
             Ok(Self {
                 store: Arc::new(store),
                 version,
