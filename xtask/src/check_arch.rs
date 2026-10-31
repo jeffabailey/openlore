@@ -3704,9 +3704,17 @@ pub fn scan_index_store_delete_only_in_purge(workspace_root: &Path) -> anyhow::R
 // `index_purge_only_in_pass_runner` (ADR-082, B6, boundary rule 1)
 // -----------------------------------------------------------------------------
 
-/// The purge capability, its plan, the runner's private entry point, and the
+/// The one module that may purge (D-STZ-42): the pass contract both the runner
+/// and the Lambda root use, so the Lambda root need not depend on `pass_runner`.
+const PURGE_CONTRACT_FILE: &str = "runner_contract.rs";
+
+/// The Lambda composition root's sources: scanned too, with no contract of its
+/// own (D-STZ-42).
+const INDEXER_LAMBDA_SOURCE_DIR: &str = "crates/openlore-indexer-lambda/src";
+
+/// The purge capability, its plan, the contract's private entry point, and the
 /// wiring field it must never live in (review M1: naming the entry point or
-/// reaching for the field outside the runner is a finding, not just naming
+/// reaching for the field outside the contract is a finding, not just naming
 /// the port).
 const PURGE_CAPABILITY_TOKENS: &[&str] = &[
     "IndexPurgePort",
@@ -3717,8 +3725,8 @@ const PURGE_CAPABILITY_TOKENS: &[&str] = &[
     "index_purge:",
 ];
 
-/// The composition root may NAME the port to wire it and hand it to the
-/// runner, never purge, plan, call the runner's entry point, or keep the
+/// A composition root may NAME the port to wire it and hand it to the
+/// runner, never purge, plan, call the contract's entry point, or keep the
 /// handle in the wiring.
 const PURGE_CALL_TOKENS: &[&str] = &[
     "purge_author",
@@ -3728,7 +3736,7 @@ const PURGE_CALL_TOKENS: &[&str] = &[
     "index_purge:",
 ];
 
-/// The runner's purge entry point must stay private to it.
+/// The contract's purge entry point must stay private to it.
 const RUNNER_PURGE_EXPORT_TOKENS: &[&str] = &[
     "pub fn purge_unlisted_authors",
     "pub(crate) fn purge_unlisted_authors",
@@ -3737,49 +3745,84 @@ const RUNNER_PURGE_EXPORT_TOKENS: &[&str] = &[
 /// The indexer's composition-root files.
 const INDEXER_COMPOSITION_ROOT: &[&str] = &["main.rs", "run.rs"];
 
-/// Pure rule over one indexer source's production part (before its first
-/// `#[cfg(test)]`): the pass runner (`*runner*.rs`) may purge but not export
-/// its entry point; the composition root may name `IndexPurgePort`; no other
-/// module may name the capability, the entry point or a purge field at all.
+/// The Lambda root's composition-root file.
+const INDEXER_LAMBDA_COMPOSITION_ROOT: &[&str] = &["main.rs"];
+
+/// A source's production part: what precedes its first `#[cfg(test)]`.
+fn production_part(source: &str) -> &str {
+    source.split("#[cfg(test)]").next().unwrap_or_default()
+}
+
+/// Pure rule over one indexer source's production part: the contract
+/// ([`PURGE_CONTRACT_FILE`]) may purge but not export its entry point; the
+/// composition root may name `IndexPurgePort`; no other module may name the
+/// capability, the entry point or a purge field at all.
 pub fn classify_index_purge_capability(file_name: &str, source: &str) -> Vec<String> {
-    let production = source.split("#[cfg(test)]").next().unwrap_or_default();
-    let tokens = if file_name.contains("runner") {
+    let tokens = if file_name == PURGE_CONTRACT_FILE {
         RUNNER_PURGE_EXPORT_TOKENS
     } else if INDEXER_COMPOSITION_ROOT.contains(&file_name) {
         PURGE_CALL_TOKENS
     } else {
         PURGE_CAPABILITY_TOKENS
     };
-    classify_forbidden_tokens(production, tokens)
+    classify_forbidden_tokens(production_part(source), tokens)
 }
 
-/// Effect shell for `index_purge_only_in_pass_runner`. A tree whose runner
-/// never purges is itself a finding (never passes vacuously).
+/// Pure rule over one Lambda root source: its `main.rs` may name
+/// `IndexPurgePort` to wire it; no other module may name the capability.
+fn classify_lambda_purge_capability(file_name: &str, source: &str) -> Vec<String> {
+    let tokens = if INDEXER_LAMBDA_COMPOSITION_ROOT.contains(&file_name) {
+        PURGE_CALL_TOKENS
+    } else {
+        PURGE_CAPABILITY_TOKENS
+    };
+    classify_forbidden_tokens(production_part(source), tokens)
+}
+
+/// The file name and text of each Rust source under `dir`.
+fn named_sources(dir: &Path) -> anyhow::Result<Vec<(PathBuf, String, String)>> {
+    rust_sources_under(dir)
+        .into_iter()
+        .map(|path| {
+            let source = std::fs::read_to_string(&path)?;
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            Ok((path, file_name, source))
+        })
+        .collect()
+}
+
+/// Effect shell for `index_purge_only_in_pass_runner`, over both roots. A tree
+/// whose contract never purges is itself a finding (never passes vacuously).
 pub fn scan_index_purge_only_in_pass_runner(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
     const RULE: &str = "index_purge_only_in_pass_runner";
-    let mut findings = Vec::new();
-    let mut runner_purges = false;
-    for path in rust_sources_under(&workspace_root.join(INDEXER_SOURCE_DIR)) {
-        let source = std::fs::read_to_string(&path)?;
-        let file_name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        runner_purges |= file_name.contains("runner") && source.contains("purge_author");
-        findings.extend(
-            classify_index_purge_capability(&file_name, &source)
-                .into_iter()
-                .map(|finding| {
+    let indexer = named_sources(&workspace_root.join(INDEXER_SOURCE_DIR))?;
+    let lambda = named_sources(&workspace_root.join(INDEXER_LAMBDA_SOURCE_DIR))?;
+    let contract_purges = indexer.iter().any(|(_, file_name, source)| {
+        file_name == PURGE_CONTRACT_FILE && production_part(source).contains("purge_author")
+    });
+    let classified = |sources: &[(PathBuf, String, String)],
+                      classify: fn(&str, &str) -> Vec<String>| {
+        sources
+            .iter()
+            .flat_map(|(path, file_name, source)| {
+                classify(file_name, source).into_iter().map(|finding| {
                     format!(
-                        "{RULE}: {}: {finding} — only the pass runner may purge (ADR-082)",
+                        "{RULE}: {}: {finding} — only {PURGE_CONTRACT_FILE} may purge \
+                         (ADR-082, D-STZ-42)",
                         path.display()
                     )
-                }),
-        );
-    }
-    if !runner_purges {
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut findings = classified(&indexer, classify_index_purge_capability);
+    findings.extend(classified(&lambda, classify_lambda_purge_capability));
+    if !contract_purges {
         findings.push(format!(
-            "{RULE}: no pass runner (*runner*.rs) under {INDEXER_SOURCE_DIR} calls purge_author — \
+            "{RULE}: {PURGE_CONTRACT_FILE} under {INDEXER_SOURCE_DIR} does not call purge_author — \
              the rule would pass vacuously"
         ));
     }
@@ -6461,7 +6504,7 @@ mod search_handler_read_only_tests {
         let in_tests =
             "#[cfg(test)]\nmod tests { fn t(p: &dyn IndexPurgePort) { p.purge_author(\"x\"); } }\n";
         for source in [wires, purges, plans] {
-            assert!(classify_index_purge_capability("pass_runner.rs", source).is_empty());
+            assert!(classify_index_purge_capability("runner_contract.rs", source).is_empty());
         }
         assert!(classify_index_purge_capability("run.rs", wires).is_empty());
         assert_eq!(classify_index_purge_capability("run.rs", purges).len(), 1);
@@ -6512,17 +6555,21 @@ mod search_handler_read_only_tests {
             ),
             (
                 "run.rs",
-                "use crate::pass_runner::purge_unlisted_authors;\n",
+                "use crate::runner_contract::purge_unlisted_authors;\n",
                 1,
             ),
             ("run.rs", "check_probe(\"index_purge\", purge.probe())\n", 0),
             (
-                "pass_runner.rs",
+                "runner_contract.rs",
                 "pub fn purge_unlisted_authors(p: &P) {}\n",
                 1,
             ),
-            ("pass_runner.rs", "fn purge_unlisted_authors(p: &P) {}\n", 0),
-            ("pass_runner.rs", "purge.purge_author(&did.0);\n", 0),
+            (
+                "runner_contract.rs",
+                "fn purge_unlisted_authors(p: &P) {}\n",
+                0,
+            ),
+            ("runner_contract.rs", "purge.purge_author(&did.0);\n", 0),
         ];
         for (file, source, findings) in table {
             assert_eq!(
@@ -6557,6 +6604,61 @@ mod search_handler_read_only_tests {
                 .len(),
             1
         );
+    }
+
+    /// D-STZ-42: the purge moved out of the runner, so only the contract module
+    /// may purge, in the indexer alone; the Lambda root's `main.rs` may wire the
+    /// port and nothing else there may name it. Scanned on a planted tree, so a
+    /// violation really reaches the shell's findings.
+    #[test]
+    fn a_purge_outside_the_runner_contract_is_refused_on_either_root() {
+        const PURGES: &str = "fn go(p: &P) { p.purge_author(\"did\"); }\n";
+        const WIRES: &str = "let purge: Arc<dyn IndexPurgePort> = store;\n";
+        const INDEXER: &str = "crates/openlore-indexer/src";
+        const LAMBDA: &str = "crates/openlore-indexer-lambda/src";
+        let scan = |planted: &[(&str, &str, &str)]| {
+            let tree = tempfile::tempdir().expect("temp dir");
+            for (dir, file, source) in planted {
+                let dir = tree.path().join(dir);
+                std::fs::create_dir_all(&dir).expect("source dir");
+                std::fs::write(dir.join(file), source).expect("planted source");
+            }
+            scan_index_purge_only_in_pass_runner(tree.path()).expect("scan")
+        };
+        let contract = (INDEXER, "runner_contract.rs", PURGES);
+
+        assert_eq!(scan(&[contract]), Vec::<String>::new());
+        let table: [((&str, &str, &str), usize); 8] = [
+            ((INDEXER, "pass_runner.rs", PURGES), 1),
+            ((INDEXER, "ingest_pass.rs", PURGES), 1),
+            ((LAMBDA, "pass.rs", PURGES), 1),
+            ((LAMBDA, "pass.rs", WIRES), 1),
+            ((LAMBDA, "main.rs", WIRES), 0),
+            ((LAMBDA, "main.rs", PURGES), 1),
+            ((LAMBDA, "run.rs", WIRES), 1),
+            ((LAMBDA, "runner_contract.rs", PURGES), 1),
+        ];
+        for (planted, findings) in table {
+            let found = scan(&[contract, planted]);
+            assert_eq!(found.len(), findings, "{planted:?}: {found:?}");
+        }
+
+        for tree in [
+            vec![(INDEXER, "pass_runner.rs", PURGES)],
+            vec![(LAMBDA, "runner_contract.rs", PURGES)],
+            vec![(
+                INDEXER,
+                "runner_contract.rs",
+                "#[cfg(test)]\nmod tests { fn t(p: &P) { p.purge_author(\"x\"); } }\n",
+            )],
+        ] {
+            assert!(
+                scan(&tree)
+                    .iter()
+                    .any(|finding| finding.contains("pass vacuously")),
+                "{tree:?}"
+            );
+        }
     }
 
     // --- `indexer_search_events_carry_no_query` -------------------------

@@ -25,7 +25,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::Subcommand;
 
@@ -45,14 +45,15 @@ use ports::{
 };
 
 use crate::config::{parse_config, BuildProfile, ConfigError, IndexerConfig, TestFault};
-use crate::events::{emit, emit_flushed};
+use crate::events::{Events, StdoutEvents};
 use crate::health::{health_handler, StoreUsability};
 use crate::ingest_pass::{in_serve_pass, ingest};
-use crate::pass_runner::{failing_first_purge, PassRunner, StatusReader};
+use crate::pass_runner::{PassRunner, StatusReader};
 use crate::probe_gauntlet::{
     capability_boundary_probe, check_probe, control_channel_probe, origin_classification_probe,
     probe_gauntlet, ProbeRefusal,
 };
+use crate::runner_contract::failing_first_purge;
 use crate::search_handler::{
     search_handler, unreadable_index, SearchStoreError, SearchTruncated, SharedIndexReads,
 };
@@ -130,6 +131,8 @@ pub struct IndexerWiring {
     /// one-shot pass leaves it `None` (it does not serve).
     pub query_server: Option<XrpcQueryServer>,
     pub clock: Box<dyn ClockPort + Send + Sync>,
+    /// Where the pass and the handlers write their event lines (UI-8).
+    pub events: Events,
     /// Where a DID whose document cannot be resolved is listed (relay
     /// origin, ADR-077); `None` = such a DID is skipped.
     pub fallback: Option<FallbackUrl>,
@@ -166,7 +169,7 @@ impl IndexerWiring {
     /// The purge capability (`OPENLORE_INDEXER_PURGE_UNLISTED=1`, ADR-082) is
     /// returned beside the wiring, for the pass runner; `None` = removed
     /// authors keep their claims.
-    pub fn production(cfg: IndexerConfig) -> anyhow::Result<Wired> {
+    pub fn production(cfg: IndexerConfig, events: Events) -> anyhow::Result<Wired> {
         let fallback_base = cfg
             .fallback
             .as_ref()
@@ -222,6 +225,7 @@ impl IndexerWiring {
             identity_resolve: Box::new(identity_resolve),
             query_server,
             clock: Box::new(clock),
+            events,
             fallback: cfg.fallback,
             policy: cfg.policy,
             max_concurrent_fetches: cfg.max_concurrent_fetches,
@@ -276,6 +280,8 @@ impl IndexerWiring {
 /// Bootstrap SCAFFOLD (step 01-04): the sequence is wired; the verb bodies are
 /// `todo!()`.
 pub fn run(command: Command) -> i32 {
+    let events = Events::new(Arc::new(StdoutEvents));
+
     // Step 0: CONFIG — refuse a bad configuration before anything is wired or
     // contacted (ADR-077/078).
     let cfg = match parse_config(
@@ -288,13 +294,13 @@ pub fn run(command: Command) -> i32 {
             return EXIT_FATAL;
         }
     };
-    emit_config_loaded(&cfg);
+    events.emit(&config_loaded_event(&cfg));
 
     // Step 1: WIRE.
     let Wired {
         wiring,
         purge_capability,
-    } = match IndexerWiring::production(cfg) {
+    } = match IndexerWiring::production(cfg, events) {
         Ok(wired) => wired,
         Err(err) => {
             eprintln!("openlore-indexer: failed to construct adapter wiring: {err:#}");
@@ -374,7 +380,7 @@ fn serve(wiring: &IndexerWiring, purge_capability: Option<SharedIndexPurge>) -> 
         let runner = Arc::new(PassRunner::spawn_scoped_purging(
             scope,
             purge_capability,
-            |pass, purge| in_serve_pass(wiring, pass, purge),
+            |pass, purge| in_serve_pass(wiring, pass, purge, Instant::now()),
         ));
         if let Some((socket, listener)) = control {
             let answering = Arc::clone(&runner);
@@ -403,7 +409,7 @@ fn serve(wiring: &IndexerWiring, purge_capability: Option<SharedIndexPurge>) -> 
 fn exit_when_the_store_is_unusable(wiring: &IndexerWiring, stop: &AtomicBool) {
     while !stop.load(Ordering::Relaxed) {
         if let Some(reason) = wiring.store_condition.unusable_reason() {
-            emit_store_unusable(reason);
+            wiring.events.emit_flushed(&store_unusable_event(reason));
             std::process::exit(EXIT_FATAL);
         }
         std::thread::sleep(STORE_WATCH_PERIOD);
@@ -411,12 +417,12 @@ fn exit_when_the_store_is_unusable(wiring: &IndexerWiring, stop: &AtomicBool) {
 }
 
 /// `indexer.store.unusable`: the store cannot be used; `serve` exits 2 next.
-fn emit_store_unusable(reason: UnusableReason) {
-    emit_flushed(serde_json::json!({
+fn store_unusable_event(reason: UnusableReason) -> serde_json::Value {
+    serde_json::json!({
         "event": "indexer.store.unusable",
         "adapter": "index_store",
         "reason": reason.token(),
-    }));
+    })
 }
 
 /// Whether the store is usable, as `/healthz` reports it.
@@ -487,10 +493,12 @@ fn control_round_trip(_: &Path) -> std::io::Result<()> {
 /// Bind the query server and answer searches (and `/healthz`, from the
 /// runner's `status`) until the process is killed.
 fn serve_searches(wiring: &IndexerWiring, status: StatusReader) -> i32 {
+    let truncations = wiring.events.clone();
+    let store_errors = wiring.events.clone();
     let handler = search_handler(
         Arc::clone(&wiring.index_reads),
-        Arc::new(emit_search_truncated),
-        Arc::new(emit_search_store_error),
+        Arc::new(move |cut| truncations.emit(&search_truncated_event(cut))),
+        Arc::new(move |failed| store_errors.emit(&search_store_error_event(failed))),
     );
 
     let listen_addr: std::net::SocketAddr = match wiring.listen_addr.parse() {
@@ -534,7 +542,7 @@ fn serve_searches(wiring: &IndexerWiring, status: StatusReader) -> i32 {
         // ephemeral port back. The event is structural (an address; no claim
         // content) — the DevOps observability contract (WD-105). Flushed so a
         // line-reading supervisor sees it immediately.
-        emit_flushed(serde_json::json!({
+        wiring.events.emit_flushed(&serde_json::json!({
             "event": "indexer.serve.listening",
             "addr": server.local_addr().to_string(),
         }));
@@ -556,24 +564,24 @@ pub(crate) fn current_thread_runtime() -> std::io::Result<tokio::runtime::Runtim
         .build()
 }
 
-/// Log a search cut at the row cap: the dimension and the cap, never the
-/// searched value (ADR-083 §3).
-fn emit_search_truncated(cut: SearchTruncated) {
-    emit(serde_json::json!({
+/// The log of a search cut at the row cap: the dimension and the cap, never
+/// the searched value (ADR-083 §3).
+fn search_truncated_event(cut: SearchTruncated) -> serde_json::Value {
+    serde_json::json!({
         "event": "indexer.search.truncated",
         "dimension": dimension_token(cut.dimension),
         "cap": cut.cap,
-    }));
+    })
 }
 
-/// Log a search the index could not answer (it is answered 500): the
+/// The log of a search the index could not answer (it is answered 500): the
 /// dimension only, never the searched value or the store's error text
 /// (ADR-080 §7, WD-105). For diagnosis; it pages nothing.
-fn emit_search_store_error(failed: SearchStoreError) {
-    emit(serde_json::json!({
+fn search_store_error_event(failed: SearchStoreError) -> serde_json::Value {
+    serde_json::json!({
         "event": "indexer.search.store_error",
         "dimension": dimension_token(failed.dimension),
-    }));
+    })
 }
 
 /// The log token of a search dimension.
@@ -606,7 +614,7 @@ fn config_refusal(error: &ConfigError) -> ProbeRefusal {
 }
 
 /// `indexer.config.loaded` (stdout): what this run was configured with.
-fn emit_config_loaded(cfg: &IndexerConfig) {
+fn config_loaded_event(cfg: &IndexerConfig) -> serde_json::Value {
     let mut event = serde_json::json!({
         "event": "indexer.config.loaded",
         "repo_did_count": cfg.repo_dids.len(),
@@ -619,7 +627,7 @@ fn emit_config_loaded(cfg: &IndexerConfig) {
     if let Some(fallback) = &cfg.fallback {
         event["fallback_url"] = fallback.as_str().into();
     }
-    emit(event);
+    event
 }
 
 /// Emit a `health.startup.refused` event to stderr in the structured shape

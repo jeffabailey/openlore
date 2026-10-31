@@ -12,74 +12,30 @@
 //! are private to this module and nothing outside the runner can set them.
 //! `/healthz` reads it through a [`StatusReader`].
 //!
-//! Every pass carries a [`PassLabel`]: the runner's boot nonce (the Unix time
-//! in milliseconds at which this runner started) and the pass's sequence
-//! number, written `<boot>-<seq>`. The sequence alone repeats after a restart;
-//! the boot nonce keeps a label unique across restarts, so "exactly one
-//! `pass_summary` per `pass_id`" stays checkable over a whole log stream.
+//! Every pass carries a [`PassLabel`]: this runner's boot nonce and the pass's
+//! sequence number.
 //!
-//! The runner is the ONLY holder of the purge capability (ADR-082, check-arch
-//! `index_purge_only_in_pass_runner`): the composition root hands the purge
-//! handle to [`PassRunner::spawn_scoped_purging`] and keeps no copy; the
-//! runner's thread owns it and lends each pass a [`RunnerPurge`] (which only
-//! this module can build) for that pass's duration. Its one operation plans
-//! the purge from the loaded list (pure `plan_purge`) and purges each removed
-//! author through `IndexPurgePort`, at pass start, before any fetch.
+//! The runner is the self-host's ONLY holder of the purge capability (ADR-082):
+//! the composition root hands the purge handle to
+//! [`PassRunner::spawn_scoped_purging`] and keeps no copy; the runner's thread
+//! owns it and lends each pass a [`RunnerPurge`] for that pass's duration. The
+//! label and the purge contract live in `runner_contract` (D-STZ-42).
 
-use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::Scope;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use appview_domain::ingest_pass::EXIT_PASS_COMPLETED;
 use appview_domain::pass_runner::{
     single_flight, PassEnding, PassId, RunnerEvent, RunnerReply, RunnerSlot,
 };
-use appview_domain::{plan_purge, BareDid, PurgePlan, PurgeSuppressed};
-use claim_domain::Did;
-use ports::{IndexPurgePort, IndexStoreError, ProbeOutcome, PurgeReport};
+
+use crate::runner_contract::{BootNonce, PassLabel, RunnerPurge, SharedPurge};
 
 /// The exit code a panicked pass reports (ADR-080 §7: `pass_panicked` → 2).
 const EXIT_PASS_PANICKED: i32 = 2;
-
-/// The process-unique label of one pass: `<boot nonce>-<sequence>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PassLabel {
-    boot: BootNonce,
-    pass_id: PassId,
-}
-
-impl PassLabel {
-    /// The pass's sequence number within this runner (1 = its first pass).
-    #[must_use]
-    pub fn pass_id(&self) -> PassId {
-        self.pass_id
-    }
-}
-
-impl fmt::Display for PassLabel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}-{}", self.boot.0, self.pass_id.0)
-    }
-}
-
-/// When a runner started (Unix milliseconds); distinguishes its passes from
-/// those of an earlier run of the same process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct BootNonce(u128);
-
-impl BootNonce {
-    fn now() -> Self {
-        Self(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |since| since.as_millis()),
-        )
-    }
-}
 
 /// The last pass the runner finished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,10 +186,7 @@ impl PassRunner {
     /// The label a pass of this runner carries in events and replies.
     #[must_use]
     pub fn label(&self, pass_id: PassId) -> PassLabel {
-        PassLabel {
-            boot: self.boot,
-            pass_id,
-        }
+        PassLabel::new(self.boot, pass_id)
     }
 
     /// Ask for one pass. Starts it when idle; otherwise reports the running pass.
@@ -288,11 +241,8 @@ fn run_orders<F>(
     F: FnMut(PassLabel, Option<RunnerPurge<'_>>) -> i32,
 {
     for order in inbox {
-        let label = PassLabel {
-            boot,
-            pass_id: order.pass_id,
-        };
-        let lent = || purge.as_deref().map(RunnerPurge);
+        let label = PassLabel::new(boot, order.pass_id);
+        let lent = || purge.as_deref().map(RunnerPurge::lent);
         let (ending, exit_code) = match catch_unwind(AssertUnwindSafe(|| pass(label, lent()))) {
             Ok(exit_code) => (PassEnding::Completed, exit_code),
             Err(_panic) => (PassEnding::Panicked, EXIT_PASS_PANICKED),
@@ -325,120 +275,13 @@ fn lock(state: &Mutex<RunnerState>) -> MutexGuard<'_, RunnerState> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The purge handle the composition root gives the runner.
-pub type SharedPurge = Arc<dyn IndexPurgePort + Send + Sync>;
-
-/// The purge capability as the runner lends it to one pass. Its field is
-/// private to this module, so no other module can build one.
-#[derive(Clone, Copy)]
-pub struct RunnerPurge<'runner>(&'runner (dyn IndexPurgePort + Send + Sync));
-
-impl RunnerPurge<'_> {
-    /// Purge every indexed author the loaded, non-empty `listed` no longer
-    /// names (ADR-082).
-    #[must_use]
-    pub fn purge_unlisted(self, listed: &[Did]) -> PurgeStep {
-        purge_unlisted_authors(self.0, listed)
-    }
-}
-
-/// One author a pass purged.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PurgedAuthor {
-    pub did: BareDid,
-    pub claims_removed: u64,
-}
-
-/// What a pass's purge step did (ADR-082).
-#[derive(Debug)]
-pub enum PurgeStep {
-    /// The list was empty: nobody was purged.
-    Suppressed(PurgeSuppressed),
-    /// Every removed author was purged (possibly none).
-    Purged(Vec<PurgedAuthor>),
-    /// The store failed; the authors before the failure stay purged and the
-    /// next pass's plan finishes the rest.
-    Failed {
-        purged: Vec<PurgedAuthor>,
-        error: IndexStoreError,
-    },
-}
-
-/// Purge every indexed author the loaded, non-empty `listed` no longer
-/// names. A listed author is never planned, whatever their fetch outcome.
-fn purge_unlisted_authors(purge: &dyn IndexPurgePort, listed: &[Did]) -> PurgeStep {
-    let indexed = match purge.indexed_authors() {
-        Ok(indexed) => indexed,
-        Err(error) => {
-            return PurgeStep::Failed {
-                purged: Vec::new(),
-                error,
-            }
-        }
-    };
-    match plan_purge(listed, indexed.iter().map(String::as_str)) {
-        PurgePlan::Suppressed(reason) => PurgeStep::Suppressed(reason),
-        PurgePlan::Purge(removed) => purge_each(purge, removed),
-    }
-}
-
-/// Purge `removed` one author at a time, stopping at the first store failure.
-fn purge_each(purge: &dyn IndexPurgePort, removed: impl IntoIterator<Item = BareDid>) -> PurgeStep {
-    let mut purged = Vec::new();
-    for did in removed {
-        match purge.purge_author(&did.0) {
-            Ok(report) => purged.push(PurgedAuthor {
-                did,
-                claims_removed: report.claims_removed,
-            }),
-            Err(error) => return PurgeStep::Failed { purged, error },
-        }
-    }
-    PurgeStep::Purged(purged)
-}
-
-/// TEST-FAULT seam (`OPENLORE_INDEXER_TEST_FAULT=purge_fails`, debug builds
-/// only): `purge`, except that its first author purge fails. The purge is
-/// resumable, so the next pass finishes it.
-pub fn failing_first_purge(purge: SharedPurge) -> SharedPurge {
-    Arc::new(FailingFirstPurge {
-        purge,
-        failed_once: AtomicBool::new(false),
-    })
-}
-
-struct FailingFirstPurge {
-    purge: SharedPurge,
-    failed_once: AtomicBool,
-}
-
-impl IndexPurgePort for FailingFirstPurge {
-    fn probe(&self) -> ProbeOutcome {
-        self.purge.probe()
-    }
-
-    fn indexed_authors(&self) -> Result<std::collections::BTreeSet<String>, IndexStoreError> {
-        self.purge.indexed_authors()
-    }
-
-    fn purge_author(&self, bare_did: &str) -> Result<PurgeReport, IndexStoreError> {
-        if self.failed_once.swap(true, Ordering::SeqCst) {
-            self.purge.purge_author(bare_did)
-        } else {
-            Err(IndexStoreError::QueryFailed {
-                message: "test fault: the purge fails".to_string(),
-            })
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     // bypass: single-example wiring test (threads + channels); the single-flight
     // property itself is CORE-6 in tests/acceptance/indexer_deployment_core.rs.
     use super::*;
     use proptest::prelude::*;
-    use std::time::Duration;
+    use std::time::{Duration, UNIX_EPOCH};
 
     proptest! {
         /// Universe {slot, last_finished, last_successful_pass_at}: every pass

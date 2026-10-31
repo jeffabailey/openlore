@@ -11,12 +11,13 @@
 pub mod config;
 #[cfg(unix)]
 mod control;
-mod events;
+pub mod events;
 pub mod health;
-mod ingest_pass;
+pub mod ingest_pass;
 pub mod pass_runner;
 mod probe_gauntlet;
 pub mod run;
+pub mod runner_contract;
 pub mod search_handler;
 
 pub use probe_gauntlet::ProbeRefusal;

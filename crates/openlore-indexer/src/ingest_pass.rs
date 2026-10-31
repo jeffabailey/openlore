@@ -28,28 +28,79 @@ use claim_domain::{ClaimRecord, Did, VerificationKey};
 use ports::{IdentityLookupError, IngestError};
 
 use crate::config::{TestFault, REPO_DIDS_FILE_VAR};
-use crate::events::{emit_in, emit_in_unchecked};
-use crate::pass_runner::{PassLabel, PurgeStep, PurgedAuthor, RunnerPurge};
+use crate::events::Events;
 use crate::run::{current_thread_runtime, IndexerWiring};
+use crate::runner_contract::{PassLabel, PurgeStep, PurgedAuthor, RunnerPurge};
 
 /// One pass inside `serve`, ending with exactly one summary whatever happens
 /// (B4): a refused list, a store failure and a panic are summarised like a
 /// completed pass, each with its cause. `purge` is the runner's purge, lent
-/// for this pass when purging is enabled (ADR-082).
-pub(crate) fn in_serve_pass(
+/// for this pass when purging is enabled (ADR-082); `started` is when the
+/// pass's deadline clock started.
+pub fn in_serve_pass(
     wiring: &IndexerWiring,
     pass: PassLabel,
     purge: Option<RunnerPurge<'_>>,
+    started: Instant,
 ) -> i32 {
-    let started = Instant::now();
+    let ended = caught_pass_work(wiring, pass, purge, started);
+    write_pass_summary(&wiring.events, pass, &ended, ended.exit(), started)
+}
+
+/// A pass whose work is over and whose summary is not yet written.
+pub struct EndedPass {
+    work: PassWork,
+    exit: PassExit,
+}
+
+impl EndedPass {
+    /// `work`, ended now. A pass that had already failed keeps its own failure;
+    /// one that had not but ran past `deadline` becomes
+    /// `pass_deadline_exceeded` (B13, see [`within_deadline`]; first failure
+    /// wins since fix-pass-failure-precedence).
+    fn of(work: PassWork, started: Instant, deadline: Duration) -> Self {
+        let exit = within_deadline(
+            pass_exit(work.failure, &work.summary),
+            started.elapsed(),
+            deadline,
+        );
+        Self { work, exit }
+    }
+
+    /// How the work ended, the deadline check included.
+    #[must_use]
+    pub const fn exit(&self) -> PassExit {
+        self.exit
+    }
+}
+
+/// The pass's work, up to and including its deadline check: everything before
+/// its summary. A panic in it (or a test fault) ends it as `pass_panicked`.
+pub fn caught_pass_work(
+    wiring: &IndexerWiring,
+    pass: PassLabel,
+    purge: Option<RunnerPurge<'_>>,
+    started: Instant,
+) -> EndedPass {
     let work = catch_unwind(AssertUnwindSafe(|| {
         provoke_test_fault(wiring, pass);
         listed_pass_work(wiring, pass, purge, started)
     }))
     .unwrap_or_else(|_panic| PassWork::failed(PassFailure::PassPanicked));
+    EndedPass::of(work, started, wiring.pass_deadline)
+}
+
+/// Write the ended pass's ONE summary, reporting `exit`, and return its code.
+pub fn write_pass_summary(
+    events: &Events,
+    pass: PassLabel,
+    ended: &EndedPass,
+    exit: PassExit,
+    started: Instant,
+) -> i32 {
     summarised(
-        || finish_pass(Some(pass), &work, started, wiring.pass_deadline),
-        || emit_in_unchecked(Some(pass), panicked_summary_event(started)),
+        || write_summary(events, Some(pass), &ended.work, exit, started),
+        || events.emit_in_unchecked(Some(pass), panicked_summary_event(started)),
     )
 }
 
@@ -108,15 +159,16 @@ fn staged_pass_work(
     started: Instant,
 ) -> Result<PassWork, PassWork> {
     let (repo_dids, source) = pass_list(wiring).map_err(|refusal| {
-        emit_pass_refused(pass, &refusal);
+        emit_pass_refused(&wiring.events, pass, &refusal);
         PassWork::failed(refusal.cause)
     })?;
     emit_pass_config_loaded(wiring, pass, &repo_dids, source);
-    let purged_authors =
-        purge_removed_authors(purge, &repo_dids, pass).map_err(|purged_authors| PassWork {
+    let purged_authors = purge_removed_authors(&wiring.events, purge, &repo_dids, pass).map_err(
+        |purged_authors| PassWork {
             purged_authors,
             ..PassWork::failed(PassFailure::PurgeFailed)
-        })?;
+        },
+    )?;
     Ok(PassWork {
         purged_authors,
         ..pass_work(wiring, &repo_dids, Some(pass), started)
@@ -128,6 +180,7 @@ fn staged_pass_work(
 /// each. `Ok`/`Err` carry how many authors were purged; `Err` = the store
 /// failed (exit 2, nothing is fetched; the next pass finishes the purge).
 fn purge_removed_authors(
+    events: &Events,
     purge: Option<RunnerPurge<'_>>,
     repo_dids: &[Did],
     pass: PassLabel,
@@ -137,7 +190,7 @@ fn purge_removed_authors(
     };
     match purge.purge_unlisted(repo_dids) {
         PurgeStep::Suppressed(reason) => {
-            emit_in(
+            events.emit_in(
                 Some(pass),
                 serde_json::json!({
                     "event": "indexer.ingest.purge_suppressed",
@@ -146,19 +199,19 @@ fn purge_removed_authors(
             );
             Ok(0)
         }
-        PurgeStep::Purged(purged) => Ok(emit_purged(pass, &purged)),
+        PurgeStep::Purged(purged) => Ok(emit_purged(events, pass, &purged)),
         PurgeStep::Failed { purged, error } => {
             eprintln!("openlore-indexer: purge failed: {error}");
-            Err(emit_purged(pass, &purged))
+            Err(emit_purged(events, pass, &purged))
         }
     }
 }
 
 /// `indexer.ingest.author_purged` per purged author (bare DID and count
 /// only, no claim content); how many there were.
-fn emit_purged(pass: PassLabel, purged: &[PurgedAuthor]) -> u64 {
+fn emit_purged(events: &Events, pass: PassLabel, purged: &[PurgedAuthor]) -> u64 {
     for author in purged {
-        emit_in(
+        events.emit_in(
             Some(pass),
             serde_json::json!({
                 "event": "indexer.ingest.author_purged",
@@ -247,8 +300,8 @@ fn read_list_file(file: &Path) -> std::io::Result<(String, Option<u64>)> {
 }
 
 /// `indexer.ingest.pass_refused`: the list was refused; nothing is fetched.
-fn emit_pass_refused(pass: PassLabel, refusal: &ListRefusal) {
-    emit_in(
+fn emit_pass_refused(events: &Events, pass: PassLabel, refusal: &ListRefusal) {
+    events.emit_in(
         Some(pass),
         serde_json::json!({
             "event": "indexer.ingest.pass_refused",
@@ -278,7 +331,7 @@ fn emit_pass_config_loaded(
     if let Some(age_secs) = source.age_secs() {
         loaded["repo_dids_age_secs"] = age_secs.into();
     }
-    emit_in(Some(pass), loaded);
+    wiring.events.emit_in(Some(pass), loaded);
 }
 
 /// `openlore-indexer ingest` — a one-shot bounded PULL pass (ADR-024, ADR-077).
@@ -305,7 +358,8 @@ pub(crate) fn ingest(wiring: &IndexerWiring) -> i32 {
 fn run_pass(wiring: &IndexerWiring, repo_dids: &[Did], pass: Option<PassLabel>) -> i32 {
     let started = Instant::now();
     let work = pass_work(wiring, repo_dids, pass, started);
-    finish_pass(pass, &work, started, wiring.pass_deadline)
+    let ended = EndedPass::of(work, started, wiring.pass_deadline);
+    write_summary(&wiring.events, pass, &ended.work, ended.exit, started)
 }
 
 /// What a pass's work came to, before its summary is written: the per-DID
@@ -329,21 +383,14 @@ impl PassWork {
 }
 
 /// Write the pass's ONE summary (last of its events) and return its exit code.
-/// A pass that had already failed keeps its own failure; one that had not but
-/// ran past `deadline` becomes `pass_deadline_exceeded` (B13, see
-/// [`within_deadline`]; first failure wins since fix-pass-failure-precedence).
-fn finish_pass(
+fn write_summary(
+    events: &Events,
     pass: Option<PassLabel>,
     work: &PassWork,
+    exit: PassExit,
     started: Instant,
-    deadline: Duration,
 ) -> i32 {
-    let exit = within_deadline(
-        pass_exit(work.failure, &work.summary),
-        started.elapsed(),
-        deadline,
-    );
-    emit_in(pass, pass_summary_event(work, exit, started));
+    events.emit_in(pass, pass_summary_event(work, exit, started));
     exit.code()
 }
 
@@ -392,7 +439,7 @@ fn pass_work(
         }
     });
     let progress = until_first_failure(did_steps);
-    tally.emit(pass);
+    tally.emit(&wiring.events, pass);
     checkpoint(wiring);
     PassWork {
         summary: summarize_outcomes(progress.values),
@@ -411,8 +458,8 @@ fn gated_did(
     author_keys: &mut AuthorKeys,
     tally: &mut IngestTally,
 ) -> PassStep<PassOutcome> {
-    emit_fallback_read(pass, fetch);
-    emit_source_skipped(pass, fetch);
+    emit_fallback_read(&wiring.events, pass, fetch);
+    emit_source_skipped(&wiring.events, pass, fetch);
     let outcome = fetch.outcome();
     gate_fetch(wiring, runtime, fetch, author_keys, tally)
         .map(|()| outcome)
@@ -586,14 +633,14 @@ fn record_outcome(
 
 /// Emit `indexer.ingest.source_fallback` for a DID read through the fallback
 /// (it was unresolvable — the only way onto that arm, ADR-077).
-fn emit_fallback_read(pass: Option<PassLabel>, fetch: &DidFetch) {
+fn emit_fallback_read(events: &Events, pass: Option<PassLabel>, fetch: &DidFetch) {
     if let DidFetch::Read {
         did,
         source: ListingSource::Fallback(fallback),
         ..
     } = fetch
     {
-        emit_in(
+        events.emit_in(
             pass,
             serde_json::json!({
                 "event": "indexer.ingest.source_fallback",
@@ -607,7 +654,7 @@ fn emit_fallback_read(pass: Option<PassLabel>, fetch: &DidFetch) {
 
 /// Emit `indexer.ingest.source_skipped` for a DID that contributed nothing:
 /// its DID and reason, the PDS only when one was resolved — NO claim content.
-fn emit_source_skipped(pass: Option<PassLabel>, fetch: &DidFetch) {
+fn emit_source_skipped(events: &Events, pass: Option<PassLabel>, fetch: &DidFetch) {
     if let DidFetch::Skipped { did, skip, pds_url } = fetch {
         let mut event = serde_json::json!({
             "event": "indexer.ingest.source_skipped",
@@ -621,7 +668,7 @@ fn emit_source_skipped(pass: Option<PassLabel>, fetch: &DidFetch) {
         if let Some(fallback_failure) = skip.fallback_failure {
             event["fallback_failure"] = serde_json::Value::from(fallback_failure.token());
         }
-        emit_in(pass, event);
+        events.emit_in(pass, event);
     }
 }
 
@@ -723,7 +770,7 @@ impl IngestTally {
     /// Emit the structured `indexer.ingest.verified` + `indexer.ingest.rejected`
     /// events to stdout (the DevOps observability contract). Structural counts +
     /// per-reason breakdown ONLY — NO claim-content telemetry (WD-105 privacy).
-    fn emit(&self, pass: Option<PassLabel>) {
+    fn emit(&self, events: &Events, pass: Option<PassLabel>) {
         let by_reason: serde_json::Map<String, serde_json::Value> = RefusalCause::ALL
             .iter()
             .map(|cause| {
@@ -731,14 +778,14 @@ impl IngestTally {
                 (cause.token().to_string(), count.into())
             })
             .collect();
-        emit_in(
+        events.emit_in(
             pass,
             serde_json::json!({
                 "event": "indexer.ingest.verified",
                 "count": self.verified,
             }),
         );
-        emit_in(
+        events.emit_in(
             pass,
             serde_json::json!({
                 "event": "indexer.ingest.rejected",
@@ -752,7 +799,107 @@ impl IngestTally {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::EventWriter;
+    use crate::runner_contract::BootNonce;
     use std::cell::Cell;
+    use std::io;
+    use std::sync::{Arc, Mutex};
+
+    /// The event lines a pass wrote; `refusing` fails each write, like a dead
+    /// stdout, after counting it.
+    #[derive(Default)]
+    struct CapturedLines {
+        lines: Mutex<Vec<String>>,
+        refusing: bool,
+    }
+
+    impl EventWriter for CapturedLines {
+        fn write_line(&self, line: &str) -> io::Result<()> {
+            self.lines.lock().unwrap().push(line.to_string());
+            if self.refusing {
+                return Err(io::Error::other("stdout is gone"));
+            }
+            Ok(())
+        }
+
+        fn flush(&self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn captured(refusing: bool) -> (Arc<CapturedLines>, Events) {
+        let lines = Arc::new(CapturedLines {
+            refusing,
+            ..CapturedLines::default()
+        });
+        (Arc::clone(&lines), Events::new(lines))
+    }
+
+    fn untouched_work() -> PassWork {
+        PassWork {
+            summary: PassSummary::default(),
+            failure: None,
+            purged_authors: 0,
+        }
+    }
+
+    fn summary_of(line: &str) -> serde_json::Value {
+        let event: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(event["event"], "indexer.ingest.pass_summary");
+        event
+    }
+
+    /// bypass: within_deadline's table is a property in appview-domain; this
+    /// pins that the ended pass really goes through it, against the clock,
+    /// and that its one summary reaches the root's writer.
+    #[test]
+    fn work_that_ends_past_its_deadline_reports_the_deadline_in_one_summary() {
+        let deadline = Duration::from_secs(1);
+        let overran = Instant::now() - Duration::from_secs(2);
+        let label = PassLabel::new(BootNonce::now(), PassId(1));
+
+        let ended = EndedPass::of(untouched_work(), overran, deadline);
+        let (lines, events) = captured(false);
+        let code = write_pass_summary(&events, label, &ended, ended.exit(), overran);
+
+        assert_eq!(
+            ended.exit(),
+            PassExit::Failed(PassFailure::PassDeadlineExceeded)
+        );
+        assert_eq!(code, 2);
+        let lines = lines.lines.lock().unwrap();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let summary = summary_of(&lines[0]);
+        assert_eq!(summary["exit_code"], 2);
+        assert_eq!(summary["cause"], "pass_deadline_exceeded");
+        assert_eq!(summary["pass_id"], label.to_string());
+
+        let failed = PassWork::failed(PassFailure::ListMalformed);
+        assert_eq!(
+            EndedPass::of(failed, overran, deadline).exit(),
+            PassExit::Failed(PassFailure::ListMalformed)
+        );
+        let in_time = EndedPass::of(untouched_work(), Instant::now(), deadline);
+        assert_eq!(in_time.exit(), PassExit::Completed);
+    }
+
+    /// bypass: one wiring example of the review L1 path, through the writer.
+    #[test]
+    fn a_writer_that_refuses_the_summary_gets_one_last_resort_exit_2_summary() {
+        let started = Instant::now();
+        let label = PassLabel::new(BootNonce::now(), PassId(1));
+        let ended = EndedPass::of(untouched_work(), started, Duration::from_secs(60));
+        let (lines, events) = captured(true);
+
+        let code = write_pass_summary(&events, label, &ended, ended.exit(), started);
+
+        assert_eq!(code, 2);
+        let lines = lines.lines.lock().unwrap();
+        assert_eq!(lines.len(), 2, "the refused summary, then the fallback");
+        let fallback = summary_of(&lines[1]);
+        assert_eq!(fallback["cause"], "pass_panicked");
+        assert_eq!(fallback["pass_id"], label.to_string());
+    }
 
     /// Review L1: a pass whose summary panics still ends with one exit-2
     /// `pass_panicked` summary; a pass whose summary is written writes no other.
