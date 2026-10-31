@@ -78,6 +78,13 @@ impl EndedPass {
         }
     }
 
+    /// The same work, ending on the `exit` a Lambda root settled after it, for its
+    /// no-publish summary as much as its normal one. `serve` and `ingest` never do.
+    #[must_use]
+    pub const fn ending_as(self, exit: PassExit) -> Self {
+        Self { exit, ..self }
+    }
+
     /// How the work ended, the deadline check included.
     #[must_use]
     pub const fn exit(&self) -> PassExit {

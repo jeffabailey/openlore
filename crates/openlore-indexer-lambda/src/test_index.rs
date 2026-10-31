@@ -55,6 +55,15 @@ pub(crate) fn with_a_damaged_block(published: &[u8]) -> Vec<u8> {
         .expect("a block that a search reads")
 }
 
+/// Each block `read_through` catches, by number, with the object it damages.
+pub(crate) fn blocks_a_read_through_catches(published: &[u8]) -> Vec<(usize, Vec<u8>)> {
+    let blocks = (published.len() - HEADER_BYTES) / BLOCK_BYTES;
+    (0..blocks)
+        .map(|block| (block, damaged_at(published, block)))
+        .filter(|(_, damaged)| opens_and_fails_a_read_through(damaged))
+        .collect()
+}
+
 fn damaged_at(published: &[u8], block: usize) -> Vec<u8> {
     let mut damaged = published.to_vec();
     let start = HEADER_BYTES + block * BLOCK_BYTES + 5_000;
@@ -69,6 +78,13 @@ fn opens_and_fails_a_search(index: &[u8]) -> bool {
     let path = scratch.path().join("index.duckdb");
     std::fs::write(&path, index).expect("a copy");
     store_opens_and_fails_a_search(&path)
+}
+
+fn opens_and_fails_a_read_through(index: &[u8]) -> bool {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let path = scratch.path().join("index.duckdb");
+    std::fs::write(&path, index).expect("a copy");
+    IndexStoreAdapter::open(&path).is_ok_and(|store| store.read_through().is_err())
 }
 
 fn store_opens_and_fails_a_search(path: &Path) -> bool {

@@ -7,7 +7,9 @@
 //! `decide::final_exit` settles.
 //!
 //! A pass with no usable starting index does no work: it ends as a failed pass and
-//! goes through the same record and summary (D-STZ-41).
+//! goes through the same record and summary (D-STZ-41). A fetched object is read
+//! through first, because its length says nothing about its blocks and an open reads
+//! few of them. Working on a damaged file can publish it back over the old object.
 //!
 //! A no-publish run takes the same steps up to the pass work, and reads the same
 //! plan value. That arm is `no_publish::run_no_publish`, which takes the read port
@@ -19,7 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use adapter_index_store::write_ahead_log_path;
+use adapter_index_store::{write_ahead_log_path, IndexStoreAdapter};
 use appview_domain::ingest_pass::{PassExit, PassFailure};
 use appview_domain::pass_runner::PassId;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -29,8 +31,9 @@ use openlore_indexer::ingest_pass::{write_pass_summary, EndedPass};
 use openlore_indexer::run::{store_unusable_event, ProbedWiring};
 use openlore_indexer::runner_contract::{BootNonce, PassLabel};
 use ports::{
-    IndexFingerprint, IndexObjectError, IndexObjectReadPort, LastPass, ObjectVersion, ProbeOutcome,
-    ProbeRefused, PublishMetadata, PublishOutcome, WriteCondition, PUBLISH_OPERATION_TIMEOUT,
+    IndexFingerprint, IndexObjectError, IndexObjectReadPort, IndexStoreError, LastPass,
+    ObjectVersion, ProbeOutcome, ProbeRefused, PublishMetadata, PublishOutcome, WriteCondition,
+    PUBLISH_OPERATION_TIMEOUT,
 };
 use serde_json::json;
 use tokio::task::JoinError;
@@ -63,7 +66,8 @@ pub(crate) struct WorkedPass {
 
 impl WorkedPass {
     /// D-STZ-41: no work was done, so nothing is published. `seen` names an object
-    /// that downloaded but will not open; a failed download saw none (D-STZ-48).
+    /// that downloaded but will not open or read through; a failed download saw
+    /// none (D-STZ-48).
     fn no_usable_start(seen: Option<ObjectVersion>) -> Self {
         Self {
             seen,
@@ -426,7 +430,9 @@ fn write_probe_verdict(answer: Result<ProbeOutcome, JoinError>) -> Result<(), Pr
 /// changed fingerprint and reaches the bucket only through this publish. The
 /// store's condition is read once, after the work, for the log and the publish
 /// (D-STZ-9). It is checked closed, because a close is what could still fail to
-/// fold the log into the file (P-7).
+/// fold the log into the file (P-7). A store that cannot say what it holds before
+/// the work gets no work, and one that cannot after it fails the pass, because a
+/// skipped publish on its own says nothing.
 fn work_on(
     wired: ProbedWiring,
     seen: Option<ObjectVersion>,
@@ -436,9 +442,15 @@ fn work_on(
 ) -> WorkedPass {
     let store = Arc::clone(&wired.wiring.store_condition);
     let events = wired.wiring.events.clone();
-    let before = store.fingerprint().ok();
+    let before = match starting_fingerprint(&store, seen.as_ref()) {
+        Ok(before) => before,
+        Err(unreadable) => {
+            eprintln!("openlore-indexer-lambda: starting index not usable: {unreadable}");
+            return WorkedPass::no_usable_start(seen);
+        }
+    };
     let ended = wired.pass_work(pass, started);
-    let after = store.fingerprint().ok();
+    let (ended, after) = closing_fingerprint(&store, ended);
     let unusable = store.unusable_reason();
     drop(store);
     if let Some(reason) = unusable {
@@ -446,7 +458,7 @@ fn work_on(
     }
     let publish = publish_on_change(
         ended.exit(),
-        before,
+        Some(before),
         after,
         ready_to_upload(unusable.is_none(), index_path),
     );
@@ -454,6 +466,35 @@ fn work_on(
         seen,
         ended,
         publish,
+    }
+}
+
+/// What a starting store holds, once it is known to read (D-STZ-41). Only a fetched
+/// object is read through: a new store has no blocks to check.
+fn starting_fingerprint(
+    store: &IndexStoreAdapter,
+    seen: Option<&ObjectVersion>,
+) -> Result<IndexFingerprint, IndexStoreError> {
+    if seen.is_some() {
+        store.read_through()?;
+    }
+    store.fingerprint()
+}
+
+/// What the store holds after the work. One that cannot say cannot be published, so
+/// the pass ends as a failed publish does (D-STZ-40), and a failure it already had
+/// keeps its cause.
+fn closing_fingerprint(
+    store: &IndexStoreAdapter,
+    ended: EndedPass,
+) -> (EndedPass, Option<IndexFingerprint>) {
+    match store.fingerprint() {
+        Ok(after) => (ended, Some(after)),
+        Err(unreadable) => {
+            eprintln!("openlore-indexer-lambda: not published: {unreadable}");
+            let exit = final_exit(ended.exit(), PublishStep::Failed, RecordStep::NoFailure);
+            (ended.ending_as(exit), None)
+        }
     }
 }
 
@@ -566,17 +607,20 @@ mod state_delta;
 mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use adapter_index_store::IndexStoreAdapter;
     use async_trait::async_trait;
     use chrono::TimeDelta;
     use claim_domain::Cid;
+    use openlore_indexer::config::{
+        parse_config, BuildProfile, PURGE_UNLISTED_VAR, TEST_FAULT_VAR,
+    };
+    use openlore_test_support::{BlueskyAccount, FakeAtprotoNetwork};
     use ports::{HeadOutcome, IndexReadPort, IndexStorePort, ProbeRefusalReason};
     use proptest::prelude::*;
     use serde_json::Value;
 
     use super::state_delta::{assert_state_delta, set_to, Delta};
     use super::*;
-    use crate::test_index::a_claim;
+    use crate::test_index::{a_claim, a_published_index, blocks_a_read_through_catches};
 
     /// D-STZ-16's limit, stated here so a changed constant shows.
     const TWO_HOURS_IN_SECONDS: i64 = 2 * 60 * 60;
@@ -643,6 +687,132 @@ mod tests {
         async fn get_last_pass(&self) -> Result<Option<LastPass>, IndexObjectError> {
             Ok(None)
         }
+    }
+
+    /// The author of every claim in `test_index`.
+    const INDEXED_AUTHOR: &str = "did:plc:priya";
+    /// An author with nothing on their PDS, so a pass over them adds nothing.
+    const QUIET_AUTHOR: &str = "did:plc:noor";
+
+    /// A sink a pass writes into and nobody reads: these tests read what it returns.
+    struct NoSink;
+
+    impl EventSink for NoSink {
+        fn line(&self, _line: &str) {}
+    }
+
+    /// The real wiring around one pass: its own scratch directory and DID list,
+    /// and a fake network holding both authors, with nothing published on it.
+    struct PassBench {
+        net: FakeAtprotoNetwork,
+        config: IndexerConfig,
+        _scratch: tempfile::TempDir,
+    }
+
+    impl PassBench {
+        fn listing(author: &str, settings: &[(&str, &str)]) -> Self {
+            const HOST: &str = "morel-us-east-host-bsky-network";
+            let net = FakeAtprotoNetwork::start(
+                [
+                    ("priya.example", INDEXED_AUTHOR),
+                    ("noor.example", QUIET_AUTHOR),
+                ]
+                .map(|(handle, did)| BlueskyAccount::new(handle, did, HOST))
+                .to_vec(),
+            );
+            let scratch = tempfile::tempdir().expect("scratch");
+            let did_list = scratch.path().join("repo-dids");
+            std::fs::write(&did_list, format!("{author}\n")).expect("a DID list");
+            let directory = net.directory_url().to_string();
+            let index = scratch.path().join("index.duckdb");
+            let environment: HashMap<&str, String> = [
+                ("OPENLORE_INDEXER_INDEX_PATH", index.display().to_string()),
+                (REPO_DIDS_FILE_VAR, did_list.display().to_string()),
+                ("OPENLORE_INDEXER_PLC_ENDPOINT", directory),
+                ("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP", "1".to_string()),
+            ]
+            .into_iter()
+            .chain(
+                settings
+                    .iter()
+                    .map(|&(name, value)| (name, value.to_string())),
+            )
+            .collect();
+            let config = parse_config(
+                |name| environment.get(name).cloned(),
+                BuildProfile::of_this_build(),
+            )
+            .expect("a configuration");
+            Self {
+                net,
+                config,
+                _scratch: scratch,
+            }
+        }
+
+        /// A pass that lists only the quiet author, so its purge removes the indexed
+        /// one: the fingerprint changes with nothing to fetch.
+        fn whose_purge_changes_the_index() -> Self {
+            Self::listing(QUIET_AUTHOR, &[(PURGE_UNLISTED_VAR, "1")])
+        }
+
+        /// On a runtime of its own, as the fake network cannot start inside one.
+        fn pass_from(&self, object: &[u8]) -> WorkedPass {
+            std::fs::write(&self.config.index_path, object).expect("the fetched object");
+            let worked = work_the_pass(
+                &self.config,
+                Arc::new(NoSink),
+                Some(the_fetched_version()),
+                a_pass_label(),
+                Instant::now(),
+            );
+            a_runtime().block_on(worked).expect("the pass ends")
+        }
+
+        /// A no-publish run, as the deploy gate invokes it, over `bucket`'s object.
+        fn no_publish_run_over(
+            &self,
+            bucket: &PublishedObject,
+        ) -> crate::no_publish::NoPublishReport {
+            let report = run_no_publish(
+                bucket,
+                &self.config,
+                Arc::new(NoSink),
+                a_pass_label(),
+                Instant::now(),
+            );
+            a_runtime().block_on(report).expect("the run ends")
+        }
+
+        fn wired_over(&self, object: &[u8]) -> ProbedWiring {
+            std::fs::write(&self.config.index_path, object).expect("the fetched object");
+            let sink: Arc<dyn EventSink> = Arc::new(NoSink);
+            pass_wiring(self.config.clone(), &sink).expect("a wiring")
+        }
+    }
+
+    fn a_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime")
+    }
+
+    fn a_pass_label() -> PassLabel {
+        PassLabel::new(BootNonce::now(), PassId(1))
+    }
+
+    fn the_fetched_version() -> ObjectVersion {
+        ObjectVersion {
+            etag: "the-fetched-etag".to_string(),
+            published_at: None,
+            pass_id: None,
+            size_bytes: 1,
+        }
+    }
+
+    fn seen_etag(worked: &WorkedPass) -> Option<&str> {
+        worked.seen.as_ref().map(|version| version.etag.as_str())
     }
 
     fn any_exit() -> impl Strategy<Value = PassExit> {
@@ -852,6 +1022,105 @@ mod tests {
 
         assert!(fetched.is_err(), "no starting index");
         assert_eq!(bucket.downloads.load(Ordering::Relaxed), 0);
+    }
+
+    // bypass: a sweep of every block of one real file, the input space of this
+    // contract; each block fails at a different store step without the check.
+    #[test]
+    fn a_fetched_index_with_a_damaged_block_ends_the_pass_with_no_work_and_no_publish() {
+        let damaged = blocks_a_read_through_catches(&a_published_index("bafypublished"));
+        assert!(damaged.len() > 1, "the sweep reached the file's blocks");
+
+        for (block, object) in damaged {
+            let bench = PassBench::whose_purge_changes_the_index();
+
+            let worked = bench.pass_from(&object);
+
+            let exit = worked.ended.exit();
+            assert_eq!(worked.publish, Publish::Skip, "block {block}");
+            assert_eq!(
+                exit,
+                PassExit::Failed(PassFailure::StartingIndexUnusable),
+                "block {block}"
+            );
+            assert_eq!(exit.code(), 2, "block {block}");
+            assert_eq!(
+                seen_etag(&worked),
+                Some("the-fetched-etag"),
+                "block {block}"
+            );
+            assert_eq!(bench.net.requests().len(), 0, "block {block}: no work");
+        }
+    }
+
+    // bypass: the positive control of the sweep above, on the same bench.
+    #[test]
+    fn a_whole_fetched_index_is_worked_on_and_published() {
+        let bench = PassBench::whose_purge_changes_the_index();
+
+        let worked = bench.pass_from(&a_published_index("bafypublished"));
+
+        assert_eq!(worked.publish, Publish::Publish);
+        assert_eq!(worked.ended.exit(), PassExit::Completed);
+        assert_eq!(seen_etag(&worked), Some("the-fetched-etag"));
+    }
+
+    // bypass: the deploy gate's road to the same check, on one damaged object and
+    // its whole control; which block is damaged is the sweep's to vary.
+    #[test]
+    fn the_deploy_gate_fails_on_a_damaged_object_and_passes_on_a_whole_one() {
+        let published = a_published_index("bafypublished");
+        let (_, damaged) = blocks_a_read_through_catches(&published).remove(0);
+        let bench = PassBench::whose_purge_changes_the_index();
+
+        let refused = bench.no_publish_run_over(&PublishedObject::holding(damaged));
+        let passed = bench.no_publish_run_over(&PublishedObject::holding(published));
+
+        assert_eq!((refused.exit_code, refused.would_publish), (2, false));
+        assert_eq!((passed.exit_code, passed.would_publish), (0, true));
+    }
+
+    // bypass: two fixed starts over one store that cannot answer; a real store
+    // only gets here through a fault, and the empty start has no read-through.
+    #[test]
+    fn a_store_that_cannot_say_what_it_holds_at_the_start_does_no_work() {
+        let object = a_published_index("bafypublished");
+        for seen in [Some(the_fetched_version()), None] {
+            let bench = PassBench::whose_purge_changes_the_index();
+            let wired = bench.wired_over(&object);
+            wired.wiring.store_condition.poison_for_test_fault();
+
+            let worked = work_on(
+                wired,
+                seen,
+                a_pass_label(),
+                Instant::now(),
+                &bench.config.index_path,
+            );
+
+            assert_eq!(worked.publish, Publish::Skip);
+            assert_eq!(
+                worked.ended.exit(),
+                PassExit::Failed(PassFailure::StartingIndexUnusable)
+            );
+            assert_eq!(bench.net.requests().len(), 0, "no work");
+        }
+    }
+
+    // bypass: one fixed fault at one fixed step. The work finds nothing to write,
+    // so nothing but the fingerprint after it notices the store went away.
+    #[test]
+    fn a_pass_that_cannot_say_what_it_ended_with_fails_instead_of_exiting_clean() {
+        let bench = PassBench::listing(INDEXED_AUTHOR, &[(TEST_FAULT_VAR, "store_poisoned")]);
+
+        let worked = bench.pass_from(&a_published_index("bafypublished"));
+
+        assert_eq!(worked.publish, Publish::Skip);
+        assert_eq!(
+            worked.ended.exit(),
+            PassExit::Failed(PassFailure::PublishFailed)
+        );
+        assert_eq!(worked.ended.exit().code(), 2);
     }
 
     // bypass: P-7 is one rule over a file's three states, and a real pass can
