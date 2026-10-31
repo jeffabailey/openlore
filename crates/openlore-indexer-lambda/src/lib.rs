@@ -24,8 +24,6 @@ pub mod no_publish;
 mod pass;
 mod probe;
 mod search;
-#[cfg(test)]
-mod test_index;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -226,3 +224,8 @@ pub struct InitRefused {
 pub struct FunctionError {
     pub message: String,
 }
+
+// Last in the file: xtask's architecture tests read this file up to the first
+// test marker, so one above the types would hide them from those rules.
+#[cfg(test)]
+mod test_index;
