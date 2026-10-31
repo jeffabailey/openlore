@@ -42,7 +42,8 @@ use crate::decide::{
 };
 use crate::no_publish::run_no_publish;
 use crate::{
-    events_through, pass_wiring, Environment, EventSink, FunctionError, InitRefused, PassDriven,
+    events_through, pass_wiring, refuse_start, Environment, EventSink, FunctionError, InitRefused,
+    PassDriven,
 };
 
 /// How a pass whose work panicked ended (D-STZ-43).
@@ -123,11 +124,13 @@ pub struct PassFunction {
 }
 
 impl PassFunction {
-    /// Lambda init: read the configuration, then run the write probe, whose
-    /// marker the bucket keeps and whose two accepted writes refuse the pass
-    /// (D-STZ-39). The pass reads its list only from the file it renders, so a
+    /// Lambda init: refuse a key naming the write probe's marker before any PUT,
+    /// read the configuration, then run the write probe, whose marker the bucket
+    /// keeps and whose two accepted writes refuse the pass (D-STZ-39). The pass
+    /// reads its list only from the file it renders, so a
     /// configuration with no such file is refused.
     pub async fn init(env: &Environment, driven: PassDriven) -> Result<Self, InitRefused> {
+        env.refuse_a_key_naming_the_marker(&driven.events)?;
         let config = env.indexer_config()?;
         let did_list_file = config.repo_dids_file.clone().ok_or_else(|| InitRefused {
             reason: format!("{REPO_DIDS_FILE_VAR} is not set"),
@@ -380,12 +383,8 @@ async fn work_the_pass(
 async fn run_write_probe(driven: &PassDriven) -> Result<(), InitRefused> {
     let index_write = Arc::clone(&driven.index_write);
     let answer = tokio::task::spawn_blocking(move || index_write.probe()).await;
-    write_probe_verdict(answer).map_err(|refused| {
-        events_through(driven.events.clone()).emit_flushed(&startup_refused_event(&refused));
-        InitRefused {
-            reason: refused.detail,
-        }
-    })
+    write_probe_verdict(answer)
+        .map_err(|refused| refuse_start(&driven.events, "index_object_write", refused))
 }
 
 /// D-STZ-39, UI-17: the probe's own refusal is the only one. A probe that never
@@ -408,18 +407,6 @@ fn write_probe_verdict(answer: Result<ProbeOutcome, JoinError>) -> Result<(), Pr
             Ok(())
         }
     }
-}
-
-/// The line the self-host indexer writes for a refused probe, from this root.
-fn startup_refused_event(refused: &ProbeRefused) -> serde_json::Value {
-    json!({
-        "event": "health.startup.refused",
-        "binary": "openlore-indexer-lambda",
-        "adapter": "index_object_write",
-        "reason": format!("{:?}", refused.reason),
-        "detail": refused.detail,
-        "structured": refused.structured,
-    })
 }
 
 /// The line the self-host indexer writes for an unusable store, from this root.

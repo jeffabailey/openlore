@@ -32,13 +32,19 @@ use openlore_indexer::config::{parse_config, BuildProfile, IndexerConfig};
 use openlore_indexer::events::{EventWriter, Events};
 use openlore_indexer::run::{IndexerWiring, Wired};
 use ports::{
-    ClockPort, IdentityResolvePort, IndexObjectReadPort, IndexObjectWritePort,
-    RepoDidListSourcePort,
+    location_names_write_probe_key, ClockPort, IdentityResolvePort, IndexObjectReadPort,
+    IndexObjectWritePort, ProbeRefusalReason, ProbeRefused, RepoDidListSourcePort, WRITE_PROBE_KEY,
 };
+use serde_json::{json, Value};
 
 pub use pass::PassFunction;
 pub use probe::ProbeFunction;
 pub use search::SearchFunction;
+
+/// The bucket key of the index object, as the function is configured with it.
+const INDEX_KEY_VAR: &str = "OPENLORE_INDEXER_LAMBDA_INDEX_KEY";
+/// The bucket key of `last-pass.json`, as the function is configured with it.
+const LAST_PASS_KEY_VAR: &str = "OPENLORE_INDEXER_LAMBDA_LAST_PASS_KEY";
 
 /// The function's environment as Lambda hands it over (`std::env::vars()` in
 /// `main`). The same variable names as the self-host indexer, plus the Lambda
@@ -56,6 +62,33 @@ impl Environment {
         .map_err(|refused| InitRefused {
             reason: refused.to_string(),
         })
+    }
+
+    /// D-STZ-39, UI-21: the first thing every function does at init, so a key
+    /// naming the write probe's marker refuses before any call to the store.
+    fn refuse_a_key_naming_the_marker(
+        &self,
+        events: &Arc<dyn EventSink>,
+    ) -> Result<(), InitRefused> {
+        let index_key = self.text_of(INDEX_KEY_VAR);
+        let last_pass_key = self.text_of(LAST_PASS_KEY_VAR);
+        if !location_names_write_probe_key(index_key, last_pass_key) {
+            return Ok(());
+        }
+        let refused = ProbeRefused {
+            reason: ProbeRefusalReason::IndexerConfigInvalid,
+            detail: format!("a configured key is the write probe's key {WRITE_PROBE_KEY}"),
+            structured: json!({
+                (INDEX_KEY_VAR): index_key,
+                (LAST_PASS_KEY_VAR): last_pass_key,
+            }),
+        };
+        Err(refuse_start(events, "config", refused))
+    }
+
+    /// A variable's text; an unset one names no key.
+    fn text_of(&self, variable: &str) -> &str {
+        self.0.get(variable).map_or("", String::as_str)
     }
 }
 
@@ -80,6 +113,28 @@ impl EventWriter for SinkWriter {
 
 fn events_through(sink: Arc<dyn EventSink>) -> Events {
     Events::new(Arc::new(SinkWriter(sink)))
+}
+
+/// Refuse this instance: the one `health.startup.refused` line, flushed, because
+/// nothing else runs after it.
+fn refuse_start(events: &Arc<dyn EventSink>, adapter: &str, refused: ProbeRefused) -> InitRefused {
+    let line = startup_refused_event(adapter, &refused);
+    events_through(Arc::clone(events)).emit_flushed(&line);
+    InitRefused {
+        reason: refused.detail,
+    }
+}
+
+/// The line the self-host indexer writes for a refused start, from this root.
+fn startup_refused_event(adapter: &str, refused: &ProbeRefused) -> Value {
+    json!({
+        "event": "health.startup.refused",
+        "binary": "openlore-indexer-lambda",
+        "adapter": adapter,
+        "reason": format!("{:?}", refused.reason),
+        "detail": refused.detail,
+        "structured": refused.structured,
+    })
 }
 
 /// The verify-only resolve path (D-STZ-50): the root's one site, held behind

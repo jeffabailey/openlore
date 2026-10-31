@@ -31,8 +31,10 @@ pub struct SearchFunction {
 
 impl SearchFunction {
     /// Lambda init: fetch the index (or open an empty one when there is no
-    /// object) and get ready. Refused on any other store failure.
+    /// object) and get ready. Refused on a key naming the write probe's marker
+    /// (D-STZ-39), and on any other store failure.
     pub async fn init(env: &Environment, driven: SearchDriven) -> Result<Self, InitRefused> {
+        env.refuse_a_key_naming_the_marker(&driven.events)?;
         let config = env.indexer_config()?;
         let looked_at = driven.clock.now_utc();
         let index = HeldIndex::fetched(driven.index_object.as_ref(), &config).await?;

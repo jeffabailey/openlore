@@ -15,9 +15,9 @@ pub struct ProbeFunction {
 }
 
 impl ProbeFunction {
-    /// Lambda init.
+    /// Lambda init. Refused on a key naming the write probe's marker (D-STZ-39).
     pub async fn init(env: &Environment, driven: ProbeDriven) -> Result<Self, InitRefused> {
-        let _ = (env, driven);
+        env.refuse_a_key_naming_the_marker(&driven.events)?;
         panic!("Not yet implemented -- RED scaffold")
     }
 

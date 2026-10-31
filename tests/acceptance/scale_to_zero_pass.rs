@@ -1104,7 +1104,6 @@ fn a_pass_refuses_any_event_but_an_empty_one_or_a_no_publish_request() {
 ///     | the probe | the pass record |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (config refusal at init, D-STZ-39)"]
 fn a_function_configured_to_keep_its_data_under_the_write_checks_marker_never_starts() {
     each_row(
         [
