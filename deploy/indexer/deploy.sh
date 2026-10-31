@@ -118,11 +118,22 @@ image_revision() { # $1 = digest -> the commit in the signed image's org.opencon
   echo "$rev"
 }
 
+workflow_conclusion() { # $1 = workflow file, $2 = git sha -> its run's conclusion; `none` if no run
+  gh run list --repo jeffabailey/openlore --workflow "$1" --commit "$2" \
+    --branch main --json conclusion --jq '.[0].conclusion // "none"'
+}
+
+# deploy-pds-check.yml runs only when a commit touches deploy/, so no run says nothing about the
+# commit and cannot be required. A run that exists must have succeeded; one in progress is refused.
 ci_green() { # $1 = git sha
   local conclusion
-  conclusion=$(gh run list --repo jeffabailey/openlore --workflow ci.yml --commit "$1" \
-    --branch main --json conclusion --jq '.[0].conclusion // "none"')
+  conclusion=$(workflow_conclusion ci.yml "$1")
   [ "$conclusion" = "success" ] || die "ci.yml on main for $1 is '$conclusion', not success"
+  conclusion=$(workflow_conclusion deploy-pds-check.yml "$1")
+  case "$conclusion" in
+    success | none) ;;
+    *) die "refusing: deploy-pds-check.yml on main for $1 is '$conclusion', not success" ;;
+  esac
 }
 
 verify_signature() { # $1 = digest

@@ -44,8 +44,10 @@ deploy/indexer/deploy.sh install | redeploy | stop | start | trigger | host-stat
 ```
 
 Tags, branches and short shas are refused before any tool runs. `deploy` also refuses a sha
-whose `ci.yml` run on main is not `success`, and a digest without a CI cosign signature, before
-it touches the host.
+whose `ci.yml` run on main is not `success`, a sha whose `deploy-pds-check.yml` run on main is
+anything but `success`, and a digest without a CI cosign signature, before it touches the host.
+`deploy-pds-check.yml` runs only on commits that touch `deploy/`, so a commit with no such run
+passes that check. `lambda deploy` and `lambda seed` take the same gates.
 
 ## Trusted proxies (per-client rate limit)
 

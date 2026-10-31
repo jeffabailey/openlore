@@ -51,6 +51,7 @@
 //! | OP-E24 | A failed flip of the pass or the probe undoes what flipped, and says where each is | review H1 |
 //! | OP-E25 | Only a missing object reads as an empty bucket; any other failed read stops the verb | review H2 |
 //! | OP-18 | `standby --timers` keeps the timers off through a reboot | review H6 |
+//! | OP-E26 | A red static-checks run on the commit stops a deploy; a commit with no run does not | review M2 |
 //!
 //! ## Testability contract for `deploy.sh lambda`
 //!
@@ -512,13 +513,15 @@ fn aws(posture: Posture, digest: &str) -> String {
             )
         })
         .collect();
-    let index_head_fault = posture.index_head_fails.map_or_else(String::new, |(from, text)| {
-        format!(
-            r#"if [ "$(grep -c 's3api head-object' "$CALLS")" -ge {from} ]; then
+    let index_head_fault = posture
+        .index_head_fails
+        .map_or_else(String::new, |(from, text)| {
+            format!(
+                r#"if [ "$(grep -c 's3api head-object' "$CALLS")" -ge {from} ]; then
       echo '{text}' >&2; exit 254
     fi"#
-        )
-    });
+            )
+        });
     format!(
         r#"
 in_ecr={in_ecr}
@@ -2921,6 +2924,54 @@ fn standby_keeps_the_timers_off_through_a_reboot() {
         !called(&container.calls(), &["systemctl"]),
         "the container's standby leaves the timers\n{}",
         container.calls()
+    );
+}
+
+/// `gh`, answering `ci.yml` with success and `deploy-pds-check.yml` with `conclusion`.
+fn gh_answering(conclusion: &str) -> String {
+    format!(
+        r#"case "$*" in
+  *deploy-pds-check.yml*) echo '{conclusion}' ;;
+  *) echo success ;;
+esac"#
+    )
+}
+
+/// OP-E26, crafter-owned (review M2). `deploy-pds-check.yml` is its own workflow, and it only runs
+/// when a commit touches `deploy/`. So no run says nothing about the commit, and must not block a
+/// deploy, but a run that is there has to have succeeded. An empty conclusion is a run in progress.
+/// Rows: the conclusion, then whether the deploy gets through.
+#[test]
+fn a_red_static_checks_run_stops_a_deploy_and_no_run_does_not() {
+    each_row(
+        [
+            ("success", true),
+            ("none", true),
+            ("failure", false),
+            ("cancelled", false),
+            ("timed_out", false),
+            ("", false),
+        ],
+        |(conclusion, passes)| {
+            for reference in [SHA.to_string(), digest()] {
+                let stubs = Stubs::new(Posture::default());
+                stubs.add("gh", &gh_answering(conclusion));
+
+                let run = stubs.run(&["lambda", "deploy", &reference], &[], "");
+
+                let asked = ["gh run list", "deploy-pds-check.yml", "--branch main", SHA];
+                assert_reached(&stubs, &asked);
+                if *passes {
+                    assert_flipped(&run, &stubs);
+                } else {
+                    assert_stopped_with_nothing_flipped(&run, &stubs);
+                    assert_refused(&run);
+                    assert!(run.out.contains("deploy-pds-check.yml"), "{}", run.out);
+                    let calls = stubs.calls();
+                    assert!(!called(&calls, &["crane copy"]), "{calls}");
+                }
+            }
+        },
     );
 }
 
