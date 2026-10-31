@@ -8,6 +8,7 @@
 //! probes, so nothing here can use one that has not (ADR-009).
 
 use std::convert::Infallible;
+use std::fmt::Display;
 use std::io::Write;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -22,8 +23,8 @@ use openlore_indexer_lambda::{
     refuse_config, refuse_start, Environment, EventSink, InitRefused, PassDriven, PassFunction,
     ProbeDriven, ProbeFunction, SearchDriven, SearchFunction,
 };
-use ports::{ClockPort, ProbeRefusalReason, ProbeRefused};
-use serde_json::{json, Value};
+use ports::{ClockPort, ProbeRefused};
+use serde_json::Value;
 use tokio::runtime::Builder as RuntimeBuilder;
 
 /// A refused start, as the self-host indexer exits on one.
@@ -65,7 +66,7 @@ fn main() -> ExitCode {
             refuse_start(
                 &events,
                 RUNTIME_ADAPTER,
-                unusable(format!("no async runtime: {failed}")),
+                ProbeRefused::index_object_unusable(format!("no async runtime: {failed}")),
             );
             ExitCode::from(EXIT_REFUSED)
         }
@@ -119,9 +120,7 @@ async fn start(
         ModeSettings::Pass { did_list } => {
             let repo_dids = SsmRepoDidListAdapter::connect(did_list)
                 .await
-                .map_err(|failed| {
-                    refuse_start(&events, DID_LIST_ADAPTER, unusable(failed.to_string()))
-                })?;
+                .map_err(|failed| refuse_connect(&events, DID_LIST_ADAPTER, &failed))?;
             let driven = PassDriven {
                 index_read: Arc::clone(&store) as _,
                 index_write: store,
@@ -151,15 +150,16 @@ async fn connect_object_store(
     S3IndexObjectAdapter::connect(location)
         .await
         .map(|adapter| Arc::new(adapter.fetching_as(mode.fetch_call())))
-        .map_err(|failed| refuse_start(events, OBJECT_STORE_ADAPTER, unusable(failed.to_string())))
+        .map_err(|failed| refuse_connect(events, OBJECT_STORE_ADAPTER, &failed))
 }
 
-fn unusable(detail: String) -> ProbeRefused {
-    ProbeRefused {
-        reason: ProbeRefusalReason::IndexObjectUnusable,
-        detail,
-        structured: json!({}),
-    }
+fn refuse_connect(
+    events: &Arc<dyn EventSink>,
+    adapter: &str,
+    failed: &impl Display,
+) -> InitRefused {
+    let refused = ProbeRefused::index_object_unusable(failed.to_string());
+    refuse_start(events, adapter, refused)
 }
 
 async fn serve(function: Function) -> Result<(), lambda_runtime::Error> {

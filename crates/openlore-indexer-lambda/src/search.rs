@@ -18,10 +18,7 @@ use openlore_indexer::config::{IndexerConfig, TestFault};
 use openlore_indexer::events::Events;
 use openlore_indexer::run::search_answers;
 use openlore_indexer::search_handler::{slow_index, unreadable_index, SharedIndexReads};
-use ports::{
-    HeadOutcome, IndexObjectError, IndexObjectReadPort, ProbeOutcome, ProbeRefusalReason,
-    ProbeRefused,
-};
+use ports::{HeadOutcome, IndexObjectError, IndexObjectReadPort, ProbeOutcome, ProbeRefused};
 use serde_json::{json, Map, Value};
 use tokio::task::JoinError;
 use tokio::time::{timeout, Instant};
@@ -66,7 +63,8 @@ impl SearchFunction {
         let index = HeldIndex::fetched(driven.index_object.as_ref(), &config)
             .await
             .map_err(|unusable| {
-                refuse_start(&driven.events, READ_PORT, index_unusable(unusable.reason))
+                let refused = ProbeRefused::index_object_unusable(unusable.reason);
+                refuse_start(&driven.events, READ_PORT, refused)
             })?;
         Ok(Self {
             events: events_through(Arc::clone(&driven.events)),
@@ -180,27 +178,10 @@ pub(crate) async fn run_read_probe(
 /// only on its `Ok`. A probe that never answered proved nothing.
 fn read_probe_verdict(answer: Result<ProbeOutcome, JoinError>) -> Result<(), ProbeRefused> {
     match answer {
-        Ok(ProbeOutcome::Ok) => Ok(()),
-        Ok(ProbeOutcome::Refused {
-            reason,
-            detail,
-            structured,
-        }) => Err(ProbeRefused {
-            reason,
-            detail,
-            structured,
-        }),
-        Err(crashed) => Err(index_unusable(format!(
+        Ok(outcome) => outcome.into_result(),
+        Err(crashed) => Err(ProbeRefused::index_object_unusable(format!(
             "read probe gave no answer: {crashed}"
         ))),
-    }
-}
-
-fn index_unusable(detail: String) -> ProbeRefused {
-    ProbeRefused {
-        reason: ProbeRefusalReason::IndexObjectUnusable,
-        detail,
-        structured: json!({}),
     }
 }
 
@@ -312,7 +293,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use async_trait::async_trait;
-    use ports::{ClockPort, LastPass, ObjectVersion};
+    use ports::{ClockPort, LastPass, ObjectVersion, ProbeRefusalReason};
     use proptest::prelude::*;
     use tempfile::TempDir;
 

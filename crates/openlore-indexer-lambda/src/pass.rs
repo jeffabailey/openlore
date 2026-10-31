@@ -408,16 +408,7 @@ async fn run_write_probe(driven: &PassDriven) -> Result<(), InitRefused> {
 /// D-STZ-41.
 fn write_probe_verdict(answer: Result<ProbeOutcome, JoinError>) -> Result<(), ProbeRefused> {
     match answer {
-        Ok(ProbeOutcome::Ok) => Ok(()),
-        Ok(ProbeOutcome::Refused {
-            reason,
-            detail,
-            structured,
-        }) => Err(ProbeRefused {
-            reason,
-            detail,
-            structured,
-        }),
+        Ok(outcome) => outcome.into_result(),
         Err(crashed) => {
             eprintln!("openlore-indexer-lambda: write probe gave no answer: {crashed}");
             Ok(())

@@ -27,12 +27,10 @@ use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
 use ports::{
-    HeadOutcome, IndexObjectError, LastPass, ObjectVersion, ProbeOutcome, ProbeRefusalReason,
-    ProbeRefused, PublishMetadata, PublishOutcome, RepeatAnswer, WriteCondition, WriteProbeSeen,
-    WRITE_PROBE_KEY,
+    HeadOutcome, IndexObjectError, LastPass, ObjectVersion, ProbeOutcome, ProbeRefused,
+    PublishMetadata, PublishOutcome, RepeatAnswer, WriteCondition, WriteProbeSeen, WRITE_PROBE_KEY,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
@@ -201,12 +199,7 @@ fn published_version(
 fn read_probe_outcome(checked: Result<HeadOutcome, IndexObjectError>) -> ProbeOutcome {
     match checked {
         Ok(HeadOutcome::Present(_) | HeadOutcome::Absent) => ProbeOutcome::Ok,
-        Err(failed) => ProbeRefused {
-            reason: ProbeRefusalReason::IndexObjectUnusable,
-            detail: failed.to_string(),
-            structured: json!({}),
-        }
-        .into(),
+        Err(failed) => ProbeRefused::index_object_unusable(failed.to_string()).into(),
     }
 }
 
@@ -552,6 +545,7 @@ impl IndexObjectStore {
 
 #[cfg(test)]
 mod tests {
+    use ports::ProbeRefusalReason;
     use proptest::prelude::*;
 
     use super::*;

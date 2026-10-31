@@ -49,6 +49,35 @@ impl From<ProbeRefused> for ProbeOutcome {
     }
 }
 
+impl ProbeOutcome {
+    /// This answer on the railway: `Ok` passed, and a refusal is its payload.
+    pub fn into_result(self) -> Result<(), ProbeRefused> {
+        match self {
+            ProbeOutcome::Ok => Ok(()),
+            ProbeOutcome::Refused {
+                reason,
+                detail,
+                structured,
+            } => Err(ProbeRefused {
+                reason,
+                detail,
+                structured,
+            }),
+        }
+    }
+}
+
+impl ProbeRefused {
+    /// No usable index at init, for the reason in `detail` (D-STZ-14).
+    pub fn index_object_unusable(detail: String) -> Self {
+        Self {
+            reason: ProbeRefusalReason::IndexObjectUnusable,
+            detail,
+            structured: serde_json::json!({}),
+        }
+    }
+}
+
 /// Why an adapter refused to start. `#[non_exhaustive]` so new adapters
 /// can extend the enum without a SemVer break for downstream consumers
 /// that pattern-match on it.
