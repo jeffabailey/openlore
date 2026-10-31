@@ -606,7 +606,6 @@ fn an_index_whose_store_breaks_while_it_runs_says_so_instead_of_looking_healthy(
 ///   And once the store answers again, a search a minute later finds the new claim
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (freshness failure never fails a search)"]
 fn when_the_freshness_check_fails_maria_still_gets_an_answer_from_the_current_copy() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = given_a_warm_instance_serving_priyas_claim(&world);
@@ -673,7 +672,6 @@ fn when_the_freshness_check_fails_maria_still_gets_an_answer_from_the_current_co
 ///     | the instance has no room left to download       |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (reload failure keeps the current copy)"]
 fn a_newer_index_the_instance_cannot_use_leaves_maria_on_the_current_copy() {
     each_row(["damaged", "no room"], |trouble| {
         let world = LambdaWorld::listing(&[Author::Priya]);
@@ -725,7 +723,6 @@ fn a_newer_index_the_instance_cannot_use_leaves_maria_on_the_current_copy() {
 ///   And the instance logs that its freshness check failed
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (a stalled HEAD maps to a failed check, D-STZ-10)"]
 fn a_freshness_check_that_stalls_still_leaves_maria_an_answer_from_the_current_copy() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = given_a_warm_instance_serving_priyas_claim(&world);
@@ -769,7 +766,6 @@ fn a_freshness_check_that_stalls_still_leaves_maria_an_answer_from_the_current_c
 ///   And once the store answers again, a search a minute later finds the new claim
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (the 3 s reload bound, D-STZ-10)"]
 fn a_reload_that_stalls_is_abandoned_and_maria_stays_on_the_current_copy() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = given_a_warm_instance_serving_priyas_claim(&world);

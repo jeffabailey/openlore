@@ -3,8 +3,17 @@
 //! `/healthz` reports what the object's metadata says (D-STZ-12). A reload brings
 //! the next copy into a new file, the holder swaps it in, and the old file goes
 //! with the old copy (D-STZ-10).
+//!
+//! The 3 s reload bound is a tokio timeout over the whole reload (the root's, in
+//! `search`), and a timeout acts only when the reload yields. So the download is
+//! dropped where it waits, and the open, which is synchronous, runs on a blocking
+//! thread for the search to wait on. That thread cannot be stopped: at the bound
+//! the search goes on, and the open runs out alone. The copy it is building owns
+//! the file, so the file goes when the download is dropped or when the abandoned
+//! open ends, and each attempt has its own file, so a retry never meets it.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use adapter_index_store::{DuckDbCaps, IndexStoreAdapter};
@@ -29,7 +38,7 @@ impl Drop for ScratchFile {
 }
 
 /// Where the copy of this generation lives: the configured path first, then a
-/// new file for each reload.
+/// new file for each reload attempt.
 fn copy_path(index_path: &Path, generation: u64) -> PathBuf {
     if generation == 0 {
         return index_path.to_path_buf();
@@ -39,11 +48,20 @@ fn copy_path(index_path: &Path, generation: u64) -> PathBuf {
     path.into()
 }
 
+/// Hands each reload attempt a generation of its own, past the first copy's 0.
+#[derive(Default)]
+struct ReloadAttempts(AtomicU64);
+
+impl ReloadAttempts {
+    fn next_generation(&self) -> u64 {
+        self.0.fetch_add(1, Ordering::Relaxed) + 1
+    }
+}
+
 /// One open copy of the index and the object version it holds.
 pub(crate) struct HeldIndex {
     store: Arc<IndexStoreAdapter>,
     version: Option<ObjectVersion>,
-    generation: u64,
     /// After `store`: fields drop in order, so the store closes before its file goes.
     _file: ScratchFile,
 }
@@ -58,34 +76,26 @@ impl HeldIndex {
         Self::fetched_as(index_object, config, 0).await
     }
 
-    /// The copy to replace this one: the current object in a new file.
-    pub(crate) async fn successor(
-        &self,
-        index_object: &dyn IndexObjectReadPort,
-        config: &IndexerConfig,
-    ) -> Result<Self, InitRefused> {
-        Self::fetched_as(index_object, config, self.generation + 1).await
-    }
-
     async fn fetched_as(
         index_object: &dyn IndexObjectReadPort,
         config: &IndexerConfig,
         generation: u64,
     ) -> Result<Self, InitRefused> {
-        let path = copy_path(&config.index_path, generation);
-        let file = ScratchFile(path.clone());
-        let version = index_object.fetch_to(&path).await.map_err(refused)?;
+        let file = ScratchFile(copy_path(&config.index_path, generation));
+        let version = index_object.fetch_to(&file.0).await.map_err(refused)?;
         let caps = DuckDbCaps {
             memory_limit_mb: config.duckdb_memory_limit_mb,
             threads: config.duckdb_threads,
         };
-        let store = IndexStoreAdapter::open_capped(&path, caps).map_err(refused)?;
-        Ok(Self {
-            store: Arc::new(store),
-            version,
-            generation,
-            _file: file,
+        off_the_runtime(move || {
+            let store = IndexStoreAdapter::open_capped(&file.0, caps).map_err(refused)?;
+            Ok(Self {
+                store: Arc::new(store),
+                version,
+                _file: file,
+            })
         })
+        .await
     }
 
     /// The ETag of the object this copy came from; `None` for an empty index.
@@ -114,21 +124,46 @@ impl HeldIndex {
 
 /// The copy being served. A swap takes effect for the next answer, and the last
 /// reference to the old copy closes it and deletes its file.
-pub(crate) struct IndexHolder(RwLock<Arc<HeldIndex>>);
+pub(crate) struct IndexHolder {
+    served: RwLock<Arc<HeldIndex>>,
+    reload_attempts: ReloadAttempts,
+}
 
 impl IndexHolder {
     pub(crate) fn holding(index: HeldIndex) -> Self {
-        Self(RwLock::new(Arc::new(index)))
+        Self {
+            served: RwLock::new(Arc::new(index)),
+            reload_attempts: ReloadAttempts::default(),
+        }
     }
 
     pub(crate) fn current(&self) -> Arc<HeldIndex> {
-        let served = self.0.read().unwrap_or_else(PoisonError::into_inner);
+        let served = self.served.read().unwrap_or_else(PoisonError::into_inner);
         Arc::clone(&served)
     }
 
-    pub(crate) fn swap(&self, next: HeldIndex) {
-        *self.0.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(next);
+    /// The copy to replace the served one: the current object in a file of its
+    /// own, which an open abandoned by an earlier attempt cannot be holding.
+    pub(crate) async fn next_copy(
+        &self,
+        index_object: &dyn IndexObjectReadPort,
+        config: &IndexerConfig,
+    ) -> Result<HeldIndex, InitRefused> {
+        let generation = self.reload_attempts.next_generation();
+        HeldIndex::fetched_as(index_object, config, generation).await
     }
+
+    pub(crate) fn swap(&self, next: HeldIndex) {
+        *self.served.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(next);
+    }
+}
+
+/// Run a synchronous open where a timeout on the caller can still fire. Whatever
+/// `open` owns, its result included, is dropped when it ends, waited for or not.
+async fn off_the_runtime<Opened: Send + 'static>(
+    open: impl FnOnce() -> Result<Opened, InitRefused> + Send + 'static,
+) -> Result<Opened, InitRefused> {
+    tokio::task::spawn_blocking(open).await.map_err(refused)?
 }
 
 fn refused(error: impl std::fmt::Display) -> InitRefused {
@@ -139,6 +174,10 @@ fn refused(error: impl std::fmt::Display) -> InitRefused {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
     use proptest::prelude::*;
 
     use super::*;
@@ -158,5 +197,44 @@ mod tests {
                 first == second
             );
         }
+
+        #[test]
+        fn no_reload_attempt_shares_a_generation_with_another_or_with_the_first_copy(
+            attempts in 1..64_usize,
+        ) {
+            let reload_attempts = ReloadAttempts::default();
+            let generations: HashSet<u64> = (0..attempts)
+                .map(|_| reload_attempts.next_generation())
+                .collect();
+            prop_assert_eq!(generations.len(), attempts);
+            prop_assert!(!generations.contains(&0));
+        }
+    }
+
+    // bypass: the contract is how one stuck open meets a timer; it has no input space.
+    #[tokio::test]
+    async fn an_open_that_outlasts_the_bound_is_left_behind_and_its_file_goes_when_it_ends() {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let path = scratch.path().join("index.duckdb.1");
+        std::fs::write(&path, b"half an index").expect("a partial file");
+        let file = ScratchFile(path.clone());
+        let (end_the_open, open_may_end) = mpsc::channel::<()>();
+
+        let open = off_the_runtime(move || {
+            let _ = open_may_end.recv_timeout(Duration::from_secs(5));
+            Ok(file)
+        });
+        let bounded = tokio::time::timeout(Duration::from_millis(10), open).await;
+
+        assert!(bounded.is_err(), "the bound fires during the open");
+        end_the_open.send(()).expect("the open is still running");
+        let file_gone = async {
+            while path.exists() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), file_gone)
+            .await
+            .expect("the file goes when the abandoned open ends");
     }
 }

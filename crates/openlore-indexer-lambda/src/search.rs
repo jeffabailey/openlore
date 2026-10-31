@@ -5,6 +5,7 @@
 //! (check-arch `indexer_search_handler_read_only`, extended).
 
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use adapter_xrpc_query_server::{
     dispatch, BodyRead, Handlers, PublicAnswer, PublicRequest, QueryHandler, REQUEST_TIMEOUT,
@@ -16,10 +17,15 @@ use openlore_indexer::run::search_answers;
 use openlore_indexer::search_handler::{slow_index, unreadable_index, SharedIndexReads};
 use ports::{HeadOutcome, IndexObjectError};
 use serde_json::{json, Map, Value};
+use tokio::time::timeout;
 
 use crate::decide::{freshness_due, reload_needed, HeadSeen, Reload, FRESHNESS_TTL};
 use crate::index_holder::{HeldIndex, IndexHolder};
 use crate::{events_through, Environment, InitRefused, SearchDriven};
+
+/// The bound on one reload, the download and the open together (D-STZ-10). It is
+/// the root's: no adapter sees both.
+const RELOAD_BOUND: Duration = Duration::from_secs(3);
 
 /// One warm search instance.
 pub struct SearchFunction {
@@ -74,7 +80,7 @@ impl SearchFunction {
         match reload_needed(served.etag(), &seen) {
             Reload::Keep => {}
             Reload::KeepAndReport => self.report_failed_check(),
-            Reload::Fetch(_) | Reload::OpenEmpty => self.reload(&served).await,
+            Reload::Fetch(_) | Reload::OpenEmpty => self.reload().await,
         }
     }
 
@@ -94,12 +100,14 @@ impl SearchFunction {
     }
 
     /// Bring in the object as it is now, which is empty when it has gone
-    /// (D-STZ-13), and swap. On failure the served copy stays.
-    async fn reload(&self, served: &HeldIndex) {
+    /// (D-STZ-13), and swap. On failure or at the bound the served copy stays,
+    /// and dropping the reload gives up what it had fetched (`index_holder`).
+    async fn reload(&self) {
         let index_object = self.driven.index_object.as_ref();
-        match served.successor(index_object, &self.config).await {
-            Ok(next) => self.index.swap(next),
-            Err(_) => self.report_failed_check(),
+        let reload = self.index.next_copy(index_object, &self.config);
+        match timeout(RELOAD_BOUND, reload).await {
+            Ok(Ok(next)) => self.index.swap(next),
+            Ok(Err(_)) | Err(_) => self.report_failed_check(),
         }
     }
 
