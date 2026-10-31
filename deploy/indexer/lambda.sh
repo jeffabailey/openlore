@@ -69,6 +69,7 @@ WARM_LIMIT_S=0.2
 PARITY_SEARCHES=3
 # What `lambda kpi` counts as a pass: no gate line (D-STZ-44) and no test-fire.
 KPI_PASSES='filter event = "indexer.ingest.pass_summary" and not ispresent(no_publish) and pass_id not like /^TEST/'
+COLD_STARTS='filter type = "platform.report" and ispresent(record.metrics.initDurationMs)'
 PROBE_LINES="filter event = \"indexer.host.health\" and \`source\` = \"lambda-probe\""
 
 # The version a `live` record says it replaced (L-13): a rollback's target, so a prune must read it
@@ -1212,8 +1213,17 @@ refuse_unless_at_required_concurrency() { # $1 = function
 report_init_durations() {
   use_current_phase
   echo "measure: recent init durations (ms):"
-  insights_wait "$(insights_start 900 'filter type = "platform.report" and ispresent(record.metrics.initDurationMs) | fields record.metrics.initDurationMs as init_ms | sort @timestamp desc | limit 10')" |
+  insights_wait "$(insights_start 900 "$COLD_STARTS | fields record.metrics.initDurationMs as init_ms | sort @timestamp desc | limit 10")" |
     jq -r '"  \(.init_ms)"'
+}
+
+measure_cold_calls() { # $1 = candidate URL; each call gets a fresh version, so a cold instance
+  local call nonce
+  for ((call = 1; call <= MEASURE_COLD_CALLS; call++)); do
+    nonce=$(jq -cn --arg nonce "$(now_ms)-$call" '{OPENLORE_MEASURE_NONCE: $nonce}')
+    publish_search_variant "$nonce"
+    measure_call raw cold "$1"
+  done
 }
 
 # Any way out but a pass is exit 1, die's 2 included, for that is what blocks Stage 2.
@@ -1239,17 +1249,13 @@ lambda_measure() {
   MEASURE_LOG=$LAMBDA_WORK/measure-log
   search_body 120 >"$MEASURE_BODY"
   : >"$MEASURE_LOG"
-  local domain raw candidate call nonce verdict=0
+  local domain raw candidate verdict=0
   domain=$(distribution_field DomainName)
   [ -n "$domain" ] || die "refusing: no distribution serves $INDEX_HOST"
   raw=$(search_url live)
   candidate=$(search_url candidate)
   begin_search_variants
-  for ((call = 1; call <= MEASURE_COLD_CALLS; call++)); do
-    nonce=$(jq -cn --arg nonce "$(now_ms)-$call" '{OPENLORE_MEASURE_NONCE: $nonce}')
-    publish_search_variant "$nonce"
-    measure_call raw cold "$candidate"
-  done
+  measure_cold_calls "$candidate"
   end_search_variants
   measure_warm_calls raw "$raw"
   measure_warm_calls edge "https://$domain"
@@ -1275,6 +1281,38 @@ transition_count() { # $1 = alarm, $2 = since (Unix s)
   echo "  $1: $(alarm_transitions "$1" "$2" | jq length)"
 }
 
+kpi_passes() { # $1 = days, $2 = window seconds, $3 = since, $4 = until (Unix s)
+  local q_ok q_fail ok_times fail_times a2
+  q_ok=$(insights_start "$2" "$KPI_PASSES and exit_code = 0 | fields @timestamp | limit 10000")
+  q_fail=$(insights_start "$2" "$KPI_PASSES and exit_code = 2 | fields @timestamp | limit 10000")
+  ok_times=$(insights_wait "$q_ok" | insights_epoch)
+  fail_times=$(insights_wait "$q_fail" | insights_epoch | jq -sc .)
+  a2=$(alarm_transitions "$ALARM_A2" "$3")
+  echo "--- KPIs over the last $1 day(s), $LOG_GROUP"
+  freshness_ratio "$3" "$4" <<<"$ok_times"
+  unalerted_failures "$fail_times" "$a2"
+}
+
+kpi_alarm_transitions() { # $1 = since (Unix s)
+  local alarm
+  echo "ALARM transitions:"
+  for alarm in "$ALARM_A1" "$ALARM_A2" "$ALARM_A3" "${LAMBDA_ONLY_ALARMS[@]}"; do
+    transition_count "$alarm" "$1"
+  done
+}
+
+kpi_platform_figures() { # $1 = window seconds
+  echo "cold starts (KPI-STZ-G1):"
+  insights_rows "$1" "$COLD_STARTS | stats count() as cold_starts, pct(record.metrics.initDurationMs, 95) as init_p95_ms" \
+    '"  \(.cold_starts) cold starts, init p95 \(.init_p95_ms) ms (target < 2000)"'
+  echo "warm search (KPI-STZ-G2):"
+  insights_rows "$1" "$PROBE_LINES | stats pct(search_ms, 95) as search_p95_ms" \
+    '"  probe search_ms p95 \(.search_p95_ms) (target < 200)"'
+  echo "max memory (KPI-STZ-G5):"
+  insights_rows "$1" 'filter type = "platform.report" | parse @logStream /\/(?<function_name>openlore-indexer-[a-z]+)\[/ | stats max(record.metrics.maxMemoryUsedMB) as max_memory_mb by function_name' \
+    '"  \(.function_name): \(.max_memory_mb) MB"'
+}
+
 # laptop_kpi's figures, with its own queries: they must skip the gate's lines, and they read the
 # current group. The prod root's saved query does neither.
 lambda_kpi() { # $1 = days (1-30)
@@ -1284,31 +1322,13 @@ lambda_kpi() { # $1 = days (1-30)
   fi
   lambda_account_check
   use_current_phase
-  local now window start q_ok q_fail ok_times fail_times a2 alarm
+  local now window start
   now=$(date +%s)
   window=$((days * 86400))
   start=$((now - window))
-  q_ok=$(insights_start "$window" "$KPI_PASSES and exit_code = 0 | fields @timestamp | limit 10000")
-  q_fail=$(insights_start "$window" "$KPI_PASSES and exit_code = 2 | fields @timestamp | limit 10000")
-  ok_times=$(insights_wait "$q_ok" | insights_epoch)
-  fail_times=$(insights_wait "$q_fail" | insights_epoch | jq -sc .)
-  a2=$(alarm_transitions "$ALARM_A2" "$start")
-  echo "--- KPIs over the last $days day(s), $LOG_GROUP"
-  freshness_ratio "$start" "$now" <<<"$ok_times"
-  unalerted_failures "$fail_times" "$a2"
-  echo "ALARM transitions:"
-  for alarm in "$ALARM_A1" "$ALARM_A2" "$ALARM_A3" "${LAMBDA_ONLY_ALARMS[@]}"; do
-    transition_count "$alarm" "$start"
-  done
-  echo "cold starts (KPI-STZ-G1):"
-  insights_rows "$window" 'filter type = "platform.report" and ispresent(record.metrics.initDurationMs) | stats count() as cold_starts, pct(record.metrics.initDurationMs, 95) as init_p95_ms' \
-    '"  \(.cold_starts) cold starts, init p95 \(.init_p95_ms) ms (target < 2000)"'
-  echo "warm search (KPI-STZ-G2):"
-  insights_rows "$window" "$PROBE_LINES | stats pct(search_ms, 95) as search_p95_ms" \
-    '"  probe search_ms p95 \(.search_p95_ms) (target < 200)"'
-  echo "max memory (KPI-STZ-G5):"
-  insights_rows "$window" 'filter type = "platform.report" | parse @logStream /\/(?<function_name>openlore-indexer-[a-z]+)\[/ | stats max(record.metrics.maxMemoryUsedMB) as max_memory_mb by function_name' \
-    '"  \(.function_name): \(.max_memory_mb) MB"'
+  kpi_passes "$days" "$window" "$start" "$now"
+  kpi_alarm_transitions "$start"
+  kpi_platform_figures "$window"
   budget_report
 }
 
@@ -1320,6 +1340,22 @@ parity_rows() { # $1 = base URL, $2 = DID -> the sorted (author_did, cid) pairs
     "$1$SEARCH_PATH" | jq -c '[.results[] | [.author_did, .cid]] | sort'
 }
 
+# One DID's search on both, reporting how they compare; non-zero when they differ.
+parity_search() { # $1 = edge URL, $2 = DID
+  local host_rows edge_rows
+  host_rows=$(parity_rows "https://$INDEX_HOST" "$2") ||
+    die "refusing: the host did not answer the search for $2"
+  edge_rows=$(parity_rows "$1" "$2") ||
+    die "refusing: the edge did not answer the search for $2"
+  if [ "$host_rows" = "$edge_rows" ]; then
+    echo "parity: $2: $(jq length <<<"$host_rows") rows match"
+    return 0
+  fi
+  echo "parity: $2: host $(jq length <<<"$host_rows") rows, edge $(jq length <<<"$edge_rows")," \
+    "and they differ"
+  return 1
+}
+
 # Trial only. Three authors from the DID list are three searches with real rows to compare, which
 # the probe's canned search, built to match nothing, is not. A pass publishes at a quarter hour, so
 # minute 7 of one leaves the two indexes settled; the rerun 15 min later is minute 7 of the next.
@@ -1327,7 +1363,7 @@ lambda_parity() {
   refuse_arguments parity "$@"
   need curl
   lambda_account_check
-  local minute edge dids did host_rows edge_rows differs=0
+  local minute edge dids did differs=0
   minute=$(date -u +%M)
   [ "$((10#$minute % 15))" = 7 ] ||
     die "refusing: minute $minute is not 7 minutes past a quarter hour"
@@ -1337,17 +1373,7 @@ lambda_parity() {
   dids=$(aws ssm get-parameter --region "$REGION" --name "$DID_LIST_PARAM" --with-decryption \
     --query Parameter.Value --output text | tr ',' '\n' | head -n "$PARITY_SEARCHES")
   for did in $dids; do
-    host_rows=$(parity_rows "https://$INDEX_HOST" "$did") ||
-      die "refusing: the host did not answer the search for $did"
-    edge_rows=$(parity_rows "$edge" "$did") ||
-      die "refusing: the edge did not answer the search for $did"
-    if [ "$host_rows" = "$edge_rows" ]; then
-      echo "parity: $did: $(jq length <<<"$host_rows") rows match"
-    else
-      echo "parity: $did: host $(jq length <<<"$host_rows") rows, edge $(jq length <<<"$edge_rows")," \
-        "and they differ"
-      differs=1
-    fi
+    parity_search "$edge" "$did" || differs=1
   done
   [ "$differs" = 0 ] || {
     echo "parity: FAIL; if a pass was in flight, run it once more 15 min from now" >&2
