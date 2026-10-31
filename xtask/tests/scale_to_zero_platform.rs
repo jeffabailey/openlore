@@ -1033,7 +1033,6 @@ fn a_deploy_passes_every_gate_in_order_and_flips_live_last() {
 ///   Then the live alias of all three functions moves back to that version
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda rollback"]
 fn a_rollback_returns_every_function_to_the_version_it_replaced() {
     let stubs = Stubs::new(Posture {
         image_in_ecr: true,
@@ -1489,7 +1488,6 @@ fn a_pass_gate_that_reached_nobody_stops_the_deploy_unless_the_operator_accepts_
 ///   Then the rollback is refused, and no alias moved
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda rollback"]
 fn a_rollback_to_a_version_whose_image_was_removed_is_refused() {
     let stubs = Stubs::new(Posture::default());
 
@@ -1670,7 +1668,6 @@ fn a_probe_gate_that_finds_the_index_not_live_stops_the_deploy_unless_accepted()
 ///   Then the rollback is refused, and no alias moved
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda rollback"]
 fn a_rollback_with_no_recorded_version_is_refused() {
     let stubs = Stubs::new(Posture {
         alias_records_prev: false,

@@ -6,6 +6,7 @@
 # rules are the same on both paths.
 #
 #   lambda deploy <git-sha|digest>   blue-green by alias: every gate in order, `live` flips last
+#   lambda rollback                  every `live` back to its recorded prev=, `candidate` following
 #
 # Each step below does I/O and stops the deploy with `die`. Decisions are in plain predicates
 # (a jq filter, an awk program), so a gate reads as what it requires.
@@ -26,9 +27,9 @@ GATE_ATTEMPTS=30   # 30 s apart, so up to 870 s: a pass's 840 s timeout plus 30 
 MAX_EDGE_GAP_MS=30000
 
 COPIED_DIGEST=""      # step 6: set while this run's copy is not yet on every $LATEST
-LIVE_VERSIONS=()      # step 7: what each `live` alias holds now
+LIVE_VERSIONS=()      # step 7, or a rollback: what each `live` alias holds now
 LATEST_REVISIONS=()   # step 8: each $LATEST's revision, to publish without a race
-NEW_VERSIONS=()       # step 9: the version each function will flip to
+NEW_VERSIONS=()       # step 9, or a rollback: the version each function will flip to
 CANDIDATE_BACK_TO=""  # step 10: set while `candidate` is ahead of a `live` that has not flipped
 INDEX_VERSION=none    # step 7: the pre-publish index version id
 WOULD_PUBLISH=unknown # step 12: printed, not gated
@@ -304,12 +305,20 @@ probe_gate() {
     die "refusing: the probe gate's health line says not_live '$not_live': $health"
 }
 
+move_live() { # $1 = function, $2 = version, $3 = description
+  aws lambda update-alias --region "$REGION" --function-name "$1" --name live \
+    --function-version "$2" --description "$3" >/dev/null
+}
+
+live_record() { # $1 = function -> the description of its `live` alias
+  aws lambda get-alias --region "$REGION" --function-name "$1" --name live |
+    jq -r '.Description // ""'
+}
+
 # Moves `live` and records what it replaced (L-13); $2 is appended for the pass's index id.
 flip_live() { # $1 = index into LAMBDA_FUNCTIONS, $2 = digest, $3 = git sha, $4 = extra record
-  local description
-  description="prev=${LIVE_VERSIONS[$1]} $3 $2 $(date -u +%FT%TZ)${4:+ $4}"
-  aws lambda update-alias --region "$REGION" --function-name "${LAMBDA_FUNCTIONS[$1]}" --name live \
-    --function-version "${NEW_VERSIONS[$1]}" --description "$description" >/dev/null
+  move_live "${LAMBDA_FUNCTIONS[$1]}" "${NEW_VERSIONS[$1]}" \
+    "prev=${LIVE_VERSIONS[$1]} $3 $2 $(date -u +%FT%TZ)${4:+ $4}"
 }
 
 distribution_domain() {
@@ -411,8 +420,7 @@ edge_holds_up() { # $1 = edge URL, $2 = ms of the flip
 # `candidate` is the EXIT trap's again, which keeps this deploy's exit status.
 flip_search_back() { # $1 = the description `live` had before the flip
   local version=${LIVE_VERSIONS[0]}
-  aws lambda update-alias --region "$REGION" --function-name "$LAMBDA_SEARCH" --name live \
-    --function-version "$version" --description "$1" >/dev/null ||
+  move_live "$LAMBDA_SEARCH" "$version" "$1" ||
     die "search stayed on version ${NEW_VERSIONS[0]}: could not flip live back to $version"
   CANDIDATE_BACK_TO=$version
   echo "deploy.sh: search is back on version $version; the pass and the probe did not flip" >&2
@@ -423,8 +431,7 @@ flip_search_back() { # $1 = the description `live` had before the flip
 flip_search() { # $1 = digest, $2 = git sha
   local edge flipped_at record
   edge=$(edge_url)
-  record=$(aws lambda get-alias --region "$REGION" --function-name "$LAMBDA_SEARCH" --name live |
-    jq -r '.Description // ""')
+  record=$(live_record "$LAMBDA_SEARCH")
   start_edge_poller "$edge"
   sleep 5
   flipped_at=$(now_ms)
@@ -438,11 +445,15 @@ flip_pass_and_probe() { # step 15; $1 = digest, $2 = git sha
   flip_live 2 "$1" "$2"
 }
 
-deploy_summary() { # step 16; $1 = digest
+flip_summary() {
   local i
   for i in "${!LAMBDA_FUNCTIONS[@]}"; do
     echo "${LAMBDA_FUNCTIONS[$i]}: live ${LIVE_VERSIONS[$i]} -> ${NEW_VERSIONS[$i]}"
   done
+}
+
+deploy_summary() { # step 16; $1 = digest
+  flip_summary
   echo "digest $1"
   echo "flip to first 200: ${FLIP_TO_FIRST_200_MS:-n/a} ms; longest gap: $EDGE_GAP_MS ms"
   echo "would_publish: $WOULD_PUBLISH"
@@ -508,11 +519,63 @@ lambda_deploy() { # $1 = git sha or digest
   echo "deployed $IMAGE@$digest to Lambda"
 }
 
+# What one function goes back to. Refuses a missing record or a missing image, so this runs for
+# all three before any alias moves. A rollback's targets were verified when first deployed.
+read_rollback_target() { # $1 = function
+  local versions current target answer digest
+  versions=$(alias_versions "$1" live) || die "refusing: could not read the live alias of $1"
+  current=$(sed -n 1p <<<"$versions")
+  target=$(sed -n 2p <<<"$versions")
+  [ -n "$target" ] || die "refusing: $1 records no version it replaced"
+  answer=$(aws lambda get-function --region "$REGION" --function-name "$1" \
+    --qualifier "$target") || die "refusing: could not read version $target of $1"
+  digest=$(image_digest <<<"$answer") || die "refusing: version $target of $1 names no image"
+  ecr_holds "$digest" || die "refusing: ECR does not hold $digest, the image of $1 version $target"
+  LIVE_VERSIONS+=("$current")
+  NEW_VERSIONS+=("$target")
+}
+
+# The pre-publish index id the pass recorded; empty if it recorded none. Read before the flip
+# rewrites that record.
+recorded_index_version() {
+  local record
+  record=$(live_record "$LAMBDA_PASS") || die "refusing: could not read the live alias of $LAMBDA_PASS"
+  jq -Rr 'capture("idx=(?<v>[^ ]+)").v' <<<"$record"
+}
+
+# No prev= in the new record: that version is what `live` now holds, so a second rollback is
+# refused, not a quiet no-op. $2 keeps the pass's index id, which recovery reads after a rollback.
+flip_back() { # $1 = index into LAMBDA_FUNCTIONS, $2 = extra record
+  local function=${LAMBDA_FUNCTIONS[$1]}
+  move_live "$function" "${NEW_VERSIONS[$1]}" \
+    "rolled back from ${LIVE_VERSIONS[$1]} $(date -u +%FT%TZ)${2:+ $2}" ||
+    die "$function stayed on version ${LIVE_VERSIONS[$1]}: could not flip live back;" \
+      "any function before it in search, pass, probe order is already back"
+}
+
+lambda_rollback() {
+  [ "$#" = 0 ] || die "refusing: rollback takes no arguments, got '$*'"
+  lambda_preflight
+  local function index_version
+  for function in "${LAMBDA_FUNCTIONS[@]}"; do
+    read_rollback_target "$function"
+  done
+  index_version=$(recorded_index_version)
+  flip_back 0
+  flip_back 1 "${index_version:+idx=$index_version}"
+  flip_back 2
+  point_candidate_at "${NEW_VERSIONS[0]}" ||
+    die "every live is back, but candidate did not follow to version ${NEW_VERSIONS[0]}"
+  flip_summary
+  echo "pre-publish index version: ${index_version:-none}"
+}
+
 lambda_main() {
   local verb="${1:-}"
   shift || true
   case "$verb" in
     deploy) lambda_deploy "$@" ;;
-    *) die "usage: deploy.sh lambda deploy <git-sha|digest>" ;;
+    rollback) lambda_rollback "$@" ;;
+    *) die "usage: deploy.sh lambda deploy <git-sha|digest> | rollback" ;;
   esac
 }
