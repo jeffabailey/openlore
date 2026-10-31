@@ -187,6 +187,10 @@ pub enum ProbeRefusalReason {
     /// the single-writer guarantee cannot be trusted (scale-to-zero-hosting
     /// D-STZ-39).
     IndexObjectWriteConditionIgnored,
+    /// A search or probe instance could not get a usable index at init: the
+    /// store failed, or the object it served could not be used (scale-to-zero-
+    /// hosting D-STZ-14). A missing object is not this: it opens empty (D-STZ-13).
+    IndexObjectUnusable,
 }
 
 // -----------------------------------------------------------------------------

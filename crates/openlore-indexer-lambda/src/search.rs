@@ -15,17 +15,24 @@ use openlore_indexer::config::{IndexerConfig, TestFault};
 use openlore_indexer::events::Events;
 use openlore_indexer::run::search_answers;
 use openlore_indexer::search_handler::{slow_index, unreadable_index, SharedIndexReads};
-use ports::{HeadOutcome, IndexObjectError};
+use ports::{
+    HeadOutcome, IndexObjectError, IndexObjectReadPort, ProbeOutcome, ProbeRefusalReason,
+    ProbeRefused,
+};
 use serde_json::{json, Map, Value};
+use tokio::task::JoinError;
 use tokio::time::{timeout, Instant};
 
 use crate::decide::{freshness_due, reload_needed, HeadSeen, Reload, FRESHNESS_TTL};
 use crate::index_holder::{HeldIndex, IndexHolder};
-use crate::{events_through, Environment, InitRefused, SearchDriven};
+use crate::{events_through, refuse_start, Environment, EventSink, InitRefused, SearchDriven};
 
 /// The bound on one reload, the download and the open together (D-STZ-10). It is
 /// the root's: no adapter sees both.
 const RELOAD_BOUND: Duration = Duration::from_secs(3);
+
+/// The port a refused start names (`health.startup.refused.adapter`).
+const READ_PORT: &str = "index_object_read";
 
 /// One warm search instance.
 pub struct SearchFunction {
@@ -37,14 +44,21 @@ pub struct SearchFunction {
 }
 
 impl SearchFunction {
-    /// Lambda init: fetch the index (or open an empty one when there is no
-    /// object) and get ready. Refused on a key naming the write probe's marker
-    /// (D-STZ-39), and on any other store failure.
+    /// Lambda init: pass the read probe, fetch the index (or open an empty one
+    /// when there is no object) and get ready. Refused on a key naming the write
+    /// probe's marker and on a refused read probe (D-STZ-39), on a store failure,
+    /// and on an object that downloads but cannot be used (D-STZ-14). A missing
+    /// object is not a refusal (D-STZ-13).
     pub async fn init(env: &Environment, driven: SearchDriven) -> Result<Self, InitRefused> {
         env.refuse_a_key_naming_the_marker(&driven.events)?;
         let config = env.indexer_config()?;
+        run_read_probe(&driven.index_object, &driven.events).await?;
         let looked_at = driven.clock.now_utc();
-        let index = HeldIndex::fetched(driven.index_object.as_ref(), &config).await?;
+        let index = HeldIndex::fetched(driven.index_object.as_ref(), &config)
+            .await
+            .map_err(|unusable| {
+                refuse_start(&driven.events, READ_PORT, index_unusable(unusable.reason))
+            })?;
         Ok(Self {
             events: events_through(Arc::clone(&driven.events)),
             driven,
@@ -119,6 +133,45 @@ impl SearchFunction {
     }
 }
 
+/// The read probe, off the async runtime: it is sync and blocks, and blocking on
+/// the runtime from async init panics (D-STZ-39, UI-11).
+pub(crate) async fn run_read_probe(
+    index_object: &Arc<dyn IndexObjectReadPort>,
+    events: &Arc<dyn EventSink>,
+) -> Result<(), InitRefused> {
+    let index_object = Arc::clone(index_object);
+    let answer = tokio::task::spawn_blocking(move || index_object.probe()).await;
+    read_probe_verdict(answer).map_err(|refused| refuse_start(events, READ_PORT, refused))
+}
+
+/// D-STZ-39: search and probe init gate on this probe, so an instance starts
+/// only on its `Ok`. A probe that never answered proved nothing.
+fn read_probe_verdict(answer: Result<ProbeOutcome, JoinError>) -> Result<(), ProbeRefused> {
+    match answer {
+        Ok(ProbeOutcome::Ok) => Ok(()),
+        Ok(ProbeOutcome::Refused {
+            reason,
+            detail,
+            structured,
+        }) => Err(ProbeRefused {
+            reason,
+            detail,
+            structured,
+        }),
+        Err(crashed) => Err(index_unusable(format!(
+            "read probe gave no answer: {crashed}"
+        ))),
+    }
+}
+
+fn index_unusable(detail: String) -> ProbeRefused {
+    ProbeRefused {
+        reason: ProbeRefusalReason::IndexObjectUnusable,
+        detail,
+        structured: json!({}),
+    }
+}
+
 fn head_seen(head: Result<HeadOutcome, IndexObjectError>) -> HeadSeen {
     match head {
         Ok(HeadOutcome::Present(version)) => HeadSeen::Present(version.etag),
@@ -190,4 +243,188 @@ fn function_url_response(answer: &PublicAnswer) -> Value {
         "body": String::from_utf8_lossy(&answer.body),
         "isBase64Encoded": false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use ports::{ClockPort, LastPass, ObjectVersion};
+    use tempfile::TempDir;
+
+    use super::*;
+
+    /// A bucket whose read probe answers as told, and which holds `object`.
+    struct ProbedBucket {
+        probe: fn() -> ProbeOutcome,
+        object: Option<Vec<u8>>,
+        fetches: AtomicUsize,
+    }
+
+    impl ProbedBucket {
+        fn answering(probe: fn() -> ProbeOutcome) -> Self {
+            Self {
+                probe,
+                object: None,
+                fetches: AtomicUsize::new(0),
+            }
+        }
+
+        fn holding(object: &[u8]) -> Self {
+            Self {
+                object: Some(object.to_vec()),
+                ..Self::answering(|| ProbeOutcome::Ok)
+            }
+        }
+    }
+
+    #[async_trait]
+    impl IndexObjectReadPort for ProbedBucket {
+        fn probe(&self) -> ProbeOutcome {
+            (self.probe)()
+        }
+
+        async fn head(&self) -> Result<HeadOutcome, IndexObjectError> {
+            Ok(HeadOutcome::Absent)
+        }
+
+        async fn fetch_to(&self, dest: &Path) -> Result<Option<ObjectVersion>, IndexObjectError> {
+            self.fetches.fetch_add(1, Ordering::Relaxed);
+            let Some(object) = &self.object else {
+                return Ok(None);
+            };
+            std::fs::write(dest, object).expect("a scratch file");
+            Ok(Some(ObjectVersion {
+                etag: "etag".to_string(),
+                published_at: None,
+                pass_id: None,
+                size_bytes: object.len() as u64,
+            }))
+        }
+
+        async fn get_last_pass(&self) -> Result<Option<LastPass>, IndexObjectError> {
+            Ok(None)
+        }
+    }
+
+    struct StoppedClock;
+
+    impl ClockPort for StoppedClock {
+        fn probe(&self) -> ProbeOutcome {
+            ProbeOutcome::Ok
+        }
+
+        fn now_utc(&self) -> DateTime<Utc> {
+            DateTime::UNIX_EPOCH
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordedLines(Mutex<Vec<String>>);
+
+    impl EventSink for RecordedLines {
+        fn line(&self, line: &str) {
+            self.0.lock().expect("the lines").push(line.to_string());
+        }
+    }
+
+    impl RecordedLines {
+        fn refusals(&self) -> usize {
+            let lines = self.0.lock().expect("the lines");
+            lines
+                .iter()
+                .filter(|line| line.contains("health.startup.refused"))
+                .count()
+        }
+    }
+
+    fn environment(scratch: &TempDir) -> Environment {
+        let path = |name: &str| scratch.path().join(name).display().to_string();
+        Environment(BTreeMap::from(
+            [
+                ("OPENLORE_INDEXER_INDEX_PATH", path("index.duckdb")),
+                ("OPENLORE_INDEXER_REPO_DIDS_FILE", path("repo-dids")),
+                ("OPENLORE_INDEXER_DUCKDB_MEMORY_LIMIT_MB", "48".to_string()),
+                ("OPENLORE_INDEXER_DUCKDB_THREADS", "1".to_string()),
+            ]
+            .map(|(name, value)| (name.to_string(), value)),
+        ))
+    }
+
+    /// One start against `bucket`, and how many refusals it logged.
+    async fn start(bucket: &Arc<ProbedBucket>) -> (Result<SearchFunction, InitRefused>, usize) {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let lines = Arc::new(RecordedLines::default());
+        let driven = SearchDriven {
+            index_object: Arc::clone(bucket) as Arc<dyn IndexObjectReadPort>,
+            clock: Arc::new(StoppedClock),
+            events: Arc::clone(&lines) as Arc<dyn EventSink>,
+        };
+        let started = SearchFunction::init(&environment(&scratch), driven).await;
+        (started, lines.refusals())
+    }
+
+    fn refused_probe() -> ProbeOutcome {
+        ProbeOutcome::Refused {
+            reason: ProbeRefusalReason::IndexObjectUnusable,
+            detail: "the role cannot HEAD the object".to_string(),
+            structured: json!({}),
+        }
+    }
+
+    /// Blocks on the runtime the way a sync adapter's probe does, which panics
+    /// on a thread that is running async work.
+    fn probe_that_blocks_on_the_runtime() -> ProbeOutcome {
+        tokio::runtime::Handle::current().block_on(async { ProbeOutcome::Ok })
+    }
+
+    // bypass: the probe's answer is a fixed case, and the contract is that init
+    // goes no further; it has no input space.
+    #[tokio::test]
+    async fn a_refused_read_probe_stops_init_before_it_fetches_anything() {
+        let bucket = Arc::new(ProbedBucket::answering(refused_probe));
+
+        let (started, refusals) = start(&bucket).await;
+
+        assert!(started.is_err(), "init must be refused");
+        assert_eq!(refusals, 1);
+        assert_eq!(bucket.fetches.load(Ordering::Relaxed), 0);
+    }
+
+    // bypass: one crash is one fixed case.
+    #[tokio::test]
+    async fn a_read_probe_that_crashes_proves_nothing_so_init_is_refused() {
+        let bucket = Arc::new(ProbedBucket::answering(|| panic!("the probe crashed")));
+
+        let (started, refusals) = start(&bucket).await;
+
+        assert!(started.is_err(), "init must be refused");
+        assert_eq!(refusals, 1);
+    }
+
+    // bypass: UI-11 is about which thread the probe runs on; it has no input space.
+    #[tokio::test]
+    async fn a_read_probe_that_blocks_runs_off_the_runtime_and_init_goes_on() {
+        let bucket = Arc::new(ProbedBucket::answering(probe_that_blocks_on_the_runtime));
+
+        let (started, refusals) = start(&bucket).await;
+
+        assert!(started.is_ok(), "the probe passed");
+        assert_eq!(refusals, 0);
+    }
+
+    // bypass: no bytes is the one object a store could take for a new file, so
+    // it is the fixed case that would serve a damaged object as empty.
+    #[tokio::test]
+    async fn an_object_of_no_bytes_is_refused_and_not_served_as_empty() {
+        let bucket = Arc::new(ProbedBucket::holding(b""));
+
+        let (started, refusals) = start(&bucket).await;
+
+        assert!(started.is_err(), "init must be refused");
+        assert_eq!(refusals, 1);
+    }
 }

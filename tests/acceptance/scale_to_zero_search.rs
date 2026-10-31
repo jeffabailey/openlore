@@ -863,7 +863,6 @@ fn after_a_slow_freshness_check_a_search_has_only_what_is_left_of_its_5_seconds(
 ///     | the instance has no room to download it  |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (init refusal)"]
 fn a_search_instance_that_cannot_get_a_usable_index_never_starts_answering() {
     each_row(
         ["refuses", "unavailable", "damaged", "no room"],
