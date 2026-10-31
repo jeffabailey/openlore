@@ -459,9 +459,9 @@ All of these have run on stubs only (§10). A refusal starts with `refusing` and
 
 | Verb | What it does | Know this |
 |---|---|---|
-| `lambda deploy <git-sha\|digest>` | Blue-green by alias: all gates, then `live` flips, search first | Takes a 40-hex sha or `sha256:<64 hex>`. The gates can take 28.5 min. A stop before the flip leaves nothing flipped. `LAMBDA_ACCEPT_NOT_LIVE=1` accepts the probe gate alone. `LAMBDA_ACCEPT_EXIT_3=1` accepts exit 3 alone. A failure in step 15 or an interrupt has its own recovery (§16). |
+| `lambda deploy <git-sha\|digest>` | Blue-green by alias: all gates, then `live` flips, search first | Takes a 40-hex sha or `sha256:<64 hex>`. The gates can take 28.5 min. A stop before the flip leaves nothing flipped. `LAMBDA_ACCEPT_NOT_LIVE=1` accepts the probe gate alone. `LAMBDA_ACCEPT_EXIT_3=1` accepts exit 3 alone. **Refused if any function publishes nothing new** (§16). A failure in step 15 or an interrupt has its own recovery (§16). |
 | `lambda seed <git-sha\|digest>` | Gates and ECR copy only; prints `bootstrap_image_uri` | First apply only (§11). |
-| `lambda republish` | Republishes each function's live image, through the same gates and flips | Run it after any tofu change to function configuration. Takes no arguments. Refuses if the live image is not in ECR. |
+| `lambda republish` | Republishes each function's live image, through the same gates and flips | Run it after any tofu change to function configuration. Takes no arguments. Refuses if the live image is not in ECR. **Refused if any function publishes nothing new** (§16): a change that reaches only some functions needs a deploy of a new build. |
 | `lambda rollback` | Every `live` back to its recorded `prev=`; `candidate` follows | Prints the pre-publish index version. **`lambda rollback --to <sha>` is refused today**: rollback takes no arguments. **A second rollback is refused**: a rollback leaves no `prev=`. A partly failed rollback cannot be rerun (§16). Afterwards `lambda status` shows `$LATEST` drift. That is expected. |
 | `lambda stop [--wait]` | The kill switch: search concurrency 0, then the distribution off | Lambda stops in seconds, the edge in minutes. Pass and probe keep running. Expect A3 within about 10 min, staying in ALARM while stopped. A deploy during a stop fails its post-checks. |
 | `lambda start` | Search concurrency back to 3, the distribution on | Safe to run twice. The raw URL answers at once, the public name when the distribution is `Deployed`. |
@@ -528,6 +528,20 @@ their gates, so go forward.
 Do not run `lambda rollback`: a function that did not flip still records the version before it, so
 it would go back one too far. Do not rerun the deploy: Lambda returns the same version for unchanged
 code, and `prev=` would name the version it now holds.
+
+### A deploy or republish refused with `nothing changed`
+
+The refusal names each function whose publish answered with the version `live` already holds. Lambda
+publishes no new version for unchanged code and configuration, and a flip to that version would make
+`prev=` name the version it now holds, so the real rollback target would be gone. The refusal comes
+before `candidate` moves, so no alias moved. A version a changed function did publish stays until a
+later prune, and `$LATEST` holds what the run set.
+
+- **All three named:** nothing needs deploying. `lambda status` shows what `live` runs.
+- **Some named, after a tofu change:** the change reached only the others, and it cannot reach `live`
+  through `republish`. Run `lambda deploy` on a newer build, which publishes all three.
+- **Some named, after a flip that stopped partway:** those functions are ahead of the others. Do not
+  try again: read the state with `lambda status`, then recover with the part of this section that fits.
 
 ### You interrupted a deploy during the edge checks
 

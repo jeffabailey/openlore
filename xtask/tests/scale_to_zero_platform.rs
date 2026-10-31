@@ -47,6 +47,7 @@
 //! | OP-E20 | A stop before the flip moves `candidate` back | steps 12, 13 |
 //! | OP-E21 | The errors drill waits out a busy probe | `lambda test-alarm errors` |
 //! | OP-E22 | `standby` needs a flag | U-STZ-1 |
+//! | OP-E23 | A publish that changed nothing is refused before anything moves | review B1 |
 //!
 //! ## Testability contract for `deploy.sh lambda`
 //!
@@ -198,6 +199,9 @@ struct Posture {
     live_runs_the_build: bool,
     /// What the search function's reserved concurrency reads.
     search_concurrency: u8,
+    /// For each function, in [`FUNCTIONS`] order: whether its publish changed nothing, so
+    /// Lambda answers with the version `live` already holds.
+    publish_answers_live: [bool; 3],
 }
 
 impl Default for Posture {
@@ -225,6 +229,7 @@ impl Default for Posture {
             code_update_fails: false,
             live_runs_the_build: true,
             search_concurrency: 3,
+            publish_answers_live: [false; 3],
         }
     }
 }
@@ -475,6 +480,17 @@ fn aws(posture: Posture, digest: &str) -> String {
     };
     let published_at = posture.object_published_at;
     let search_concurrency = posture.search_concurrency;
+    let publishes = FUNCTIONS
+        .iter()
+        .zip(posture.publish_answers_live)
+        .map(|(function, unchanged)| {
+            let version = if unchanged { 7 } else { 8 };
+            format!(
+                r#"*"lambda publish-version"*{function}*) echo '{{"Version":"{version}","State":"Active"}}' ;;"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n  ");
     format!(
         r#"
 in_ecr={in_ecr}
@@ -505,7 +521,7 @@ case "$*" in
   *"lambda get-function "*)
     echo '{{"Configuration":{{"Version":"$LATEST","CodeSha256":"{latest_sha}","RevisionId":"r","State":"Active","LastUpdateStatus":"Successful"}},"Code":{{"ImageUri":"{repo}@{latest_image}"}}}}' ;;
   *"lambda update-function-code"*) {code_update} ;;
-  *"lambda publish-version"*) echo '{{"Version":"8","State":"Active"}}' ;;
+  {publishes}
   *"lambda invoke"*openlore-indexer-pass*)
     {pass_throttle}
     {pass_answer} ;;
@@ -2616,6 +2632,49 @@ fn standby_needs_to_be_told_what_to_stop() {
             stubs.calls()
         );
     });
+}
+
+/// OP-E23, crafter-owned (review B1). Lambda publishes no version for unchanged code and
+/// configuration: it answers with the latest one. A flip to that would write a `prev=` naming the
+/// version `live` already holds, and the real rollback target would be gone. Some functions
+/// unchanged is refused too: from here that is one half-flipped state, whose `prev=` must stay.
+#[test]
+fn a_publish_that_changed_nothing_is_refused_before_anything_moves() {
+    let deploy = vec!["lambda", "deploy", SHA];
+    let republish = vec!["lambda", "republish"];
+    each_row(
+        [
+            (deploy.clone(), [true, true, true]),
+            (republish.clone(), [true, true, true]),
+            (deploy, [true, false, false]),
+            (republish.clone(), [false, true, false]),
+            (republish, [false, false, true]),
+        ],
+        |(args, unchanged)| {
+            let stubs = Stubs::new(Posture {
+                image_in_ecr: true,
+                publish_answers_live: *unchanged,
+                ..Posture::default()
+            });
+
+            let run = stubs.run(args, &[], "");
+
+            assert_ne!(run.status, 0, "{}\n{}", run.out, stubs.calls());
+            assert_refused(&run);
+            let refusal = run
+                .out
+                .lines()
+                .find(|line| line.contains("nothing changed"))
+                .unwrap_or_else(|| panic!("it says nothing changed\n{}", run.out));
+            for (function, unchanged) in FUNCTIONS.iter().zip(unchanged) {
+                assert_eq!(refusal.contains(function), *unchanged, "{refusal}");
+            }
+            let calls = stubs.calls();
+            assert_eq!(calls.matches("publish-version").count(), 3, "{calls}");
+            assert!(!called(&calls, &["update-alias"]), "{calls}");
+            assert!(!called(&calls, &["lambda invoke"]), "{calls}");
+        },
+    );
 }
 
 /// Crafter-owned (step 08-09). `resume` has no scenario, since only a real host

@@ -290,6 +290,29 @@ publish_versions() {
   done
 }
 
+# The functions whose publish answered with the version `live` already holds (pure, on the two
+# version arrays). Lambda does that when code and configuration are unchanged.
+unchanged_functions() {
+  local i
+  for i in "${!LAMBDA_FUNCTIONS[@]}"; do
+    if [ "${NEW_VERSIONS[$i]}" = "${LIVE_VERSIONS[$i]}" ]; then
+      echo "${LAMBDA_FUNCTIONS[$i]}"
+    fi
+  done
+}
+
+# A flip to the version `live` already holds would write a prev= naming that version, and the real
+# rollback target would be gone. Any one is enough to refuse: a function that is ahead of the
+# others from a half-finished flip reads the same as an unchanged one, and its prev= is what a
+# by-hand recovery needs. Nothing has moved yet, so the aliases stay as they are.
+refuse_a_publish_that_changed_nothing() {
+  local unchanged
+  unchanged=$(unchanged_functions)
+  [ -z "$unchanged" ] ||
+    die "refusing: nothing changed for ${unchanged//$'\n'/, }: each still answers with the" \
+      "version live holds, so a flip would lose its rollback target; no alias moved"
+}
+
 point_candidate_at() { # $1 = version
   aws lambda update-alias --region "$REGION" --function-name "$LAMBDA_SEARCH" --name candidate \
     --function-version "$1" >/dev/null
@@ -606,6 +629,7 @@ prune_old_versions() {
 # Steps 10-16: everything after every $LATEST holds its image and the versions are published.
 # A deploy and a republish share these, so a republish passes the gates a deploy passes.
 gate_and_flip() {
+  refuse_a_publish_that_changed_nothing
   move_candidate
   candidate_checks
   pass_gate
