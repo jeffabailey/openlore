@@ -169,7 +169,6 @@ fn the_index_reports_when_the_copy_it_serves_was_published() {
 ///   And after one more publish the instance still keeps at most two index sizes in its scratch space
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (freshness gate + reload)"]
 fn a_warm_instance_picks_up_a_newly_published_claim_within_a_minute() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = given_a_warm_instance_serving_priyas_claim(&world);
@@ -228,7 +227,6 @@ fn a_warm_instance_picks_up_a_newly_published_claim_within_a_minute() {
 ///   And the instance checked the store once per minute and downloaded nothing
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (freshness gate)"]
 fn when_nothing_was_published_a_warm_instance_only_checks_and_keeps_its_copy() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = given_a_warm_instance_serving_priyas_claim(&world);
@@ -291,7 +289,6 @@ fn after_the_operator_resets_the_index_warm_instances_answer_empty_until_the_nex
 ///   Then every search is answered with Priya's claim, and none is told to slow down
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (search mode without the per-client limiter)"]
 fn serial_searches_from_one_client_are_all_answered() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = given_a_warm_instance_serving_priyas_claim(&world);
@@ -372,7 +369,6 @@ fn a_warm_instance_on_a_fresh_deployment_picks_up_the_first_published_index() {
 ///   Then both find it, 56 seconds after the publish
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (freshness gate + reload)"]
 fn two_warm_instances_disagree_for_at_most_about_a_minute_after_a_publish() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let first = given_a_warm_instance_serving_priyas_claim(&world);
