@@ -1253,7 +1253,6 @@ fn at_most_three_searches_run_at_once_and_a_stop_survives_an_apply() {
 ///   And the new versions pass the candidate and gate checks before live flips
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda republish"]
 fn a_republish_carries_the_image_already_live() {
     let stubs = Stubs::new(Posture {
         image_in_ecr: true,
@@ -1695,7 +1694,6 @@ fn a_rollback_with_no_recorded_version_is_refused() {
 ///   Then the republish is refused, and no version is published and no alias moved
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda republish"]
 fn a_republish_that_does_not_hold_the_image_already_live_is_refused() {
     let stubs = Stubs::new(Posture {
         image_in_ecr: true,
@@ -1806,7 +1804,6 @@ fn a_gate_waits_for_a_running_pass_or_probe_and_gives_up_with_nothing_flipped() 
 ///   Then the republish is refused, and no function changed
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda republish"]
 fn a_republish_of_an_image_that_left_the_registry_is_refused() {
     let stubs = Stubs::new(Posture::default());
 
@@ -2207,7 +2204,6 @@ fn the_status_report_looks_for_the_search_error_metric_where_a_test_put_it() {
 ///   Then the republish is refused, and no function changed
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda republish"]
 fn a_republish_that_cannot_read_the_live_image_is_refused() {
     let stubs = Stubs::new(Posture {
         image_in_ecr: true,

@@ -6,6 +6,8 @@
 # rules are the same on both paths.
 #
 #   lambda deploy <git-sha|digest>   blue-green by alias: every gate in order, `live` flips last
+#   lambda republish                 each function's live image again, through the same gates and
+#                                    flips, so a config change reaches `live` (U-STZ-2)
 #   lambda rollback                  every `live` back to its recorded prev=, `candidate` following
 #
 # Each step below does I/O and stops the deploy with `die`. Decisions are in plain predicates
@@ -28,6 +30,8 @@ MAX_EDGE_GAP_MS=30000
 
 COPIED_DIGEST=""      # step 6: set while this run's copy is not yet on every $LATEST
 LIVE_VERSIONS=()      # step 7, or a rollback: what each `live` alias holds now
+IMAGE_DIGESTS=()      # what each function is set to: a deploy's build, or its own live image
+IMAGE_SHAS=()         # the git sha of each of those, for the records
 LATEST_REVISIONS=()   # step 8: each $LATEST's revision, to publish without a race
 NEW_VERSIONS=()       # step 9, or a rollback: the version each function will flip to
 CANDIDATE_BACK_TO=""  # step 10: set while `candidate` is ahead of a `live` that has not flipped
@@ -166,37 +170,42 @@ live_version() { # $1 = function
 
 # Step 7: the versions and the index id every later rollback or restore starts from.
 record_rollback_targets() {
-  local function
+  local function version
   for function in "${LAMBDA_FUNCTIONS[@]}"; do
-    LIVE_VERSIONS+=("$(live_version "$function")")
+    version=$(live_version "$function") || die "refusing: could not read the live alias of $function"
+    LIVE_VERSIONS+=("$version")
   done
   INDEX_VERSION=$(index_head | jq -r '.VersionId // "none"')
 }
 
 # Step 8. Nothing invokes $LATEST, so this is invisible to traffic.
-update_images() { # $1 = digest
-  local function config code_sha
-  for function in "${LAMBDA_FUNCTIONS[@]}"; do
-    aws lambda update-function-code --region "$REGION" --function-name "$function" \
-      --image-uri "$ECR_REPO@$1" >/dev/null
+update_images() {
+  local i function digest config code_sha
+  for i in "${!LAMBDA_FUNCTIONS[@]}"; do
+    aws lambda update-function-code --region "$REGION" --function-name "${LAMBDA_FUNCTIONS[$i]}" \
+      --image-uri "$ECR_REPO@${IMAGE_DIGESTS[$i]}" >/dev/null
   done
-  for function in "${LAMBDA_FUNCTIONS[@]}"; do
+  for i in "${!LAMBDA_FUNCTIONS[@]}"; do
+    function=${LAMBDA_FUNCTIONS[$i]}
+    digest=${IMAGE_DIGESTS[$i]}
     aws lambda wait function-updated-v2 --region "$REGION" --function-name "$function"
     config=$(aws lambda get-function-configuration --region "$REGION" --function-name "$function")
     code_sha=$(jq -r .CodeSha256 <<<"$config")
-    [ "$code_sha" = "${1#sha256:}" ] ||
-      die "refusing: $function \$LATEST holds $code_sha, not $1"
+    [ "$code_sha" = "${digest#sha256:}" ] ||
+      die "refusing: $function \$LATEST holds $code_sha, not $digest"
     LATEST_REVISIONS+=("$(jq -r .RevisionId <<<"$config")")
   done
 }
 
 # Step 9, with --code-sha256 and --revision-id so a concurrent change cannot slip in.
-publish_versions() { # $1 = digest, $2 = git sha
-  local i version
+publish_versions() {
+  local i digest version
   for i in "${!LAMBDA_FUNCTIONS[@]}"; do
+    digest=${IMAGE_DIGESTS[$i]}
     version=$(aws lambda publish-version --region "$REGION" \
-      --function-name "${LAMBDA_FUNCTIONS[$i]}" --code-sha256 "${1#sha256:}" \
-      --revision-id "${LATEST_REVISIONS[$i]}" --description "$2 $1" | jq -r .Version)
+      --function-name "${LAMBDA_FUNCTIONS[$i]}" --code-sha256 "${digest#sha256:}" \
+      --revision-id "${LATEST_REVISIONS[$i]}" --description "${IMAGE_SHAS[$i]} $digest" |
+      jq -r .Version)
     aws lambda wait published-version-active --region "$REGION" \
       --function-name "${LAMBDA_FUNCTIONS[$i]}" --qualifier "$version"
     NEW_VERSIONS+=("$version")
@@ -316,9 +325,9 @@ live_record() { # $1 = function -> the description of its `live` alias
 }
 
 # Moves `live` and records what it replaced (L-13); $2 is appended for the pass's index id.
-flip_live() { # $1 = index into LAMBDA_FUNCTIONS, $2 = digest, $3 = git sha, $4 = extra record
+flip_live() { # $1 = index into LAMBDA_FUNCTIONS, $2 = extra record
   move_live "${LAMBDA_FUNCTIONS[$1]}" "${NEW_VERSIONS[$1]}" \
-    "prev=${LIVE_VERSIONS[$1]} $3 $2 $(date -u +%FT%TZ)${4:+ $4}"
+    "prev=${LIVE_VERSIONS[$1]} ${IMAGE_SHAS[$1]} ${IMAGE_DIGESTS[$1]} $(date -u +%FT%TZ)${2:+ $2}"
 }
 
 distribution_domain() {
@@ -428,21 +437,21 @@ flip_search_back() { # $1 = the description `live` had before the flip
 }
 
 # Step 14: search flips first, watched from 5 s before the flip until the edge checks end.
-flip_search() { # $1 = digest, $2 = git sha
+flip_search() {
   local edge flipped_at record
   edge=$(edge_url)
   record=$(live_record "$LAMBDA_SEARCH")
   start_edge_poller "$edge"
   sleep 5
   flipped_at=$(now_ms)
-  flip_live 0 "$1" "$2"
+  flip_live 0
   CANDIDATE_BACK_TO="" # `live` has caught up, so a stop from here is the flip's to undo
   edge_holds_up "$edge" "$flipped_at" || flip_search_back "$record"
 }
 
-flip_pass_and_probe() { # step 15; $1 = digest, $2 = git sha
-  flip_live 1 "$1" "$2" "idx=$INDEX_VERSION"
-  flip_live 2 "$1" "$2"
+flip_pass_and_probe() { # step 15
+  flip_live 1 "idx=$INDEX_VERSION"
+  flip_live 2
 }
 
 flip_summary() {
@@ -452,9 +461,9 @@ flip_summary() {
   done
 }
 
-deploy_summary() { # step 16; $1 = digest
+deploy_summary() { # step 16
   flip_summary
-  echo "digest $1"
+  printf 'digest %s\n' "${IMAGE_DIGESTS[@]}" | sort -u
   echo "flip to first 200: ${FLIP_TO_FIRST_200_MS:-n/a} ms; longest gap: $EDGE_GAP_MS ms"
   echo "would_publish: $WOULD_PUBLISH"
   echo "pre-publish index version: $INDEX_VERSION"
@@ -493,30 +502,83 @@ prune_old_versions() {
   done
 }
 
-lambda_deploy() { # $1 = git sha or digest
-  read_build_ref "${1:-}"
-  lambda_preflight
+# Steps 10-16: everything after every $LATEST holds its image and the versions are published.
+# A deploy and a republish share these, so a republish passes the gates a deploy passes.
+gate_and_flip() {
+  move_candidate
+  candidate_checks
+  pass_gate
+  probe_gate
+  flip_search
+  flip_pass_and_probe
+  deploy_summary
+  prune_old_versions
+}
+
+prepare_run() {
   LAMBDA_WORK=$(mktemp -d)
   CLEANUP_PATHS+=("$LAMBDA_WORK")
   EDGE_POLL_LOG=$LAMBDA_WORK/edge-poll
   trap 'discard_failed_copy; put_candidate_back; cleanup' EXIT
+}
+
+lambda_deploy() { # $1 = git sha or digest
+  read_build_ref "${1:-}"
+  lambda_preflight
+  prepare_run
   verify_build
   local digest="$BUILD_DIGEST" sha="$BUILD_SHA"
   refuse_unless_lambda_capable "$digest"
   ecr_copy "$digest" "$sha"
   record_rollback_targets
-  update_images "$digest"
+  local function
+  for function in "${LAMBDA_FUNCTIONS[@]}"; do
+    IMAGE_DIGESTS+=("$digest")
+    IMAGE_SHAS+=("$sha")
+  done
+  update_images
   COPIED_DIGEST="" # every $LATEST holds it now, so it stays whatever happens next
-  publish_versions "$digest" "$sha"
-  move_candidate
-  candidate_checks
-  pass_gate
-  probe_gate
-  flip_search "$digest" "$sha"
-  flip_pass_and_probe "$digest" "$sha"
-  deploy_summary "$digest"
-  prune_old_versions
+  publish_versions
+  gate_and_flip
   echo "deployed $IMAGE@$digest to Lambda"
+}
+
+# The sha a version was published with, the first word of its description (pure).
+# stdin = get-function JSON. A version this script did not publish names none.
+version_sha() {
+  jq -r '(.Configuration.Description // "" | split(" ")[0]) // "unknown"'
+}
+
+# What one function carries: the image of the version step 7 read, not of the alias, which could
+# have moved since. Refuses, and never falls back: `$LATEST` may hold an unflipped image, and a
+# prev= record names the version before this one. Runs for all three before any function changes.
+read_live_image() { # $1 = index into LAMBDA_FUNCTIONS
+  local function=${LAMBDA_FUNCTIONS[$1]} version=${LIVE_VERSIONS[$1]} answer digest
+  answer=$(aws lambda get-function --region "$REGION" --function-name "$function" \
+    --qualifier "$version") || die "refusing: could not read version $version of $function"
+  digest=$(image_digest <<<"$answer") || die "refusing: version $version of $function names no image"
+  ecr_holds "$digest" || die "refusing: ECR does not hold $digest, the live image of $function"
+  IMAGE_DIGESTS+=("$digest")
+  IMAGE_SHAS+=("$(version_sha <<<"$answer")")
+}
+
+# U-STZ-2: a published version snapshots the function's configuration, so a tofu change reaches
+# `live` only through a new version. Each function keeps its own live image, which after a
+# partial flip is not the same image everywhere. No CI or cosign gate: it was verified when
+# deployed. No copy either, so the EXIT trap has no image to discard.
+lambda_republish() {
+  [ "$#" = 0 ] || die "refusing: republish takes no arguments, got '$*'"
+  lambda_preflight
+  prepare_run
+  record_rollback_targets
+  local i
+  for i in "${!LAMBDA_FUNCTIONS[@]}"; do
+    read_live_image "$i"
+  done
+  update_images
+  publish_versions
+  gate_and_flip
+  echo "republished the live images to Lambda"
 }
 
 # What one function goes back to. Refuses a missing record or a missing image, so this runs for
@@ -575,7 +637,8 @@ lambda_main() {
   shift || true
   case "$verb" in
     deploy) lambda_deploy "$@" ;;
+    republish) lambda_republish "$@" ;;
     rollback) lambda_rollback "$@" ;;
-    *) die "usage: deploy.sh lambda deploy <git-sha|digest> | rollback" ;;
+    *) die "usage: deploy.sh lambda deploy <git-sha|digest> | republish | rollback" ;;
   esac
 }
