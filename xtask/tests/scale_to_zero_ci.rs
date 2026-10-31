@@ -1,12 +1,13 @@
-//! Crafter-owned checks of `deploy/tofu/environments/prod-indexer`: the settings
-//! the DEVOPS tables fix that no scenario pins. Each is a row, read whole, so `1`
-//! is not `10`. Nothing here runs tofu or reaches AWS.
+//! Crafter-owned checks of `deploy/tofu/environments/prod-indexer` and of the image
+//! CI builds for it: the settings the DEVOPS tables fix that no scenario pins. Each
+//! is a row, read whole, so `1` is not `10`. Nothing here runs tofu or reaches AWS.
 //!
 //! The reader repeats the small one in `scale_to_zero_platform.rs`, which is a
 //! DISTILL suite and has no library to share it through.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const PROD_INDEXER_ROOT: &str = "deploy/tofu/environments/prod-indexer";
 const FUNCTIONS: [&str; 3] = ["search", "pass", "probe"];
@@ -1380,4 +1381,197 @@ fn the_static_checks_cover_the_new_root_without_credentials() {
     ] {
         assert!(!workflow.contains(refused), "{refused}");
     }
+}
+
+/// A job of the workflow: its lines up to the next line indented like a job.
+fn job<'a>(workflow: &'a str, name: &str) -> &'a str {
+    let opening = format!("\n  {name}:\n");
+    let start = workflow
+        .find(&opening)
+        .unwrap_or_else(|| panic!("no job {name}"))
+        + opening.len();
+    let body = &workflow[start..];
+    let end = body
+        .match_indices('\n')
+        .map(|(at, _)| at + 1)
+        .find(|&at| {
+            let line = &body[at..];
+            line.starts_with("  ") && !line.starts_with("   ")
+        })
+        .unwrap_or(body.len());
+    &body[..end]
+}
+
+/// The steps of a job, in order, each with its own lines.
+fn steps(job: &str) -> Vec<&str> {
+    let starts: Vec<usize> = job
+        .match_indices("\n      - ")
+        .map(|(at, _)| at + 1)
+        .collect();
+    let ends = starts.iter().skip(1).copied().chain([job.len()]);
+    starts.iter().zip(ends).map(|(&s, e)| &job[s..e]).collect()
+}
+
+/// Where the first step holding `needle` stands in its job.
+fn step_at(steps: &[&str], needle: &str) -> usize {
+    steps
+        .iter()
+        .position(|step| step.contains(needle))
+        .unwrap_or_else(|| panic!("no step holds {needle}"))
+}
+
+/// The script of a `run: |` step, unindented.
+fn script(step: &str) -> String {
+    let (_, block) = step.split_once("run: |\n").expect("a run block");
+    block
+        .lines()
+        .map(|line| line.strip_prefix("          ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The lines of a step's script that run this command, read whole.
+fn lines_running<'a>(job: &'a str, command: &str) -> Vec<&'a str> {
+    job.lines()
+        .map(str::trim)
+        .filter(|line| line.contains(command))
+        .filter(|line| !line.starts_with("- name:") && !line.starts_with('#'))
+        .collect()
+}
+
+const ARTIFACT_CHECK: &str = "Artifact check (the self-host binary is AWS-free)";
+
+/// D-STZ-24, R-STZ-9. The first main-push CI run is the real proof; this holds the
+/// files to it. `--version` is not the Lambda binary's word, so its smoke asserts the
+/// refusal only a binary that loaded and ran can print.
+#[test]
+fn the_image_carries_both_binaries_and_the_self_host_stays_clean() {
+    let dockerfile: BTreeSet<String> = read("crates/openlore-indexer/Dockerfile")
+        .lines()
+        .map(|line| line.trim().to_string())
+        .collect();
+    for line in [
+        "COPY --chmod=0555 openlore-indexer openlore-indexer-lambda /usr/local/bin/",
+        "WORKDIR /",
+        r#"org.openlore.indexer.lambda-root="1""#,
+        "USER 65532:65532",
+        r#"ENTRYPOINT ["/usr/local/bin/openlore-indexer"]"#,
+        r#"CMD ["serve"]"#,
+    ] {
+        assert!(dockerfile.contains(line), "the Dockerfile has `{line}`");
+    }
+
+    let ci = read(".github/workflows/ci.yml");
+    let build = job(&ci, "indexer-build");
+    assert_eq!(
+        lines_running(build, "cargo build"),
+        [
+            "run: cargo build --release -p openlore-indexer",
+            "run: cargo build --release -p openlore-indexer-lambda",
+        ],
+        "two invocations: one would unify the SDK's features into the self-host binary"
+    );
+    let stage = steps(build);
+    let staged = stage[step_at(&stage, "cargo cyclonedx")];
+    assert!(staged.contains("for crate in openlore-indexer openlore-indexer-lambda; do"));
+    for line in [
+        r#"strip "target/release/$crate""#,
+        r#"cp "target/release/$crate" out/"#,
+        r#"--manifest-path "crates/$crate/Cargo.toml""#,
+        r#"cp "crates/$crate/sbom.json" "out/$crate.cdx.json""#,
+    ] {
+        assert!(staged.contains(line), "{line}");
+    }
+    let staged_at = step_at(&stage, "cargo cyclonedx");
+    let checked_at = step_at(&stage, ARTIFACT_CHECK);
+    let uploaded_at = step_at(&stage, "actions/upload-artifact");
+    assert!(
+        staged_at < checked_at && checked_at < uploaded_at,
+        "no artifact leaves unchecked"
+    );
+
+    let image = steps(job(&ci, "indexer-image"));
+    let built_at = step_at(&image, "docker buildx build");
+    let lambda_at = step_at(
+        &image,
+        "--entrypoint /usr/local/bin/openlore-indexer-lambda",
+    );
+    let bundle_at = step_at(&image, "/etc/ssl/certs/ca-certificates.crt");
+    let serve_at = step_at(&image, "- name: serve-smoke (production posture)");
+    let scanned_at = step_at(&image, "aquasecurity/trivy-action");
+    let pushed_at = step_at(&image, "docker push");
+    assert!(built_at < lambda_at && built_at < bundle_at && built_at < serve_at);
+    assert!(lambda_at < scanned_at && bundle_at < scanned_at && serve_at < scanned_at);
+    assert!(scanned_at < pushed_at, "nothing is pushed unsmoked");
+    assert!(image[step_at(&image, "Smoke (dynamic linking)")].contains(r#""$LOCAL_TAG" --version"#));
+    assert!(image[serve_at].contains(r#""$LOCAL_TAG" serve"#));
+    let lambda_smoke = image[lambda_at];
+    assert!(lambda_smoke.contains(r#""$LOCAL_TAG" --version"#));
+    assert!(lambda_smoke.contains(r#"[ "$rc" = 2 ]"#));
+    assert!(lambda_smoke.contains("health.startup.refused"));
+    let bundle_smoke = image[bundle_at];
+    assert!(
+        bundle_smoke.contains(r#"docker cp -L "$c:$bundle""#),
+        "out of the image itself"
+    );
+    assert!(
+        bundle_smoke.contains("BEGIN CERTIFICATE"),
+        "a bundle, not a file"
+    );
+
+    let attested = job(&ci, "indexer-image");
+    assert_eq!(
+        lines_running(attested, "cosign attest"),
+        [
+            r#"cosign attest --yes --type cyclonedx --predicate "$RUNNER_TEMP/cargo.cdx.json" "$IMAGE@$DIGEST""#,
+            r#"cosign attest --yes --type cyclonedx --predicate "$RUNNER_TEMP/cargo-lambda.cdx.json" "$IMAGE@$DIGEST""#,
+            r#"cosign attest --yes --type cyclonedx --predicate "$RUNNER_TEMP/image.cdx.json" "$IMAGE@$DIGEST""#,
+        ],
+        "three SBOMs on the one digest"
+    );
+    assert_eq!(lines_running(attested, "cosign sign").len(), 1);
+    assert!(attested.contains(
+        r#"mv "$RUNNER_TEMP/ctx/openlore-indexer-lambda.cdx.json" "$RUNNER_TEMP/cargo-lambda.cdx.json""#
+    ));
+    assert!(attested.contains("deploy/indexer/deploy.sh lambda deploy ${GITHUB_SHA}"));
+}
+
+/// The check itself, run on planted binaries: a string fails the build, an unreadable
+/// binary is no pass, and a check that cannot see the strings in the Lambda binary
+/// proves nothing about the self-host one.
+#[test]
+fn a_self_host_binary_holding_an_aws_string_fails_the_build() {
+    const LAMBDA: &[u8] = b"\x7fELF\0registry/aws-smithy-runtime-1.16.2/src/lib.rs\0";
+    const CLEAN: &[u8] = b"\x7fELF\0registry/rustls-0.23.46/src/lib.rs\0aws\0lambda\0";
+    let ci = read(".github/workflows/ci.yml");
+    let build = steps(job(&ci, "indexer-build"));
+    let check = script(build[step_at(&build, ARTIFACT_CHECK)]);
+    let exits_zero = |self_host: Option<&[u8]>, lambda: &[u8]| {
+        let dir = tempfile::tempdir().expect("a directory");
+        let out = dir.path().join("out");
+        std::fs::create_dir(&out).expect("out");
+        if let Some(bytes) = self_host {
+            std::fs::write(out.join("openlore-indexer"), bytes).expect("the binary");
+        }
+        std::fs::write(out.join("openlore-indexer-lambda"), lambda).expect("the binary");
+        Command::new("bash")
+            .args(["-c", &check])
+            .current_dir(dir.path())
+            .status()
+            .expect("bash")
+            .success()
+    };
+
+    assert!(exits_zero(Some(CLEAN), LAMBDA), "a clean binary passes");
+    for planted in [
+        "aws-sdk-s3",
+        "aws-smithy-types",
+        "aws-lc-sys",
+        "lambda_runtime",
+    ] {
+        let dirty = [CLEAN, planted.as_bytes(), b"\0"].concat();
+        assert!(!exits_zero(Some(&dirty), LAMBDA), "{planted}");
+    }
+    assert!(!exits_zero(None, LAMBDA), "no binary is no pass");
+    assert!(!exits_zero(Some(CLEAN), CLEAN), "a blind check is no pass");
 }

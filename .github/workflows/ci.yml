@@ -414,19 +414,38 @@ jobs:
       - name: cargo build --release -p openlore-indexer
         # No --locked: Cargo.lock is gitignored in this workspace (same as release.yml).
         run: cargo build --release -p openlore-indexer
+      - name: cargo build --release -p openlore-indexer-lambda
+        # Its own invocation: built together, Cargo would unify the AWS SDK's features into
+        # the self-host binary's dependencies (R-STZ-9).
+        run: cargo build --release -p openlore-indexer-lambda
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-cyclonedx@0.5.9
-      - name: Stage binary + CycloneDX SBOM
+      - name: Stage both binaries + CycloneDX SBOMs
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
-          strip target/release/openlore-indexer
-          cp target/release/openlore-indexer out/
-          # cargo-cyclonedx 0.5.x: scope with --manifest-path (see release.yml).
-          cargo cyclonedx --format json --manifest-path crates/openlore-indexer/Cargo.toml --override-filename sbom
-          cp crates/openlore-indexer/sbom.json out/openlore-indexer.cdx.json
+          for crate in openlore-indexer openlore-indexer-lambda; do
+            strip "target/release/$crate"
+            cp "target/release/$crate" out/
+            # cargo-cyclonedx 0.5.x: scope with --manifest-path (see release.yml).
+            cargo cyclonedx --format json --manifest-path "crates/$crate/Cargo.toml" --override-filename sbom
+            cp "crates/$crate/sbom.json" "out/$crate.cdx.json"
+          done
+      # A second layer behind the xtask rule (blocking). The Lambda binary is the control:
+      # a check that cannot see these strings there proves nothing here. Only grep's exit 1,
+      # no match, is a pass, so an unreadable binary is not.
+      - name: Artifact check (the self-host binary is AWS-free)
+        shell: bash
+        run: |
+          set -euo pipefail
+          strings='aws-sdk-|aws-smithy-|aws-lc|lambda_runtime'
+          LC_ALL=C grep -a -q -E "$strings" out/openlore-indexer-lambda \
+            || { echo "::error::the check found no AWS string in the Lambda binary"; exit 1; }
+          rc=0
+          found=$(LC_ALL=C grep -a -o -E "$strings" out/openlore-indexer | sort -u) || rc=$?
+          [ "$rc" = 1 ] || { echo "::error::the self-host binary is not AWS-free: ${found:-unreadable}"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: openlore-indexer-aarch64
@@ -459,6 +478,7 @@ jobs:
         run: |
           set -euo pipefail
           mv "$RUNNER_TEMP/ctx/openlore-indexer.cdx.json" "$RUNNER_TEMP/cargo.cdx.json"
+          mv "$RUNNER_TEMP/ctx/openlore-indexer-lambda.cdx.json" "$RUNNER_TEMP/cargo-lambda.cdx.json"
           docker buildx build --platform linux/arm64 --load \
             -f crates/openlore-indexer/Dockerfile \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
@@ -466,6 +486,31 @@ jobs:
 
       - name: Smoke (dynamic linking)
         run: docker run --rm "$LOCAL_TAG" --version
+
+      # The Lambda binary takes only a mode, so --version reaches its refusal: exit 2 and a
+      # health.startup.refused line, which only a binary that loaded and ran can print.
+      - name: Smoke (dynamic linking, the Lambda binary)
+        run: |
+          set -euo pipefail
+          set +e
+          out=$(timeout 30 docker run --rm --entrypoint /usr/local/bin/openlore-indexer-lambda "$LOCAL_TAG" --version 2>&1)
+          rc=$?
+          set -e
+          [ "$rc" = 2 ] || { echo "::error::the Lambda binary exited $rc, wanted 2: $out"; exit 1; }
+          grep -q 'health.startup.refused' <<<"$out" \
+            || { echo "::error::no health.startup.refused: $out"; exit 1; }
+
+      # The HTTP client loads native root certificates and panics with none. The image has no
+      # shell, so the file is copied out of a created container and read here.
+      - name: Smoke (the image holds a CA bundle)
+        run: |
+          set -euo pipefail
+          bundle=/etc/ssl/certs/ca-certificates.crt
+          c=$(docker create "$LOCAL_TAG")
+          docker cp -L "$c:$bundle" "$RUNNER_TEMP/ca-bundle.crt"
+          docker rm "$c" >/dev/null
+          grep -q 'BEGIN CERTIFICATE' "$RUNNER_TEMP/ca-bundle.crt" \
+            || { echo "::error::$bundle holds no certificate"; exit 1; }
 
       # serve-smoke (blocking; AS-56): the production posture of deploy/indexer/host/compose.yaml
       # with one unresolvable DID. healthz, the two-route surface, the 8 KB body cap, one
@@ -593,12 +638,13 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
 
-      - name: Attest SBOMs (cargo + image, cosign)
+      - name: Attest SBOMs (both cargo + image, cosign)
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           set -euo pipefail
           cosign attest --yes --type cyclonedx --predicate "$RUNNER_TEMP/cargo.cdx.json" "$IMAGE@$DIGEST"
+          cosign attest --yes --type cyclonedx --predicate "$RUNNER_TEMP/cargo-lambda.cdx.json" "$IMAGE@$DIGEST"
           cosign attest --yes --type cyclonedx --predicate "$RUNNER_TEMP/image.cdx.json" "$IMAGE@$DIGEST"
 
       - name: Attest build provenance (SLSA)
@@ -618,4 +664,5 @@ jobs:
             echo "- tags: \`sha-${GITHUB_SHA}\`, \`main\`"
             echo "- serve-smoke: passed"
             echo "- deploy (laptop): \`deploy/indexer/deploy.sh deploy ${GITHUB_SHA}\`"
+            echo "- lambda deploy (laptop): \`deploy/indexer/deploy.sh lambda deploy ${GITHUB_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
