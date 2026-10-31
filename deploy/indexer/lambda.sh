@@ -21,8 +21,10 @@ ECR_REPO=$ECR_REGISTRY/openlore-indexer
 INDEX_BUCKET=openlore-indexer-index-$LAMBDA_ACCOUNT
 INDEX_KEY=index/index.duckdb
 RETAINED_VERSIONS=5
+RETAINED_IMAGES=10 # the ECR lifecycle's count of sha-* images
 MAX_EDGE_GAP_MS=30000
 
+COPIED_DIGEST=""      # step 6: set while this run's copy is not yet on every $LATEST
 LIVE_VERSIONS=()      # step 7: what each `live` alias holds now
 LATEST_REVISIONS=()   # step 8: each $LATEST's revision, to publish without a race
 NEW_VERSIONS=()       # step 9: the version each function will flip to
@@ -66,6 +68,60 @@ ecr_login() {
   crane auth login "$ECR_REGISTRY" -u AWS --password-stdin <<<"$password"
 }
 
+# The sha-* images one more push would take past the lifecycle's count, because the lifecycle
+# counts pushes and knows nothing about aliases (pure). stdin = describe-images JSON -> digests.
+evicted_digests() {
+  jq -r --argjson keep "$RETAINED_IMAGES" '
+    [.imageDetails[]? | select(any(.imageTags[]?; startswith("sha-")))]
+    | sort_by(.imagePushedAt) | reverse | .[($keep - 1):][].imageDigest'
+}
+
+alias_versions() { # $1 = function, $2 = alias -> the version it holds and the one it records
+  aws lambda get-alias --region "$REGION" --function-name "$1" --name "$2" |
+    jq -r '.FunctionVersion, (.Description // "" | capture("prev=(?<v>[0-9]+)").v)'
+}
+
+# Lambda resolves a tag to a digest at create time, so ResolvedImageUri is the one to trust.
+image_digest() { # stdin = get-function JSON -> the digest; fails if it names none
+  jq -er '(.Code.ResolvedImageUri // .Code.ImageUri) | split("@")[1]'
+}
+
+function_references() { # $1 = function -> the digests of its aliases, its prev= and its $LATEST
+  local versions version answer
+  versions=$(alias_versions "$1" live) || return 1
+  if [ "$1" = "$LAMBDA_SEARCH" ]; then
+    versions+=$'\n'$(alias_versions "$1" candidate) || return 1
+  fi
+  versions=$(sort -u <<<"$versions")
+  for version in $versions; do
+    answer=$(aws lambda get-function --region "$REGION" --function-name "$1" \
+      --qualifier "$version") || return 1
+    image_digest <<<"$answer" || return 1
+  done
+  answer=$(aws lambda get-function --region "$REGION" --function-name "$1") || return 1
+  image_digest <<<"$answer" || return 1
+}
+
+# U-STZ-9: what an image must not leave ECR for. Returns non-zero rather than dying, because the
+# failed-copy cleanup runs in the EXIT trap and must not stop `cleanup`.
+referenced_digests() {
+  local function
+  for function in "${LAMBDA_FUNCTIONS[@]}"; do
+    function_references "$function" || return 1
+  done
+}
+
+refuse_evicting_a_referenced_image() {
+  local images evicted referenced in_use
+  images=$(aws ecr describe-images --region "$REGION" --repository-name openlore-indexer)
+  evicted=$(evicted_digests <<<"$images")
+  [ -n "$evicted" ] || return 0
+  referenced=$(referenced_digests) ||
+    die "refusing: could not read which images the functions reference"
+  in_use=$(grep -Fxf <(echo "$referenced") <<<"$evicted" || true)
+  [ -z "$in_use" ] || die "refusing: this copy would push $in_use out of ECR, and it is in use"
+}
+
 # Step 6. A tag is immutable, so a second copy would fail: copy only what ECR does not hold.
 ecr_copy() { # $1 = digest, $2 = git sha
   local copied
@@ -73,10 +129,31 @@ ecr_copy() { # $1 = digest, $2 = git sha
     echo "ECR already holds $1"
     return 0
   fi
+  refuse_evicting_a_referenced_image
   ecr_login
   crane copy "$IMAGE@$1" "$ECR_REPO:sha-$2"
   copied=$(crane digest "$ECR_REPO:sha-$2")
   [ "$copied" = "$1" ] || die "refusing: the copy in ECR is '$copied', not $1"
+  COPIED_DIGEST=$1
+}
+
+# A deploy that stopped before step 8 finished gives its retention slot back, if nothing needs
+# the image. When that cannot be read, the copy stays: a spare image costs one slot, and a
+# deleted one in use costs new instances of that version.
+discard_failed_copy() {
+  [ -n "$COPIED_DIGEST" ] || return 0
+  local referenced
+  if ! referenced=$(referenced_digests); then
+    echo "deploy.sh: could not read references; keeping $COPIED_DIGEST in ECR" >&2
+    return 0
+  fi
+  if grep -Fxq "$COPIED_DIGEST" <<<"$referenced"; then
+    echo "deploy.sh: keeping $COPIED_DIGEST in ECR: it is referenced" >&2
+    return 0
+  fi
+  aws ecr batch-delete-image --region "$REGION" --repository-name openlore-indexer \
+    --image-ids "imageDigest=$COPIED_DIGEST" >/dev/null ||
+    echo "deploy.sh: could not delete $COPIED_DIGEST from ECR" >&2
 }
 
 live_version() { # $1 = function
@@ -351,12 +428,14 @@ lambda_deploy() { # $1 = git sha or digest
   LAMBDA_WORK=$(mktemp -d)
   CLEANUP_PATHS+=("$LAMBDA_WORK")
   EDGE_POLL_LOG=$LAMBDA_WORK/edge-poll
+  trap 'discard_failed_copy; cleanup' EXIT
   verify_build
   local digest="$BUILD_DIGEST" sha="$BUILD_SHA"
   refuse_unless_lambda_capable "$digest"
   ecr_copy "$digest" "$sha"
   record_rollback_targets
   update_images "$digest"
+  COPIED_DIGEST="" # every $LATEST holds it now, so it stays whatever happens next
   publish_versions "$digest" "$sha"
   move_candidate
   candidate_checks

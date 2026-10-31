@@ -190,6 +190,10 @@ struct Posture {
     candidate_5xx_seen: bool,
     /// Whether `update-function-code` fails.
     code_update_fails: bool,
+    /// Whether `live`, `candidate` and the `prev=` record hold the digest being
+    /// deployed. Otherwise they hold another one, so the deploy's own digest is
+    /// referenced only where a scenario says so.
+    live_runs_the_build: bool,
 }
 
 impl Default for Posture {
@@ -215,6 +219,7 @@ impl Default for Posture {
             latest_holds_the_build: false,
             candidate_5xx_seen: true,
             code_update_fails: false,
+            live_runs_the_build: true,
         }
     }
 }
@@ -424,7 +429,7 @@ fn aws(posture: Posture, digest: &str) -> String {
     let repo = "091153021562.dkr.ecr.us-east-1.amazonaws.com/openlore-indexer";
     let drifted = format!("sha256:{}", "c".repeat(64));
     let enabled = posture.distribution_enabled;
-    let referenced = if posture.oldest_image == Holder::Live {
+    let referenced = if posture.oldest_image == Holder::Live || !posture.live_runs_the_build {
         format!("sha256:{}", "e".repeat(64))
     } else {
         digest.to_string()
@@ -2232,7 +2237,6 @@ fn a_republish_that_cannot_read_the_live_image_is_refused() {
 ///     | the one the next version would be made of |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn a_copy_that_would_push_out_an_image_in_use_is_refused() {
     each_row([Holder::Live, Holder::Latest], |holder| {
         let stubs = Stubs::new(Posture {
@@ -2268,7 +2272,6 @@ fn a_copy_that_would_push_out_an_image_in_use_is_refused() {
 ///     | this deploy copied it, and the next version is made of it | stays |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda deploy"]
 fn a_failed_deploy_removes_the_copy_it_made_and_only_that() {
     each_row(
         [
@@ -2281,6 +2284,7 @@ fn a_failed_deploy_removes_the_copy_it_made_and_only_that() {
                 image_in_ecr: *already_there,
                 latest_holds_the_build: *held_by_latest,
                 code_update_fails: true,
+                live_runs_the_build: false,
                 ..Posture::default()
             });
 
