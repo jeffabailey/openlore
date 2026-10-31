@@ -4,8 +4,10 @@
 //!
 //! The reader repeats the small one in `scale_to_zero_platform.rs`, which is a
 //! DISTILL suite and has no library to share it through.
+#![cfg(unix)]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -1220,8 +1222,8 @@ fn the_edge_is_the_distribution_devops_set() {
     );
 }
 
-/// The table's method and path pairs, and nothing else: OP-4 reads that the paths
-/// appear, this reads that nothing was added beside them.
+/// The table's method and path pairs, and nothing else: OP-4 runs the function on a few
+/// requests, this reads that nothing was added beside them.
 #[test]
 fn the_edge_function_passes_exactly_three_requests() {
     let tofu = tofu();
@@ -1833,6 +1835,8 @@ const LAMBDA_SMOKE_STEP: &str = "- name: lambda-smoke (the image as Lambda runs 
 const RIE_STEP: &str = "- name: Fetch the Runtime Interface Emulator";
 const SECRET_STEP: &str = "- name: Secret check (no AWS credential in the image)";
 const SEED_STEP: &str = "- name: Seed index for lambda-smoke (one claim)";
+/// The stubbed world `lambda-smoke.sh` runs in.
+const SMOKE_WORLD: &str = include_str!("support/smoke_world.sh");
 
 /// Where `needle` first stands in `text`.
 fn position(text: &str, needle: &str) -> usize {
@@ -1858,56 +1862,165 @@ fn pinned<'a>(text: &'a str, name: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no {name}"))
 }
 
-/// DEVOPS lambda-smoke. The binary's first real run: the first main-push CI run is
-/// the proof, and this holds the files to what that run must be. The assertions are
-/// read in order, because each one's bucket is the last one's.
-#[test]
-fn lambda_smoke_runs_every_assertion_as_lambda_runs_the_image() {
-    let smoke = read(LAMBDA_SMOKE);
-    for posture in [
-        "--user 993:990",
-        "--read-only",
-        "--tmpfs /tmp:size=512m",
-        "--memory 512m",
-        r#"-v "$RIE_BIN:/aws-lambda-rie:ro""#,
-        "--entrypoint /aws-lambda-rie",
-        "/usr/local/bin/openlore-indexer-lambda",
-        "deploy/tofu/environments/prod-indexer/lambda-env.json",
-        "AWS_ENDPOINT_URL=",
-        "AWS_REGION=",
-    ] {
-        assert!(smoke.contains(posture), "the smoke runs with `{posture}`");
-    }
-    let tofu_adds = [
-        "OPENLORE_INDEXER_LAMBDA_BUCKET=",
-        "OPENLORE_INDEXER_LAMBDA_INDEX_KEY=",
-        "OPENLORE_INDEXER_LAMBDA_LAST_PASS_KEY=",
-        "OPENLORE_INDEXER_LAMBDA_DID_PARAMETER=",
-        "OPENLORE_INDEXER_LAMBDA_PROBE_BASE_URL=",
-    ];
-    for setting in tofu_adds {
-        assert!(smoke.contains(setting), "lambda.tf adds {setting}");
+/// One run of `lambda-smoke.sh` in `support/smoke_world.sh`, its tools stubbed.
+struct SmokeRun {
+    status: Option<i32>,
+    out: String,
+    state: tempfile::TempDir,
+}
+
+impl SmokeRun {
+    /// Run the smoke in a world where `broken` goes wrong; "" is a good image and store.
+    fn in_a_world_where(broken: &str) -> Self {
+        let state = tempfile::tempdir().expect("the world");
+        let world = state.path().join("world.sh");
+        std::fs::write(&world, SMOKE_WORLD).expect("write the world");
+        for tool in ["docker", "curl", "python3"] {
+            let path = state.path().join(tool);
+            let stub = format!(
+                "#!/usr/bin/env bash\nSTATE='{}'\nBROKEN='{broken}'\n. '{}'\n{tool}_stub \"$@\"\n",
+                state.path().display(),
+                world.display(),
+            );
+            std::fs::write(&path, stub).expect("write a stub");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod a stub");
+        }
+        let path = format!(
+            "{}:{}",
+            state.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let output = Command::new("bash")
+            .arg(workspace().join(LAMBDA_SMOKE))
+            .env("PATH", path)
+            .env("LOCAL_TAG", "the-image")
+            .env("RIE_BIN", "/the-rie")
+            .env("SEED_INDEX", "/the-seed")
+            .env("MOTO_IMAGE", "the-moto")
+            .output()
+            .expect("run the smoke");
+        Self {
+            status: output.status.code(),
+            out: format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+            state,
+        }
     }
 
-    let assertions: Vec<usize> = (1..=10)
-        .map(|number| position(&smoke, &format!(r#"assertion "{number}:"#)))
-        .collect();
-    assert!(
-        assertions.windows(2).all(|pair| pair[0] < pair[1]),
-        "the ten assertions, in order"
+    /// The numbers of the assertions it reached, in the order it reached them.
+    fn assertions(&self) -> Vec<u32> {
+        self.out
+            .lines()
+            .filter_map(|line| line.strip_prefix("lambda-smoke: assertion "))
+            .filter_map(|line| line.split(':').next()?.parse().ok())
+            .collect()
+    }
+
+    /// The `docker run` of each function start, in order.
+    fn function_starts(&self) -> Vec<String> {
+        std::fs::read_to_string(self.state.path().join("calls.log"))
+            .expect("the calls")
+            .lines()
+            .filter(|line| line.starts_with("docker run"))
+            .filter(|line| line.contains("--name openlore-lambda-smoke "))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// The environment file of the function start at `index`.
+    fn environment_of(&self, index: usize) -> String {
+        std::fs::read_to_string(self.state.path().join(format!("env-{}", index + 1)))
+            .expect("the environment of a start")
+    }
+}
+
+/// DEVOPS lambda-smoke, run: the script itself, with `docker`, `curl` and `python3` stubbed,
+/// so this reads what it does and not what it says. Its one real run is the `indexer-image`
+/// job of a main push, so this also holds the job to what that run must be. The assertions
+/// come in order, because each one's bucket is the last one's.
+#[test]
+fn lambda_smoke_runs_every_assertion_as_lambda_runs_the_image() {
+    const MODES: [&str; 10] = [
+        "search", "search", "pass", "probe", "pass", "search", "pass", "pass", "pass", "pass",
+    ];
+    const REFUSED_LOOPBACK: [usize; 2] = [4, 5];
+    const NO_STORE: usize = 1;
+    let smoke = SmokeRun::in_a_world_where("");
+
+    assert_eq!(smoke.status, Some(0), "{}", smoke.out);
+    assert_eq!(
+        smoke.assertions(),
+        (1..=10).collect::<Vec<_>>(),
+        "{}",
+        smoke.out
     );
-    for (number, words) in [
-        (1, "WorkingDir"),
-        (3, "http://host.docker.internal:9"),
-        (6, "OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP=1"),
-        (8, "indexer.lambda.published"),
-        (9, "indexer.lambda.publish_conflict"),
-    ] {
-        let next = assertions.get(number).copied().unwrap_or(smoke.len());
-        assert!(
-            smoke[assertions[number - 1]..next].contains(words),
-            "assertion {number} reads {words}"
+    assert!(
+        smoke.out.ends_with("lambda-smoke: passed\n"),
+        "{}",
+        smoke.out
+    );
+
+    let starts = smoke.function_starts();
+    assert_eq!(starts.len(), MODES.len(), "{starts:?}");
+    let lambda_env: Vec<String> = lambda_env()
+        .into_iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect();
+    for (index, (start, mode)) in starts.iter().zip(MODES).enumerate() {
+        for posture in [
+            "--user 993:990",
+            "--read-only",
+            "--tmpfs /tmp:size=512m",
+            "--memory 512m",
+            "-v /the-rie:/aws-lambda-rie:ro",
+            "--entrypoint /aws-lambda-rie",
+        ] {
+            assert!(
+                start.contains(posture),
+                "{index} runs with `{posture}`: {start}"
+            );
+        }
+        let image = format!(" the-image /usr/local/bin/openlore-indexer-lambda {mode}");
+        assert!(start.ends_with(&image), "{start}");
+        let endpoint = if index == NO_STORE {
+            "-e AWS_ENDPOINT_URL=http://host.docker.internal:9 "
+        } else {
+            "-e AWS_ENDPOINT_URL=http://host.docker.internal:5056 "
+        };
+        assert!(start.contains(endpoint), "{start}");
+        assert_eq!(
+            start.contains("-e OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP=1"),
+            REFUSED_LOOPBACK.contains(&index),
+            "{start}"
         );
+
+        let environment = smoke.environment_of(index);
+        let given: BTreeSet<&str> = environment.lines().collect();
+        for setting in &lambda_env {
+            assert!(given.contains(setting.as_str()), "{setting}: {environment}");
+        }
+        for name in [
+            "AWS_REGION=",
+            "OPENLORE_INDEXER_LAMBDA_BUCKET=",
+            "OPENLORE_INDEXER_LAMBDA_INDEX_KEY=",
+            "OPENLORE_INDEXER_LAMBDA_LAST_PASS_KEY=",
+        ] {
+            assert!(environment.contains(name), "{name}: {environment}");
+        }
+        for (name, needed_by) in [
+            ("OPENLORE_INDEXER_LAMBDA_DID_PARAMETER=", "pass"),
+            ("OPENLORE_INDEXER_LAMBDA_PROBE_BASE_URL=", "probe"),
+        ] {
+            assert_eq!(
+                environment.contains(name),
+                mode == needed_by,
+                "{environment}"
+            );
+        }
     }
 
     let ci = read(".github/workflows/ci.yml");
@@ -1947,6 +2060,72 @@ fn lambda_smoke_runs_every_assertion_as_lambda_runs_the_image() {
         pinned(job(&ci, "rio-object-store"), "image"),
         "the same moto as the RIO suite"
     );
+}
+
+/// Each row is one thing a bad image or a bad store gets wrong: the assertion that must
+/// stop the smoke there, and what it says. The good run above is this table's other half.
+#[test]
+fn lambda_smoke_stops_at_the_assertion_that_catches_a_bad_image() {
+    for (broken, assertion, says) in [
+        ("working-directory", 1, "WorkingDir is '/home/nonroot'"),
+        ("empty-bucket-answers-rows", 2, "the answer is not"),
+        (
+            "large-body-taken",
+            2,
+            "the answer is not .statusCode == 413",
+        ),
+        ("search-starts", 3, "search did not end in an init error"),
+        (
+            "pass-of-nothing-publishes",
+            4,
+            "a pass that changed nothing published",
+        ),
+        ("probe-says-live", 5, "the probe said live"),
+        (
+            "refused-for-another-reason",
+            6,
+            "pass refused for another reason",
+        ),
+        (
+            "no-publish-moves-a-version",
+            7,
+            "a no-publish run moved an object version",
+        ),
+        (
+            "publish-without-if-match",
+            8,
+            "the publish's If-Match was null",
+        ),
+        (
+            "published-after-the-summary",
+            8,
+            "indexer.lambda.published does not come before",
+        ),
+        ("stale-write-lands", 9, "the raced PUT was"),
+        (
+            "refused-event-ran",
+            10,
+            "a refused event wrote a pass_summary",
+        ),
+        ("refused-event-writes", 10, "a refused event wrote:"),
+    ] {
+        let smoke = SmokeRun::in_a_world_where(broken);
+
+        assert_eq!(smoke.status, Some(1), "{broken}\n{}", smoke.out);
+        assert_eq!(
+            smoke.assertions().last(),
+            Some(&assertion),
+            "{broken}\n{}",
+            smoke.out
+        );
+        let error = format!("::error::lambda-smoke: {says}");
+        assert!(
+            smoke.out.lines().any(|line| line.starts_with(&error)),
+            "{broken}\n{}",
+            smoke.out
+        );
+        assert!(!smoke.out.contains("lambda-smoke: passed"), "{broken}");
+    }
 }
 
 /// D-STZ-44: anything richer than these is refused, so a sloppy event would prove a
@@ -2194,30 +2373,67 @@ fn the_runbook_names_the_two_host_verbs_as_the_host_takes_them() {
     }
 }
 
-/// Each evidence item owed to the operator stages, by the name its row starts with.
+/// Each evidence item owed to the operator stages: the name its row starts with, its
+/// stage, and the step the row must name.
+const EVIDENCE_ITEMS: [(&str, &str, &str); 7] = [
+    ("P-5", "Stage 1", "`deploy.sh lambda measure`"),
+    ("P-15", "Stage 0", "the simulator below"),
+    ("P-17", "Stage 0", "the simulator below"),
+    ("P-18", "Stage 1", "20 concurrent raw-URL calls below"),
+    (
+        "140 MB post-pass steps",
+        "Stage 1",
+        "Time the local post-pass steps",
+    ),
+    ("140 MB query", "Stage 1", "Time a search and a reload"),
+    ("Metric check", "Stage 0", "`lambda status`"),
+];
+
+/// The commands a row calls "below", as the heading of the block that holds them.
+const EVIDENCE_BLOCKS: [&str; 2] = [
+    "The simulator, for P-15 and P-17:\n\n```sh\n",
+    "P-18, 20 concurrent calls:\n\n```sh\n",
+];
+
+/// What the runbook leaves out of its evidence rows.
+fn missing_evidence(runbook: &str) -> Vec<String> {
+    let rows = EVIDENCE_ITEMS.iter().filter_map(|(item, stage, step)| {
+        let row = runbook
+            .lines()
+            .find(|line| line.starts_with(&format!("| {item} |")))?;
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        (cells[2] != *stage || !cells[3].contains(step)).then(|| format!("{item}: {row}"))
+    });
+    let unlisted = EVIDENCE_ITEMS
+        .iter()
+        .filter(|(item, ..)| !runbook.contains(&format!("\n| {item} |")))
+        .map(|(item, ..)| format!("{item}: no row"));
+    let blocks = EVIDENCE_BLOCKS
+        .iter()
+        .filter(|block| !runbook.contains(**block))
+        .map(|block| format!("no block: {block}"));
+    rows.chain(unlisted).chain(blocks).collect()
+}
+
+/// A planted row and a dropped block show the check can fail.
 #[test]
 fn each_evidence_item_names_its_stage_and_how_to_record_it() {
     let runbook = read(RUNBOOK);
     assert!(runbook.contains(EVIDENCE_FILE));
-    for item in [
-        "P-5",
-        "P-15",
-        "P-17",
-        "P-18",
-        "140 MB post-pass steps",
-        "140 MB query",
-        "Metric check",
-    ] {
-        let row = runbook
-            .lines()
-            .find(|line| line.starts_with(&format!("| {item} |")))
-            .unwrap_or_else(|| panic!("no evidence row for {item}"));
-        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
-        let (stage, how) = (cells[2], cells[3]);
-        assert!(
-            stage.starts_with("Stage "),
-            "{item} names no stage: {stage}"
-        );
-        assert!(how.len() > 20, "{item} does not say how to record it");
-    }
+    assert_eq!(missing_evidence(&runbook), Vec::<String>::new());
+
+    let vague = runbook.replace("`deploy.sh lambda measure` from your laptop", "Measure it");
+    assert_eq!(
+        missing_evidence(&vague).len(),
+        1,
+        "a row that names no step"
+    );
+    let moved = runbook.replace("| Metric check | Stage 0 |", "| Metric check | Stage 2 |");
+    assert_eq!(
+        missing_evidence(&moved).len(),
+        1,
+        "a row in the wrong stage"
+    );
+    let gone = runbook.replace("P-18, 20 concurrent calls:", "Some calls:");
+    assert_eq!(missing_evidence(&gone).len(), 1, "a step that is not below");
 }

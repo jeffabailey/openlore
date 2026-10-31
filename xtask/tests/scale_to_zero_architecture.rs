@@ -99,6 +99,64 @@ fn const_body<'a>(code: &'a str, name: &str) -> &'a str {
     &rest[..rest.find(';').expect("the const ends")]
 }
 
+/// The production code of the Lambda root's modes, each as `code_of` reads it.
+struct LambdaSources {
+    search: String,
+    probe: String,
+    lib: String,
+    pass: String,
+}
+
+impl LambdaSources {
+    fn of_this_workspace() -> Self {
+        let src = root().join("crates/openlore-indexer-lambda/src");
+        let code = |file: &str| {
+            let code = code_of(&src.join(file));
+            assert!(!code.is_empty(), "{file} exists");
+            code
+        };
+        Self {
+            search: code("search.rs"),
+            probe: code("probe.rs"),
+            lib: code("lib.rs"),
+            pass: code("pass.rs"),
+        }
+    }
+}
+
+/// XS-6, as a function of the sources.
+fn what_breaks_only_the_pass_publishes(sources: &LambdaSources) -> Vec<String> {
+    let mut violations = Vec::new();
+    for (mode, code) in [("search.rs", &sources.search), ("probe.rs", &sources.probe)] {
+        for capability in WRITE_TOKENS {
+            if code.contains(capability) {
+                violations.push(format!("{mode} names {capability}"));
+            }
+        }
+    }
+    if sources.search.contains("get_last_pass") {
+        violations.push("search.rs names get_last_pass".to_string());
+    }
+    for driven in ["SearchDriven", "ProbeDriven"] {
+        let at = sources
+            .lib
+            .find(&format!("pub struct {driven}"))
+            .unwrap_or_else(|| panic!("{driven} exists"));
+        let rest = &sources.lib[at..];
+        let body = &rest[..rest.find('}').expect("the struct ends")];
+        if !body.contains("IndexObjectReadPort") {
+            violations.push(format!("{driven} has no read port"));
+        }
+        if body.contains("IndexObjectWritePort") {
+            violations.push(format!("{driven} has a write port"));
+        }
+    }
+    if !sources.pass.contains("publish_if_match") {
+        violations.push("the pass does not publish".to_string());
+    }
+    violations
+}
+
 // -----------------------------------------------------------------------------
 // The guards, as functions of the graph
 // -----------------------------------------------------------------------------
@@ -318,28 +376,77 @@ fn the_lambda_root_holds_no_claim_store_no_pds_write_path_and_no_github_client()
 /// ```
 #[test]
 fn only_the_pass_can_publish_the_index() {
-    let src = root().join("crates/openlore-indexer-lambda/src");
-    for mode in ["search.rs", "probe.rs"] {
-        let code = code_of(&src.join(mode));
-        assert!(!code.is_empty(), "{mode} exists");
-        for capability in WRITE_TOKENS {
-            assert!(!code.contains(capability), "{mode} names {capability}");
-        }
-    }
-    assert!(!code_of(&src.join("search.rs")).contains("get_last_pass"));
-    let lib = code_of(&src.join("lib.rs"));
-    for driven in ["SearchDriven", "ProbeDriven"] {
-        let at = lib
-            .find(&format!("pub struct {driven}"))
-            .unwrap_or_else(|| panic!("{driven} exists"));
-        let body = &lib[at..at + lib[at..].find('}').expect("the struct ends")];
-        assert!(body.contains("IndexObjectReadPort"), "{body}");
-        assert!(!body.contains("IndexObjectWritePort"), "{body}");
-    }
-    assert!(
-        code_of(&src.join("pass.rs")).contains("publish_if_match"),
-        "the pass publishes"
+    let sources = LambdaSources::of_this_workspace();
+
+    assert_eq!(
+        what_breaks_only_the_pass_publishes(&sources),
+        Vec::<String>::new()
     );
+}
+
+/// Not a scenario: the positive control of XS-6. Each violation, planted in the real
+/// sources, so the guard reads them as they are written.
+#[test]
+fn the_publish_guard_catches_a_planted_violation() {
+    let real = LambdaSources::of_this_workspace;
+    let with_write_field = |lib: &str, driven: &str| {
+        let opening = format!("pub struct {driven} {{");
+        assert!(lib.contains(&opening), "{driven} exists");
+        lib.replace(
+            &opening,
+            &format!("{opening} pub writes: Arc<dyn IndexObjectWritePort>,"),
+        )
+    };
+    let mut plants: Vec<(LambdaSources, String)> = vec![
+        (
+            LambdaSources {
+                search: format!("{}\nfn read() {{ get_last_pass() }}", real().search),
+                ..real()
+            },
+            "search.rs names get_last_pass".to_string(),
+        ),
+        (
+            LambdaSources {
+                lib: with_write_field(&real().lib, "SearchDriven"),
+                ..real()
+            },
+            "SearchDriven has a write port".to_string(),
+        ),
+        (
+            LambdaSources {
+                lib: with_write_field(&real().lib, "ProbeDriven"),
+                ..real()
+            },
+            "ProbeDriven has a write port".to_string(),
+        ),
+        (
+            LambdaSources {
+                pass: real().pass.replace("publish_if_match", "publish_nothing"),
+                ..real()
+            },
+            "the pass does not publish".to_string(),
+        ),
+    ];
+    for capability in WRITE_TOKENS {
+        plants.push((
+            LambdaSources {
+                search: format!("{}\nuse ports::{capability};", real().search),
+                ..real()
+            },
+            format!("search.rs names {capability}"),
+        ));
+        plants.push((
+            LambdaSources {
+                probe: format!("{}\nuse ports::{capability};", real().probe),
+                ..real()
+            },
+            format!("probe.rs names {capability}"),
+        ));
+    }
+
+    for (sources, violation) in plants {
+        assert_eq!(what_breaks_only_the_pass_publishes(&sources), [violation]);
+    }
 }
 
 /// XS-7 (it holds today only because Cargo drops a dev-dependency on a crate with
