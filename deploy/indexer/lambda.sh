@@ -103,6 +103,21 @@ lambda_account_check() {
     die "refusing: these credentials are account '$account', not $LAMBDA_ACCOUNT"
 }
 
+refuse_arguments() { # $1 = verb, $2... = the arguments it was given
+  local verb=$1
+  shift
+  [ "$#" = 0 ] || die "refusing: $verb takes no arguments, got '$*'"
+}
+
+refuse_all_but_flag() { # $1 = verb, $2 = its one flag, $3... = the arguments it was given
+  local verb=$1 flag=$2
+  shift 2
+  case "$*" in
+    "" | "$flag") ;;
+    *) die "refusing: $verb takes only $flag, got '$*'" ;;
+  esac
+}
+
 # Step 0 of the verbs that handle a build, after the ref check: nothing here may run for a ref
 # that is about to be refused.
 lambda_preflight() {
@@ -647,7 +662,7 @@ read_live_image() { # $1 = index into LAMBDA_FUNCTIONS
 # partial flip is not the same image everywhere. No CI or cosign gate: it was verified when
 # deployed. No copy either, so the EXIT trap has no image to discard.
 lambda_republish() {
-  [ "$#" = 0 ] || die "refusing: republish takes no arguments, got '$*'"
+  refuse_arguments republish "$@"
   lambda_preflight
   prepare_run
   record_rollback_targets
@@ -696,7 +711,7 @@ flip_back() { # $1 = index into LAMBDA_FUNCTIONS, $2 = extra record
 }
 
 lambda_rollback() {
-  [ "$#" = 0 ] || die "refusing: rollback takes no arguments, got '$*'"
+  refuse_arguments rollback "$@"
   lambda_account_check
   local function index_version
   for function in "${LAMBDA_FUNCTIONS[@]}"; do
@@ -736,10 +751,7 @@ set_edge_enabled() { # $1 = true or false
 # D-STZ-18d. Search first, for it takes seconds and stops the spend. Pass and probe keep running,
 # so the index stays fresh, and A3 pages for as long as this lasts.
 lambda_stop() { # [--wait]
-  case "$*" in
-    "" | --wait) ;;
-    *) die "refusing: stop takes only --wait, got '$*'" ;;
-  esac
+  refuse_all_but_flag stop --wait "$@"
   lambda_account_check
   set_concurrency "$LAMBDA_SEARCH" 0
   set_edge_enabled false ||
@@ -752,7 +764,7 @@ lambda_stop() { # [--wait]
 
 # Restores what stop changed and nothing else, and is safe to run twice.
 lambda_start() {
-  [ "$#" = 0 ] || die "refusing: start takes no arguments, got '$*'"
+  refuse_arguments start "$@"
   lambda_account_check
   set_concurrency "$LAMBDA_SEARCH" "$SEARCH_CONCURRENCY"
   set_edge_enabled true ||
@@ -781,7 +793,7 @@ run_pass() {
 }
 
 lambda_trigger() {
-  [ "$#" = 0 ] || die "refusing: trigger takes no arguments, got '$*'"
+  refuse_arguments trigger "$@"
   lambda_account_check
   prepare_run
   run_pass
@@ -789,7 +801,7 @@ lambda_trigger() {
 
 # The line says what the probe saw, not_live included; judging it is the operator's.
 lambda_probe() {
-  [ "$#" = 0 ] || die "refusing: probe takes no arguments, got '$*'"
+  refuse_arguments probe "$@"
   lambda_account_check
   prepare_run
   probe_health live
@@ -799,10 +811,7 @@ lambda_probe() {
 # next pass rebuilds with If-None-Match: *. The empty IFS keeps a stray space in the answer: the
 # word must be exact. A closed stdin reads as no word.
 lambda_reset_index() { # [--trigger]
-  case "$*" in
-    "" | --trigger) ;;
-    *) die "refusing: reset-index takes only --trigger, got '$*'" ;;
-  esac
+  refuse_all_but_flag reset-index --trigger "$@"
   lambda_account_check
   prepare_run
   local word="" version
@@ -1044,7 +1053,7 @@ status_report() { # $@ = one function per section
 }
 
 lambda_status() {
-  [ "$#" = 0 ] || die "refusing: status takes no arguments, got '$*'"
+  refuse_arguments status "$@"
   lambda_account_check
   prepare_run
   use_current_phase
@@ -1199,7 +1208,7 @@ measure_stopped() {
 lambda_measure() {
   prepare_run
   trap measure_stopped EXIT
-  [ "$#" = 0 ] || die "refusing: measure takes no arguments, got '$*'"
+  refuse_arguments measure "$@"
   need curl
   lambda_account_check
   refuse_unless_at_required_concurrency "$LAMBDA_SEARCH"
@@ -1293,7 +1302,7 @@ parity_rows() { # $1 = base URL, $2 = DID -> the sorted (author_did, cid) pairs
 # the probe's canned search, built to match nothing, is not. A pass publishes at a quarter hour, so
 # minute 7 of one leaves the two indexes settled; the rerun 15 min later is minute 7 of the next.
 lambda_parity() {
-  [ "$#" = 0 ] || die "refusing: parity takes no arguments, got '$*'"
+  refuse_arguments parity "$@"
   need curl
   lambda_account_check
   local minute edge dids did host_rows edge_rows differs=0
@@ -1489,7 +1498,7 @@ watch_handover() {
 
 # Stage 2 steps 3-5. Runs until the operator interrupts it, as the runbook's step 5 says.
 lambda_cutover_watch() {
-  [ "$#" = 0 ] || die "refusing: cutover-watch takes no arguments, got '$*'"
+  refuse_arguments cutover-watch "$@"
   need curl
   lambda_account_check
   prepare_run
