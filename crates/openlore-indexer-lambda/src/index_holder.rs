@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
-use adapter_index_store::{DuckDbCaps, IndexStoreAdapter};
+use adapter_index_store::{write_ahead_log_path, DuckDbCaps, IndexStoreAdapter};
 use adapter_xrpc_query_server::HealthHandler;
 use openlore_indexer::config::IndexerConfig;
 use openlore_indexer::health::{health_handler, published_at_of_fetched, store_usability};
@@ -25,15 +25,16 @@ use ports::{IndexObjectReadPort, ObjectVersion};
 
 use crate::InitRefused;
 
-/// The file of one copy in `/tmp`, removed when the copy is dropped. So a failed
-/// download or open leaves nothing behind, and a retired copy gives its space
-/// back (D-STZ-30, open question 2). The file may never have been written, and a
-/// drop has nobody to tell, so the removal's result is not read.
+/// The file of one copy in `/tmp` and its log, removed when the copy is dropped.
+/// So a failed download or open leaves nothing behind, and a retired copy gives
+/// its space back (D-STZ-30, open question 2). Either file may never have been
+/// written, and a drop has nobody to tell, so the removals' results are not read.
 struct ScratchFile(PathBuf);
 
 impl Drop for ScratchFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
+        let _ = std::fs::remove_file(write_ahead_log_path(&self.0));
     }
 }
 
@@ -209,6 +210,21 @@ mod tests {
             prop_assert_eq!(generations.len(), attempts);
             prop_assert!(!generations.contains(&0));
         }
+    }
+
+    // bypass: one fixed pair of files, and dropping the copy has no input space.
+    #[test]
+    fn a_dropped_copy_takes_its_log_with_it() {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let path = scratch.path().join("index.duckdb.1");
+        let log = scratch.path().join("index.duckdb.1.wal");
+        std::fs::write(&path, b"a copy").expect("a copy");
+        std::fs::write(&log, b"rows").expect("its log");
+
+        drop(ScratchFile(path.clone()));
+
+        assert!(!path.exists(), "the copy");
+        assert!(!log.exists(), "its log");
     }
 
     // bypass: the contract is how one stuck open meets a timer; it has no input space.

@@ -139,6 +139,16 @@ fn mebibytes_of(size: &str) -> Option<u64> {
     (mebibytes.is_finite() && mebibytes >= 0.0).then_some(mebibytes as u64)
 }
 
+/// Where DuckDB keeps a database's write-ahead log: beside it, as `<database>.wal`.
+/// An open replays whatever log it finds there, even one written for another
+/// file, and consumes it, so a new copy of the index must not meet an old log.
+#[must_use]
+pub fn write_ahead_log_path(db_path: &Path) -> PathBuf {
+    let mut log = db_path.as_os_str().to_owned();
+    log.push(".wal");
+    log.into()
+}
+
 /// Why the store can no longer be used (`indexer.store.unusable.reason`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnusableReason {
@@ -992,6 +1002,20 @@ mod tests {
             "verified_against must never be empty (WD-104)"
         );
         assert_eq!(read.verified_against, claim.verified_against);
+    }
+
+    /// The log path is DuckDB's own: a row not yet folded into the file is there.
+    // bypass: real-DuckDB integration; the name is one fixed fact about DuckDB.
+    #[test]
+    fn rows_not_yet_folded_into_the_file_are_in_the_log_at_its_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("index.duckdb");
+        let store = IndexStoreAdapter::open(&db_path).expect("open index store");
+
+        store.upsert(&sample_claim()).expect("upsert");
+
+        let log = fs::metadata(write_ahead_log_path(&db_path)).expect("the log");
+        assert!(log.len() > 0, "the row is in the log");
     }
 
     /// `get_by_cid` returns the single attributed row by its CID PK (the `--show`

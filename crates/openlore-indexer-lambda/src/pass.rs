@@ -13,13 +13,13 @@
 //! plan value. That arm is `no_publish::run_no_publish`, which takes the read port
 //! only, so it has no path to a write (D-STZ-44).
 
-use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use adapter_index_store::write_ahead_log_path;
 use appview_domain::ingest_pass::{PassExit, PassFailure};
 use appview_domain::pass_runner::PassId;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -343,25 +343,31 @@ pub(crate) async fn work_from_the_starting_index(
     pass: PassLabel,
     started: Instant,
 ) -> Result<WorkedPass, FunctionError> {
-    match fetch_starting_index(read, config).await {
+    match fetch_starting_index(read, &config.index_path).await {
         Ok(seen) => work_the_pass(config, sink, seen, pass, started).await,
         Err(_) => Ok(WorkedPass::no_usable_start(None)),
     }
 }
 
 /// Replace the local copy with the current object. `fetch_to` wants a new file,
-/// and a warm instance's last copy must not outlive a reset of the bucket.
+/// and a warm instance's last copy must not outlive a reset of the bucket. Its
+/// log must not either: opening the new copy would replay a failed pass's rows
+/// into it and consume the log, so P-7's check after the pass could not see them.
+/// A log that will not go is no starting index.
 async fn fetch_starting_index(
     read: &dyn IndexObjectReadPort,
-    config: &IndexerConfig,
+    index_path: &Path,
 ) -> Result<Option<ObjectVersion>, IndexObjectError> {
-    let index_path = &config.index_path;
     if let Err(stuck) = remove_if_present(index_path) {
         eprintln!("openlore-indexer-lambda: last index copy not removed: {stuck}");
     }
-    read.fetch_to(index_path)
-        .await
-        .inspect_err(|failed| eprintln!("openlore-indexer-lambda: not fetched: {failed}"))
+    let fetched = match remove_if_present(&write_ahead_log_path(index_path)) {
+        Ok(()) => read.fetch_to(index_path).await,
+        Err(stuck) => Err(IndexObjectError::LocalWrite {
+            detail: format!("last index log not removed: {stuck}"),
+        }),
+    };
+    fetched.inspect_err(|failed| eprintln!("openlore-indexer-lambda: not fetched: {failed}"))
 }
 
 /// The reused pass, off the async runtime: it blocks on a runtime of its own
@@ -498,12 +504,9 @@ fn ready_to_upload(store_usable: bool, index_path: &Path) -> bool {
     store_usable && write_ahead_log_is_empty(index_path)
 }
 
-/// DuckDB keeps a database's log beside it, as `<database>.wal`. A log that
-/// cannot be read counts as holding rows.
+/// A log that cannot be read counts as holding rows.
 fn write_ahead_log_is_empty(index_path: &Path) -> bool {
-    let mut log = OsString::from(index_path);
-    log.push(".wal");
-    match std::fs::metadata(&log) {
+    match std::fs::metadata(write_ahead_log_path(index_path)) {
         Ok(found) => found.len() == 0,
         Err(unread) => unread.kind() == ErrorKind::NotFound,
     }
@@ -563,8 +566,14 @@ mod state_delta;
 mod tests {
     use std::collections::{HashMap, HashSet};
 
+    use adapter_index_store::IndexStoreAdapter;
+    use async_trait::async_trait;
     use chrono::TimeDelta;
-    use ports::ProbeRefusalReason;
+    use claim_domain::{Cid, Did, KeyId};
+    use ports::{
+        AuthorRelationship, HeadOutcome, IndexReadPort, IndexStorePort, IndexedClaim,
+        PeerClaimProvenance, ProbeRefusalReason,
+    };
     use proptest::prelude::*;
     use serde_json::Value;
 
@@ -595,6 +604,64 @@ mod tests {
             .into_iter()
             .map(String::from)
             .collect()
+    }
+
+    /// A bucket holding one published object, which counts its downloads.
+    struct PublishedObject {
+        bytes: Vec<u8>,
+        downloads: AtomicU64,
+    }
+
+    impl PublishedObject {
+        fn holding(bytes: Vec<u8>) -> Self {
+            Self {
+                bytes,
+                downloads: AtomicU64::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl IndexObjectReadPort for PublishedObject {
+        fn probe(&self) -> ProbeOutcome {
+            ProbeOutcome::Ok
+        }
+
+        async fn head(&self) -> Result<HeadOutcome, IndexObjectError> {
+            Ok(HeadOutcome::Absent)
+        }
+
+        async fn fetch_to(&self, dest: &Path) -> Result<Option<ObjectVersion>, IndexObjectError> {
+            self.downloads.fetch_add(1, Ordering::Relaxed);
+            std::fs::write(dest, &self.bytes).expect("a local copy");
+            Ok(Some(ObjectVersion {
+                etag: "etag".to_string(),
+                published_at: None,
+                pass_id: None,
+                size_bytes: self.bytes.len() as u64,
+            }))
+        }
+
+        async fn get_last_pass(&self) -> Result<Option<LastPass>, IndexObjectError> {
+            Ok(None)
+        }
+    }
+
+    fn a_claim(cid: &str) -> IndexedClaim {
+        IndexedClaim {
+            author_did: Did("did:plc:priya".to_string()),
+            cid: Cid(cid.to_string()),
+            subject: "github:bazelbuild/bazel".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.reproducible-builds".to_string(),
+            confidence: 0.8,
+            composed_at: fourteen_hundred(),
+            verified_against: KeyId("did:plc:priya".to_string()),
+            evidence: Vec::new(),
+            references: Vec::new(),
+            relationship: AuthorRelationship::NetworkUnfollowed,
+            provenance: PeerClaimProvenance::AppSigned,
+        }
     }
 
     fn any_exit() -> impl Strategy<Value = PassExit> {
@@ -756,6 +823,54 @@ mod tests {
 
         assert!(remove_if_present(&scratch.path().join("gone")).is_ok());
         assert!(remove_if_present(scratch.path()).is_err(), "a directory");
+    }
+
+    // bypass: real DuckDB over one fixed file, because what it does with a log it
+    // finds beside a new copy is the contract, and that copy's claims don't vary it.
+    #[tokio::test]
+    async fn a_log_a_failed_pass_left_behind_is_not_replayed_into_the_next_starting_index() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let index = scratch.path().join("index.duckdb");
+        let log = scratch.path().join("index.duckdb.wal");
+        let stale = Cid("bafystaleclaim".to_string());
+
+        let store = IndexStoreAdapter::open(&index).expect("a store");
+        store.upsert(&a_claim("bafypublished")).expect("a claim");
+        let published_fingerprint = store.fingerprint().expect("a fingerprint");
+        drop(store);
+        let published = std::fs::read(&index).expect("the published index");
+
+        let store = IndexStoreAdapter::open(&index).expect("the pass's store");
+        store
+            .upsert(&a_claim(&stale.0))
+            .expect("a row in the failed pass's log");
+        let rows_in_the_log = std::fs::read(&log).expect("the failed pass's log");
+        drop(store);
+        std::fs::write(&log, rows_in_the_log).expect("the log a failed pass left");
+
+        let seen = fetch_starting_index(&PublishedObject::holding(published), &index)
+            .await
+            .expect("a fetch");
+
+        assert!(seen.is_some(), "the object was fetched");
+        let store = IndexStoreAdapter::open(&index).expect("the new copy opens");
+        assert_eq!(store.get_by_cid(&stale).expect("a read"), None);
+        assert_eq!(store.fingerprint().expect("a read"), published_fingerprint);
+    }
+
+    // bypass: one fixed failure; a log that will not go must not meet the new copy.
+    #[tokio::test]
+    async fn a_log_that_cannot_be_removed_stops_the_fetch_so_it_cannot_reach_the_new_copy() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let index = scratch.path().join("index.duckdb");
+        let log = scratch.path().join("index.duckdb.wal");
+        std::fs::create_dir(&log).expect("a log that cannot be removed as a file");
+        let bucket = PublishedObject::holding(b"an object".to_vec());
+
+        let fetched = fetch_starting_index(&bucket, &index).await;
+
+        assert!(fetched.is_err(), "no starting index");
+        assert_eq!(bucket.downloads.load(Ordering::Relaxed), 0);
     }
 
     // bypass: P-7 is one rule over a file's three states, and a real pass can
