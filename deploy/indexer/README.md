@@ -423,8 +423,8 @@ reboot, confirm it with the check in §15.**
 5. Tofu: `-var phase=trial`, plan, gate, apply. This sets pass and probe concurrency back to 1, so
    they run again from here. `live` keeps its prod log target until step 6, and that group's write
    grant is gone, so their lines are lost until then.
-6. `deploy.sh lambda republish`. Not before step 5: its gates invoke pass and probe, and at
-   concurrency 0 each throttles for 870 s and then refuses.
+6. `deploy.sh lambda republish`. Not before step 5: its gates invoke the pass and then the probe, and
+   at concurrency 0 the pass gate throttles for 870 s and refuses, so nothing flips.
 
 After decommission there is no host rollback. A return to the host is a reinstall from git history.
 
@@ -455,6 +455,7 @@ After decommission there is no host rollback. A return to the host is a reinstal
 `lambda status`, `kpi` and `test-alarm` follow where `live` logs. In the trial A1-A3 mean
 `openlore-indexer-lambda-*`. After cut-over they mean the host's names, on the prod group. A tofu
 change reaches `live` only through `lambda republish`, and `lambda status` prints `DRIFT` until then.
+A change that reaches only some functions needs `lambda deploy` of a new build instead (§16).
 
 ## 14. Lambda verbs
 
@@ -465,7 +466,7 @@ All of these have run on stubs only (§10). A refusal starts with `refusing` and
 | `lambda deploy <git-sha\|digest>` | Blue-green by alias: all gates, then `live` flips, search first | Takes a 40-hex sha or `sha256:<64 hex>`. The gates can take 28.5 min. A stop before the flip leaves nothing flipped. `LAMBDA_ACCEPT_NOT_LIVE=1` accepts the probe gate alone. `LAMBDA_ACCEPT_EXIT_3=1` accepts exit 3 alone. **Refused if any function publishes nothing new** (§16). A failure in step 15 or an interrupt has its own recovery (§16). |
 | `lambda seed <git-sha\|digest>` | Gates and ECR copy only; prints `bootstrap_image_uri` | First apply only (§11). |
 | `lambda republish` | Republishes each function's live image, through the same gates and flips | Run it after any tofu change to function configuration. Takes no arguments. Refuses if the live image is not in ECR. **Refused if any function publishes nothing new** (§16): a change that reaches only some functions needs a deploy of a new build. |
-| `lambda rollback` | Every `live` back to its recorded `prev=`; `candidate` follows | Prints the pre-publish index version. **`lambda rollback --to <sha>` is refused today**: rollback takes no arguments. **A second rollback is refused**: a rollback leaves no `prev=`. A partly failed rollback cannot be rerun (§16). Afterwards `lambda status` shows `$LATEST` drift. That is expected. |
+| `lambda rollback` | Every `live` back to its recorded `prev=`; `candidate` follows | Prints the pre-publish index version. **`lambda rollback --to <sha>` is refused**: rollback takes no arguments, and reaches one record back only. To reach an earlier build, see §16. **A second rollback is refused**: a rollback leaves no `prev=`. A partly failed rollback cannot be rerun (§16). Afterwards `lambda status` shows `$LATEST` drift. That is expected. |
 | `lambda stop [--wait]` | The kill switch: search concurrency 0, then the distribution off | Lambda stops in seconds, the edge in minutes. Pass and probe keep running. Expect A3 within about 10 min, staying in ALARM while stopped. A deploy during a stop fails its post-checks. |
 | `lambda start` | Search concurrency back to 3, the distribution on | Safe to run twice. The raw URL answers at once, the public name when the distribution is `Deployed`. |
 | `lambda pass-off` | Pass concurrency 0 | A later apply sets it back to 1. |
@@ -573,6 +574,20 @@ So flip the rest by hand:
    `rolled back from <n> <utc> idx=<id>`.
 3. If `candidate` did not follow, move it to search's `<target>` with the command above.
    The verb prints `every live is back, but candidate did not follow` when only this is left.
+
+### You need a version further back than one rollback
+
+`lambda rollback` goes back one record and no further, and `lambda rollback --to <sha>` stays refused.
+To reach any earlier build, deploy it:
+
+```sh
+deploy.sh lambda deploy <older-sha>
+```
+
+It is an ordinary deploy, with no shortcut for being old. It needs CI success and a valid signature,
+as any deploy does, and it refuses an image with no Lambda root. If that build has left ECR, the
+deploy copies it back from GHCR, under the same retention check. Every gate runs before `live` flips,
+and the flip records the version it replaced, so `lambda rollback` then returns to where you started.
 
 ### Other failures
 
