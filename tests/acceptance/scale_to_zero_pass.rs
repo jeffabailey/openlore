@@ -537,7 +537,6 @@ fn a_pass_reports_itself_last_after_publishing_and_recording() {
 ///     | nothing new                    | would not      |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (no-publish arm, D-STZ-44)"]
 fn a_no_publish_run_does_the_whole_pass_and_writes_nothing_to_the_bucket() {
     each_row(
         [("a new claim", true), ("nothing new", false)],
@@ -583,7 +582,6 @@ fn a_no_publish_run_does_the_whole_pass_and_writes_nothing_to_the_bucket() {
 ///   And no publish or record write was attempted
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (init write probe plus the no-publish arm)"]
 fn on_a_buckets_very_first_run_a_no_publish_run_leaves_only_the_write_check_marker() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     world.publishes(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
@@ -1059,7 +1057,6 @@ fn a_store_that_ignores_the_write_condition_is_refused_before_a_pass_can_trust_i
 ///     | nothing                             |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (decide::pass_mode, D-STZ-44)"]
 fn a_pass_refuses_any_event_but_an_empty_one_or_a_no_publish_request() {
     each_row(
         [

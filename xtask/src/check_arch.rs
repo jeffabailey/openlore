@@ -59,6 +59,8 @@
 //!     `indexer_lambda_holds_no_signing_or_local_store` also read each root's
 //!     production code: no signing capability is named, and a verify-only
 //!     construction is (D-STZ-50; [`scan_indexer_family_holds_no_signing`]).
+//! 12. `lambda_no_publish_is_read_only`: the no-publish arm names the read port
+//!     and no write capability (D-STZ-44; [`scan_lambda_no_publish_is_read_only`]).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -3908,16 +3910,60 @@ pub fn scan_indexer_family_holds_no_signing(workspace_root: &Path) -> anyhow::Re
     Ok(findings)
 }
 
+/// The module `lambda_no_publish_is_read_only` reads.
+const LAMBDA_NO_PUBLISH_MODULE: &str = "crates/openlore-indexer-lambda/src/no_publish.rs";
+
+/// The port the no-publish arm must hold.
+const LAMBDA_NO_PUBLISH_READ_PORT: &str = "IndexObjectReadPort";
+
+/// What would give the no-publish arm a path to a write.
+const LAMBDA_NO_PUBLISH_WRITE_TOKENS: &[&str] = &[
+    "IndexObjectWritePort",
+    "publish_if_match",
+    "put_last_pass",
+    "PassDriven",
+];
+
+/// Pure rule over the no-publish module: every non-comment line of its production
+/// part naming a write capability, plus a finding when no such line names the
+/// read port.
+pub fn classify_lambda_no_publish_read_only(source: &str) -> Vec<String> {
+    let production = production_part(source);
+    let names_the_read_port =
+        !classify_forbidden_tokens(production, &[LAMBDA_NO_PUBLISH_READ_PORT]).is_empty();
+    let missing_read_port =
+        (!names_the_read_port).then(|| format!("does not name `{LAMBDA_NO_PUBLISH_READ_PORT}`"));
+    classify_forbidden_tokens(production, LAMBDA_NO_PUBLISH_WRITE_TOKENS)
+        .into_iter()
+        .chain(missing_read_port)
+        .collect()
+}
+
 /// `lambda_no_publish_is_read_only` (D-STZ-44): the no-publish module refuses
 /// `IndexObjectWritePort`, `publish_if_match`, `put_last_pass` and `PassDriven`,
 /// and must name `IndexObjectReadPort`, so it cannot pass vacuously. A missing
-/// module is itself a finding. Not wired into `check-arch` yet.
-//
-// SCAFFOLD: true  (DISTILL 2026-10-30; DELIVER implements and wires it. Contract:
-// XS-11 in xtask/tests/scale_to_zero_architecture.rs)
+/// module is itself a finding.
 pub fn scan_lambda_no_publish_is_read_only(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
-    let _ = workspace_root;
-    panic!("Not yet implemented -- RED scaffold")
+    const RULE: &str = "lambda_no_publish_is_read_only";
+    let module = workspace_root.join(LAMBDA_NO_PUBLISH_MODULE);
+    let source = match std::fs::read_to_string(&module) {
+        Ok(source) => source,
+        Err(unread) => {
+            return Ok(vec![format!(
+                "{RULE}: {LAMBDA_NO_PUBLISH_MODULE}: not read: {unread} — \
+                 the rule would pass vacuously (D-STZ-44)"
+            )])
+        }
+    };
+    Ok(classify_lambda_no_publish_read_only(&source)
+        .into_iter()
+        .map(|finding| {
+            format!(
+                "{RULE}: {LAMBDA_NO_PUBLISH_MODULE}: {finding} — \
+                 the no-publish arm holds the read port only (D-STZ-44)"
+            )
+        })
+        .collect())
 }
 
 // -----------------------------------------------------------------------------
@@ -4638,6 +4684,7 @@ pub fn run() -> anyhow::Result<i32> {
     let indexer_client_findings = scan_indexer_guarded_clients_only(&workspace_root)?;
     let search_handler_findings = scan_indexer_search_handler_read_only(&workspace_root)?;
     let indexer_signing_findings = scan_indexer_family_holds_no_signing(&workspace_root)?;
+    let no_publish_findings = scan_lambda_no_publish_is_read_only(&workspace_root)?;
     let index_delete_findings = scan_index_store_delete_only_in_purge(&workspace_root)?;
     let index_purge_findings = scan_index_purge_only_in_pass_runner(&workspace_root)?;
     let search_event_findings = scan_indexer_search_events_carry_no_query(&workspace_root)?;
@@ -4679,6 +4726,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(indexer_client_findings);
     rendered.extend(search_handler_findings);
     rendered.extend(indexer_signing_findings);
+    rendered.extend(no_publish_findings);
     rendered.extend(index_delete_findings);
     rendered.extend(index_purge_findings);
     rendered.extend(search_event_findings);
@@ -6936,6 +6984,17 @@ mod search_handler_read_only_tests {
         let reading = read_signing_claim("fn a( {\n");
         assert_eq!(reading.capabilities.len(), 1);
         assert!(!reading.holds_verify_only_construction);
+    }
+
+    // bypass: one fixed source; a port only a comment names is not held.
+    #[test]
+    fn a_no_publish_module_that_only_mentions_the_read_port_is_refused() {
+        let findings =
+            classify_lambda_no_publish_read_only("// IndexObjectReadPort\nfn run() {}\n");
+        assert_eq!(
+            findings,
+            vec!["does not name `IndexObjectReadPort`".to_string()]
+        );
     }
 
     // bypass: single example — a second site keeps the root's verify-only claim.

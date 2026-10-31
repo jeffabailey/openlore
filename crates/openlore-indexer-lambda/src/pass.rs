@@ -1,12 +1,14 @@
-//! Pass mode (ADR-090 §4): in the D-STZ-40 order, render the DID list from the
-//! parameter store, fetch the starting index, run the reused ADR-077/078 pass
-//! off the async runtime (D-STZ-42, UI-11) and take its exit, publish on change
-//! under a version condition (D-STZ-6, D-STZ-7), write `last-pass.json`, then
-//! write the ONE `pass_summary`, with the exit `decide::final_exit` settles.
+//! Pass mode (ADR-090 §4): `decide::pass_mode` reads the event first, and refuses
+//! all but two before any work or call (D-STZ-44). Then, in the D-STZ-40 order,
+//! render the DID list from the parameter store, fetch the starting index, run
+//! the reused ADR-077/078 pass off the async runtime (D-STZ-42, UI-11) and take
+//! its exit, publish on change under a version condition (D-STZ-6, D-STZ-7),
+//! write `last-pass.json`, then write the ONE `pass_summary`, with the exit
+//! `decide::final_exit` settles.
 //!
-//! Thin for now, closed by a named step: the pass ignores its event (T2, 03-02).
-//! A no-publish run will stop after the pass work: that arm is `no_publish::run_no_publish`, which
-//! takes the read port only, so it has no path to a write (D-STZ-44).
+//! A no-publish run takes the same steps up to the pass work, and reads the same
+//! plan value. That arm is `no_publish::run_no_publish`, which takes the read port
+//! only, so it has no path to a write (D-STZ-44).
 
 use std::ffi::OsString;
 use std::io::ErrorKind;
@@ -24,22 +26,26 @@ use openlore_indexer::ingest_pass::{write_pass_summary, EndedPass};
 use openlore_indexer::run::Wired;
 use openlore_indexer::runner_contract::{BootNonce, PassLabel};
 use ports::{
-    IndexFingerprint, IndexObjectError, LastPass, ObjectVersion, ProbeOutcome, ProbeRefused,
-    PublishMetadata, PublishOutcome, WriteCondition,
+    IndexFingerprint, IndexObjectError, IndexObjectReadPort, LastPass, ObjectVersion, ProbeOutcome,
+    ProbeRefused, PublishMetadata, PublishOutcome, WriteCondition,
 };
 use serde_json::json;
 use tokio::task::JoinError;
 
 use crate::decide::{
-    dids_copy_usable, final_exit, publish_decision, Publish, PublishStep, RecordStep,
-    DIDS_COPY_MAX_AGE,
+    dids_copy_usable, final_exit, pass_mode, publish_decision, EventRefused, PassMode, Publish,
+    PublishStep, RecordStep, DIDS_COPY_MAX_AGE,
 };
-use crate::{events_through, pass_wiring, Environment, FunctionError, InitRefused, PassDriven};
+use crate::no_publish::run_no_publish;
+use crate::{
+    events_through, pass_wiring, Environment, EventSink, FunctionError, InitRefused, PassDriven,
+};
 
-/// The reused pass's work, and whether its store is to be published.
-struct WorkedPass {
-    ended: EndedPass,
-    publish: Publish,
+/// The plan value both arms read: the reused pass's work, and whether its store
+/// is to be published.
+pub(crate) struct WorkedPass {
+    pub(crate) ended: EndedPass,
+    pub(crate) publish: Publish,
 }
 
 /// The index a pass published.
@@ -118,17 +124,32 @@ impl PassFunction {
     }
 
     /// Run one pass for one event. `Ok` carries `{pass_id, exit_code, published,
-    /// index_bytes}`; `index_bytes` is `null` when nothing was published.
+    /// index_bytes}`; `index_bytes` is `null` when nothing was published. A
+    /// no-publish run adds `mode` and `would_publish`. An event `decide::pass_mode`
+    /// refuses is a function error, before any work and any call (D-STZ-44).
     pub async fn handle(
         &self,
         event: serde_json::Value,
     ) -> Result<serde_json::Value, FunctionError> {
-        let _ = event;
+        let mode = pass_mode(&event).map_err(refused_event)?;
         let started = Instant::now();
         let pass = self.next_pass();
         self.render_did_list().await;
-        let seen = self.fetch_starting_index().await;
-        let WorkedPass { ended, publish } = self.pass_work(pass, started).await?;
+        match mode {
+            PassMode::Normal => self.publishing_run(pass, started).await,
+            PassMode::NoPublish => self.no_publish_run(pass, started).await,
+        }
+    }
+
+    /// The arm that may write: publish on change, then the record, then the summary.
+    async fn publishing_run(
+        &self,
+        pass: PassLabel,
+        started: Instant,
+    ) -> Result<serde_json::Value, FunctionError> {
+        let seen = fetch_starting_index(self.driven.index_read.as_ref(), &self.config).await;
+        let WorkedPass { ended, publish } =
+            work_the_pass(&self.config, self.driven.events.clone(), pass, started).await?;
         let events = events_through(self.driven.events.clone());
         let PublishEnd { published, step } = match publish {
             Publish::Publish => self.publish(pass, seen.as_ref(), &events).await,
@@ -146,6 +167,24 @@ impl PassFunction {
             "published": published.is_some(),
             "index_bytes": published.map(|index| index.bytes),
         }))
+    }
+
+    /// The arm that cannot: it is handed the read port and none of the rest.
+    async fn no_publish_run(
+        &self,
+        pass: PassLabel,
+        started: Instant,
+    ) -> Result<serde_json::Value, FunctionError> {
+        let read = self.driven.index_read.as_ref();
+        let report = run_no_publish(
+            read,
+            &self.config,
+            self.driven.events.clone(),
+            pass,
+            started,
+        )
+        .await?;
+        Ok(report.reply())
     }
 
     fn next_pass(&self) -> PassLabel {
@@ -167,42 +206,6 @@ impl PassFunction {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         *rendered_at = settle_did_list(rendered, &self.did_list_file, *rendered_at, now);
-    }
-
-    /// Replace the local copy with the current object. `fetch_to` wants a new
-    /// file, and a warm instance's last copy must not outlive a reset of the
-    /// bucket. A failed fetch saw no object (D-STZ-48).
-    async fn fetch_starting_index(&self) -> Option<ObjectVersion> {
-        let index_path = &self.config.index_path;
-        if let Err(stuck) = remove_if_present(index_path) {
-            eprintln!("openlore-indexer-lambda: last index copy not removed: {stuck}");
-        }
-        self.driven
-            .index_read
-            .fetch_to(index_path)
-            .await
-            .inspect_err(|failed| eprintln!("openlore-indexer-lambda: not fetched: {failed}"))
-            .ok()
-            .flatten()
-    }
-
-    /// The reused pass, off the async runtime: it blocks on a runtime of its own
-    /// (UI-11). Its store is closed when this returns.
-    async fn pass_work(
-        &self,
-        pass: PassLabel,
-        started: Instant,
-    ) -> Result<WorkedPass, FunctionError> {
-        let config = self.config.clone();
-        let index_path = config.index_path.clone();
-        let sink = self.driven.events.clone();
-        tokio::task::spawn_blocking(move || {
-            pass_wiring(config, sink).map(|wired| work_on(wired, pass, started, &index_path))
-        })
-        .await
-        .map_err(|crashed| FunctionError {
-            message: format!("pass task: {crashed}"),
-        })?
     }
 
     /// Publish the closed index file over the version this pass saw, stamped
@@ -266,6 +269,50 @@ impl PassFunction {
             .now_utc()
             .to_rfc3339_opts(SecondsFormat::Secs, true)
     }
+}
+
+/// D-STZ-44: the function error of an event `decide::pass_mode` refused.
+fn refused_event(_: EventRefused) -> FunctionError {
+    FunctionError {
+        message: r#"pass event refused: only {} or {"mode":"no-publish"} is accepted"#.to_string(),
+    }
+}
+
+/// Replace the local copy with the current object. `fetch_to` wants a new file,
+/// and a warm instance's last copy must not outlive a reset of the bucket. A
+/// failed fetch saw no object (D-STZ-48).
+pub(crate) async fn fetch_starting_index(
+    read: &dyn IndexObjectReadPort,
+    config: &IndexerConfig,
+) -> Option<ObjectVersion> {
+    let index_path = &config.index_path;
+    if let Err(stuck) = remove_if_present(index_path) {
+        eprintln!("openlore-indexer-lambda: last index copy not removed: {stuck}");
+    }
+    read.fetch_to(index_path)
+        .await
+        .inspect_err(|failed| eprintln!("openlore-indexer-lambda: not fetched: {failed}"))
+        .ok()
+        .flatten()
+}
+
+/// The reused pass, off the async runtime: it blocks on a runtime of its own
+/// (UI-11). Its store is closed when this returns.
+pub(crate) async fn work_the_pass(
+    config: &IndexerConfig,
+    sink: Arc<dyn EventSink>,
+    pass: PassLabel,
+    started: Instant,
+) -> Result<WorkedPass, FunctionError> {
+    let config = config.clone();
+    let index_path = config.index_path.clone();
+    tokio::task::spawn_blocking(move || {
+        pass_wiring(config, sink).map(|wired| work_on(wired, pass, started, &index_path))
+    })
+    .await
+    .map_err(|crashed| FunctionError {
+        message: format!("pass task: {crashed}"),
+    })?
 }
 
 /// The write probe, off the async runtime: it is sync and blocks (D-STZ-39,

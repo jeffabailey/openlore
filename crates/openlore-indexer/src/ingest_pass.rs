@@ -104,6 +104,35 @@ pub fn write_pass_summary(
     )
 }
 
+/// [`write_pass_summary`] for a Lambda no-publish run (D-STZ-44), which writes
+/// nothing back: the same one summary at the pass's own exit, marked
+/// `no_publish`, so the freshness query can skip it. `serve` never writes this.
+pub fn write_no_publish_pass_summary(
+    events: &Events,
+    pass: PassLabel,
+    ended: &EndedPass,
+    started: Instant,
+) -> i32 {
+    summarised(
+        || {
+            let summary = pass_summary_event(&ended.work, ended.exit, started);
+            events.emit_in(Some(pass), marked_no_publish(summary));
+            ended.exit.code()
+        },
+        || {
+            events.emit_in_unchecked(
+                Some(pass),
+                marked_no_publish(panicked_summary_event(started)),
+            )
+        },
+    )
+}
+
+fn marked_no_publish(mut summary: serde_json::Value) -> serde_json::Value {
+    summary["no_publish"] = true.into();
+    summary
+}
+
 /// Run `finish`, which writes the pass's summary last; if it panics first,
 /// write the `fallback` summary instead (exit 2, `pass_panicked`), so the
 /// alarm on exit-2 summaries still fires (review L1).

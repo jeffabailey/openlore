@@ -590,7 +590,6 @@ fn a_no_publish_module(source: &str) -> tempfile::TempDir {
 ///     | does not exist                          |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER implements and wires lambda_no_publish_is_read_only"]
 fn check_arch_refuses_a_write_capability_in_the_no_publish_module() {
     const CLEAN: &str = "fn run(read: &dyn IndexObjectReadPort) {}\n";
     let findings = |source: &str| {
