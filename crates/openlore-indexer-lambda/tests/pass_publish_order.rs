@@ -1,4 +1,5 @@
-//! Crafter-owned guards (steps 01-04, 01-10): the warm copy and the closed file.
+//! Crafter-owned guards (steps 01-04, 01-10, 04-03): the warm copy, the closed file
+//! and the no-publish arm with no usable starting index.
 //! The D-STZ-40 order is PA-11's.
 #![cfg(unix)]
 
@@ -62,4 +63,40 @@ fn a_warm_pass_after_the_index_was_reset_starts_from_nothing() {
     run.assert_exit(Exit::Completed);
     assert!(run.published(), "{}", run.dump());
     assert!(world.bucket.current().is_some());
+}
+
+/// D-STZ-41, D-STZ-44: no usable starting index fails a no-publish run too, with
+/// its one summary, and that arm still writes nothing.
+#[test]
+fn a_no_publish_run_with_no_usable_starting_index_fails_and_writes_nothing() {
+    for trouble in ["download fails", "damaged"] {
+        let world = LambdaWorld::listing(&[Author::Priya]);
+        world.publishes(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
+        world.given_a_pass_published_the_index();
+        world.publishes(Author::Priya, &[CARGO_PIN_TEST_DRIVEN]);
+        match trouble {
+            "damaged" => world.bucket.holds_a_damaged_index(),
+            _ => world.bucket.has_trouble(ObjectTrouble::DownloadsFail),
+        }
+        let before = world.bucket_universe();
+        let (pass, writes) = world.cold_pass_instance_forbidden_to_write();
+
+        let run = pass.invoked_with(no_publish_event());
+
+        let summary = run.assert_exit(Exit::Failed);
+        assert_eq!(
+            summary["cause"],
+            "starting_index_unusable",
+            "{trouble}: {}",
+            run.dump()
+        );
+        assert_eq!(summary["no_publish"], true, "{trouble}: {}", run.dump());
+        assert_eq!(run.payload()["would_publish"], false, "{trouble}");
+        assert_eq!(
+            writes.attempts(),
+            0,
+            "{trouble}: no publish or record write"
+        );
+        assert_eq!(before, world.bucket_universe(), "{trouble}");
+    }
 }

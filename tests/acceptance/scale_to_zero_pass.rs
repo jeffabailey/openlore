@@ -806,7 +806,6 @@ fn a_pass_refuses_a_did_list_with_a_typo_and_keeps_the_index_as_it_was() {
 ///     | the published index is damaged                  | that it saw the damaged index |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (pass start failures, UI-2)"]
 fn a_pass_that_cannot_get_a_usable_starting_index_is_a_failed_pass() {
     each_row(
         ["download fails", "refused", "no room", "damaged"],
@@ -886,7 +885,6 @@ fn a_pass_that_panics_part_way_is_reported_as_a_failed_pass_and_publishes_nothin
 ///   And nothing is published, and the pass record still names the 14:00 pass
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (a failed pass survives a store that refuses the record too)"]
 fn a_pass_during_a_full_store_outage_still_reports_a_failed_pass() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     given_the_first_pass_published_priyas_claim(&world);
@@ -953,7 +951,6 @@ fn a_pass_that_cannot_publish_its_changes_fails_and_keeps_the_index_as_it_was() 
 ///   And the pass record still names the 14:00 pass
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (a record write failure is exit 2 pass_record_failed)"]
 fn a_pass_whose_record_cannot_be_written_reports_exit_2_and_its_index_stays_published() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     given_the_first_pass_published_priyas_claim(&world);

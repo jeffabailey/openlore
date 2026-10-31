@@ -67,6 +67,17 @@ impl EndedPass {
         Self { work, exit }
     }
 
+    /// A pass a Lambda root ended on `failure` before any work (D-STZ-41). It has
+    /// fetched nothing, and its summary goes through [`write_pass_summary`] like
+    /// any other. `serve` and `ingest` never start a pass this way.
+    #[must_use]
+    pub fn before_work(failure: PassFailure) -> Self {
+        Self {
+            work: PassWork::failed(failure),
+            exit: PassExit::Failed(failure),
+        }
+    }
+
     /// How the work ended, the deadline check included.
     #[must_use]
     pub const fn exit(&self) -> PassExit {

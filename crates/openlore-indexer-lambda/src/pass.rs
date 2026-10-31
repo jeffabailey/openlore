@@ -6,6 +6,9 @@
 //! write `last-pass.json`, then write the ONE `pass_summary`, with the exit
 //! `decide::final_exit` settles.
 //!
+//! A pass with no usable starting index does no work: it ends as a failed pass and
+//! goes through the same record and summary (D-STZ-41).
+//!
 //! A no-publish run takes the same steps up to the pass work, and reads the same
 //! plan value. That arm is `no_publish::run_no_publish`, which takes the read port
 //! only, so it has no path to a write (D-STZ-44).
@@ -45,11 +48,24 @@ use crate::{
 /// How a pass whose work panicked ended (D-STZ-43).
 const PANICKED: PassExit = PassExit::Failed(PassFailure::PassPanicked);
 
-/// The plan value both arms read: the reused pass's work, and whether its store
-/// is to be published.
+/// The plan value both arms read: the object the pass saw at its start, the
+/// reused pass's work, and whether its store is to be published.
 pub(crate) struct WorkedPass {
+    pub(crate) seen: Option<ObjectVersion>,
     pub(crate) ended: EndedPass,
     pub(crate) publish: Publish,
+}
+
+impl WorkedPass {
+    /// D-STZ-41: no work was done, so nothing is published. `seen` names an object
+    /// that downloaded but will not open; a failed download saw none (D-STZ-48).
+    fn no_usable_start(seen: Option<ObjectVersion>) -> Self {
+        Self {
+            seen,
+            ended: EndedPass::before_work(PassFailure::StartingIndexUnusable),
+            publish: Publish::Skip,
+        }
+    }
 }
 
 /// The index a pass published.
@@ -151,9 +167,18 @@ impl PassFunction {
         pass: PassLabel,
         started: Instant,
     ) -> Result<serde_json::Value, FunctionError> {
-        let seen = fetch_starting_index(self.driven.index_read.as_ref(), &self.config).await;
-        let WorkedPass { ended, publish } =
-            work_the_pass(&self.config, self.driven.events.clone(), pass, started).await?;
+        let WorkedPass {
+            seen,
+            ended,
+            publish,
+        } = work_from_the_starting_index(
+            self.driven.index_read.as_ref(),
+            &self.config,
+            self.driven.events.clone(),
+            pass,
+            started,
+        )
+        .await?;
         let events = events_through(self.driven.events.clone());
         let PublishEnd { published, step } = match publish {
             Publish::Publish => self.publish(pass, seen.as_ref(), &events).await,
@@ -293,13 +318,27 @@ fn refused_event(_: EventRefused) -> FunctionError {
     }
 }
 
-/// Replace the local copy with the current object. `fetch_to` wants a new file,
-/// and a warm instance's last copy must not outlive a reset of the bucket. A
-/// failed fetch saw no object (D-STZ-48).
-pub(crate) async fn fetch_starting_index(
+/// Fetch the starting index, then work on it. A pass with no starting index it
+/// can use does no work (D-STZ-41).
+pub(crate) async fn work_from_the_starting_index(
     read: &dyn IndexObjectReadPort,
     config: &IndexerConfig,
-) -> Option<ObjectVersion> {
+    sink: Arc<dyn EventSink>,
+    pass: PassLabel,
+    started: Instant,
+) -> Result<WorkedPass, FunctionError> {
+    match fetch_starting_index(read, config).await {
+        Ok(seen) => work_the_pass(config, sink, seen, pass, started).await,
+        Err(_) => Ok(WorkedPass::no_usable_start(None)),
+    }
+}
+
+/// Replace the local copy with the current object. `fetch_to` wants a new file,
+/// and a warm instance's last copy must not outlive a reset of the bucket.
+async fn fetch_starting_index(
+    read: &dyn IndexObjectReadPort,
+    config: &IndexerConfig,
+) -> Result<Option<ObjectVersion>, IndexObjectError> {
     let index_path = &config.index_path;
     if let Err(stuck) = remove_if_present(index_path) {
         eprintln!("openlore-indexer-lambda: last index copy not removed: {stuck}");
@@ -307,27 +346,33 @@ pub(crate) async fn fetch_starting_index(
     read.fetch_to(index_path)
         .await
         .inspect_err(|failed| eprintln!("openlore-indexer-lambda: not fetched: {failed}"))
-        .ok()
-        .flatten()
 }
 
 /// The reused pass, off the async runtime: it blocks on a runtime of its own
-/// (UI-11). Its store is closed when this returns.
-pub(crate) async fn work_the_pass(
+/// (UI-11). Its store is closed when this returns. Opening the store is the only
+/// step of the wiring that can fail, so a refused wiring is a starting index that
+/// will not open: damaged, or no room for what opening writes (D-STZ-41).
+async fn work_the_pass(
     config: &IndexerConfig,
     sink: Arc<dyn EventSink>,
+    seen: Option<ObjectVersion>,
     pass: PassLabel,
     started: Instant,
 ) -> Result<WorkedPass, FunctionError> {
     let config = config.clone();
     let index_path = config.index_path.clone();
-    tokio::task::spawn_blocking(move || {
-        pass_wiring(config, sink).map(|wired| work_on(wired, pass, started, &index_path))
+    tokio::task::spawn_blocking(move || match pass_wiring(config, sink) {
+        Ok(wired) => work_on(wired, seen, pass, started, &index_path),
+        Err(refused) => {
+            let cause = refused.message;
+            eprintln!("openlore-indexer-lambda: starting index not opened: {cause}");
+            WorkedPass::no_usable_start(seen)
+        }
     })
     .await
     .map_err(|crashed| FunctionError {
         message: format!("pass task: {crashed}"),
-    })?
+    })
 }
 
 /// The write probe, off the async runtime: it is sync and blocks (D-STZ-39,
@@ -392,7 +437,13 @@ fn store_unusable_event(reason: UnusableReason) -> serde_json::Value {
 /// store's condition is read once, after the work, for the log and the publish
 /// (D-STZ-9). It is checked closed, because a close is what could still fail to
 /// fold the log into the file (P-7).
-fn work_on(wired: Wired, pass: PassLabel, started: Instant, index_path: &Path) -> WorkedPass {
+fn work_on(
+    wired: Wired,
+    seen: Option<ObjectVersion>,
+    pass: PassLabel,
+    started: Instant,
+    index_path: &Path,
+) -> WorkedPass {
     let store = Arc::clone(&wired.wiring.store_condition);
     let events = wired.wiring.events.clone();
     let before = store.fingerprint().ok();
@@ -409,7 +460,11 @@ fn work_on(wired: Wired, pass: PassLabel, started: Instant, index_path: &Path) -
         after,
         ready_to_upload(unusable.is_none(), index_path),
     );
-    WorkedPass { ended, publish }
+    WorkedPass {
+        seen,
+        ended,
+        publish,
+    }
 }
 
 /// `decide::publish_decision`, when both fingerprints could be read and the work

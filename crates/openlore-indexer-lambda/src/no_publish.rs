@@ -13,7 +13,7 @@ use ports::IndexObjectReadPort;
 use serde_json::json;
 
 use crate::decide::Publish;
-use crate::pass::{fetch_starting_index, work_the_pass, WorkedPass};
+use crate::pass::{work_from_the_starting_index, WorkedPass};
 use crate::{events_through, EventSink, FunctionError};
 
 /// What a no-publish run found, for the reply and its `pass_summary`.
@@ -41,7 +41,8 @@ impl NoPublishReport {
 
 /// Run the pass work against a copy of the index, write its one summary, and
 /// report what a normal pass would have published. As in a normal pass, a crash
-/// or a wiring refusal is a function error.
+/// is a function error, and no usable starting index is a failed pass that would
+/// publish nothing (D-STZ-41).
 pub async fn run_no_publish(
     read: &dyn IndexObjectReadPort,
     config: &IndexerConfig,
@@ -49,9 +50,8 @@ pub async fn run_no_publish(
     pass: PassLabel,
     started: Instant,
 ) -> Result<NoPublishReport, FunctionError> {
-    fetch_starting_index(read, config).await;
-    let WorkedPass { ended, publish } =
-        work_the_pass(config, Arc::clone(&sink), pass, started).await?;
+    let WorkedPass { ended, publish, .. } =
+        work_from_the_starting_index(read, config, Arc::clone(&sink), pass, started).await?;
     let exit_code = write_no_publish_pass_summary(&events_through(sink), pass, &ended, started);
     Ok(NoPublishReport {
         pass_id: pass.to_string(),
