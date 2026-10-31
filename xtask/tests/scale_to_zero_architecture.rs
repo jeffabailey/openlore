@@ -697,7 +697,6 @@ fn the_secret_check_catches_each_shape_and_passes_a_plain_environment() {
 ///   And no value has the shape of an access key, a secret key or a private key
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy/tofu/environments/prod-indexer/lambda-env.json"]
 fn the_lambda_environment_holds_no_secret_and_no_static_aws_key() {
     let path = root().join("deploy/tofu/environments/prod-indexer/lambda-env.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));

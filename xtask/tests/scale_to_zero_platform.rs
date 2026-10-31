@@ -1160,7 +1160,6 @@ fn the_edge_is_one_allowlist_in_front_of_every_path() {
 ///   And noncurrent index versions are kept 7 days, at least the 5 newest
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy/tofu/environments/prod-indexer"]
 fn a_crashed_pass_is_not_retried_one_pass_runs_at_a_time_and_the_index_keeps_a_week_of_history() {
     let tofu = prod_indexer_tofu();
 
@@ -1211,7 +1210,6 @@ fn a_crashed_pass_is_not_retried_one_pass_runs_at_a_time_and_the_index_keeps_a_w
 ///   And an apply never restores that number after a stop
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy/tofu/environments/prod-indexer"]
 fn at_most_three_searches_run_at_once_and_a_stop_survives_an_apply() {
     let tofu = prod_indexer_tofu();
     let search = function(&tofu, "openlore-indexer-search");
@@ -1337,7 +1335,6 @@ fn maintenance_switches_change_one_function_and_nothing_else() {
 ///   Then the pass schedule and the probe schedule each send an empty event
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy/tofu/environments/prod-indexer"]
 fn both_schedules_send_an_empty_event() {
     let tofu = prod_indexer_tofu();
 
@@ -2090,7 +2087,6 @@ fn standby_stops_what_it_names_and_leaves_the_rest() {
 ///   Then both schedules follow one setting, and that setting starts off
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy/tofu/environments/prod-indexer"]
 fn nothing_runs_on_a_schedule_until_the_operator_turns_it_on() {
     let tofu = prod_indexer_tofu();
 
@@ -2116,7 +2112,6 @@ fn nothing_runs_on_a_schedule_until_the_operator_turns_it_on() {
 ///   Then its lifecycle rule for built images keeps exactly 10
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy/tofu/environments/prod-indexer"]
 fn the_registry_keeps_the_newest_10_builds() {
     let squeezed: String = prod_indexer_tofu().split_whitespace().collect();
 
@@ -2142,7 +2137,6 @@ fn the_registry_keeps_the_newest_10_builds() {
 ///   And it does not depend on the phase, and it is not the public name
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy/tofu/environments/prod-indexer"]
 fn the_probe_watches_the_same_address_before_and_after_the_cut_over() {
     let tofu = prod_indexer_tofu();
 
