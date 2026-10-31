@@ -97,6 +97,8 @@ const ACCEPT_EXIT_3: (&str, &str) = ("LAMBDA_ACCEPT_EXIT_3", "1");
 const ACCEPT_NOT_LIVE: (&str, &str) = ("LAMBDA_ACCEPT_NOT_LIVE", "1");
 /// A gate is throttled for ever.
 const ALWAYS: u32 = u32::MAX;
+/// How a stub logs its call: the pollers run beside the calls they would split.
+const RECORD_CALL: &str = include_str!("support/record_call.sh");
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -288,7 +290,7 @@ esac"#
         std::fs::write(
             &path,
             format!(
-                "#!/usr/bin/env bash\nCALLS='{}'\necho \"{name} $*\" >> \"$CALLS\"\n{body}\n",
+                "#!/usr/bin/env bash\nCALLS='{}'\n{RECORD_CALL}\nrecord_call \"{name} $*\"\n{body}\n",
                 log.display()
             ),
         )
@@ -478,7 +480,7 @@ fn aws(posture: Posture, digest: &str) -> String {
 in_ecr={in_ecr}
 for last in "$@"; do :; done
 for a in "$@"; do
-  case "$a" in file://*) tr -d ' \n' <"${{a#file://}}" >>"$CALLS"; echo >>"$CALLS" ;; esac
+  case "$a" in file://*) record_call "$(tr -d ' \n' <"${{a#file://}}")" ;; esac
 done
 case "$*" in
   *"sts get-caller-identity"*) echo '{{"Account":"091153021562"}}' ;;

@@ -112,6 +112,9 @@ fn compact(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// How a stub logs its call: the deploy's poller runs beside the calls it would split.
+const RECORD_CALL: &str = include_str!("support/record_call.sh");
+
 /// A directory of stub executables that append `<name> <args>` to `calls.log`.
 struct Stubs {
     dir: tempfile::TempDir,
@@ -130,7 +133,7 @@ impl Stubs {
         std::fs::write(
             &path,
             format!(
-                "#!/usr/bin/env bash\necho \"{name} $*\" >> '{}'\n{body}\n",
+                "#!/usr/bin/env bash\nCALLS='{}'\n{RECORD_CALL}\nrecord_call \"{name} $*\"\n{body}\n",
                 log.display()
             ),
         )
@@ -1507,7 +1510,7 @@ fn write_recording_stub(path: &Path, log: &Path, name: &str, body: &str) {
     std::fs::write(
         path,
         format!(
-            "#!/usr/bin/env bash\necho \"{name} $*\" >> '{}'\n{body}\n",
+            "#!/usr/bin/env bash\nCALLS='{}'\n{RECORD_CALL}\nrecord_call \"{name} $*\"\n{body}\n",
             log.display()
         ),
     )
