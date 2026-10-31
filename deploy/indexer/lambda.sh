@@ -71,6 +71,10 @@ PARITY_SEARCHES=3
 KPI_PASSES='filter event = "indexer.ingest.pass_summary" and not ispresent(no_publish) and pass_id not like /^TEST/'
 PROBE_LINES="filter event = \"indexer.host.health\" and \`source\` = \"lambda-probe\""
 
+# The version a `live` record says it replaced (L-13): a rollback's target, so a prune must read it
+# exactly as a rollback does. A jq definition, for the filters that open with it.
+RECORDED_PREV='def recorded_prev: .Description // "" | capture("prev=(?<v>[0-9]+)").v;'
+
 COPIED_DIGEST=""      # step 6: set while this run's copy is not yet on every $LATEST
 LIVE_VERSIONS=()      # step 7, or a rollback: what each `live` alias holds now
 IMAGE_DIGESTS=()      # what each function is set to: a deploy's build, or its own live image
@@ -91,6 +95,10 @@ now_ms() { jq -n 'now * 1000 | floor'; }
 index_head() { # the index object's metadata; {} on an empty bucket
   aws s3api head-object --region "$REGION" --bucket "$INDEX_BUCKET" --key "$INDEX_KEY" \
     2>/dev/null || echo '{}'
+}
+
+index_version() { # the current index version id; `none` on an empty bucket
+  index_head | jq -r '.VersionId // "none"'
 }
 
 # What every verb needs. The kill switch runs on this alone, on whatever machine is at hand when
@@ -154,7 +162,7 @@ evicted_digests() {
 
 alias_versions() { # $1 = function, $2 = alias -> the version it holds and the one it records
   aws lambda get-alias --region "$REGION" --function-name "$1" --name "$2" |
-    jq -r '.FunctionVersion, (.Description // "" | capture("prev=(?<v>[0-9]+)").v)'
+    jq -r "$RECORDED_PREV"'.FunctionVersion, recorded_prev'
 }
 
 # Lambda resolves a tag to a digest at create time, so ResolvedImageUri is the one to trust.
@@ -244,7 +252,7 @@ record_rollback_targets() {
     version=$(live_version "$function") || die "refusing: could not read the live alias of $function"
     LIVE_VERSIONS+=("$version")
   done
-  INDEX_VERSION=$(index_head | jq -r '.VersionId // "none"')
+  INDEX_VERSION=$(index_version)
 }
 
 # Step 8. Nothing invokes $LATEST, so this is invisible to traffic.
@@ -566,9 +574,9 @@ deploy_summary() { # step 16
 # The versions past the newest $RETAINED_VERSIONS that no alias, and no prev= record, names
 # (pure). $1 = list-versions-by-function JSON, $2 = list-aliases JSON.
 prunable_versions() {
-  jq -rn --argjson versions "$1" --argjson aliases "$2" --argjson keep "$RETAINED_VERSIONS" '
-    [$aliases.Aliases[]? | .FunctionVersion, (.Description // "" | capture("prev=(?<v>[0-9]+)").v)]
-      as $referenced
+  jq -rn --argjson versions "$1" --argjson aliases "$2" --argjson keep "$RETAINED_VERSIONS" \
+    "$RECORDED_PREV"'
+    [$aliases.Aliases[]? | .FunctionVersion, recorded_prev] as $referenced
     | [$versions.Versions[]?.Version | select(test("^[0-9]+$")) | tonumber]
     | sort | reverse | .[$keep:][] | tostring
     | select(. as $version | any($referenced[]; . == $version) | not)'
@@ -648,6 +656,16 @@ lambda_seed() { # $1 = git sha or digest
   echo "bootstrap_image_uri = \"$ECR_REPO@$BUILD_DIGEST\""
 }
 
+# One version's get-function JSON, once it is known to name an image ECR still holds.
+readable_version() { # $1 = function, $2 = version, $3 = the image, as a refusal calls it
+  local answer digest
+  answer=$(aws lambda get-function --region "$REGION" --function-name "$1" --qualifier "$2") ||
+    die "refusing: could not read version $2 of $1"
+  digest=$(image_digest <<<"$answer") || die "refusing: version $2 of $1 names no image"
+  ecr_holds "$digest" || die "refusing: ECR does not hold $digest, $3"
+  echo "$answer"
+}
+
 # The sha a version was published with, the first word of its description (pure).
 # stdin = get-function JSON. A version this script did not publish names none.
 version_sha() {
@@ -658,12 +676,9 @@ version_sha() {
 # have moved since. Refuses, and never falls back: `$LATEST` may hold an unflipped image, and a
 # prev= record names the version before this one. Runs for all three before any function changes.
 read_live_image() { # $1 = index into LAMBDA_FUNCTIONS
-  local function=${LAMBDA_FUNCTIONS[$1]} version=${LIVE_VERSIONS[$1]} answer digest
-  answer=$(aws lambda get-function --region "$REGION" --function-name "$function" \
-    --qualifier "$version") || die "refusing: could not read version $version of $function"
-  digest=$(image_digest <<<"$answer") || die "refusing: version $version of $function names no image"
-  ecr_holds "$digest" || die "refusing: ECR does not hold $digest, the live image of $function"
-  IMAGE_DIGESTS+=("$digest")
+  local function=${LAMBDA_FUNCTIONS[$1]} answer
+  answer=$(readable_version "$function" "${LIVE_VERSIONS[$1]}" "the live image of $function")
+  IMAGE_DIGESTS+=("$(image_digest <<<"$answer")")
   IMAGE_SHAS+=("$(version_sha <<<"$answer")")
 }
 
@@ -689,15 +704,12 @@ lambda_republish() {
 # What one function goes back to. Refuses a missing record or a missing image, so this runs for
 # all three before any alias moves. A rollback's targets were verified when first deployed.
 read_rollback_target() { # $1 = function
-  local versions current target answer digest
+  local versions current target
   versions=$(alias_versions "$1" live) || die "refusing: could not read the live alias of $1"
   current=$(sed -n 1p <<<"$versions")
   target=$(sed -n 2p <<<"$versions")
   [ -n "$target" ] || die "refusing: $1 records no version it replaced"
-  answer=$(aws lambda get-function --region "$REGION" --function-name "$1" \
-    --qualifier "$target") || die "refusing: could not read version $target of $1"
-  digest=$(image_digest <<<"$answer") || die "refusing: version $target of $1 names no image"
-  ecr_holds "$digest" || die "refusing: ECR does not hold $digest, the image of $1 version $target"
+  readable_version "$1" "$target" "the image of $1 version $target" >/dev/null
   LIVE_VERSIONS+=("$current")
   NEW_VERSIONS+=("$target")
 }
@@ -828,7 +840,7 @@ lambda_reset_index() { # [--trigger]
   echo "This deletes s3://$INDEX_BUCKET/$INDEX_KEY. Type reset to go on:" >&2
   IFS= read -r word || true
   [ "$word" = reset ] || die "refusing: reset-index needs the exact word reset, got '$word'"
-  version=$(index_head | jq -r '.VersionId // "none"')
+  version=$(index_version)
   aws s3api delete-object --region "$REGION" --bucket "$INDEX_BUCKET" --key "$INDEX_KEY" >/dev/null
   echo "index deleted; its version is now noncurrent: $version"
   echo "restore: deploy.sh lambda restore-index $version"
