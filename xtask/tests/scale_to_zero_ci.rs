@@ -1575,3 +1575,183 @@ fn a_self_host_binary_holding_an_aws_string_fails_the_build() {
     assert!(!exits_zero(None, LAMBDA), "no binary is no pass");
     assert!(!exits_zero(Some(CLEAN), CLEAN), "a blind check is no pass");
 }
+
+const INHERITS: &str = "rust-version.workspace = true";
+const LAMBDA_FLOOR: &str = r#"rust-version = "1.94.1""#;
+const WORKSPACE_FLOOR: &str = r#"rust-version = "1.91""#;
+const RUST_VERSION_RULE: &str = "rust_version_1_94_only_on_lambda_crates";
+
+/// A workspace on disk, its members named so one sorts first, one in the middle and
+/// one last, each on the given `rust-version` line. Rows override the healthy tree.
+fn planted_workspace(workspace_line: &str, overrides: &[(&str, &str)]) -> tempfile::TempDir {
+    let healthy = [
+        ("aaa-first", INHERITS),
+        ("adapter-s3-index-object", LAMBDA_FLOOR),
+        ("mmm-middle", INHERITS),
+        ("openlore-indexer-lambda", LAMBDA_FLOOR),
+        ("zzz-last", INHERITS),
+    ];
+    let dir = tempfile::tempdir().expect("a directory");
+    let root = format!(
+        "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"2\"\n\n\
+         [workspace.package]\n{workspace_line}\n"
+    );
+    std::fs::write(dir.path().join("Cargo.toml"), root).expect("the root manifest");
+    for (name, healthy_line) in healthy {
+        let line = overrides
+            .iter()
+            .find(|(member, _)| *member == name)
+            .map_or(healthy_line, |(_, line)| line);
+        let source = dir.path().join("crates").join(name).join("src");
+        std::fs::create_dir_all(&source).expect("the crate");
+        std::fs::write(source.join("lib.rs"), "").expect("the library");
+        let manifest = format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.0.1\"\nedition = \"2021\"\n{line}\n"
+        );
+        std::fs::write(
+            dir.path().join("crates").join(name).join("Cargo.toml"),
+            manifest,
+        )
+        .expect("the member manifest");
+    }
+    dir
+}
+
+fn rust_version_findings(workspace: &tempfile::TempDir) -> Vec<String> {
+    xtask::check_arch::scan_member_rust_versions(workspace.path()).expect("a readable workspace")
+}
+
+/// One finding, on the named crate, under the rule.
+fn assert_only_finding_names(findings: &[String], member: &str) {
+    assert_eq!(findings.len(), 1, "{member}: {findings:?}");
+    assert!(findings[0].contains(member), "{findings:?}");
+    assert!(findings[0].contains(RUST_VERSION_RULE), "{findings:?}");
+}
+
+/// D-STZ-35, DV-STZ-3. Every member's own manifest is read: wherever the third crate
+/// sorts, and however its manifest departs from inheriting, it is the one named.
+#[test]
+fn only_the_two_lambda_crates_set_the_higher_rust_version() {
+    assert_eq!(
+        xtask::check_arch::scan_member_rust_versions(&workspace()).expect("the real tree"),
+        Vec::<String>::new()
+    );
+    let healthy = planted_workspace(WORKSPACE_FLOOR, &[]);
+    assert_eq!(rust_version_findings(&healthy), Vec::<String>::new());
+
+    for third in ["aaa-first", "mmm-middle", "zzz-last"] {
+        let planted = planted_workspace(WORKSPACE_FLOOR, &[(third, LAMBDA_FLOOR)]);
+        assert_only_finding_names(&rust_version_findings(&planted), third);
+    }
+    let two = planted_workspace(
+        WORKSPACE_FLOOR,
+        &[("aaa-first", LAMBDA_FLOOR), ("zzz-last", LAMBDA_FLOOR)],
+    );
+    assert_eq!(rust_version_findings(&two).len(), 2, "each manifest counts");
+
+    for departure in [
+        WORKSPACE_FLOOR,
+        r#"rust-version = "1.92""#,
+        r#"rust-version="1.94.1" # the SDK"#,
+        "",
+    ] {
+        let planted = planted_workspace(WORKSPACE_FLOOR, &[("mmm-middle", departure)]);
+        assert_only_finding_names(&rust_version_findings(&planted), "mmm-middle");
+    }
+    for lambda_crate in ["adapter-s3-index-object", "openlore-indexer-lambda"] {
+        for departure in [INHERITS, r#"rust-version = "1.95""#] {
+            let planted = planted_workspace(WORKSPACE_FLOOR, &[(lambda_crate, departure)]);
+            assert_only_finding_names(&rust_version_findings(&planted), lambda_crate);
+        }
+    }
+
+    let inline_table = planted_workspace(
+        WORKSPACE_FLOOR,
+        &[("mmm-middle", "rust-version = { workspace = true }")],
+    );
+    assert_eq!(rust_version_findings(&inline_table), Vec::<String>::new());
+    let comment_and_other_table = planted_workspace(
+        WORKSPACE_FLOOR,
+        &[(
+            "mmm-middle",
+            "# rust-version = \"1.94.1\"\nrust-version.workspace = true\n\n\
+             [package.metadata.floor]\nrust-version = \"1.94.1\"",
+        )],
+    );
+    assert_eq!(
+        rust_version_findings(&comment_and_other_table),
+        Vec::<String>::new(),
+        "only the package's own key counts"
+    );
+
+    let raised = planted_workspace(LAMBDA_FLOOR, &[]);
+    let findings = rust_version_findings(&raised);
+    assert_eq!(
+        findings.len(),
+        1,
+        "everyone inheriting 1.94.1: {findings:?}"
+    );
+    assert!(findings[0].contains("workspace.package"), "{findings:?}");
+    assert!(findings[0].contains(RUST_VERSION_RULE), "{findings:?}");
+}
+
+/// The rule is on the command CI runs, not only in the library. check-arch needs a
+/// whole workspace's sources, so this reads `run` rather than planting a tree.
+#[test]
+fn check_arch_reports_the_rust_version_rule() {
+    let source = read("xtask/src/check_arch.rs");
+    let (_, after_opening) = source
+        .split_once("pub fn run() -> anyhow::Result<i32> {")
+        .expect("the command");
+    let (run, _) = after_opening.split_once("\n}\n").expect("its end");
+    for line in [
+        "let rust_version_findings = scan_member_rust_versions(&workspace_root)?;",
+        "rendered.extend(rust_version_findings);",
+    ] {
+        assert!(run.contains(line), "{line}");
+    }
+}
+
+/// The names in a job's `needs:` line, read whole.
+fn needs(job: &str) -> BTreeSet<&str> {
+    job.lines()
+        .find_map(|line| line.trim().strip_prefix("needs: ["))
+        .and_then(|names| names.strip_suffix(']'))
+        .map_or_else(BTreeSet::new, |names| names.split(", ").collect())
+}
+
+/// DV-STZ-3. The repo's rust-toolchain.toml says `stable` and beats rustup's default,
+/// so a leg that only installs its toolchain would prove nothing about that toolchain.
+#[test]
+fn the_msrv_job_checks_each_floor_on_its_own_toolchain_before_the_tests_run() {
+    let ci = read(".github/workflows/ci.yml");
+    let msrv = job(&ci, "msrv");
+    let rows: BTreeSet<&str> = msrv.lines().map(str::trim).collect();
+    for row in [
+        "fail-fast: false",
+        "- toolchain: 1.91.0",
+        "scope: --workspace --exclude openlore-indexer-lambda --exclude adapter-s3-index-object",
+        "- toolchain: 1.94.1",
+        "scope: -p openlore-indexer-lambda -p adapter-s3-index-object",
+        "CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback",
+        "RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}",
+        "toolchain: ${{ matrix.toolchain }}",
+    ] {
+        assert!(rows.contains(row), "the msrv job has `{row}`");
+    }
+    assert_eq!(
+        lines_running(msrv, "cargo check"),
+        ["cargo check ${{ matrix.scope }} --lib --bins"]
+    );
+    assert_eq!(
+        needs(msrv),
+        BTreeSet::new(),
+        "commit stage: it needs nothing"
+    );
+    for gated in ["test", "rio-object-store"] {
+        assert!(
+            needs(job(&ci, gated)).contains("msrv"),
+            "{gated} needs msrv"
+        );
+    }
+}

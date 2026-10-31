@@ -1,7 +1,7 @@
 # CI — commit + acceptance stages per devops/ci-cd-pipeline.md §3-§4.
 #
 # Commit stage (parallel jobs): fmt | clippy | cargo-deny | xtask check-arch |
-# xtask check-probes. Acceptance stage (test job) gates on commit-stage success
+# xtask check-probes | msrv. Acceptance stage (test job) gates on commit-stage success
 # and runs the full nextest workspace suite (unit + acceptance + integration
 # tests share the same `cargo test` runner per Rust convention).
 #
@@ -91,10 +91,42 @@ jobs:
       - name: cargo xtask check-probes
         run: cargo run -p xtask -- check-probes
 
+  # ------------------------------------------------------------------------------------------
+  # DV-STZ-3 / D-STZ-35: the claimed Rust floors, proven. The workspace stays on 1.91 and only
+  # the two Lambda crates need 1.94.1 (xtask rust_version_1_94_only_on_lambda_crates). Cargo.lock
+  # is gitignored, so `fallback` keeps an upstream MSRV bump from turning main red for no code
+  # reason. RUSTUP_TOOLCHAIN because rust-toolchain.toml says `stable` and outranks rustup's
+  # default: without it, each leg would quietly check on stable.
+  # ------------------------------------------------------------------------------------------
+  msrv:
+    name: msrv (${{ matrix.toolchain }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - toolchain: 1.91.0
+            scope: --workspace --exclude openlore-indexer-lambda --exclude adapter-s3-index-object
+          - toolchain: 1.94.1
+            scope: -p openlore-indexer-lambda -p adapter-s3-index-object
+    env:
+      CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check on the floor
+        run: |
+          rustc --version
+          cargo check ${{ matrix.scope }} --lib --bins
+
   test:
     name: test (acceptance stage)
     runs-on: ubuntu-latest
-    needs: [fmt, clippy, deny, check-arch, check-probes]
+    needs: [fmt, clippy, deny, check-arch, check-probes, msrv]
     steps:
       # The workspace's test binaries (each linking DuckDB) outgrew the ~14 GB free on
       # ubuntu-latest: rustc hit ENOSPC and ld died with SIGBUS. Drop preinstalled SDKs
@@ -150,7 +182,7 @@ jobs:
   rio-object-store:
     name: rio-object-store
     runs-on: ubuntu-latest
-    needs: [fmt, clippy, deny, check-arch, check-probes]
+    needs: [fmt, clippy, deny, check-arch, check-probes, msrv]
     services:
       moto:
         image: motoserver/moto:5.2.5@sha256:59a1965d845249b04def37a0e2565f9cc6c44543cb89b68e90f28f344b3b0d1a

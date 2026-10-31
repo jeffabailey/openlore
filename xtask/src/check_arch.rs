@@ -760,6 +760,109 @@ pub fn check_aws_sdk_only_in_lambda_edge(workspace: &Workspace) -> Vec<Violation
 }
 
 // -----------------------------------------------------------------------------
+// Rust-version rule — `rust_version_1_94_only_on_lambda_crates` (D-STZ-35 / DV-STZ-3)
+// -----------------------------------------------------------------------------
+//
+// The AWS SDK needs 1.94.1, so the two crates at the AWS edge declare it. Everything
+// else inherits the workspace's 1.91, which keeps the CLI's source install on 1.91.
+
+/// The workspace's MSRV, set once in `[workspace.package]`.
+const WORKSPACE_RUST_VERSION: &str = "1.91";
+
+/// What the AWS edge needs.
+const AWS_EDGE_RUST_VERSION: &str = "1.94.1";
+
+/// What a manifest's table says about `rust-version`.
+#[derive(Debug, PartialEq, Eq)]
+enum RustVersionDeclaration {
+    Inherited,
+    Pinned(String),
+    Missing,
+}
+
+/// One manifest line's `rust-version` declaration, if it holds one.
+fn rust_version_on_line(line: &str) -> Option<RustVersionDeclaration> {
+    let (key, value) = line.split_once('=')?;
+    let value = value.trim();
+    match key.trim() {
+        // Cargo refuses `false` here, so the key alone means inherited.
+        "rust-version.workspace" => Some(RustVersionDeclaration::Inherited),
+        "rust-version" if value.replace(' ', "") == "{workspace=true}" => {
+            Some(RustVersionDeclaration::Inherited)
+        }
+        "rust-version" => Some(RustVersionDeclaration::Pinned(
+            value.trim_matches('"').to_string(),
+        )),
+        _ => None,
+    }
+}
+
+/// Reads `rust-version` from one table, by lines. A form this does not recognise reads
+/// as [`RustVersionDeclaration::Missing`], which the rule refuses, so it fails closed.
+fn rust_version_declared_in(manifest: &str, table: &str) -> RustVersionDeclaration {
+    let header = format!("[{table}]");
+    manifest
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or_default().trim())
+        .skip_while(|line| *line != header)
+        .skip(1)
+        .take_while(|line| !line.starts_with('['))
+        .find_map(rust_version_on_line)
+        .unwrap_or(RustVersionDeclaration::Missing)
+}
+
+fn rust_version_finding(
+    subject: &str,
+    declared: &RustVersionDeclaration,
+    required: &RustVersionDeclaration,
+) -> String {
+    format!(
+        "{subject}: declares {declared:?}, needs {required:?} \
+         (rust_version_1_94_only_on_lambda_crates, D-STZ-35 / DV-STZ-3)"
+    )
+}
+
+/// The workspace floor itself: at 1.94.1 every inheriting member would rise with it.
+fn classify_workspace_rust_version(root_manifest: &str) -> Option<String> {
+    let declared = rust_version_declared_in(root_manifest, "workspace.package");
+    let required = RustVersionDeclaration::Pinned(WORKSPACE_RUST_VERSION.to_string());
+    (declared != required)
+        .then(|| rust_version_finding("[workspace.package]", &declared, &required))
+}
+
+fn classify_member_rust_version(member: &str, manifest: &str) -> Option<String> {
+    let declared = rust_version_declared_in(manifest, "package");
+    let required = if AWS_EDGE_MEMBERS.contains(&member) {
+        RustVersionDeclaration::Pinned(AWS_EDGE_RUST_VERSION.to_string())
+    } else {
+        RustVersionDeclaration::Inherited
+    };
+    (declared != required).then(|| rust_version_finding(member, &declared, &required))
+}
+
+/// Effect shell: the root manifest and every member's own, as `cargo metadata` lists
+/// the members. Cargo resolves inheritance away, so the text is what tells a member
+/// that inherits from one that spells out the same version.
+pub fn scan_member_rust_versions(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let root_manifest = workspace_root.join("Cargo.toml");
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .manifest_path(&root_manifest)
+        .no_deps()
+        .exec()
+        .map_err(|e| anyhow::anyhow!("cargo metadata failed: {e}"))?;
+
+    let mut findings: Vec<String> =
+        classify_workspace_rust_version(&std::fs::read_to_string(&root_manifest)?)
+            .into_iter()
+            .collect();
+    for package in metadata.workspace_packages() {
+        let manifest = std::fs::read_to_string(&package.manifest_path)?;
+        findings.extend(classify_member_rust_version(&package.name, &manifest));
+    }
+    Ok(findings)
+}
+
+// -----------------------------------------------------------------------------
 // Viewer capability-boundary rule — `viewer_holds_no_signing_surface`
 // (I-VIEW-3 / ADR-028/030)
 // -----------------------------------------------------------------------------
@@ -4709,6 +4812,7 @@ pub fn run() -> anyhow::Result<i32> {
     let signing_permit_serde_findings = scan_signing_permit_not_serializable(&workspace_root)?;
     let sign_site_findings = scan_sign_only_with_permit(&workspace_root)?;
     let scoring_caller_findings = scan_scoring_callers_use_score_attested(&workspace_root)?;
+    let rust_version_findings = scan_member_rust_versions(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -4745,6 +4849,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(signing_permit_serde_findings);
     rendered.extend(sign_site_findings);
     rendered.extend(scoring_caller_findings);
+    rendered.extend(rust_version_findings);
 
     if rendered.is_empty() {
         println!(
