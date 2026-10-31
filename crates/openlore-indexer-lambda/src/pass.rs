@@ -20,14 +20,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use adapter_index_store::UnusableReason;
 use appview_domain::ingest_pass::{PassExit, PassFailure};
 use appview_domain::pass_runner::PassId;
 use chrono::{DateTime, SecondsFormat, Utc};
 use openlore_indexer::config::{IndexerConfig, REPO_DIDS_FILE_VAR};
 use openlore_indexer::events::Events;
 use openlore_indexer::ingest_pass::{write_pass_summary, EndedPass};
-use openlore_indexer::run::ProbedWiring;
+use openlore_indexer::run::{store_unusable_event, ProbedWiring};
 use openlore_indexer::runner_contract::{BootNonce, PassLabel};
 use ports::{
     IndexFingerprint, IndexObjectError, IndexObjectReadPort, LastPass, ObjectVersion, ProbeOutcome,
@@ -414,15 +413,6 @@ fn write_probe_verdict(answer: Result<ProbeOutcome, JoinError>) -> Result<(), Pr
             Ok(())
         }
     }
-}
-
-/// The line the self-host indexer writes for an unusable store, from this root.
-fn store_unusable_event(reason: UnusableReason) -> serde_json::Value {
-    json!({
-        "event": "indexer.store.unusable",
-        "adapter": "index_store",
-        "reason": reason.token(),
-    })
 }
 
 /// One pass's work between two fingerprints, ending with the store closed. The

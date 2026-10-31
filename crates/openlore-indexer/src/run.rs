@@ -457,8 +457,10 @@ fn exit_when_the_store_is_unusable(wiring: &IndexerWiring, stop: &AtomicBool) {
     }
 }
 
-/// `indexer.store.unusable`: the store cannot be used; `serve` exits 2 next.
-fn store_unusable_event(reason: UnusableReason) -> serde_json::Value {
+/// `indexer.store.unusable`, the one shape of it in both roots: the store cannot
+/// be used. `serve` exits 2 next; a Lambda pass does not publish it.
+#[must_use]
+pub fn store_unusable_event(reason: UnusableReason) -> serde_json::Value {
     serde_json::json!({
         "event": "indexer.store.unusable",
         "adapter": "index_store",
