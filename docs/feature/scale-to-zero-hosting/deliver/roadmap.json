@@ -1661,7 +1661,7 @@
             "cargo test -p xtask",
             "cargo xtask check-arch"
           ],
-          "implementation_notes": "rust-version is already in both manifests (DWD-STZ-20), so this step enforces it. No MSRV job existed, so 1.91 has never been proven: if the 1.91.0 leg fails on existing code, stop and report it, since a fix is outside this feature. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "rust-version is already in both manifests (DWD-STZ-20), so this step enforces it. No MSRV job existed, so 1.91 has never been proven: if the 1.91.0 leg fails on existing code, stop and report it, since a fix is outside this feature. EXEMPT FROM PARADIGM: conventions.test_paradigm. FROM 06-03: add msrv to rio-object-store's needs as well.",
           "estimate_hours": 2,
           "depends_on": [
             "07-02"
