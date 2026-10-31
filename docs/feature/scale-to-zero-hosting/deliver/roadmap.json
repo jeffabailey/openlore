@@ -1,0 +1,2178 @@
+{
+  "roadmap": {
+    "project_id": "scale-to-zero-hosting",
+    "created_at": "2026-10-30T00:00:00Z",
+    "total_steps": 49,
+    "scope": "Repo work only: move the indexer's search, 15-minute pass and probe onto a new Lambda composition root with the index as one S3 object, while the self-host openlore-indexer binary behaves exactly as before and stays AWS-free. Phases: walking skeleton, story lines, no-publish and write probe, error paths, probe, real adapter and runtime, infrastructure and CI, operator verbs. OUT OF SCOPE, stated plainly: anything that needs production action. No tofu apply, no lambda deploy, no trial, no cut-over, no DNS, no decommission. Those are operator stages after DELIVER; see operator_stages_after_deliver."
+  },
+  "total_steps": 49,
+  "conventions": {
+    "paradigm": "ADR-007 functional Rust. decide (openlore-indexer-lambda), write_probe_outcome, location_names_write_probe_key and call_budget are pure. The pass, search and probe modes, the adapters and deploy.sh do I/O only. Plan-value rule (D-STZ-44): the pass work returns a value, and the no-publish arm holds the read port alone. Crafter: nw-functional-software-crafter.",
+    "tdd_phases": "PREPARE, RED_ACCEPTANCE, RED_UNIT, GREEN, COMMIT (.nwave/des-config.json). RED_UNIT is recorded NOT_APPLICABLE with a reason on steps whose only RED is an acceptance scenario, a guard or a shell/tofu check.",
+    "test_paradigm": "Acceptance suites already exist; DELIVER does not re-author them. Pure core: proptest in scale_to_zero_core.rs plus crafter-owned proptest with state-delta (tests/common/state_delta.rs) over a declared universe; single-example unit tests only with a `// bypass:` reason. In-process suites (layer 2), RIO, xtask and OP scenarios stay example-only: they verify wiring. EXEMPT FROM PARADIGM for shell, tofu and workflow steps: the contract is a call log or a file's settings (DWD-STZ-28), compensated by the pure-core properties.",
+    "scenario_mapping": "Every one of the 132 DISTILL scenarios appears in exactly one step's scenario_ids, RED driver first. scenario_fns are `<test target>::<fn>`. Targets: crate openlore-indexer-lambda: scale_to_zero_walking_skeleton, _search, _pass, _probe, _core. adapter-s3-index-object: scale_to_zero_object_store_real_io, scale_to_zero_write_probe. adapter-index-store: fingerprint_contract. xtask: scale_to_zero_architecture, scale_to_zero_platform. Steps with no DISTILL activation (01-02, 01-03, 06-04, 07-03, 07-04, 07-05, 08-10) name the test that guards them, which is shipped or crafter-owned, and leave scenario_ids empty. Non-scenario tests stay as they are: scale_to_zero_harness, the positive controls, the_stubs_answer_what_the_gates_will_ask, the_tofu_reader_reads_whole_values_in_the_right_block, the_secret_check_catches_each_shape_and_passes_a_plain_environment, the_seeds_really_reach_the_moto_store (activated with RIO in 06-03).",
+    "rider_classes": "Each step names one RED driver (scenario_name). Other activations are a secondary driver (RED on activation, green within the step) or a guard (green on activation, or already active: record a mutation RED, revert it, and say so in the execution log). Un-ignore one scenario at a time.",
+    "rio_stay_ignored": "EXCEPTION to 'DELIVER un-ignores'. RIO-1..9 and the seed check KEEP #[ignore]: rio-object-store runs `--run-ignored only` and demands all 10 by name, and un-ignoring RIO-1..8 would make the moto-less `test` job fail. DELIVER only edits their ignore reason to drop 'RED scaffold'. Activated means green against moto. Until 06-03 lands rio-object-store, RIO is enforced only locally, by the crafter's moto run in 06-01..06-03; CI does not run it. The job uses an explicit name filter, so a new ignored test cannot enter it silently.",
+    "test_edit_allow_list": "(1) Remove the #[ignore] of a named scenario fn (RIO: reason text only). (2) One-line renames of var::* and Fault::token in tests/acceptance/support/indexer_lambda.rs (UI-5). (3) Stub output in scale_to_zero_platform.rs when deploy.sh reads a field with --query (its testability contract); order and refusal assertions stay. (4) Delete scale_to_zero_core.proptest-regressions if scaffold-panic seeds reappear before 01-05. (5) WS-1 and WS-2 drop their #[ignore], and its stale 'DELIVER step 1' reason, at activation (01-04, 01-10), and the suite header's 'first step' line names those steps. Forbidden otherwise: assertions, oracles, strategies, universe slots and test names. A scenario failing for a reason unrelated to its behaviour is a possible test bug (most have never run past init): stop and send it to nw-acceptance-designer. Crafter-owned tests may be added in their own crates and in xtask/tests/scale_to_zero_ci.rs.",
+    "green_before_commit": "L-10: every test that is not #[ignore]d, the GUARD rows included, is green before any commit. Only #[ignore]d RED scenarios may be red. Stage by path, never commit -a. Commit locally; push only when the user says so.",
+    "test_runs": "step_gate = `cargo build --bin openlore --bin openlore-indexer` (cli suites spawn the binary after 01-01), then for each touched crate `cargo nextest run -p <crate>`, plus `cargo test -p xtask`, `cargo xtask check-arch`, `cargo xtask check-probes`. Any step touching crates/openlore-indexer, adapter-xrpc-query-server, adapter-index-store or adapter-index-query also runs `cargo nextest run -p cli --test indexer_ingest --test appview_search --test indexer_deployment_walking_skeleton --test indexer_deployment_passes --test indexer_deployment_did_list --test indexer_deployment_public_surface --test indexer_deployment_core --test indexer_per_did_fetch --test indexer_per_did_resilience --test indexer_per_did_config --test indexer_pass_core`. Scoped crates only; CI verifies the workspace (host too slow).",
+    "self_host_unchanged": "R-STZ-9 and P-1. The openlore-indexer binary's CLI, env vars, events, exit codes and hyper serve path do not change. A self-host behaviour change is a defect, in every step. Its proof: the shipped cli indexer suites, XS-2, and in CI serve-smoke and the artifact string check.",
+    "transitional_risks": "All in-repo, nothing deployed. T1: 01-04..01-09 the pass publishes whenever it ran, with no start fetch, no fingerprint and the none-exists condition only, so only a first object works (WS-1 precedes FP and CORE in the handoff). It already stamps published-at, which WS-1 needs. PublishMetadata also requires pass_id, so 01-04 fills it, but no scenario pins it until PA-1. 01-10 closes T1: start fetch, publish on change, version condition. T2: until 03-02 the pass ignores its event; only `{}` reaches it; closed by CORE-7's caller. T3: until 02-05 search has no freshness gate. T4: until 06-04 main panics, so no image can run the root; nothing ships it until 07-03. T5: the write probe's refusal arrives in 03-01, though init calls the probe from 01-10.",
+    "decide_callers": "CORE bodies land in 01-05 by handoff order; each gains its production caller in: publish_decision 01-10; dids_copy_usable 02-02; final_exit 02-03; freshness_due, reload_needed 02-05; pass_mode 03-02; not_live 05-01; served_index_stale 05-03. They are pub in the lib, so nothing is dead-code flagged meanwhile.",
+    "arch_rules_note": "Each step's arch_rules names the xtask rules it adds or amends; each ships a synthetic violation unless a DISTILL XS scenario already plants one, and keeps `cargo xtask check-arch` green on the real tree. Criteria stay behavioural.",
+    "done_per_step": "Scenario fns activated and green, guards recorded, arch_rules hold, the step's SCAFFOLD markers are gone, and every command in green passes.",
+    "mutation": "Per-feature, kill rate >= 80% on modified files, after refactoring in each step. Scope (DEVOPS): decide.rs, pass_mode, served_index_stale, call_budget and each timeout, fingerprint, dispatch, the Lambda config parser, the S3 error mapping (404 vs other). Pure SDK call sites are excluded with the reason recorded.",
+    "wording": "Event names, causes and fault tokens are pinned by the suites. PassFailure tokens (D-STZ-41) and IndexObjectWriteConditionIgnored already exist as vocabulary.",
+    "backlog_map": {
+      "UI-7 cli dev-dependency, D-STZ-45": "01-01",
+      "lib split, D-STZ-2": "01-01",
+      "reused pass entry, pass_contract, D-STZ-42": "01-02",
+      "UI-8 event writer": "01-02",
+      "D-STZ-22 dispatch": "01-03",
+      "deadline left after the gate, D-STZ-10": "04-07",
+      "UI-11 spawn_blocking": "01-04 (pass), 01-10 (write probe), 04-08 (read probe)",
+      "UI-5 fault tokens": "04-05",
+      "UI-13 no test of a real crash or timeout": "recorded, LOW, no step",
+      "UI-22 clients built from call_budget": "01-07 (builder), 06-01, 06-02, 06-03",
+      "AWS SDK dependencies, cargo deny, deny.toml": "01-07",
+      "rust-version": "already set on both crates (DWD-STZ-20); enforced by 07-04",
+      "call_budget and SDK default confirmation": "01-07",
+      "real S3 and SSM adapter": "06-01, 06-02, 06-03",
+      "xtask aws_sdk_only_in_lambda_edge": "01-07",
+      "xtask indexer_lambda_holds_no_signing_or_local_store": "01-04 (graph), 01-11 (source scan)",
+      "xtask lambda_no_publish_is_read_only": "03-02",
+      "xtask token lists, indexer_search_handler_read_only": "01-09",
+      "xtask moved purge rule": "01-02",
+      "xtask CLI I-3 axis, indexer_guarded_clients_only": "01-07, 01-04",
+      "check-probes allowlist removal": "06-02, 06-03",
+      "Dockerfile, indexer-build, indexer-image": "07-03",
+      "ci.yml msrv": "07-04",
+      "ci.yml rio-object-store": "06-03",
+      "ci.yml lambda-smoke, assertions, seed helper, race shim, smoke assertion 9": "07-05",
+      "secret check": "07-01 (lambda-env.json), 07-05 (image)",
+      "deploy-pds-check.yml": "07-02",
+      "prod-indexer tofu root": "07-01, 07-02",
+      "deploy.sh lambda verbs": "08-01..08-08",
+      "host standby and resume": "08-09",
+      "runbook": "08-10"
+    },
+    "upstream_ids": "UI-5 -> 04-05. UI-7 -> 01-01. UI-8 -> 01-02. UI-11 -> 01-04, 01-10, 04-08. UI-13 -> recorded. UI-22 -> 01-07, 06-01..06-03. U-STZ-1 -> 08-09. U-STZ-2 -> 08-06. U-STZ-3 -> 01-10. U-STZ-4 -> 07-02. U-STZ-5 -> 07-01. U-STZ-6 -> 02-01, 05-03. U-STZ-7 -> 05-01. U-STZ-8 -> 03-02. U-STZ-9 -> 07-01, 08-02."
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Walking skeleton: the seam, the pure rules, WS-1 and WS-2",
+      "description": "UI-7 and the lib split first, then WS-1 thin, the pure rules and the fingerprint, then SE-1, SE-2, PA-1 and WS-2, in handoff order.",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Drop cli's indexer dev-dependency and split indexer into lib",
+          "description": "UI-7 first: cli drops its openlore-indexer dev-dependency and uses build-before-run, in the same step that gives openlore-indexer a library target. The bin's behaviour does not change.",
+          "criteria": [
+            "XS-8: cli's manifest names openlore-indexer under no dependency table.",
+            "XS-7 and XS-2b stay green: cli's graph, dev edges included, never reaches the indexer; the indexer reaches no PDS writer.",
+            "The binary's CLI, env vars, events and exit codes are unchanged; the shipped indexer suites and check-arch stay green.",
+            "ci.yml and release.yml build the binaries first, and their 'bin-only' comments are rewritten."
+          ],
+          "test_file": "xtask/tests/scale_to_zero_architecture.rs",
+          "scenario_name": "the_cli_no_longer_names_the_self_hosted_indexer_as_a_dependency",
+          "scenario_ids": [
+            "XS-8",
+            "XS-7",
+            "XS-2b"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_architecture::the_cli_no_longer_names_the_self_hosted_indexer_as_a_dependency",
+            "scale_to_zero_architecture::the_clis_graph_does_not_reach_the_self_hosted_indexer_dev_edges_included",
+            "scale_to_zero_architecture::the_self_hosted_indexer_has_no_path_to_write_to_a_pds"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_architecture",
+            "conventions.test_runs step_gate with the cli indexer suites"
+          ],
+          "implementation_notes": "RED driver XS-8. Guards XS-7 (mutation: re-add the dev-dependency after the lib exists) and XS-2b. The lib only re-exports what later steps need; visibility widens, behaviour does not. Do UI-7 and the lib in one commit, or check-arch fails between them (CLI_FORBIDDEN_INDEXER_DEPS). DEVOPS named the ci.yml comment; release.yml lines 85-97 carry the same comment. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 3,
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/cli/Cargo.toml",
+            "crates/openlore-indexer/Cargo.toml",
+            "crates/openlore-indexer/src/main.rs",
+            "crates/openlore-indexer/src/run.rs",
+            ".github/workflows/ci.yml",
+            ".github/workflows/release.yml",
+            "xtask/tests/scale_to_zero_architecture.rs"
+          ],
+          "files_to_create": [
+            "crates/openlore-indexer/src/lib.rs"
+          ],
+          "mutation_note": "Kill: re-adding the dev-dependency; a lib export that changes the bin's startup order."
+        },
+        {
+          "id": "01-02",
+          "name": "Expose the pass entry, purge contract and event writer",
+          "description": "D-STZ-42: the lib splits in_serve_pass into the caught work and the summary write, and serve calls both in order. PassLabel and the purge contract move to a neutral module. UI-8: event lines go through a writer the root provides.",
+          "criteria": [
+            "serve writes exactly one pass_summary per pass, with today's fields, order and exit codes.",
+            "A serve pass past its deadline ends and reports as it does today.",
+            "check-arch's purge rule passes on the real tree and refuses a purge outside its moved allowed file.",
+            "The shipped suites read serve's stdout event lines unchanged."
+          ],
+          "red_acceptance": "NOT_APPLICABLE: behaviour-preserving seam, so no acceptance test can go RED. The purge rule's synthetic-violation unit test goes RED first.",
+          "test_file": "tests/acceptance/indexer_deployment_passes.rs",
+          "scenario_name": "the_timer_sees_the_pass_s_own_exit_code_and_exactly_one_summary",
+          "scenario_ids": [],
+          "scenario_fns": [],
+          "arch_rules": [
+            "index_purge_only_in_pass_runner: the allowed file becomes the neutral module, the never-vacuous check points at it, and it also scans crates/openlore-indexer-lambda/src with that root's main.rs as a composition root (D-STZ-42)"
+          ],
+          "green": [
+            "conventions.test_runs step_gate with the cli indexer suites"
+          ],
+          "implementation_notes": "No DISTILL activation: a behaviour-preserving seam with production change, guarded by the shipped suites. Proposed module name pass_contract. Single-flight and PassStatus stay in pass_runner. in_serve_pass today starts its own Instant, but D-STZ-40a starts the clock at handler entry, so the start becomes an input. run_pass is not the entry. Keep the panic catch and test faults in the shared path. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer/src/lib.rs",
+            "crates/openlore-indexer/src/ingest_pass.rs",
+            "crates/openlore-indexer/src/pass_runner.rs",
+            "crates/openlore-indexer/src/events.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "files_to_create": [
+            "crates/openlore-indexer/src/pass_contract.rs"
+          ],
+          "mutation_note": "Kill: summary written before the work ends; a second summary; a dropped purge."
+        },
+        {
+          "id": "01-03",
+          "name": "Extract transport-free dispatch and the health reader",
+          "description": "D-STZ-22: adapter-xrpc-query-server gains a transport-free dispatch (routes, admit, 5 s limit, 413, 404, health), and hyper serve calls it after its rate limit and connection cap. Health takes a last-published reader instead of StatusReader.",
+          "criteria": [
+            "Every status, route and bound of the public surface is unchanged through hyper serve.",
+            "Dispatch answers a request with no socket, no hyper server and no rate limiter.",
+            "On host and self-host, /healthz still moves only on exit-0 passes."
+          ],
+          "red_acceptance": "NOT_APPLICABLE: behaviour-preserving extraction, so no acceptance test can go RED. The crafter-owned dispatch_answers_with_no_socket in adapter-xrpc-query-server goes RED first.",
+          "test_file": "tests/acceptance/indexer_deployment_public_surface.rs",
+          "scenario_name": "oversized_requests_are_refused_at_the_boundary_not_one_byte_early",
+          "scenario_ids": [],
+          "scenario_fns": [],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p adapter-xrpc-query-server",
+            "conventions.test_runs step_gate with the cli indexer suites"
+          ],
+          "implementation_notes": "No DISTILL activation: guarded by the shipped surface suites and public_surface_properties. Crafter-owned proptests on dispatch go in adapter-xrpc-query-server. The deadline argument arrives in 04-07; keep the shape open to it. The per-client limiter stays outside dispatch (D-STZ-19). TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "crates/adapter-xrpc-query-server/src/lib.rs",
+            "crates/openlore-indexer/src/health.rs",
+            "crates/openlore-indexer/src/run.rs"
+          ],
+          "files_to_create": [
+            "crates/adapter-xrpc-query-server/src/dispatch.rs"
+          ],
+          "mutation_note": "Kill: bound off by one; a dropped 5 s limit; rate limiting moved into dispatch."
+        },
+        {
+          "id": "01-04",
+          "name": "Walking skeleton: a scheduled pass publishes, a search finds",
+          "description": "Thinnest WS-1 thread through the real root: pass renders the DID list each run, runs the reused pass off the runtime, publishes the first object stamped published-at, writes the summary; a cold search fetches it, answers through dispatch and reports that stamp.",
+          "criteria": [
+            "WS-1: after the schedule fires, a search instance started afterwards finds Priya's claim, attributed to her, and reports the index as published at 14:00.",
+            "The published-at the index reports comes from the published object's metadata.",
+            "The invocation's payload and the single summary agree on exit code and pass id.",
+            "XS-6: search and probe name no write capability, and the pass is what publishes.",
+            "XS-5: the Lambda root reaches no claim store, PDS writer or GitHub client."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_walking_skeleton.rs",
+          "scenario_name": "maria_finds_priyas_claim_after_the_scheduled_pass_published_the_index",
+          "scenario_ids": [
+            "WS-1",
+            "XS-6",
+            "XS-5"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_walking_skeleton::maria_finds_priyas_claim_after_the_scheduled_pass_published_the_index",
+            "scale_to_zero_architecture::only_the_pass_can_publish_the_index",
+            "scale_to_zero_architecture::the_lambda_root_holds_no_claim_store_no_pds_write_path_and_no_github_client"
+          ],
+          "arch_rules": [
+            "COMPOSITION_ROOTS gains openlore-indexer-lambda here: I-3 fails as soon as the root gains its first adapter, before the first aws-* dependency",
+            "indexer_lambda_holds_no_signing_or_local_store, graph half (XS-5's forbidden set)",
+            "indexer_guarded_clients_only also scans crates/openlore-indexer-lambda/src"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_walking_skeleton",
+            "conventions.test_runs step_gate with the cli indexer suites"
+          ],
+          "implementation_notes": "RED driver WS-1. Secondary XS-6. Guard XS-5 (mutation: add adapter-github). Thin: T1, T2, T3 apply. Health reads published-at through the 01-03 reader from the fetched version. UI-11: the reused pass runs through spawn_blocking. UF-1: wiring takes the verify-only resolver as an input; the Lambda root's resolve_only site is crates/openlore-indexer-lambda/src/lib.rs, self-host's stays in run.rs. Drop WS-1's #[ignore]; correct the suite header's 'first step' line. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 8,
+          "depends_on": [
+            "01-02",
+            "01-03"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/Cargo.toml",
+            "crates/openlore-indexer-lambda/src/lib.rs",
+            "crates/openlore-indexer-lambda/src/pass.rs",
+            "crates/openlore-indexer-lambda/src/search.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/openlore-indexer/src/lib.rs",
+            "crates/openlore-indexer/src/health.rs",
+            "xtask/src/check_arch.rs",
+            "tests/acceptance/scale_to_zero_walking_skeleton.rs",
+            "xtask/tests/scale_to_zero_architecture.rs"
+          ],
+          "files_to_create": [
+            "crates/openlore-indexer-lambda/src/index_holder.rs"
+          ],
+          "mutation_note": "Kill: a summary before the publish; published-at taken from the wrong clock; search built with a write port."
+        },
+        {
+          "id": "01-05",
+          "name": "Pure decisions: freshness, publish, liveness, exits, events, staleness",
+          "description": "All eight pure decisions in decide, as a batch: freshness_due, reload_needed, publish_decision, not_live, dids_copy_usable, final_exit, pass_mode, served_index_stale. No I/O: now and every outcome are arguments.",
+          "criteria": [
+            "CORE-1, CORE-2, CORE-5: at most one check per TTL, a download only of a different index, and a DID copy usable up to 2 hours.",
+            "CORE-3: a pass publishes exactly when the index changed and stayed usable.",
+            "CORE-4, CORE-8: live only when every fact is good; stale only when it lags a record older than the margin.",
+            "CORE-6: the first failure wins; a pass that did not fail keeps its exit.",
+            "CORE-7: exactly two events are accepted and every other is refused."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_core.rs",
+          "scenario_name": "core_1_freshness_due::due_iff_at_least_the_ttl_has_passed",
+          "scenario_ids": [
+            "CORE-1",
+            "CORE-2",
+            "CORE-3",
+            "CORE-4",
+            "CORE-5",
+            "CORE-6",
+            "CORE-7",
+            "CORE-8"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_core::core_1_freshness_due::*",
+            "scale_to_zero_core::core_2_reload_needed::*",
+            "scale_to_zero_core::core_3_publish_decision::*",
+            "scale_to_zero_core::core_4_not_live::*",
+            "scale_to_zero_core::core_5_dids_copy_usable::*",
+            "scale_to_zero_core::core_6_final_exit::*",
+            "scale_to_zero_core::core_7_pass_mode::*",
+            "scale_to_zero_core::core_8_served_index_stale::*"
+          ],
+          "tags": [
+            "@sizing-review-needed"
+          ],
+          "sizing": "8 scenarios, 27 test fns. Retained, not split: a natural batch of one pure file with no fakes and no wiring. If the crafter finds it over one cycle, split at CORE-4/CORE-5.",
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_core",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "Un-ignore module by module, one decision at a time. Delete scaffold-panic proptest regressions before starting. Real findings stay. Callers arrive per conventions.decide_callers. final_exit works on the domain PassExit. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 6,
+          "depends_on": [
+            "01-04"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/decide.rs",
+            "tests/acceptance/scale_to_zero_core.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill every boundary: TTL, 2 h, 45 min, 120 s; precedence in final_exit; string compare of instants in served_index_stale."
+        },
+        {
+          "id": "01-06",
+          "name": "Write probe rules and the marker key refusal",
+          "description": "The pure rules of D-STZ-39 move to crates/ports/src/probe.rs and are re-exported from the adapter: only two accepted writes mean a store ignores the condition, and a location naming the write probe's key is refused.",
+          "criteria": [
+            "WP-1: only a repeated, accepted write refuses, with the condition-ignored reason; 412 is honoured; anything else is unknown, not a refusal.",
+            "WP-2: a location whose index or record key is the marker is refused, and a control row is not."
+          ],
+          "test_file": "crates/adapter-s3-index-object/tests/scale_to_zero_write_probe.rs",
+          "scenario_name": "only_two_accepted_writes_mean_a_store_ignores_the_condition",
+          "scenario_ids": [
+            "WP-1",
+            "WP-2"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_write_probe::only_two_accepted_writes_mean_a_store_ignores_the_condition",
+            "scale_to_zero_write_probe::the_write_checks_marker_can_never_be_the_index"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p adapter-s3-index-object --test scale_to_zero_write_probe",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver WP-1, secondary WP-2. Move WRITE_PROBE_KEY, location_names_write_probe_key, write_probe_outcome, WriteProbeSeen and RepeatAnswer (WriteProbeSeen holds it) to ports; re-export from the adapter so test imports compile unchanged. check-arch: only ports' I/O crates are banned, and net_policy.rs is precedent for pure functions, so this should pass; the step_gate confirms it. WP-2 asserts connect refuses; connect's success path stays a scaffold until 06-01. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 2,
+          "depends_on": [
+            "01-05"
+          ],
+          "files_to_modify": [
+            "crates/ports/src/probe.rs",
+            "crates/ports/src/lib.rs",
+            "crates/adapter-s3-index-object/src/lib.rs",
+            "crates/adapter-s3-index-object/tests/scale_to_zero_write_probe.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: Repeated(Unknown) treated as a refusal; only one of the two keys checked."
+        },
+        {
+          "id": "01-07",
+          "name": "AWS SDK dependencies, cargo-deny, call_budget and SDK defaults",
+          "description": "First aws-* dependency, with its xtask rules and deny bans in the same commit (P-2, P-3). call_budget holds the Timeouts table, and one builder derives every client's settings from it after confirming the pinned SDK's defaults.",
+          "criteria": [
+            "TO-1: each of the ten calls has its table limit and max_attempts 1.",
+            "XS-1: check-arch lists the Lambda root and both new rules; XS-2, XS-3, XS-4 stay green with AWS crates in the graph.",
+            "cargo deny check passes with the AWS tree; aws-lc-rs, aws-lc-sys and aws-lc-fips-sys are banned and absent; openssl stays absent.",
+            "The pinned SDK's default retry mode, attempt count and stalled-stream protection are read from its source and recorded in the execution log.",
+            "One client-settings builder overrides those defaults from call_budget, so each figure is the real worst case."
+          ],
+          "test_file": "crates/adapter-s3-index-object/tests/scale_to_zero_write_probe.rs",
+          "scenario_name": "every_store_call_has_one_attempt_and_its_own_time_limit",
+          "scenario_ids": [
+            "TO-1",
+            "XS-1",
+            "XS-2",
+            "XS-3",
+            "XS-4"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_write_probe::every_store_call_has_one_attempt_and_its_own_time_limit",
+            "scale_to_zero_architecture::check_arch_knows_the_lambda_root_and_its_rules",
+            "scale_to_zero_architecture::the_self_hosted_indexer_stays_free_of_aws_and_lambda_code",
+            "scale_to_zero_architecture::only_the_lambda_root_and_its_adapter_may_reach_aws",
+            "scale_to_zero_architecture::the_cli_links_neither_the_lambda_root_nor_its_adapter"
+          ],
+          "arch_rules": [
+            "aws_sdk_only_in_lambda_edge (new): aws-* and lambda_* reachable only from adapter-s3-index-object and openlore-indexer-lambda",
+            "I-3 second axis gains adapter-s3-index-object and openlore-indexer-lambda"
+          ],
+          "green": [
+            "cargo nextest run -p adapter-s3-index-object --test scale_to_zero_write_probe",
+            "cargo deny check",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver TO-1, secondary XS-1, guards XS-2..4 (their positive control is the_guards_catch_a_planted_violation). Pins and features: feature-delta Technology choices, rustls-ring, default-features off. A crafter-owned test reads the builder's output: one attempt, limit from the table, stalled-stream as recorded. If the default stall grace exceeds a budget, the operation timeout remains the bound; say so in the log. Fallback pins if per-crate MSRV fails: listed there. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 6,
+          "depends_on": [
+            "01-06"
+          ],
+          "files_to_modify": [
+            "crates/adapter-s3-index-object/Cargo.toml",
+            "crates/adapter-s3-index-object/src/lib.rs",
+            "crates/adapter-s3-index-object/tests/scale_to_zero_write_probe.rs",
+            "deny.toml",
+            "xtask/src/check_arch.rs",
+            "xtask/tests/scale_to_zero_architecture.rs"
+          ],
+          "files_to_create": [
+            "crates/adapter-s3-index-object/src/client_settings.rs"
+          ],
+          "mutation_note": "Kill: each timeout figure; max_attempts above 1; the builder ignoring the table."
+        },
+        {
+          "id": "01-08",
+          "name": "Index fingerprint: counts and a CID hash",
+          "description": "adapter-index-store gains fingerprint: claim count, distinct author count and the XOR of a 64-bit hash of every CID, from one read-only SQL literal that returns no claim data (D-STZ-8, D-STZ-46).",
+          "criteria": [
+            "FP-1: an empty index has the zero fingerprint, and counts claims and authors.",
+            "FP-2, FP-3: re-indexing the same claim, or indexing in another order, changes nothing.",
+            "FP-4: adding a claim changes it, and purging its author restores it.",
+            "FP-5: indexes with equal counts but different claims differ."
+          ],
+          "test_file": "crates/adapter-index-store/tests/fingerprint_contract.rs",
+          "scenario_name": "an_empty_index_has_the_zero_fingerprint_and_counts_claims_and_authors",
+          "scenario_ids": [
+            "FP-1",
+            "FP-2",
+            "FP-3",
+            "FP-4",
+            "FP-5"
+          ],
+          "scenario_fns": [
+            "fingerprint_contract::an_empty_index_has_the_zero_fingerprint_and_counts_claims_and_authors",
+            "fingerprint_contract::indexing_the_same_claim_again_does_not_change_the_fingerprint",
+            "fingerprint_contract::the_fingerprint_does_not_depend_on_the_order_claims_were_indexed_in",
+            "fingerprint_contract::adding_a_claim_changes_the_fingerprint_and_purging_its_author_restores_it",
+            "fingerprint_contract::two_indexes_with_the_same_counts_but_different_claims_have_different_fingerprints"
+          ],
+          "arch_rules": [
+            "No scanner change: one literal projecting all three values (D-STZ-46); a separate count(*) would be flagged, correctly"
+          ],
+          "green": [
+            "cargo nextest run -p adapter-index-store",
+            "conventions.test_runs step_gate with the cli indexer suites"
+          ],
+          "implementation_notes": "RED driver FP-1. The others are secondary. The literal must stay one literal. The hash must be stable across runs, since it is compared before and after a pass, and across DuckDB handles. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "01-05"
+          ],
+          "files_to_modify": [
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/adapter-index-store/tests/fingerprint_contract.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: XOR replaced by a sum that collides on FP-5; distinct dropped; order-dependent hash."
+        },
+        {
+          "id": "01-09",
+          "name": "Empty start, published-at health, read-only mode rules",
+          "description": "Search with no object opens an empty index and reports null. SE-2 guards the published-at read from 01-04. The read-only rule is extended to the Lambda modes.",
+          "criteria": [
+            "SE-1: before any publish, health is 200 with null and searches return empty results.",
+            "SE-2: the index reports when the served copy was published, not when it last looked.",
+            "XS-9: check-arch refuses each write capability in a read-only mode, and a pass-record read in search."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_search.rs",
+          "scenario_name": "a_fresh_deployment_answers_before_any_index_was_published",
+          "scenario_ids": [
+            "SE-1",
+            "SE-2",
+            "XS-9"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_search::a_fresh_deployment_answers_before_any_index_was_published",
+            "scale_to_zero_search::the_index_reports_when_the_copy_it_serves_was_published",
+            "scale_to_zero_architecture::check_arch_refuses_a_write_capability_in_a_read_only_lambda_mode"
+          ],
+          "arch_rules": [
+            "indexer_search_handler_read_only: SEARCH_HANDLER_WRITE_TOKENS gains publish_if_match, put_last_pass, IndexObjectPort, IndexObjectWritePort; also scans the Lambda search module (refusing get_last_pass) and probe module (no IndexReadPort requirement)"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_search",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver SE-1. Secondary XS-9. Guard SE-2: green on activation from 01-04, so record a mutation RED (health reading the clock). Both read modes must satisfy the rule on the real tree, with the planted rows as proof. The empty index opens through the existing store open. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-04",
+            "01-07"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/search.rs",
+            "crates/openlore-indexer-lambda/src/index_holder.rs",
+            "xtask/src/check_arch.rs",
+            "tests/acceptance/scale_to_zero_search.rs",
+            "xtask/tests/scale_to_zero_architecture.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: 503 on an empty start; health reading the clock instead of the metadata."
+        },
+        {
+          "id": "01-10",
+          "name": "Passes publish conditionally on change and record themselves",
+          "description": "The pass fetches its starting object, compares fingerprints through publish_decision, publishes under a version condition, logs the size, writes last-pass.json and calls the write probe at init. WS-2 closes the walking skeleton. Closes T1.",
+          "criteria": [
+            "PA-1: the first pass publishes the index stamped 14:00 with its pass id and reports the published size.",
+            "The pass record says it completed and published that index; nothing says no-publish.",
+            "The only other bucket change is the write check's marker, created at init.",
+            "The publish is conditional: on the version the pass fetched, or on no object existing when it fetched none.",
+            "WS-2: after the operator saves a list naming Tomas, the next pass brings his claim to a new search instance, with no deploy."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_pass.rs",
+          "scenario_name": "the_first_pass_creates_the_index_and_records_itself",
+          "scenario_ids": [
+            "PA-1",
+            "WS-2"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_pass::the_first_pass_creates_the_index_and_records_itself",
+            "scale_to_zero_walking_skeleton::the_operator_adds_an_author_and_with_no_deploy_maria_finds_their_claim"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_pass --test scale_to_zero_walking_skeleton",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver PA-1, secondary WS-2 (a second pass without a fetched version conflicts). WS-1 is not re-activated. PA-1's delta sets the marker, so init calls the write probe here, through spawn_blocking (UI-11, UF-2). Refusal comes in 03-01 (T5). fetch_to returns the ETag, so no head call. P-7: verify the WAL before upload; a crafter-owned test pins it. U-STZ-3: every pass writes the record. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 8,
+          "depends_on": [
+            "01-05",
+            "01-06",
+            "01-08"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/pass.rs",
+            "tests/acceptance/scale_to_zero_pass.rs",
+            "tests/acceptance/scale_to_zero_walking_skeleton.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: pass-id missing from the metadata; record written before the publish; index_bytes from the wrong file; an unconditional PUT."
+        },
+        {
+          "id": "01-11",
+          "name": "Source scan of the signing claim, both indexer roots",
+          "description": "D-STZ-50: implement and wire the scan over the production code of both roots, in both capability rules, refusing each signing capability and requiring a resolve_only site, so it cannot pass vacuously.",
+          "criteria": [
+            "XS-10: each planted signing capability, in either root, is reported naming that root and token.",
+            "A root with no verify-only construction is reported.",
+            "A mention in a comment or test code is not a finding, and the real roots have none."
+          ],
+          "test_file": "xtask/tests/scale_to_zero_architecture.rs",
+          "scenario_name": "check_arch_refuses_a_signing_capability_in_either_indexer_root",
+          "scenario_ids": [
+            "XS-10"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_architecture::check_arch_refuses_a_signing_capability_in_either_indexer_root"
+          ],
+          "arch_rules": [
+            "indexer_holds_no_signing_or_local_store and indexer_lambda_holds_no_signing_or_local_store gain the source scan (D-STZ-50)"
+          ],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_architecture",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "RED driver XS-10. Not named in the handoff's sequence; placed here because the Lambda root's resolve_only site lands in 01-04. Not a graph rule: signer and verifier share adapter-atproto-did. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 2,
+          "depends_on": [
+            "01-04"
+          ],
+          "files_to_modify": [
+            "xtask/src/check_arch.rs",
+            "xtask/tests/scale_to_zero_architecture.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: scanning only one root; comments counted as code; the vacuous pass."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Story lines of the pass and search suites",
+      "description": "The ordinary paths: what a pass publishes and records, the DID list, purge, and how warm search instances stay fresh.",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "A pass publishes only on change and names the object",
+          "description": "A pass that changes nothing still records itself; a pass on an empty bucket records that no index exists; the record's index_published_at names this publish, else the object seen at the start, else null (D-STZ-7, D-STZ-48).",
+          "criteria": [
+            "PA-10: on an empty bucket with nothing to publish, the record says no index exists.",
+            "PA-2: a pass that changes nothing publishes nothing and still records itself.",
+            "PA-3: a pass with a new claim replaces exactly the version it started from."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_pass.rs",
+          "scenario_name": "a_pass_on_an_empty_bucket_with_nothing_to_publish_records_that_no_index_exists",
+          "scenario_ids": [
+            "PA-10",
+            "PA-2",
+            "PA-3"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_pass::a_pass_on_an_empty_bucket_with_nothing_to_publish_records_that_no_index_exists",
+            "scale_to_zero_pass::a_pass_that_changes_nothing_publishes_nothing_but_still_records_itself",
+            "scale_to_zero_pass::a_pass_that_indexes_a_new_claim_replaces_exactly_the_version_it_started_from"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_pass",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver PA-10. PA-2 and PA-3 may be guards after 01-10: if green on activation, record a mutation RED. Seen means fetch_to returned the version (UI-19). TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "01-10"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/pass.rs",
+            "tests/acceptance/scale_to_zero_pass.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: publishing on an unchanged fingerprint; the record skipped when nothing changed."
+        },
+        {
+          "id": "02-02",
+          "name": "DID list read each pass, with a warm copy",
+          "description": "D-STZ-16: every run reads the parameter. If that fails, a warm instance keeps its last good copy for up to 2 hours through dids_copy_usable. A copy too old is removed so the ADR-081 path refuses.",
+          "criteria": [
+            "PA-4: an edit takes effect on the next pass, with one read per pass and no redeploy.",
+            "PA-7: a warm pass rides out a parameter store outage on its last good list.",
+            "Past 2 hours the copy is not used."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_pass.rs",
+          "scenario_name": "a_warm_pass_rides_out_a_parameter_store_outage_on_its_last_good_list",
+          "scenario_ids": [
+            "PA-7",
+            "PA-4"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_pass::a_warm_pass_rides_out_a_parameter_store_outage_on_its_last_good_list",
+            "scale_to_zero_pass::an_edit_to_the_did_list_takes_effect_on_the_next_pass_with_no_redeploy"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_pass",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver PA-7, guard PA-4 unless it fails on activation. Crafter-owned unit test for the over-age arm, because no scenario reaches it at the root. dids_copy_usable's first caller. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/pass.rs",
+            "tests/acceptance/scale_to_zero_pass.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a stale copy used past the limit; the copy's age reset on an outage."
+        },
+        {
+          "id": "02-03",
+          "name": "Publish, record, then the one summary",
+          "description": "D-STZ-40 order with final_exit: the pass work ends, publish if changed and usable, write the record with the exit decided so far, then one summary with the final exit. Publishes also on exit 2 or 3 (D-STZ-9).",
+          "criteria": [
+            "PA-11: every pass reports itself last, after publishing and recording.",
+            "PA-5: a pass that fails part way still publishes the claims it committed.",
+            "PA-6: a pass that reaches nobody publishes nothing and records itself; exit 3 is an answer, not a function error."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_pass.rs",
+          "scenario_name": "a_pass_reports_itself_last_after_publishing_and_recording",
+          "scenario_ids": [
+            "PA-11",
+            "PA-5",
+            "PA-6"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_pass::a_pass_reports_itself_last_after_publishing_and_recording",
+            "scale_to_zero_pass::a_pass_that_fails_part_way_still_publishes_the_claims_it_committed",
+            "scale_to_zero_pass::a_pass_that_reaches_nobody_publishes_nothing_and_still_records_itself"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_pass",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver PA-11. final_exit's first caller. The deadline clock starts at handler entry, using the input from 01-02 (D-STZ-40a); the SSM read and the fetch count against it. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/pass.rs",
+            "tests/acceptance/scale_to_zero_pass.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: two summaries; the record carrying the final exit; a publish skipped on exit 2."
+        },
+        {
+          "id": "02-04",
+          "name": "Purge reaches search through a publish",
+          "description": "The Lambda pass lends the purge through the neutral contract, so an unlisted author leaves search on the next pass and an emptied list purges nobody (ADR-082).",
+          "criteria": [
+            "PA-8: an author removed from the list leaves search on the next pass.",
+            "PA-9: an emptied list purges nobody and publishes nothing."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_pass.rs",
+          "scenario_name": "an_author_removed_from_the_did_list_leaves_search_on_the_next_pass",
+          "scenario_ids": [
+            "PA-8",
+            "PA-9"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_pass::an_author_removed_from_the_did_list_leaves_search_on_the_next_pass",
+            "scale_to_zero_pass::an_emptied_did_list_purges_nobody_and_publishes_nothing"
+          ],
+          "arch_rules": [
+            "index_purge_only_in_pass_runner stays green with the Lambda pass lending the purge"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_pass",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver PA-8, guard PA-9 (mutation: drop the empty-list rule). Assertion through assert_state_delta over the suite's universe. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/pass.rs",
+            "tests/acceptance/scale_to_zero_pass.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: an empty list purging everyone; a purge that does not change the fingerprint."
+        },
+        {
+          "id": "02-05",
+          "name": "Freshness gate and reload on warm instances",
+          "description": "D-STZ-10: at most every TTL, search checks the version and, if it changed, downloads to a new file, opens it, swaps the handle and deletes the old file before answering. Closes T3.",
+          "criteria": [
+            "SE-3: a warm instance picks up a new claim within a minute, with scratch space at most twice the index size after two swaps.",
+            "SE-4: when nothing was published, it checks at most once per TTL and keeps its copy.",
+            "SE-8: two warm instances disagree for at most about a minute after a publish.",
+            "SE-6: serial searches from one client are all answered; no per-client limit exists."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_search.rs",
+          "scenario_name": "a_warm_instance_picks_up_a_newly_published_claim_within_a_minute",
+          "scenario_ids": [
+            "SE-3",
+            "SE-4",
+            "SE-8",
+            "SE-6"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_search::a_warm_instance_picks_up_a_newly_published_claim_within_a_minute",
+            "scale_to_zero_search::when_nothing_was_published_a_warm_instance_only_checks_and_keeps_its_copy",
+            "scale_to_zero_search::two_warm_instances_disagree_for_at_most_about_a_minute_after_a_publish",
+            "scale_to_zero_search::serial_searches_from_one_client_are_all_answered"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_search",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver SE-3. Secondary SE-4, SE-8. Guard SE-6 (mutation: wire a limiter). First callers of freshness_due and reload_needed. Reload runs inline on the request. The 1 s and 3 s bounds arrive in 04-06. DESIGN open question 2: the old file is deleted after the swap, proven by the scratch bound. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 6,
+          "depends_on": [
+            "01-09",
+            "01-10"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/search.rs",
+            "crates/openlore-indexer-lambda/src/index_holder.rs",
+            "tests/acceptance/scale_to_zero_search.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a check on every search; the old file kept; answering before the swap."
+        },
+        {
+          "id": "02-06",
+          "name": "Warm instances move between empty and published",
+          "description": "After reset-index, warm instances answer empty until the next pass; a warm instance on a fresh deployment picks up the first published index (D-STZ-13, D-STZ-27).",
+          "criteria": [
+            "SE-5: after a reset, warm instances answer empty until the next pass.",
+            "SE-7: a warm instance on a fresh deployment picks up the first published index."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_search.rs",
+          "scenario_name": "after_the_operator_resets_the_index_warm_instances_answer_empty_until_the_next_pass",
+          "scenario_ids": [
+            "SE-5",
+            "SE-7"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_search::after_the_operator_resets_the_index_warm_instances_answer_empty_until_the_next_pass",
+            "scale_to_zero_search::a_warm_instance_on_a_fresh_deployment_picks_up_the_first_published_index"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_search",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver SE-5, secondary SE-7. An absent object is not a failed check. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 2,
+          "depends_on": [
+            "02-05"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/search.rs",
+            "crates/openlore-indexer-lambda/src/index_holder.rs",
+            "tests/acceptance/scale_to_zero_search.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: an absent object treated as a failed check; a stale published-at after the reset."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "The write probe's refusal and no-publish",
+      "description": "A store that ignores conditions never gets a pass, and the deploy gate can run a whole pass with no path to a write.",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "A store that ignores conditions never gets a pass",
+          "description": "D-STZ-39: two accepted writes refuse pass init with health.startup.refused. An outage never does; a refused read probe does not gate pass init. Closes T5.",
+          "criteria": [
+            "PA-E10: a store that ignores the write condition is refused before a pass can trust it.",
+            "PA-14: the write check leaves one marker in a bucket's life, however often passes start."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_pass.rs",
+          "scenario_name": "a_store_that_ignores_the_write_condition_is_refused_before_a_pass_can_trust_it",
+          "scenario_ids": [
+            "PA-E10",
+            "PA-14"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_pass::a_store_that_ignores_the_write_condition_is_refused_before_a_pass_can_trust_it",
+            "scale_to_zero_pass::the_write_check_leaves_one_marker_in_a_buckets_life"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_pass",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver PA-E10, guard PA-14 (mutation: a second marker write). Refusal comes only from the probe's verdict; WP-1 pins the reading. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 2,
+          "depends_on": [
+            "01-10",
+            "02-03"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/pass.rs",
+            "tests/acceptance/scale_to_zero_pass.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: an unknown probe answer refusing the pass."
+        },
+        {
+          "id": "03-02",
+          "name": "No-publish run and strict pass events",
+          "description": "D-STZ-44: pass_mode accepts two events and refuses all others before any work. The no-publish arm does the whole run in its own module with the read port alone. Closes T2.",
+          "criteria": [
+            "PA-12: a no-publish run does the whole pass and writes nothing to the bucket.",
+            "PA-13: on a bucket's first run, only the write-check marker appears.",
+            "PA-E11: any other event is a function error, with no pass work and no store call.",
+            "The reply carries mode and would_publish, and the summary says no_publish.",
+            "XS-11: check-arch refuses each write capability in the no-publish module."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_pass.rs",
+          "scenario_name": "a_no_publish_run_does_the_whole_pass_and_writes_nothing_to_the_bucket",
+          "scenario_ids": [
+            "PA-12",
+            "PA-13",
+            "PA-E11",
+            "XS-11"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_pass::a_no_publish_run_does_the_whole_pass_and_writes_nothing_to_the_bucket",
+            "scale_to_zero_pass::on_a_buckets_very_first_run_a_no_publish_run_leaves_only_the_write_check_marker",
+            "scale_to_zero_pass::a_pass_refuses_any_event_but_an_empty_one_or_a_no_publish_request",
+            "scale_to_zero_architecture::check_arch_refuses_a_write_capability_in_the_no_publish_module"
+          ],
+          "arch_rules": [
+            "lambda_no_publish_is_read_only (new, wired): refuses IndexObjectWritePort, publish_if_match, put_last_pass, PassDriven; must name IndexObjectReadPort"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_pass",
+            "cargo test -p xtask --test scale_to_zero_architecture",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver PA-12. Secondary PA-13, PA-E11, XS-11. Plan-value rule: the shared pass work returns a value both arms read. The arm needs the wiring, so its environment and read port are inputs. Init has already run on a refused event, so the marker may appear (U-STZ-8). TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/pass.rs",
+            "crates/openlore-indexer-lambda/src/no_publish.rs",
+            "xtask/src/check_arch.rs",
+            "tests/acceptance/scale_to_zero_pass.rs",
+            "xtask/tests/scale_to_zero_architecture.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: the record written on a no-publish run; a refused event reaching the store; would_publish inverted."
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "Error paths of the pass and of search",
+      "description": "Each failed pass names its cause and pages; a search never fails on a failed freshness check; a broken index never looks healthy.",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "Publish conflicts and failures, with a shrinking time limit",
+          "description": "A 412 is exit 2 publish_conflict inside the one summary; any other store error is publish_failed. The publish budget shrinks to the time left minus 10 s (D-STZ-6, D-STZ-40a, D-STZ-41).",
+          "criteria": [
+            "PA-E1: a pass never overwrites an index somebody else published while it ran; it reports a conflict and pages.",
+            "PA-E8: a pass that cannot publish fails and keeps the index as it was.",
+            "The publish's limit never exceeds the time left minus 10 s, so the record and summary survive."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_pass.rs",
+          "scenario_name": "a_pass_never_overwrites_an_index_somebody_else_published_while_it_ran",
+          "scenario_ids": [
+            "PA-E1",
+            "PA-E8"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_pass::a_pass_never_overwrites_an_index_somebody_else_published_while_it_ran",
+            "scale_to_zero_pass::a_pass_that_cannot_publish_its_changes_fails_and_keeps_the_index_as_it_was"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_pass",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver PA-E1, secondary PA-E8. The shrinking limit is pure: a crafter-owned proptest over time left. The real client takes it in 06-01. A timed-out publish may have landed; no re-head (D-STZ-40a). TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/pass.rs",
+            "crates/openlore-indexer-lambda/src/decide.rs",
+            "tests/acceptance/scale_to_zero_pass.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a 412 mapped to publish_failed; a limit above 35 s; the margin dropped."
+        },
+        {
+          "id": "04-02",
+          "name": "Unusable store, panic and refused lists publish nothing",
+          "description": "A store that became unusable, a panic inside the pass, a missing list and a list with a typo each end as a failed pass that publishes nothing, through the reused path (D-STZ-43, D-STZ-42, ADR-081).",
+          "criteria": [
+            "PA-E2: a pass whose store became unusable never publishes it.",
+            "PA-E6: a panic is a failed pass; the invocation still succeeds and nothing is published.",
+            "PA-E3: with no usable list a pass refuses, publishes nothing, and pages.",
+            "PA-E4: a list with a typo is refused and the index stays as it was."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_pass.rs",
+          "scenario_name": "a_pass_whose_store_became_unusable_never_publishes_it",
+          "scenario_ids": [
+            "PA-E2",
+            "PA-E6",
+            "PA-E3",
+            "PA-E4"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_pass::a_pass_whose_store_became_unusable_never_publishes_it",
+            "scale_to_zero_pass::a_pass_that_panics_part_way_is_reported_as_a_failed_pass_and_publishes_nothing",
+            "scale_to_zero_pass::a_pass_with_no_usable_did_list_refuses_publishes_nothing_and_pages",
+            "scale_to_zero_pass::a_pass_refuses_a_did_list_with_a_typo_and_keeps_the_index_as_it_was"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_pass",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver PA-E2, whose production change is reading usability from the store after the pass. PA-E3, PA-E4 and PA-E6 are probably guards of the reused path: record a mutation RED each. The test faults reach the Lambda pass through the shared path. A panic counts as store not usable. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "04-01"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/pass.rs",
+            "tests/acceptance/scale_to_zero_pass.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: publishing after a panic; publishing with usability read before the pass."
+        },
+        {
+          "id": "04-03",
+          "name": "No starting index, full outage, lost record",
+          "description": "D-STZ-41: no usable starting index is exit 2 starting_index_unusable with the record written; a full outage is the same with the old record kept; a lost record is exit 2 pass_record_failed with the index still published.",
+          "criteria": [
+            "PA-E5: each row is a failed pass with its cause, nothing published, record written, no crash.",
+            "A downloaded damaged object is named in the record; a failed download is null.",
+            "PA-E7: a full outage still reports a failed pass, and the old record stays.",
+            "PA-E9: a lost record reports exit 2 and the index stays published."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_pass.rs",
+          "scenario_name": "a_pass_that_cannot_get_a_usable_starting_index_is_a_failed_pass",
+          "scenario_ids": [
+            "PA-E5",
+            "PA-E7",
+            "PA-E9"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_pass::a_pass_that_cannot_get_a_usable_starting_index_is_a_failed_pass",
+            "scale_to_zero_pass::a_pass_during_a_full_store_outage_still_reports_a_failed_pass",
+            "scale_to_zero_pass::a_pass_whose_record_cannot_be_written_reports_exit_2_and_its_index_stays_published"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_pass",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver PA-E5. Secondary PA-E7, PA-E9. These failures arise before or after the reused pass, so the Lambda pass builds a failed summary itself through the lib's summary write, never a second path. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "04-02"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/pass.rs",
+            "crates/openlore-indexer/src/ingest_pass.rs",
+            "tests/acceptance/scale_to_zero_pass.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a crash on a failed download; the record naming a failed download; a lost record reverting the publish."
+        },
+        {
+          "id": "04-04",
+          "name": "Every function refuses a key naming the marker",
+          "description": "D-STZ-39, UI-21: search, pass and probe init each refuse, with health.startup.refused naming the marker, a configuration whose index or record key is the write check's key.",
+          "criteria": [
+            "PA-E12: each of the four rows refuses to start, once, naming the marker.",
+            "Nothing under the index changed, so no PUT ran before the refusal."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_pass.rs",
+          "scenario_name": "a_function_configured_to_keep_its_data_under_the_write_checks_marker_never_starts",
+          "scenario_ids": [
+            "PA-E12"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_pass::a_function_configured_to_keep_its_data_under_the_write_checks_marker_never_starts"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_pass",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver PA-E12. The acceptance fakes bypass connect, so the root makes the check at init through the pure function in ports (UF-3): no Cargo change, and no AWS SDK in the Lambda suites here. The probe's init becomes real for this one branch. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 2,
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/lib.rs",
+            "crates/openlore-indexer-lambda/src/pass.rs",
+            "crates/openlore-indexer-lambda/src/search.rs",
+            "crates/openlore-indexer-lambda/src/probe.rs",
+            "tests/acceptance/scale_to_zero_pass.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: one function left unchecked; only the index key checked."
+        },
+        {
+          "id": "04-05",
+          "name": "Search bounds and store errors through dispatch",
+          "description": "The Lambda entry turns away what the self-hosted index turns away, answers 503 past 5 s, 500 on a store error, and 503 on health when the store breaks while running. UI-5 adds the two test faults.",
+          "criteria": [
+            "SE-B1: all 14 rows match the self-hosted index's answers.",
+            "SE-E1: a search not answered within 5 s is told to retry shortly.",
+            "SE-E2: a search the index cannot read fails loudly, never as an empty result.",
+            "SE-E6: a store that breaks while running reports itself instead of looking healthy.",
+            "A release build refuses both new fault tokens, like the existing ones."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_search.rs",
+          "scenario_name": "the_search_entry_turns_away_what_the_self_hosted_index_turns_away",
+          "scenario_ids": [
+            "SE-B1",
+            "SE-E1",
+            "SE-E2",
+            "SE-E6"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_search::the_search_entry_turns_away_what_the_self_hosted_index_turns_away",
+            "scale_to_zero_search::a_search_the_index_cannot_answer_within_5_seconds_is_told_to_retry_shortly",
+            "scale_to_zero_search::a_search_the_index_cannot_read_fails_loudly_never_as_an_empty_result",
+            "scale_to_zero_search::an_index_whose_store_breaks_while_it_runs_says_so_instead_of_looking_healthy"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_search",
+            "conventions.test_runs step_gate with the cli indexer suites"
+          ],
+          "implementation_notes": "RED driver SE-B1. UI-5: search_store_slow and store_poisoned_after_first_search join TestFault, its config parser and the seam proptest, acting on reads after init. Self-host never sets them. Function URL event mapping lives in search.rs; body limits come from dispatch. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-06"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer/src/config.rs",
+            "crates/openlore-indexer/src/search_handler.rs",
+            "crates/openlore-indexer-lambda/src/search.rs",
+            "tests/acceptance/scale_to_zero_search.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a bound re-implemented in the root; a fault token accepted in release."
+        },
+        {
+          "id": "04-06",
+          "name": "A failed or stalled freshness check never fails search",
+          "description": "D-STZ-10, D-STZ-11: a failed, stalled or unusable check or reload keeps the current copy, logs freshness_check_failed and retries after the next TTL. The root holds the 3 s reload bound and removes the partial file.",
+          "criteria": [
+            "SE-E3: when the freshness check fails, Maria still gets an answer from the current copy.",
+            "SE-E4: a newer index the instance cannot use leaves her on it, with no scratch leak after three failures.",
+            "SE-E7: a stalled check still leaves an answer.",
+            "SE-E8: a stalled reload is abandoned at the bound, with the partial file gone and no swap."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_search.rs",
+          "scenario_name": "when_the_freshness_check_fails_maria_still_gets_an_answer_from_the_current_copy",
+          "scenario_ids": [
+            "SE-E3",
+            "SE-E4",
+            "SE-E7",
+            "SE-E8"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_search::when_the_freshness_check_fails_maria_still_gets_an_answer_from_the_current_copy",
+            "scale_to_zero_search::a_newer_index_the_instance_cannot_use_leaves_maria_on_the_current_copy",
+            "scale_to_zero_search::a_freshness_check_that_stalls_still_leaves_maria_an_answer_from_the_current_copy",
+            "scale_to_zero_search::a_reload_that_stalls_is_abandoned_and_maria_stays_on_the_current_copy"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_search",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver SE-E3. The 1 s head bound is the adapter's contract, so a stalled head arrives as a failed check; the 3 s reload covers download and open, so it is the root's (DWD-STZ-30). The reload must run so that dropping it deletes the partial file. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "04-05"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/search.rs",
+            "crates/openlore-indexer-lambda/src/index_holder.rs",
+            "tests/acceptance/scale_to_zero_search.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a failed reload retried within the TTL; the partial file left; a swap to an unopened file."
+        },
+        {
+          "id": "04-07",
+          "name": "Dispatch gets the deadline left after the gate",
+          "description": "D-STZ-22, D-STZ-10: on Lambda the 5 s covers the gate and the query together, so dispatch takes the deadline left. Hyper serve keeps its full 5 s.",
+          "criteria": [
+            "SE-E9: after a slow freshness check, a search has only what is left of its 5 seconds.",
+            "A query that runs past that gets the usual retry answer.",
+            "Hyper serve's request limit is unchanged."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_search.rs",
+          "scenario_name": "after_a_slow_freshness_check_a_search_has_only_what_is_left_of_its_5_seconds",
+          "scenario_ids": [
+            "SE-E9"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_search::after_a_slow_freshness_check_a_search_has_only_what_is_left_of_its_5_seconds"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_search",
+            "cargo nextest run -p adapter-xrpc-query-server",
+            "conventions.test_runs step_gate with the cli indexer suites"
+          ],
+          "implementation_notes": "RED driver SE-E9. The 1 s floor stays unmeasured until the operator stages. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 2,
+          "depends_on": [
+            "04-06"
+          ],
+          "files_to_modify": [
+            "crates/adapter-xrpc-query-server/src/dispatch.rs",
+            "crates/openlore-indexer-lambda/src/search.rs",
+            "tests/acceptance/scale_to_zero_search.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: the full 5 s after the gate; a clock read after the query."
+        },
+        {
+          "id": "04-08",
+          "name": "A search instance refuses an unusable index at init",
+          "description": "D-STZ-14: a store failure at init, or an object that downloads but cannot be used, emits health.startup.refused and fails init. The read probe gates search init through spawn_blocking (UI-11).",
+          "criteria": [
+            "SE-E5: each of the four rows never starts answering and logs the refusal.",
+            "A missing object is not a refusal.",
+            "A search instance whose init runs under a Tokio runtime answers without panicking."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_search.rs",
+          "scenario_name": "a_search_instance_that_cannot_get_a_usable_index_never_starts_answering",
+          "scenario_ids": [
+            "SE-E5"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_search::a_search_instance_that_cannot_get_a_usable_index_never_starts_answering"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_search",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver SE-E5. The same read-probe gate serves probe init in 05-01. Pass init never gates on the read probe. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 2,
+          "depends_on": [
+            "04-07"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/search.rs",
+            "tests/acceptance/scale_to_zero_search.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a damaged object served as empty; init answering after a refused probe."
+        }
+      ]
+    },
+    {
+      "id": "05",
+      "name": "The probe",
+      "description": "One health line per run from the public edge and the pass record, with A10's stale reading on top.",
+      "steps": [
+        {
+          "id": "05-01",
+          "name": "Probe mode reports a live index and refuses non-objects",
+          "description": "D-STZ-23, D-STZ-37: canned search, then health, through the bounded client; the pass record's age; one indexer.host.health line through not_live. A non-object event is a function error with no calls.",
+          "criteria": [
+            "PR-1: a live index gives one health line with not_live 0.",
+            "PR-2: a failed pass that just ran does not also make the index look dead.",
+            "PR-E3: a non-object event is refused, with no line and no calls."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_probe.rs",
+          "scenario_name": "the_probe_reports_a_live_index",
+          "scenario_ids": [
+            "PR-1",
+            "PR-2",
+            "PR-E3"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_probe::the_probe_reports_a_live_index",
+            "scale_to_zero_probe::a_failed_pass_that_just_ran_does_not_also_make_the_index_look_dead",
+            "scale_to_zero_probe::the_probe_refuses_an_event_that_is_not_an_object_and_does_nothing_else"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_probe",
+            "conventions.test_runs step_gate with the cli indexer suites"
+          ],
+          "implementation_notes": "RED driver PR-1. adapter-index-query gains health with the client's bounded timeouts, and not_live gets its first caller. Probe init gates on the read probe through spawn_blocking. Line fields: feature-delta Monitoring contracts. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "04-04",
+            "04-08"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/Cargo.toml",
+            "crates/openlore-indexer-lambda/src/probe.rs",
+            "crates/adapter-index-query/src/lib.rs",
+            "tests/acceptance/scale_to_zero_probe.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: two health lines; a refused event that still calls out."
+        },
+        {
+          "id": "05-02",
+          "name": "The probe names each cause of not live",
+          "description": "Every failure gives not_live 1 with its cause: search, health, a stale, missing or unreadable record. A hanging edge is still reported in time; an unreadable health answer counts as a failed check.",
+          "criteria": [
+            "PR-E1: each of the seven rows says not live, and why.",
+            "PR-B1: a pass exactly 45 minutes old still counts as recent.",
+            "PR-E2: a hanging public index is not live, and the line arrives inside the function's time.",
+            "PR-E4: an unreadable health answer counts as a failed health check."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_probe.rs",
+          "scenario_name": "the_probe_says_the_index_is_not_live_and_why_for_each_failure",
+          "scenario_ids": [
+            "PR-E1",
+            "PR-B1",
+            "PR-E2",
+            "PR-E4"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_probe::the_probe_says_the_index_is_not_live_and_why_for_each_failure",
+            "scale_to_zero_probe::a_pass_exactly_45_minutes_old_still_counts_as_recent",
+            "scale_to_zero_probe::a_public_index_that_hangs_is_not_live_and_the_probe_still_reports_it_in_time",
+            "scale_to_zero_probe::a_health_answer_the_probe_cannot_read_counts_as_a_failed_health_check"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_probe",
+            "conventions.test_runs step_gate with the cli indexer suites"
+          ],
+          "implementation_notes": "RED driver PR-E1. A missing or unreadable record counts as no recent pass (UI-12). The causes match health-timer.sh. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "05-01"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/probe.rs",
+            "crates/adapter-index-query/src/lib.rs",
+            "tests/acceptance/scale_to_zero_probe.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: the 45-minute boundary; a garbled record read as recent; a crash on a hang."
+        },
+        {
+          "id": "05-03",
+          "name": "The probe reports a search stuck on an old copy",
+          "description": "D-STZ-48: the probe compares the served published-at with the record through served_index_stale and writes indexer.lambda.served_index_stale. This never changes not_live.",
+          "criteria": [
+            "PR-3: a served index older than a settled record is reported, without calling the index dead.",
+            "PR-4: all seven rows with nothing to compare or nothing lagging write no stale line."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_probe.rs",
+          "scenario_name": "the_probe_reports_a_search_stuck_on_an_old_copy_without_calling_the_index_dead",
+          "scenario_ids": [
+            "PR-3",
+            "PR-4"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_probe::the_probe_reports_a_search_stuck_on_an_old_copy_without_calling_the_index_dead",
+            "scale_to_zero_probe::the_probe_writes_no_stale_index_line_when_it_has_nothing_to_compare_or_nothing_lags"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda --test scale_to_zero_probe",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver PR-3, secondary PR-4. served_index_stale's first caller. lag_s is null when served is null. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 2,
+          "depends_on": [
+            "05-02"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/src/probe.rs",
+            "tests/acceptance/scale_to_zero_probe.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: a stale reading raising not_live; a line on a failed health call."
+        }
+      ]
+    },
+    {
+      "id": "06",
+      "name": "The real S3 and SSM adapter, and the Lambda runtime",
+      "description": "RIO-1..9 against moto, with the rio-object-store job landing with them, then main wires the real runtime.",
+      "steps": [
+        {
+          "id": "06-01",
+          "name": "S3 reads, conditional publish and the pass record",
+          "description": "Real head, fetch_to, publish_if_match, put_last_pass and get_last_pass over S3, each client built from call_budget. A 404 is absent, a 412 is a conflict, anything else is a store failure.",
+          "criteria": [
+            "RIO-1: the index object round-trips with its metadata, and a lost update is refused.",
+            "RIO-2: the pass record round-trips.",
+            "RIO-3: a missing bucket is a store failure, never 'no index yet'.",
+            "RIO-7: a write the store cannot take is a failure, never a lost update.",
+            "RIO-8: an unreadable pass record is an error, never 'no pass yet'."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_object_store_real_io.rs",
+          "scenario_name": "the_index_object_round_trips_through_a_real_object_store_and_a_lost_update_is_refused",
+          "scenario_ids": [
+            "RIO-1",
+            "RIO-2",
+            "RIO-3",
+            "RIO-7",
+            "RIO-8"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_object_store_real_io::the_index_object_round_trips_through_a_real_object_store_and_a_lost_update_is_refused",
+            "scale_to_zero_object_store_real_io::the_pass_record_round_trips_through_a_real_object_store",
+            "scale_to_zero_object_store_real_io::a_bucket_that_does_not_exist_is_a_store_failure_never_no_index_yet",
+            "scale_to_zero_object_store_real_io::a_write_the_store_cannot_take_is_a_failure_never_a_lost_update",
+            "scale_to_zero_object_store_real_io::a_pass_record_nobody_can_read_is_an_error_never_no_pass_yet"
+          ],
+          "arch_rules": [],
+          "green": [
+            "OPENLORE_TEST_MOTO_ENDPOINT=<local moto 5.2.5> cargo nextest run -p adapter-s3-index-object --run-ignored only",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver RIO-1. conventions.rio_stay_ignored applies. Local moto: uvx --from 'moto[server]==5.2.5' moto_server. No job in ci.yml yet (L-10). The publish takes the shrinking limit from 04-01. Stream the download so an aborted fetch leaves no file. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 7,
+          "depends_on": [
+            "01-07",
+            "05-03"
+          ],
+          "files_to_modify": [
+            "crates/adapter-s3-index-object/src/lib.rs",
+            "tests/acceptance/scale_to_zero_object_store_real_io.rs"
+          ],
+          "files_to_create": [
+            "crates/adapter-s3-index-object/src/s3.rs"
+          ],
+          "mutation_note": "Kill: 403 or 500 mapped to absent; a 412 mapped to a store failure; metadata keys swapped."
+        },
+        {
+          "id": "06-02",
+          "name": "SSM DID list and the start-up read probes",
+          "description": "RepoDidListSourcePort over GetParameter, returning raw text, plus the read probes of both adapters: a role-reachable store proves a HEAD, and a missing one refuses.",
+          "criteria": [
+            "RIO-4: the list is read verbatim, and a missing list is a failure.",
+            "RIO-5: the start-up probes tell a reachable store from a missing one.",
+            "check-probes passes with the SSM adapter off its allowlist."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_object_store_real_io.rs",
+          "scenario_name": "the_did_list_is_read_verbatim_from_a_real_parameter_store",
+          "scenario_ids": [
+            "RIO-4",
+            "RIO-5"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_object_store_real_io::the_did_list_is_read_verbatim_from_a_real_parameter_store",
+            "scale_to_zero_object_store_real_io::the_start_up_probes_tell_a_reachable_store_from_a_missing_one"
+          ],
+          "arch_rules": [
+            "xtask/src/check_probes.rs: SsmRepoDidListAdapter leaves the stub allowlist once its probe is real"
+          ],
+          "green": [
+            "OPENLORE_TEST_MOTO_ENDPOINT=<local moto 5.2.5> cargo nextest run -p adapter-s3-index-object --run-ignored only",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver RIO-4, secondary RIO-5. Probes stay sync (ADR-009): they run on a blocking thread and reach the runtime by handle. Validation stays in the ADR-081 loader. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "06-01"
+          ],
+          "files_to_modify": [
+            "crates/adapter-s3-index-object/src/lib.rs",
+            "crates/adapter-s3-index-object/src/s3.rs",
+            "xtask/src/check_probes.rs",
+            "tests/acceptance/scale_to_zero_object_store_real_io.rs"
+          ],
+          "files_to_create": [
+            "crates/adapter-s3-index-object/src/ssm.rs"
+          ],
+          "mutation_note": "Kill: trimming the list; a probe that returns ok on a missing store."
+        },
+        {
+          "id": "06-03",
+          "name": "Real write probe and the rio-object-store job",
+          "description": "The real write probe on its own key, repeating a 2xx and read through write_probe_outcome, bounded at 2 s per PUT. The blocking CI job lands in the same commit as RIO-9 goes green.",
+          "criteria": [
+            "RIO-6: one empty marker, however often the check runs, and the index is never touched.",
+            "RIO-9: a store that accepts the connection and never answers does not stop a pass starting.",
+            "rio-object-store selects all 10 tests by an explicit name filter, a skip fails it, and indexer-build needs it.",
+            "No SCAFFOLD marker remains in the adapter, and check-probes has neither adapter on its allowlist."
+          ],
+          "test_file": "tests/acceptance/scale_to_zero_object_store_real_io.rs",
+          "scenario_name": "the_write_check_creates_one_empty_marker_and_never_touches_the_index",
+          "scenario_ids": [
+            "RIO-6",
+            "RIO-9"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_object_store_real_io::the_write_check_creates_one_empty_marker_and_never_touches_the_index",
+            "scale_to_zero_object_store_real_io::a_store_that_accepts_the_connection_and_never_answers_does_not_stop_a_pass_starting"
+          ],
+          "arch_rules": [
+            "xtask/src/check_probes.rs: S3IndexObjectAdapter leaves the stub allowlist"
+          ],
+          "green": [
+            "OPENLORE_TEST_MOTO_ENDPOINT=<local moto 5.2.5> cargo nextest run -p adapter-s3-index-object --run-ignored only",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "RED driver RIO-6, secondary RIO-9. Seed check passes alongside. Job: moto 5.2.5 by the digest in environments.yaml, --run-ignored only plus an explicit nextest filter naming the 10 tests, each confirmed PASS by name, 'not run: set' absent. RIO has only run on the pip package; the first CI run on the pinned image settles that handoff item. UI-22: extend RIO-9 if another call's bound looks at risk. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "06-02"
+          ],
+          "files_to_modify": [
+            "crates/adapter-s3-index-object/src/lib.rs",
+            "crates/adapter-s3-index-object/src/s3.rs",
+            "xtask/src/check_probes.rs",
+            ".github/workflows/ci.yml",
+            "tests/acceptance/scale_to_zero_object_store_real_io.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: the repeat PUT skipped; the probe key written with the index's condition; a retry on the probe client."
+        },
+        {
+          "id": "06-04",
+          "name": "main wires the real runtime for all three modes",
+          "description": "main reads the Lambda environment through a pure config parser, builds the SDK config and adapters, and runs search under lambda_http and pass and probe under lambda_runtime. Closes T4.",
+          "criteria": [
+            "The parser refuses a missing or unknown setting and accepts the production environment.",
+            "The binary selects search, pass or probe from its command and refuses anything else.",
+            "A release build refuses the loopback seam with health.startup.refused naming it.",
+            "A config or connect failure emits health.startup.refused, not a panic."
+          ],
+          "red_acceptance": "NOT_APPLICABLE: no cargo scenario starts this binary (DWD-STZ-3). The crafter-owned the_lambda_environment_parses_or_names_what_is_wrong goes RED first.",
+          "test_file": "crates/openlore-indexer-lambda/src/config.rs",
+          "scenario_name": "the_lambda_environment_parses_or_names_what_is_wrong",
+          "scenario_ids": [],
+          "scenario_fns": [],
+          "arch_rules": [
+            "aws_sdk_only_in_lambda_edge stays green with lambda_http and lambda_runtime in the graph",
+            "check-probes: the root wires then probes then uses"
+          ],
+          "green": [
+            "cargo nextest run -p openlore-indexer-lambda",
+            "cargo deny check",
+            "conventions.test_runs step_gate"
+          ],
+          "implementation_notes": "No cargo scenario starts this binary (waiver DWD-STZ-3); lambda-smoke in 07-05 is its proof. The root gains its adapter-s3-index-object dependency here. Crafter-owned proptests over the parser, which is in mutation scope. Env names per UI-5, with bucket and parameter names chosen here and mirrored in lambda-env.json. lambda_http 1.3.2, lambda_runtime 1.5.0. TEST PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 5,
+          "depends_on": [
+            "05-03",
+            "06-03"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer-lambda/Cargo.toml",
+            "crates/openlore-indexer-lambda/src/main.rs",
+            "crates/openlore-indexer-lambda/src/lib.rs"
+          ],
+          "files_to_create": [
+            "crates/openlore-indexer-lambda/src/config.rs"
+          ],
+          "mutation_note": "Kill: a default bucket; modes swapped; a seam accepted in release."
+        }
+      ]
+    },
+    {
+      "id": "07",
+      "name": "Infrastructure as code, image and CI",
+      "description": "The prod-indexer tofu root, written and validated, never applied, then one image, the MSRV job and lambda-smoke.",
+      "steps": [
+        {
+          "id": "07-01",
+          "name": "prod-indexer root: registry, bucket, roles, functions, schedules",
+          "description": "The new tofu root's core per DEVOPS, plus lambda-env.json, shared with the smoke. Written and validated with -backend=false only; nothing is planned against or applied to AWS.",
+          "criteria": [
+            "OP-5: a crashed pass is not retried, one pass runs at a time, and the index keeps a week of history.",
+            "OP-6: search concurrency is 3 and an apply cannot undo a stop.",
+            "OP-10, OP-14: both schedules send an empty event, disabled until the operator enables them.",
+            "OP-15, OP-16: the registry keeps 10 images; the probe's address does not change with the phase.",
+            "XS-12: the Lambda environment holds no secret and no static AWS key."
+          ],
+          "test_file": "xtask/tests/scale_to_zero_platform.rs",
+          "scenario_name": "a_crashed_pass_is_not_retried_one_pass_runs_at_a_time_and_the_index_keeps_a_week_of_history",
+          "scenario_ids": [
+            "OP-5",
+            "OP-6",
+            "OP-10",
+            "OP-14",
+            "OP-15",
+            "OP-16",
+            "XS-12"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_platform::a_crashed_pass_is_not_retried_one_pass_runs_at_a_time_and_the_index_keeps_a_week_of_history",
+            "scale_to_zero_platform::at_most_three_searches_run_at_once_and_a_stop_survives_an_apply",
+            "scale_to_zero_platform::both_schedules_send_an_empty_event",
+            "scale_to_zero_platform::nothing_runs_on_a_schedule_until_the_operator_turns_it_on",
+            "scale_to_zero_platform::the_registry_keeps_the_newest_10_builds",
+            "scale_to_zero_platform::the_probe_watches_the_same_address_before_and_after_the_cut_over",
+            "scale_to_zero_architecture::the_lambda_environment_holds_no_secret_and_no_static_aws_key"
+          ],
+          "arch_rules": [],
+          "green": [
+            "tofu -chdir=deploy/tofu/environments/prod-indexer init -backend=false",
+            "tofu -chdir=deploy/tofu/environments/prod-indexer validate",
+            "tofu fmt -check deploy/tofu/environments/prod-indexer",
+            "cargo test -p xtask --test scale_to_zero_platform --test scale_to_zero_architecture"
+          ],
+          "implementation_notes": "RED driver OP-5. Reader contract: literal function_name, no for_each or dynamic. Per-function roles exactly as the DEVOPS table, including the conditional PutObject statements and the ListBucket prefix condition. prevent_destroy on the bucket. Commit .terraform.lock.hcl. NO tofu plan or apply. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 7,
+          "depends_on": [
+            "06-04"
+          ],
+          "files_to_modify": [
+            "xtask/tests/scale_to_zero_platform.rs",
+            "xtask/tests/scale_to_zero_architecture.rs"
+          ],
+          "files_to_create": [
+            "deploy/tofu/environments/prod-indexer/versions.tf",
+            "deploy/tofu/environments/prod-indexer/main.tf",
+            "deploy/tofu/environments/prod-indexer/variables.tf",
+            "deploy/tofu/environments/prod-indexer/ecr.tf",
+            "deploy/tofu/environments/prod-indexer/s3.tf",
+            "deploy/tofu/environments/prod-indexer/iam.tf",
+            "deploy/tofu/environments/prod-indexer/lambda.tf",
+            "deploy/tofu/environments/prod-indexer/schedule.tf",
+            "deploy/tofu/environments/prod-indexer/outputs.tf",
+            "deploy/tofu/environments/prod-indexer/lambda-env.json",
+            "deploy/tofu/environments/prod-indexer/.terraform.lock.hcl"
+          ],
+          "mutation_note": "Shell and tofu: EXEMPT. Each setting has its row in the reader, with =1 not matching =10."
+        },
+        {
+          "id": "07-02",
+          "name": "prod-indexer root: edge, alarms, budget, and its checks",
+          "description": "CloudFront with one allowlist function on all three behaviors, the header strip policy, ACM, filters, alarms A1-T..A3-T and A4-A11, the budget and saved queries; deploy-pds-check gains the new root.",
+          "criteria": [
+            "OP-4: one allowlist function fronts every path, every method reaches it, and enabled is left to the kill switch.",
+            "Alarm thresholds and metrics match the DEVOPS alarm table.",
+            "deploy-pds-check validates and formats the new root without credentials."
+          ],
+          "test_file": "xtask/tests/scale_to_zero_platform.rs",
+          "scenario_name": "the_edge_is_one_allowlist_in_front_of_every_path",
+          "scenario_ids": [
+            "OP-4"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_platform::the_edge_is_one_allowlist_in_front_of_every_path"
+          ],
+          "arch_rules": [],
+          "green": [
+            "tofu -chdir=deploy/tofu/environments/prod-indexer validate",
+            "tofu fmt -check deploy/tofu/environments/prod-indexer",
+            "cargo test -p xtask --test scale_to_zero_platform"
+          ],
+          "implementation_notes": "RED driver OP-4. Each behavior its own block. A crafter-owned check in xtask/tests/scale_to_zero_ci.rs pins alarm thresholds and the workflow's path trigger, in the style of indexer_deployment_platform.rs. Trial filters and alarms keyed on phase. NO tofu plan or apply. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 6,
+          "depends_on": [
+            "07-01"
+          ],
+          "files_to_modify": [
+            ".github/workflows/deploy-pds-check.yml",
+            "xtask/tests/scale_to_zero_platform.rs"
+          ],
+          "files_to_create": [
+            "deploy/tofu/environments/prod-indexer/edge.tf",
+            "deploy/tofu/environments/prod-indexer/edge-function.js",
+            "deploy/tofu/environments/prod-indexer/monitoring.tf",
+            "deploy/tofu/environments/prod-indexer/budget.tf",
+            "xtask/tests/scale_to_zero_ci.rs"
+          ],
+          "mutation_note": "Shell and tofu: EXEMPT."
+        },
+        {
+          "id": "07-03",
+          "name": "One image carries both binaries",
+          "description": "The Dockerfile copies both binaries, sets WORKDIR / and the lambda-root label; indexer-build builds them in two cargo invocations, SBOMs each, and checks the self-host binary for AWS strings. serve-smoke stays as it is.",
+          "criteria": [
+            "The image holds both binaries; ENTRYPOINT, CMD and USER are unchanged.",
+            "The two binaries build in separate cargo invocations, so the SDK's features cannot reach the self-host binary.",
+            "A self-host binary containing an AWS or Lambda string fails the build.",
+            "serve-smoke is unchanged and runs on the image built with WORKDIR /.",
+            "indexer-image attests three SBOMs on the one digest."
+          ],
+          "red_acceptance": "NOT_APPLICABLE: no DISTILL scenario. The crafter-owned the_image_carries_both_binaries_and_the_self_host_stays_clean goes RED first.",
+          "test_file": "xtask/tests/scale_to_zero_ci.rs",
+          "scenario_name": "the_image_carries_both_binaries_and_the_self_host_stays_clean",
+          "scenario_ids": [],
+          "scenario_fns": [],
+          "arch_rules": [],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_ci --test indexer_deployment_platform"
+          ],
+          "implementation_notes": "No DISTILL scenario: crafter-owned file checks, the XP-17 pattern. Real proof is the first main-push CI run. WORKDIR / is harmless to compose, which uses absolute paths. Job summary gains the lambda deploy command. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "06-04",
+            "07-02"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer/Dockerfile",
+            ".github/workflows/ci.yml",
+            "xtask/tests/scale_to_zero_ci.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Shell and workflow: EXEMPT."
+        },
+        {
+          "id": "07-04",
+          "name": "MSRV job and the rust-version rule",
+          "description": "A new commit-stage msrv matrix: 1.91.0 for the workspace without the two Lambda crates, 1.94.1 for them, with fallback resolution. An xtask check keeps 1.94.1 on only those two crates.",
+          "criteria": [
+            "Only the two Lambda crates set rust-version 1.94.1, and every other member inherits 1.91.",
+            "A third crate setting 1.94.1 fails check-arch.",
+            "The test job needs msrv."
+          ],
+          "red_acceptance": "NOT_APPLICABLE: no DISTILL scenario. The crafter-owned only_the_two_lambda_crates_set_the_higher_rust_version goes RED first, on its synthetic violation.",
+          "test_file": "xtask/tests/scale_to_zero_ci.rs",
+          "scenario_name": "only_the_two_lambda_crates_set_the_higher_rust_version",
+          "scenario_ids": [],
+          "scenario_fns": [],
+          "arch_rules": [
+            "New xtask check: rust-version 1.94.1 only on openlore-indexer-lambda and adapter-s3-index-object (DV-STZ-3), with a synthetic violation"
+          ],
+          "green": [
+            "cargo test -p xtask",
+            "cargo xtask check-arch"
+          ],
+          "implementation_notes": "rust-version is already in both manifests (DWD-STZ-20), so this step enforces it. No MSRV job existed, so 1.91 has never been proven: if the 1.91.0 leg fails on existing code, stop and report it, since a fix is outside this feature. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 2,
+          "depends_on": [
+            "07-02"
+          ],
+          "files_to_modify": [
+            ".github/workflows/ci.yml",
+            "xtask/src/check_arch.rs",
+            "xtask/tests/scale_to_zero_ci.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Kill: the rule reading only one manifest."
+        },
+        {
+          "id": "07-05",
+          "name": "lambda-smoke with seed helper, race shim and secret check",
+          "description": "The release image under the Runtime Interface Emulator and pinned moto, arbitrary uid, read-only root, 512 MB /tmp, with all ten assertions, the one-claim seed helper, a race shim armed before the invoke, and the image secret check.",
+          "criteria": [
+            "lambda-smoke makes all ten DEVOPS assertions and blocks the push.",
+            "Each normal invoke sends the empty event, and the no-publish invoke sends exactly its one key.",
+            "Assertion 9's stale version is deterministic: the shim is armed before the invoke, on the index key only.",
+            "The seed is written straight to moto, and repeated before assertion 9.",
+            "The image shows no AWS credential variable, and trivy scans for secrets too."
+          ],
+          "red_acceptance": "NOT_APPLICABLE: no DISTILL scenario (waiver DWD-STZ-3). The crafter-owned lambda_smoke_runs_every_assertion_as_lambda_runs_the_image goes RED first.",
+          "test_file": "xtask/tests/scale_to_zero_ci.rs",
+          "scenario_name": "lambda_smoke_runs_every_assertion_as_lambda_runs_the_image",
+          "scenario_ids": [],
+          "scenario_fns": [],
+          "arch_rules": [],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_ci",
+            "shellcheck deploy/indexer/smoke/lambda-smoke.sh"
+          ],
+          "implementation_notes": "No DISTILL scenario: the root's only end-to-end run (DWD-STZ-3), so its real proof is the first main-push CI run. RIE pinned by version and sha256, mounted, never in the image. moto by the same digest as rio-object-store. The smoke reads lambda-env.json. Shim is Python stdlib, in the job only. Seed helper is built in indexer-build. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 8,
+          "depends_on": [
+            "07-01",
+            "07-02",
+            "07-03"
+          ],
+          "files_to_modify": [
+            ".github/workflows/ci.yml",
+            "xtask/tests/scale_to_zero_ci.rs"
+          ],
+          "files_to_create": [
+            "deploy/indexer/smoke/lambda-smoke.sh",
+            "deploy/indexer/smoke/race_shim.py",
+            "crates/adapter-index-store/examples/seed_index.rs"
+          ],
+          "mutation_note": "Shell and workflow: EXEMPT."
+        }
+      ]
+    },
+    {
+      "id": "08",
+      "name": "Operator verbs: deploy.sh lambda, and host standby and resume",
+      "description": "The operator's tools, built and tested under stubs. None is run against AWS or the host here.",
+      "steps": [
+        {
+          "id": "08-01",
+          "name": "lambda deploy: every gate in order, live flips last",
+          "description": "The full gate order, steps 0-16, reusing ci_green, resolve_digest, verify_signature and post_checks, with refs and digests refused before any tool or registry call. Happy path only.",
+          "criteria": [
+            "OP-1: every gate runs in order, the gate is no-publish, and live flips last, each with prev= and the pass with idx=.",
+            "OP-E1: anything but one exact build is refused before any tool runs.",
+            "OP-E2: an image with no Lambda root is refused before the registry sees it."
+          ],
+          "test_file": "xtask/tests/scale_to_zero_platform.rs",
+          "scenario_name": "a_deploy_passes_every_gate_in_order_and_flips_live_last",
+          "scenario_ids": [
+            "OP-1",
+            "OP-E1",
+            "OP-E2"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_platform::a_deploy_passes_every_gate_in_order_and_flips_live_last",
+            "scale_to_zero_platform::a_deploy_names_one_exact_build_or_it_is_refused_before_any_tool_runs",
+            "scale_to_zero_platform::an_image_that_cannot_run_the_pass_is_refused_before_the_registry_sees_it"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_platform --test indexer_deployment_platform",
+            "shellcheck deploy/indexer/deploy.sh deploy/indexer/lambda.sh"
+          ],
+          "implementation_notes": "RED driver OP-1. Crafter's call: a sourced lambda.sh or deploy.sh (DESIGN open question 6). Testability contract: header of scale_to_zero_platform.rs. Host verbs keep working. Never run against AWS. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 8,
+          "depends_on": [
+            "07-02"
+          ],
+          "files_to_modify": [
+            "deploy/indexer/deploy.sh",
+            "xtask/tests/scale_to_zero_platform.rs"
+          ],
+          "files_to_create": [
+            "deploy/indexer/lambda.sh"
+          ],
+          "mutation_note": "Shell: EXEMPT; DWD-STZ-28 call-log assertions."
+        },
+        {
+          "id": "08-02",
+          "name": "ECR eviction guard and the failed-copy cleanup",
+          "description": "Step 6: refuse a copy that would evict a referenced digest; a deploy that fails before publishing deletes the copy it made, and only that (U-STZ-9).",
+          "criteria": [
+            "OP-E18: a copy that would push out an image in use is refused.",
+            "OP-E19: a failed deploy removes the copy it made, and only that."
+          ],
+          "test_file": "xtask/tests/scale_to_zero_platform.rs",
+          "scenario_name": "a_copy_that_would_push_out_an_image_in_use_is_refused",
+          "scenario_ids": [
+            "OP-E18",
+            "OP-E19"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_platform::a_copy_that_would_push_out_an_image_in_use_is_refused",
+            "scale_to_zero_platform::a_failed_deploy_removes_the_copy_it_made_and_only_that"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_platform",
+            "shellcheck deploy/indexer/lambda.sh"
+          ],
+          "implementation_notes": "RED driver OP-E18. A failure after step 8 keeps the copy, since $LATEST references it. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "08-01"
+          ],
+          "files_to_modify": [
+            "deploy/indexer/lambda.sh",
+            "xtask/tests/scale_to_zero_platform.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Shell: EXEMPT."
+        },
+        {
+          "id": "08-03",
+          "name": "Candidate check and pass gate stop the deploy",
+          "description": "Step 11's candidate check and step 12's no-publish gate: exit rules, the mode echo, the exit-3 acceptance that changes nothing else, and a stop that puts candidate back.",
+          "criteria": [
+            "OP-E16: a failed candidate check stops the deploy before any gate.",
+            "OP-E3, OP-E7: a failing gate, or one with no mode in its reply, stops it with nothing flipped.",
+            "OP-E4, OP-E8: exit 3 stops unless accepted, and accepting it accepts nothing else.",
+            "OP-E20: a stop before the flip puts candidate back."
+          ],
+          "test_file": "xtask/tests/scale_to_zero_platform.rs",
+          "scenario_name": "a_pass_gate_that_fails_stops_the_deploy_with_nothing_flipped",
+          "scenario_ids": [
+            "OP-E3",
+            "OP-E4",
+            "OP-E7",
+            "OP-E8",
+            "OP-E16",
+            "OP-E20"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_platform::a_pass_gate_that_fails_stops_the_deploy_with_nothing_flipped",
+            "scale_to_zero_platform::a_pass_gate_that_reached_nobody_stops_the_deploy_unless_the_operator_accepts_it",
+            "scale_to_zero_platform::a_pass_gate_that_does_not_say_it_ran_as_no_publish_stops_the_deploy",
+            "scale_to_zero_platform::accepting_a_gate_that_reached_nobody_accepts_nothing_else",
+            "scale_to_zero_platform::a_candidate_that_fails_its_checks_stops_the_deploy_before_any_gate",
+            "scale_to_zero_platform::a_deploy_stopped_before_the_flip_puts_its_candidate_back"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_platform",
+            "shellcheck deploy/indexer/lambda.sh"
+          ],
+          "implementation_notes": "RED driver OP-E3. The word 'refusing' on each refusal. Invoke with --cli-read-timeout 0 and AWS_MAX_ATTEMPTS=1. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "08-02"
+          ],
+          "files_to_modify": [
+            "deploy/indexer/lambda.sh",
+            "xtask/tests/scale_to_zero_platform.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Shell: EXEMPT."
+        },
+        {
+          "id": "08-04",
+          "name": "Probe gate, gate wait and the flip-back",
+          "description": "Step 13's not-live gate and its acceptance, the throttle wait shared by both gates, and step 14's flip poller and edge checks, which flip search straight back on failure.",
+          "criteria": [
+            "OP-E9: not live stops the deploy unless accepted, and that changes only this check.",
+            "OP-E13: a gate waits for a running pass or probe, then gives up with nothing flipped.",
+            "OP-E15: a search failing at the public edge after its flip goes straight back, leaving pass and probe alone."
+          ],
+          "test_file": "xtask/tests/scale_to_zero_platform.rs",
+          "scenario_name": "a_probe_gate_that_finds_the_index_not_live_stops_the_deploy_unless_accepted",
+          "scenario_ids": [
+            "OP-E9",
+            "OP-E13",
+            "OP-E15"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_platform::a_probe_gate_that_finds_the_index_not_live_stops_the_deploy_unless_accepted",
+            "scale_to_zero_platform::a_gate_waits_for_a_running_pass_or_probe_and_gives_up_with_nothing_flipped",
+            "scale_to_zero_platform::a_search_that_fails_at_the_public_edge_after_its_flip_goes_straight_back"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_platform",
+            "shellcheck deploy/indexer/lambda.sh"
+          ],
+          "implementation_notes": "RED driver OP-E9. The wait uses sleep 30 and counted attempts, per the testability contract. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "08-03"
+          ],
+          "files_to_modify": [
+            "deploy/indexer/lambda.sh",
+            "xtask/tests/scale_to_zero_platform.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Shell: EXEMPT."
+        },
+        {
+          "id": "08-05",
+          "name": "lambda rollback to the recorded versions",
+          "description": "Rollback flips every live alias to its recorded prev= version, candidate following, and refuses a target whose image left ECR or an alias with nothing recorded.",
+          "criteria": [
+            "OP-2: every function returns to the version it replaced.",
+            "OP-E5: a target whose image was removed is refused.",
+            "OP-E10: a rollback with no recorded version is refused."
+          ],
+          "test_file": "xtask/tests/scale_to_zero_platform.rs",
+          "scenario_name": "a_rollback_returns_every_function_to_the_version_it_replaced",
+          "scenario_ids": [
+            "OP-2",
+            "OP-E5",
+            "OP-E10"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_platform::a_rollback_returns_every_function_to_the_version_it_replaced",
+            "scale_to_zero_platform::a_rollback_to_a_version_whose_image_was_removed_is_refused",
+            "scale_to_zero_platform::a_rollback_with_no_recorded_version_is_refused"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_platform",
+            "shellcheck deploy/indexer/lambda.sh"
+          ],
+          "implementation_notes": "RED driver OP-2. Prints the idx= version id. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 2,
+          "depends_on": [
+            "08-01"
+          ],
+          "files_to_modify": [
+            "deploy/indexer/lambda.sh",
+            "xtask/tests/scale_to_zero_platform.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Shell: EXEMPT."
+        },
+        {
+          "id": "08-06",
+          "name": "lambda republish carries only the live image",
+          "description": "U-STZ-2: republish reads the digest from live, sets $LATEST to it, asserts CodeSha256 and reuses the deploy's later steps. It refuses rather than fall back to a prev= record.",
+          "criteria": [
+            "OP-7: a republish carries the image already live, whatever the next version would have held.",
+            "OP-E11: one not holding the live image is refused.",
+            "OP-E14: one whose image left the registry is refused.",
+            "OP-E17: one that cannot read the live image is refused, whatever the record says."
+          ],
+          "test_file": "xtask/tests/scale_to_zero_platform.rs",
+          "scenario_name": "a_republish_carries_the_image_already_live",
+          "scenario_ids": [
+            "OP-7",
+            "OP-E11",
+            "OP-E14",
+            "OP-E17"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_platform::a_republish_carries_the_image_already_live",
+            "scale_to_zero_platform::a_republish_that_does_not_hold_the_image_already_live_is_refused",
+            "scale_to_zero_platform::a_republish_of_an_image_that_left_the_registry_is_refused",
+            "scale_to_zero_platform::a_republish_that_cannot_read_the_live_image_is_refused"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_platform",
+            "shellcheck deploy/indexer/lambda.sh"
+          ],
+          "implementation_notes": "RED driver OP-7. Step 7 first, then steps 10-16, shared with deploy. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "08-04"
+          ],
+          "files_to_modify": [
+            "deploy/indexer/lambda.sh",
+            "xtask/tests/scale_to_zero_platform.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Shell: EXEMPT."
+        },
+        {
+          "id": "08-07",
+          "name": "Kill switch, maintenance switches, index reset and restore",
+          "description": "lambda stop and start change search concurrency and the distribution only; pass-off/on and probe-off/on change one function; reset-index needs the typed word; restore-index copies one version, outside the quarter-hour edge.",
+          "criteria": [
+            "OP-3: the kill switch stops search and the edge, and leaves pass and probe alone.",
+            "OP-9: each maintenance switch changes one function and nothing else.",
+            "OP-E6: resetting needs the exact typed word.",
+            "OP-8, OP-E12: restoring copies the chosen version once, refused when a pass is due or running."
+          ],
+          "test_file": "xtask/tests/scale_to_zero_platform.rs",
+          "scenario_name": "the_kill_switch_stops_search_and_the_edge_and_leaves_the_pass_and_the_probe_alone",
+          "scenario_ids": [
+            "OP-3",
+            "OP-9",
+            "OP-E6",
+            "OP-8",
+            "OP-E12"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_platform::the_kill_switch_stops_search_and_the_edge_and_leaves_the_pass_and_the_probe_alone",
+            "scale_to_zero_platform::maintenance_switches_change_one_function_and_nothing_else",
+            "scale_to_zero_platform::resetting_the_index_needs_the_exact_typed_word",
+            "scale_to_zero_platform::restoring_the_index_copies_the_chosen_version_back_once",
+            "scale_to_zero_platform::restoring_the_index_is_refused_when_a_pass_is_due_or_running"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_platform",
+            "shellcheck deploy/indexer/lambda.sh"
+          ],
+          "implementation_notes": "RED driver OP-3. start restores a fixed 3. reset-index --trigger arrives with 08-08. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 4,
+          "depends_on": [
+            "08-01"
+          ],
+          "files_to_modify": [
+            "deploy/indexer/lambda.sh",
+            "xtask/tests/scale_to_zero_platform.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Shell: EXEMPT."
+        },
+        {
+          "id": "08-08",
+          "name": "Status, seed, reporting verbs and the host-path assertion",
+          "description": "trigger, probe, reset-index --trigger, status with its metric check, seed, test-alarm targets, measure, kpi, parity and cutover-watch, written and not run. OP-12 closes the set: no lambda verb reaches the host.",
+          "criteria": [
+            "OP-11: each operator action sends exactly its own event.",
+            "OP-17: status looks for the search error metric on the candidate series.",
+            "OP-E21: the error alarm drill waits out a busy probe.",
+            "OP-12: no Lambda operation reaches the shared host.",
+            "measure exits 1 unless all cold and warm calls meet their limits on both paths."
+          ],
+          "test_file": "xtask/tests/scale_to_zero_platform.rs",
+          "scenario_name": "each_operator_action_sends_exactly_its_own_event",
+          "scenario_ids": [
+            "OP-11",
+            "OP-17",
+            "OP-E21",
+            "OP-12"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_platform::each_operator_action_sends_exactly_its_own_event",
+            "scale_to_zero_platform::the_status_report_looks_for_the_search_error_metric_where_a_test_put_it",
+            "scale_to_zero_platform::the_error_alarm_drill_waits_out_a_busy_probe",
+            "scale_to_zero_platform::no_lambda_operation_reaches_the_shared_host"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_platform",
+            "shellcheck deploy/indexer/lambda.sh"
+          ],
+          "implementation_notes": "RED driver OP-11. Everything else in this step has no scenario by design (DISTILL driving-adapter table): they report. A crafter-owned stub test pins measure's exit rule, since it is a gate. Running them is an operator stage. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 8,
+          "depends_on": [
+            "08-05",
+            "08-06",
+            "08-07"
+          ],
+          "files_to_modify": [
+            "deploy/indexer/lambda.sh",
+            "xtask/tests/scale_to_zero_platform.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Shell: EXEMPT."
+        },
+        {
+          "id": "08-09",
+          "name": "Host standby and resume verbs",
+          "description": "U-STZ-1: standby --timers and --container stop what they name and leave files, units, Caddy site and releases in place; standby with no flag refuses; resume starts them again.",
+          "criteria": [
+            "OP-13: standby stops what it names and leaves the rest.",
+            "OP-E22: standby needs to be told what to stop.",
+            "Host and PDS poller paths match the existing host verbs."
+          ],
+          "test_file": "xtask/tests/scale_to_zero_platform.rs",
+          "scenario_name": "standby_stops_what_it_names_and_leaves_the_rest",
+          "scenario_ids": [
+            "OP-13",
+            "OP-E22"
+          ],
+          "scenario_fns": [
+            "scale_to_zero_platform::standby_stops_what_it_names_and_leaves_the_rest",
+            "scale_to_zero_platform::standby_needs_to_be_told_what_to_stop"
+          ],
+          "arch_rules": [],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_platform --test indexer_deployment_platform",
+            "shellcheck deploy/indexer/deploy.sh"
+          ],
+          "implementation_notes": "RED driver OP-13. resume has no scenario (it needs a real host): the runbook covers it; a crafter-owned stub test checks the call order. Reuses start_pds_poller. Never run against the host. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "08-01"
+          ],
+          "files_to_modify": [
+            "deploy/indexer/deploy.sh",
+            "xtask/tests/scale_to_zero_platform.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Shell: EXEMPT."
+        },
+        {
+          "id": "08-10",
+          "name": "Operator runbook for the stages after DELIVER",
+          "description": "deploy/indexer/README.md gains the apply order, every lambda verb and the host verbs, the stages, the green-day rule, and where each piece of evidence goes, so the operator can run what this roadmap does not.",
+          "criteria": [
+            "The runbook lists every lambda verb that deploy.sh accepts and the two host verbs.",
+            "Each evidence item names its stage and how to record it.",
+            "A verb added without a runbook line fails the check."
+          ],
+          "red_acceptance": "NOT_APPLICABLE: no DISTILL scenario. The crafter-owned the_runbook_names_every_lambda_verb goes RED first.",
+          "test_file": "xtask/tests/scale_to_zero_ci.rs",
+          "scenario_name": "the_runbook_names_every_lambda_verb",
+          "scenario_ids": [],
+          "scenario_fns": [],
+          "arch_rules": [],
+          "green": [
+            "cargo test -p xtask --test scale_to_zero_ci"
+          ],
+          "implementation_notes": "Structural: a golden check of the verb list against the runbook. The stage content comes from feature-delta Cut-over runbook outline; do not restate decisions. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "estimate_hours": 2,
+          "depends_on": [
+            "08-08",
+            "08-09"
+          ],
+          "files_to_modify": [
+            "deploy/indexer/README.md",
+            "xtask/tests/scale_to_zero_ci.rs"
+          ],
+          "files_to_create": [],
+          "mutation_note": "Structural: EXEMPT."
+        }
+      ]
+    }
+  ],
+  "operator_stages_after_deliver": {
+    "statement": "DELIVER ends with green repo work. Nothing here is a step, and no crafter runs any of it: no tofu apply, no lambda deploy, no trial, no cut-over, no DNS, no decommission.",
+    "stages": "Apply order and Stage 0 bootstrap, Stage 1 trial, Stage 2 cut-over, the 7-day soak, decommission (feature-delta Cut-over runbook outline).",
+    "evidence": [
+      "P-15: policy simulator on the applied pass policy, then the first production publish and write probe",
+      "P-17: empty-bucket 404 with the ListBucket prefix condition",
+      "P-18: a 429 at cap 3, on 20 concurrent raw-URL calls",
+      "P-5: lambda measure on the digest to be cut over (R-STZ-1, R-STZ-2)",
+      "140 MB measurements: the post-pass local steps (D-STZ-40a) and the query after a full gate (D-STZ-10), and whether a reload fits 3 s",
+      "The metric check in lambda status, the lambda stop and start times at the edge, and the first scheduled publish",
+      "Open: what the first real publish alone can prove, since IAM conditions are not exercised in CI"
+    ]
+  },
+  "deferred_to_later_slices": {
+    "UI-13": "No test of a real crash or timeout of the pass. LOW; lambda test-alarm errors covers the notification path.",
+    "L-11, L-12": "Pre-existing cosign regex dots and tag-pinned actions: recorded by DEVOPS as out of scope."
+  },
+  "implementation_scope": {
+    "source_directories": [
+      "crates/openlore-indexer/src/",
+      "crates/openlore-indexer-lambda/src/",
+      "crates/adapter-s3-index-object/src/",
+      "crates/adapter-xrpc-query-server/src/",
+      "crates/adapter-index-store/src/",
+      "crates/adapter-index-query/src/",
+      "xtask/src/",
+      "deploy/indexer/",
+      "deploy/tofu/environments/prod-indexer/",
+      ".github/workflows/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "crates/adapter-s3-index-object/tests/",
+      "crates/adapter-index-store/tests/",
+      "xtask/tests/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.rs.bk",
+      "deploy/tofu/environments/prod/**",
+      "deploy/tofu/bootstrap/**",
+      "deploy/indexer/host/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "note": "Revision 1 of 2. 49 steps (11 + 6 + 2 + 8 + 3 + 4 + 5 + 10 by phase) covering all 132 DISTILL scenarios, each in exactly one step. One step flagged @sizing-review-needed: 01-05, retained as one step by review ruling. The old 01-11 merged into 01-10, and the old 01-12 is now 01-11.",
+    "upstream_findings": {
+      "UF-1": "ACCEPTED. XS-10 requires a resolve_only site in the Lambda root, but the only site is IndexerWiring::production in crates/openlore-indexer/src/run.rs. Wiring takes the verify-only resolver as an input; the Lambda root's site is crates/openlore-indexer-lambda/src/lib.rs, reached from the in-process entry points, since tests bypass main.rs. This amends D-STZ-38's scope note, which says the lib wiring composes the DID-resolve client; DESIGN text to update.",
+      "UF-2": "PA-1's delta requires the write-check marker, so init's write probe lands in 01-10, before the handoff's write-probe slot. PA-14 and PA-E10 keep their place.",
+      "UF-3": "CHANGED. The accepted-compile-cost version is rejected. PA-E12's fakes bypass connect, so the root must make the check itself. WRITE_PROBE_KEY, location_names_write_probe_key, write_probe_outcome, WriteProbeSeen and RepeatAnswer move to crates/ports/src/probe.rs in 01-06, re-exported from the adapter. 04-04 needs no Cargo change; the root gains the adapter only in 06-04. D-STZ-39 and the feature delta still place them in the adapter; DESIGN text to update.",
+      "UF-4": "ACCEPTED, closure corrected. WS-1 precedes CORE and FP in the handoff but needs a publish. T1 covers it and 01-10 closes it, which now holds the start fetch and the version condition. The published-at stamp and health read moved to 01-04, because WS-1 asserts them. WS-1 and WS-2 drop their ignore reason at activation.",
+      "UF-5": "P-2 says rules land with the first aws-* dependency, but COMPOSITION_ROOTS must include the root at 01-04, when it gains its first adapter. XS-1 still activates in 01-07.",
+      "UF-6": "ACCEPTED. RIO cannot be un-ignored: see conventions.rio_stay_ignored. The job's name filter is an addition to the DEVOPS command.",
+      "UF-7": "release.yml lines 85-97 carry the 'bin-only' comment too; DEVOPS named only ci.yml. Added to 01-01.",
+      "UF-8": "XS is absent from the handoff's sequence, so placement is this roadmap's call: XS-8, XS-7, XS-2b 01-01; XS-5, XS-6 01-04; XS-1..4 01-07; XS-9 01-09; XS-10 01-11; XS-11 03-02; XS-12 07-01.",
+      "UF-9": "D-STZ-40a starts the deadline at handler entry, but in_serve_pass starts its own Instant, and no scenario pins the difference. 01-02 and 02-03 carry it.",
+      "UF-10": "design/wave-decisions.md still says rust-version is 'applied in DELIVER' (noted in DWD-STZ-20); both manifests already set it.",
+      "UF-11": "Moving the conditional publish and start fetch into 01-10 left WS-2 with no production change: the list is rendered each run from 01-04, so the old 01-11 would have been validation-only. WS-2 merged into 01-10 as a secondary driver; it stays last in the phase's pass work, after PA-1."
+    },
+    "by": "nw-solution-architect (Morgan)",
+    "date": "2026-10-30",
+    "approved_by": "nw-acceptance-designer-reviewer (Sentinel), 2026-10-30, after revision 1 of 2"
+  }
+}
