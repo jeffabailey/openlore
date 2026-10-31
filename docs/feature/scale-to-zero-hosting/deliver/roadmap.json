@@ -1588,21 +1588,21 @@
             "tofu fmt -check deploy/tofu/environments/prod-indexer",
             "cargo test -p xtask --test scale_to_zero_platform"
           ],
-          "implementation_notes": "RED driver OP-4. Each behavior its own block. A crafter-owned check in xtask/tests/scale_to_zero_ci.rs pins alarm thresholds and the workflow's path trigger, in the style of indexer_deployment_platform.rs. Trial filters and alarms keyed on phase. NO tofu plan or apply. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "RED driver OP-4. Each behavior its own block. A crafter-owned check in xtask/tests/scale_to_zero_ci.rs pins alarm thresholds and the workflow's path trigger, in the style of indexer_deployment_platform.rs. Trial filters and alarms keyed on phase. NO tofu plan or apply. EXEMPT FROM PARADIGM: conventions.test_paradigm. FROM 07-01: edge.tf exists with a minimal aws_cloudfront_distribution.index, one behavior, default certificate and ignore_changes = [enabled]; EDIT it, adding the allowlist function, strip policy, ACM and the other two behaviors. The root must not be applied before this step. xtask/tests/scale_to_zero_ci.rs exists with 12 tests; extend it, it repeats the small tofu reader. Declare lambda_alarms_enabled. A2 is NOT filtered on no_publish: a no-publish run with no usable start means the store really is unusable, so the page is true.",
           "estimate_hours": 6,
           "depends_on": [
             "07-01"
           ],
           "files_to_modify": [
             ".github/workflows/deploy-pds-check.yml",
-            "xtask/tests/scale_to_zero_platform.rs"
+            "xtask/tests/scale_to_zero_platform.rs",
+            "deploy/tofu/environments/prod-indexer/edge.tf",
+            "xtask/tests/scale_to_zero_ci.rs"
           ],
           "files_to_create": [
-            "deploy/tofu/environments/prod-indexer/edge.tf",
             "deploy/tofu/environments/prod-indexer/edge-function.js",
             "deploy/tofu/environments/prod-indexer/monitoring.tf",
-            "deploy/tofu/environments/prod-indexer/budget.tf",
-            "xtask/tests/scale_to_zero_ci.rs"
+            "deploy/tofu/environments/prod-indexer/budget.tf"
           ],
           "mutation_note": "Shell and tofu: EXEMPT."
         },
