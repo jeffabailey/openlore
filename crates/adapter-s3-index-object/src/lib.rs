@@ -12,13 +12,10 @@
 //! * [`SsmRepoDidListAdapter`] implements `RepoDidListSourcePort` over SSM
 //!   `GetParameter`, returning the raw text (see `ssm`).
 //!
-//! The port probes are sync (ADR-009) and their calls are async: see `run_probe`.
+//! The port probes are sync (ADR-009) and their calls are async: see `wait_for`.
 //!
 //! The only crate besides the Lambda root that may link `aws-*` (xtask
 //! `aws_sdk_only_in_lambda_edge`).
-//
-// SCAFFOLD: true  (the write probe still panics: 06-03. Contract:
-// tests/acceptance/scale_to_zero_object_store_real_io.rs)
 
 #![forbid(unsafe_code)]
 
@@ -103,7 +100,7 @@ pub(crate) async fn shared_config(region: &str) -> SdkConfig {
         .await
 }
 
-/// Wait for a probe's async call from its sync `probe` (ADR-009).
+/// Wait for an async call from a sync `probe` (ADR-009).
 ///
 /// Init calls a probe through `spawn_blocking` (D-STZ-39), so the thread can reach
 /// the runtime it came from, and the connection the call opens stays with that
@@ -113,20 +110,27 @@ pub(crate) async fn shared_config(region: &str) -> SdkConfig {
 /// The handle is the caller's and not one kept from `connect`: a current-thread
 /// runtime that nobody is running cannot drive a handle's I/O, so a kept handle
 /// could wait forever. With no runtime around, the call gets one of its own, for
-/// as long as it lasts.
-fn run_probe(call: impl Future<Output = ProbeOutcome>, reason: ProbeRefusalReason) -> ProbeOutcome {
+/// as long as it lasts. `Err` when that one cannot be built.
+fn wait_for<T>(call: impl Future<Output = T>) -> std::io::Result<T> {
     if let Ok(runtime) = Handle::try_current() {
-        return runtime.block_on(call);
+        return Ok(runtime.block_on(call));
     }
-    match RuntimeBuilder::new_current_thread().enable_all().build() {
-        Ok(own_runtime) => own_runtime.block_on(call),
-        Err(failed) => ProbeRefused {
+    RuntimeBuilder::new_current_thread()
+        .enable_all()
+        .build()
+        .map(|own_runtime| own_runtime.block_on(call))
+}
+
+/// [`wait_for`] for a probe that refuses a start when it cannot run.
+fn run_probe(call: impl Future<Output = ProbeOutcome>, reason: ProbeRefusalReason) -> ProbeOutcome {
+    wait_for(call).unwrap_or_else(|failed| {
+        ProbeRefused {
             reason,
             detail: format!("no runtime for the probe: {failed}"),
             structured: serde_json::json!({}),
         }
-        .into(),
-    }
+        .into()
+    })
 }
 
 /// Where the index object lives.
@@ -205,8 +209,11 @@ impl IndexObjectReadPort for S3IndexObjectAdapter {
 
 #[async_trait]
 impl IndexObjectWritePort for S3IndexObjectAdapter {
+    /// A write probe that could not run says nothing about conditions, so unlike
+    /// [`run_probe`] it is no refusal (D-STZ-39).
     fn probe(&self) -> ProbeOutcome {
-        panic!("Not yet implemented -- RED scaffold")
+        let seen = wait_for(self.store.write_probe_seen()).unwrap_or(WriteProbeSeen::Unknown);
+        write_probe_outcome(seen)
     }
 
     async fn publish_if_match(

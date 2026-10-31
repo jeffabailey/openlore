@@ -8,12 +8,14 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use adapter_s3_index_object::{
     S3IndexObjectAdapter, S3Location, SsmLocation, SsmRepoDidListAdapter, StoreCall,
+    WRITE_PROBE_KEY,
 };
 use ports::{
     HeadOutcome, IndexObjectError, IndexObjectReadPort, IndexObjectWritePort, LastPass,
@@ -645,6 +647,105 @@ async fn a_silent_store_refuses_a_read_probe_at_its_two_seconds() {
     );
     assert!(took >= TWO_SECONDS - Duration::from_millis(200), "{took:?}");
     assert!(took < TWO_SECONDS + MARGIN, "{took:?}");
+}
+
+/// A store that gives each request the next of `answers`, and the last for good.
+fn answering_in_turn(answers: &'static [&'static str]) -> LoopbackStore {
+    let turn = AtomicUsize::new(0);
+    LoopbackStore::answering(move |_, stream| {
+        let this_turn = turn.fetch_add(1, Ordering::SeqCst);
+        let status = answers[this_turn.min(answers.len() - 1)];
+        answer_with(stream, status, &[], "");
+    })
+}
+
+/// Init's way in: sync, on a blocking thread of the running runtime.
+async fn write_probe_as_init_runs_it(adapter: &Arc<S3IndexObjectAdapter>) -> ProbeOutcome {
+    let adapter = Arc::clone(adapter);
+    tokio::task::spawn_blocking(move || IndexObjectWritePort::probe(adapter.as_ref()))
+        .await
+        .expect("the probe answered")
+}
+
+/// D-STZ-39, on what moto cannot play: a store that ignores the condition, and every
+/// answer that says nothing about it. Each row is how a run ends and how many PUTs it
+/// took, so a retry or a repeat skipped or added shows here.
+#[tokio::test]
+async fn the_write_probe_refuses_only_two_accepted_puts_after_at_most_two_puts() {
+    const TAKEN: &str = "200 OK";
+    const HONOURED: &str = "412 Precondition Failed";
+    const DENIED: &str = "403 Forbidden";
+    const DOWN: &str = "500 Internal Server Error";
+    let rows: [(&[&str], usize, bool); 7] = [
+        (&[HONOURED], 1, false),
+        (&[DENIED], 1, false),
+        (&[DOWN], 1, false),
+        (&[TAKEN, HONOURED], 2, false),
+        (&[TAKEN, DENIED], 2, false),
+        (&[TAKEN, DOWN], 2, false),
+        (&[TAKEN, TAKEN], 2, true),
+    ];
+    for (answers, puts, refused) in rows {
+        let store = answering_in_turn(answers);
+        let adapter = Arc::new(store.adapter().await);
+
+        let outcome = write_probe_as_init_runs_it(&adapter).await;
+
+        let ignored = matches!(
+            outcome,
+            ProbeOutcome::Refused {
+                reason: ProbeRefusalReason::IndexObjectWriteConditionIgnored,
+                ..
+            }
+        );
+        assert_eq!(ignored, refused, "{answers:?}: {outcome:?}");
+        assert_eq!(matches!(outcome, ProbeOutcome::Ok), !refused, "{answers:?}");
+        assert_eq!(store.requests().len(), puts, "{answers:?}");
+    }
+}
+
+/// Every PUT is the same empty create-only write, on the marker's key alone.
+#[tokio::test]
+async fn each_write_probe_put_is_an_empty_create_only_write_to_the_marker() {
+    let store = answering_in_turn(&["200 OK", "412 Precondition Failed"]);
+    let adapter = Arc::new(store.adapter().await);
+
+    write_probe_as_init_runs_it(&adapter).await;
+
+    let sent = store.requests();
+    assert_eq!(sent.len(), 2);
+    for request in &sent {
+        assert_eq!(request.method(), "PUT");
+        assert!(
+            request
+                .head
+                .lines()
+                .next()
+                .is_some_and(|line| { line.contains(&format!("/{WRITE_PROBE_KEY}")) }),
+            "{}",
+            request.head
+        );
+        assert_eq!(request.header("if-none-match"), Some("*"));
+        assert_eq!(request.header("if-match"), None);
+        assert_eq!(request.header("content-length"), Some("0"));
+    }
+}
+
+/// § Timeouts: a silent first PUT is unknown, at its 2 s and not the 1 s below it, and
+/// the one PUT sent means no repeat and no retry.
+#[tokio::test]
+async fn a_silent_store_passes_a_write_probe_at_its_two_seconds_after_one_put() {
+    let store = LoopbackStore::answering(|_, stream| hold_silently(stream));
+    let adapter = Arc::new(store.adapter().await);
+    let started = Instant::now();
+
+    let outcome = write_probe_as_init_runs_it(&adapter).await;
+
+    let took = started.elapsed();
+    assert!(matches!(outcome, ProbeOutcome::Ok), "{outcome:?}");
+    assert!(took >= TWO_SECONDS - Duration::from_millis(200), "{took:?}");
+    assert!(took < TWO_SECONDS + MARGIN, "{took:?}");
+    assert_eq!(store.requests().len(), 1);
 }
 
 /// RIO-4's whitespace, which moto's seed does not send: the kill for a trimmed list.

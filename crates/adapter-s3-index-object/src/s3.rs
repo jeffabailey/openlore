@@ -28,7 +28,8 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
 use ports::{
     HeadOutcome, IndexObjectError, LastPass, ObjectVersion, ProbeOutcome, ProbeRefusalReason,
-    ProbeRefused, PublishMetadata, PublishOutcome, WriteCondition,
+    ProbeRefused, PublishMetadata, PublishOutcome, RepeatAnswer, WriteCondition, WriteProbeSeen,
+    WRITE_PROBE_KEY,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -99,6 +100,20 @@ fn write_answer(status: Option<u16>) -> WriteAnswer {
     match status {
         Some(412) => WriteAnswer::Conflict,
         _ => WriteAnswer::Failed(StoreFailure::of(status)),
+    }
+}
+
+/// What one PUT of the write probe's marker got, in the words of the repeat's
+/// answer: `Err` holds the status of a failed PUT, if it had one. Only a 412 says the
+/// condition was honoured, and anything else that is not a 2xx says nothing about
+/// conditions (D-STZ-39).
+fn marker_answer(sent: Result<(), Option<u16>>) -> RepeatAnswer {
+    match sent {
+        Ok(()) => RepeatAnswer::Accepted,
+        Err(status) => match write_answer(status) {
+            WriteAnswer::Conflict => RepeatAnswer::Honoured,
+            WriteAnswer::Failed(_) => RepeatAnswer::Unknown,
+        },
     }
 }
 
@@ -485,6 +500,36 @@ impl IndexObjectStore {
         }
     }
 
+    /// D-STZ-39: a 2xx is a first run or a store ignoring the condition, and only
+    /// the repeat can tell them apart.
+    pub(crate) async fn write_probe_seen(&self) -> WriteProbeSeen {
+        match self.put_marker().await {
+            RepeatAnswer::Accepted => WriteProbeSeen::Repeated(self.put_marker().await),
+            RepeatAnswer::Honoured => WriteProbeSeen::Honoured,
+            RepeatAnswer::Unknown => WriteProbeSeen::Unknown,
+        }
+    }
+
+    /// The zero-byte conditional PUT. A `PutObject` answer has no stream to outlast
+    /// the operation timeout, so unlike a read this needs no [`within`].
+    async fn put_marker(&self) -> RepeatAnswer {
+        let sent = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(WRITE_PROBE_KEY)
+            .if_none_match("*")
+            .customize()
+            .config_override(client_settings(StoreCall::WriteProbePut).s3_config())
+            .send()
+            .await;
+        marker_answer(
+            sent.as_ref()
+                .map(drop)
+                .map_err(|failed| store_reply(failed).0),
+        )
+    }
+
     pub(crate) async fn put_last_pass(&self, last: &LastPass) -> Result<(), IndexObjectError> {
         let record = serde_json::to_vec(&StoredPassRecord::from(last)).map_err(unavailable)?;
         let sent = self
@@ -575,6 +620,21 @@ mod tests {
             prop_assert_eq!(write_answer(status), expected);
         }
 
+        // D-STZ-39: a 412 is the only proof of a condition, and no failure reads
+        // as a write the store took.
+        #[test]
+        fn a_marker_put_is_honoured_only_on_a_412_and_never_taken_when_it_failed(
+            status in any_status(),
+        ) {
+            let expected = if status == Some(412) {
+                RepeatAnswer::Honoured
+            } else {
+                RepeatAnswer::Unknown
+            };
+
+            prop_assert_eq!(marker_answer(Err(status)), expected);
+        }
+
         // D-STZ-12: each stamp comes back from its own key.
         #[test]
         fn a_version_reads_each_stamp_from_its_own_key(
@@ -661,6 +721,12 @@ mod tests {
 
             prop_assert_eq!(parse_pass_record(&stored), Ok(record));
         }
+    }
+
+    // bypass: the one success, a single fixed value.
+    #[test]
+    fn a_marker_put_that_succeeded_was_taken() {
+        assert_eq!(marker_answer(Ok(())), RepeatAnswer::Accepted);
     }
 
     // bypass: the three shapes a check can end in, each a fixed case.

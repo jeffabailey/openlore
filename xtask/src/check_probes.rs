@@ -102,18 +102,14 @@ const PORT_TRAIT_SUFFIX: &str = "Port";
 ///   needs the allowlist. The REAL end-to-end z6Mk resolve+decode is proven by
 ///   AV-4. (The SAME adapter's `IdentityPort::probe` was always a REAL body.)
 ///
-/// scale-to-zero-hosting (DISTILL 2026-10-27) RED scaffolds; the REAL probes
-/// land with the AWS SDK in DELIVER:
-/// - `S3IndexObjectAdapter`  (adapter-s3-index-object): `IndexObjectWritePort::probe`.
-///
-/// DE-ALLOWLISTED (step 06-02): `SsmRepoDidListAdapter`, whose probe reads the list
-/// for real, and which is a hard violation if it regresses to a stub.
+/// DE-ALLOWLISTED (scale-to-zero-hosting): `SsmRepoDidListAdapter` (step 06-02), whose
+/// probe reads the list for real, and `S3IndexObjectAdapter` (step 06-03), whose two
+/// probes make the real calls. Either is a hard violation if it regresses to a stub.
 const BOOTSTRAP_STUB_ALLOWLIST: &[&str] = &[
     "DuckDbPeerStorageAdapter",
     "AtProtoIngestAdapter",
     "HttpIndexQueryAdapter",
     "IndexStoreAdapter",
-    "S3IndexObjectAdapter",
 ];
 
 /// Result of classifying one `probe()` body. The variants carry the
@@ -795,25 +791,26 @@ mod required_probe_tests {
         assert!(missing_required_probes(&both).is_empty());
     }
 
-    /// Step 06-02: the DID list adapter's probe is real, so a stub fails the check
-    /// and does not warn.
+    /// Steps 06-02 and 06-03: both adapters of this crate have real probes, so a stub
+    /// in either fails the check and does not warn.
     #[test]
-    fn a_stubbed_did_list_probe_fails_the_check() {
-        let adapter = "SsmRepoDidListAdapter";
-        let stubbed = ProbeSite {
-            file: PathBuf::from("crates/adapter-s3-index-object/src/lib.rs"),
-            adapter: adapter.into(),
-            classification: Classification::RejectStubMacro {
+    fn a_stubbed_probe_in_the_store_adapters_fails_the_check() {
+        for adapter in ["SsmRepoDidListAdapter", "S3IndexObjectAdapter"] {
+            let stubbed = ProbeSite {
+                file: PathBuf::from("crates/adapter-s3-index-object/src/lib.rs"),
                 adapter: adapter.into(),
-                macro_name: "panic".into(),
-            },
-        };
-        let sites = [
-            site("crates/adapter-review-store/src/lib.rs"),
-            site("crates/adapter-atproto-oauth/src/lib.rs"),
-            stubbed,
-        ];
+                classification: Classification::RejectStubMacro {
+                    adapter: adapter.into(),
+                    macro_name: "panic".into(),
+                },
+            };
+            let sites = [
+                site("crates/adapter-review-store/src/lib.rs"),
+                site("crates/adapter-atproto-oauth/src/lib.rs"),
+                stubbed,
+            ];
 
-        assert_eq!(report(&sites).expect("a report"), 1);
+            assert_eq!(report(&sites).expect("a report"), 1, "{adapter}");
+        }
     }
 }

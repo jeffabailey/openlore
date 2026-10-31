@@ -466,7 +466,7 @@ fn the_start_up_probes_tell_a_reachable_store_from_a_missing_one() {
 ///   And there is still no index
 /// ```
 #[test]
-#[ignore = "requires_external: moto; RED scaffold: DELIVER adapter-s3-index-object"]
+#[ignore = "requires_external: moto"]
 fn the_write_check_creates_one_empty_marker_and_never_touches_the_index() {
     let endpoint = moto();
     moto_credentials();
@@ -578,7 +578,7 @@ fn a_pass_record_nobody_can_read_is_an_error_never_no_pass_yet() {
 ///   And it comes back inside its 2 seconds, plus a margin
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER adapter-s3-index-object operation timeouts"]
+#[ignore = "real-I/O: runs with RIO-1..8 in the rio-object-store job"]
 fn a_store_that_accepts_the_connection_and_never_answers_does_not_stop_a_pass_starting() {
     moto_credentials();
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind the silent store");

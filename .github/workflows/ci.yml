@@ -139,6 +139,83 @@ jobs:
         run: cargo nextest run --workspace --test-threads=1 --no-fail-fast
 
   # ------------------------------------------------------------------------------------------
+  # Real-I/O home of the S3 and SSM adapter (scale-to-zero-hosting D-STZ-47): RIO-1..9 and the
+  # seed check, against moto by digest, on every push. They stay #[ignore]d so the moto-less
+  # `test` job passes, which also means a run here can quietly select none of them. So the
+  # filter names all 10, a new ignored test cannot join silently, and each one must report
+  # PASS by name: a skip fails this job. indexer-build needs it, so no digest is signed
+  # without it. A pin bump reruns the proof in feature-delta.md (P-16); ci-image-lambda uses
+  # the same pin.
+  # ------------------------------------------------------------------------------------------
+  rio-object-store:
+    name: rio-object-store
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy, deny, check-arch, check-probes]
+    services:
+      moto:
+        image: motoserver/moto:5.2.5@sha256:59a1965d845249b04def37a0e2565f9cc6c44543cb89b68e90f28f344b3b0d1a
+        ports:
+          - 5055:5000
+    env:
+      OPENLORE_TEST_MOTO_ENDPOINT: http://127.0.0.1:5055
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Wait for moto
+        shell: bash
+        run: |
+          for _ in $(seq 1 60); do
+            curl --silent --output /dev/null "$OPENLORE_TEST_MOTO_ENDPOINT/" && exit 0
+            sleep 1
+          done
+          echo "::error::moto did not answer at $OPENLORE_TEST_MOTO_ENDPOINT"
+          exit 1
+      - name: RIO-1..9 and the seed check, each by name
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENLORE_TEST_MOTO_ENDPOINT:-}" ]; then
+            echo "::error::OPENLORE_TEST_MOTO_ENDPOINT is empty"
+            exit 1
+          fi
+          tests=(
+            the_index_object_round_trips_through_a_real_object_store_and_a_lost_update_is_refused
+            the_pass_record_round_trips_through_a_real_object_store
+            a_bucket_that_does_not_exist_is_a_store_failure_never_no_index_yet
+            the_did_list_is_read_verbatim_from_a_real_parameter_store
+            the_start_up_probes_tell_a_reachable_store_from_a_missing_one
+            the_write_check_creates_one_empty_marker_and_never_touches_the_index
+            a_write_the_store_cannot_take_is_a_failure_never_a_lost_update
+            a_pass_record_nobody_can_read_is_an_error_never_no_pass_yet
+            a_store_that_accepts_the_connection_and_never_answers_does_not_stop_a_pass_starting
+            the_seeds_really_reach_the_moto_store
+          )
+          filter="test(=${tests[0]})"
+          for name in "${tests[@]:1}"; do
+            filter+=" | test(=$name)"
+          done
+          # --color never: this workflow sets CARGO_TERM_COLOR=always, and the checks below
+          # read the log.
+          cargo nextest run -p adapter-s3-index-object --run-ignored only --no-fail-fast \
+            --success-output immediate --color never -E "$filter" 2>&1 | tee rio-object-store.log
+          if grep --fixed-strings 'not run: set' rio-object-store.log; then
+            echo "::error::a test ran without the moto endpoint"
+            exit 1
+          fi
+          missing=0
+          for name in "${tests[@]}"; do
+            if ! grep --extended-regexp --quiet "^ *PASS \[.* $name\$" rio-object-store.log; then
+              echo "::error::$name did not report PASS"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+  # ------------------------------------------------------------------------------------------
   # Release guard (indexer-per-did-pds-fetch AC-004.5 / R-IPF-9): the loopback transport test
   # seam exists only in debug builds. A RELEASE build of the indexer must refuse to start when
   # OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP is set — IPF-30 checks the real release binary. It is
@@ -321,7 +398,7 @@ jobs:
   indexer-build:
     name: indexer build (arm64, bookworm)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test]
+    needs: [test, rio-object-store]
     runs-on: ubuntu-24.04-arm
     # Built in a bookworm container so the binary's glibc symbols match distroless
     # cc-debian12 (2.36); same pin as review-app-build.
