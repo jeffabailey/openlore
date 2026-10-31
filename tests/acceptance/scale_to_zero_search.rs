@@ -258,7 +258,6 @@ fn when_nothing_was_published_a_warm_instance_only_checks_and_keeps_its_copy() {
 ///   And the index reports it is healthy with nothing published
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (reload to an empty index)"]
 fn after_the_operator_resets_the_index_warm_instances_answer_empty_until_the_next_pass() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = given_a_warm_instance_serving_priyas_claim(&world);
@@ -325,7 +324,6 @@ fn serial_searches_from_one_client_are_all_answered() {
 ///   And the index reports the index as published at 14:00
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (reload from an empty index)"]
 fn a_warm_instance_on_a_fresh_deployment_picks_up_the_first_published_index() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = world.cold_search_instance();
