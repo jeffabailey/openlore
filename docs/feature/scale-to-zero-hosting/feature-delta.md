@@ -30,6 +30,10 @@
 | **Deployed** | None. The host still serves `index.openlore.jeffbailey.us`. |
 | **Deferred** | The trial, cut-over and decommission, and the other SPIKE-6 halves: bring-your-own PDS and the review app on Lambda. |
 
+**As built (2026-10-31).** The table above is the DESIGN hand-off. DELIVER has since landed the
+Lambda behaviour, and its tests pass locally. Deployed is still none, and nothing has run against
+real AWS. See `## Wave: DELIVER / [REF] Implementation summary`.
+
 ## Wave: DESIGN / [REF] User-visible behaviour
 
 What a searcher or an operator sees change after cut-over:
@@ -1734,3 +1738,158 @@ Take these in order; **UI-7 comes first** because it blocks the lib split.
 Implementation sequence: UI-7 → WS-1 → CORE-1..8, WP-1, WP-2, TO-1 and FP-1..5 → SE-1, SE-2, PA-1 → WS-2 → the story lines of the
 pass and search suites → no-publish and the write probe → error paths → PR → RIO → OP. Un-ignore one
 scenario at a time.
+
+# Wave: DELIVER (2026-10-31)
+
+- **Nothing is deployed, nothing has run against real AWS, and CI has not seen this work.** The
+  commits are on local `main`, ahead of `origin/main`.
+- Evolution doc: `docs/evolution/scale-to-zero-hosting-evolution.md`. Operator evidence:
+  `docs/evolution/scale-to-zero-hosting-evidence.md`.
+
+## Wave: DELIVER / [REF] Implementation summary
+
+All 49 roadmap steps are committed (`deliver/roadmap.json`, `deliver/execution-log.json`).
+
+- **Lambda root.** `openlore-indexer-lambda` runs `search`, `pass` and `probe` from one signed
+  image. The rules are pure, in `decide`.
+- **AWS adapter.** `adapter-s3-index-object` provides the read and write ports over S3, the DID
+  list over SSM, and one table of call budgets, with one attempt per call.
+- **Reuse.** `openlore-indexer` is lib and bin. `dispatch` is transport-free and serves hyper and
+  Lambda. The self-hosted binary stays free of AWS.
+- **Index store.** It gained a fingerprint and `read_through`. The design did not have
+  `read_through`; review added it to fetch.
+- **Infrastructure.** Tofu root `deploy/tofu/environments/prod-indexer/`, one image with both
+  binaries, the MSRV legs, `rio-object-store` and lambda-smoke in CI.
+- **Operator.** `deploy.sh lambda` verbs in `deploy/indexer/lambda.sh`, host standby and resume,
+  and the runbook in `deploy/indexer/README.md`.
+
+Phase 4 rejected the first result. One revision pass followed, and the changes are in the
+evolution doc.
+
+## Wave: DELIVER / [REF] Files modified
+
+`c108420..HEAD`: 129 commits, 111 files, +34,618, -765.
+
+| Group | Files |
+|---|---|
+| `crates/openlore-indexer-lambda/` (new) | 12 |
+| `crates/openlore-indexer/` (lib split, pass entry, event writer) | 12 |
+| `crates/adapter-s3-index-object/` (new) | 7 |
+| `crates/ports/` | 5 |
+| `crates/adapter-index-store/` | 4 |
+| `crates/adapter-xrpc-query-server/`, `crates/appview-domain/` | 2 each |
+| `crates/adapter-index-query/`, `crates/cli/` | 1 each |
+| `deploy/tofu/environments/prod-indexer/` (new) | 15 |
+| `deploy/indexer/` | 5 |
+| `.github/workflows/` | 3 |
+| `xtask/src/`, `xtask/tests/` | 2, 6 |
+| `tests/acceptance/` | 8 |
+| `docs/adrs/`, `docs/product/`, this feature directory | 7, 2, 10 |
+| The rest: `Cargo.toml`, `deny.toml`, agent and architecture docs | Few |
+
+## Wave: DELIVER / [REF] Scenarios green
+
+- **DISTILL's 132 scenarios** all exist in the test files, by a script over the IDs above. 123 run
+  in the default suite and pass. RIO-1..9 keep `#[ignore]` by design.
+- **8 scenario IDs added in DELIVER:** SE-3b, PA-E1b, OP-18, OP-19, OP-E23, OP-E24, OP-E25 and
+  OP-E26. They pass. That makes 140 IDs, 131 of them in the default suite.
+- **Test cases.** `cargo nextest list` shows 269 cases in this feature's 15 test binaries: 259 run
+  by default and 10 are ignored, which are RIO-1..9 and the seed check.
+- **Full workspace at 5300ebb:** 3307 run, 3307 passed, 21 skipped.
+- **RIO** passed 10 of 10 against moto at step 06-03. The default run skips them, the crate has
+  changed since, and the CI job has never run.
+
+## Wave: DELIVER / [REF] Definition of Done
+
+- [x] All 49 roadmap steps committed; DES traces complete.
+- [x] Acceptance scenarios green in the default suite (131 of 140 IDs, above).
+- [x] Full workspace nextest passes locally at 5300ebb.
+- [x] Mutation at or above the gate on the feature diff (292 of 292 after the new tests).
+- [x] `check-arch`, `check-probes`, clippy and fmt OK locally.
+- [x] Both feature adapters de-allowlisted; no SCAFFOLD markers in this feature's code.
+- [ ] Reviewer approval. Phase 4 REJECTED, one revision pass followed, and no re-review ran.
+- [ ] CI green. CI has not seen this work.
+- [ ] Any run against real AWS. Every lambda verb has run only against stubs.
+- [ ] ADR-090 accepted. Its status is still Proposed.
+
+## Wave: DELIVER / [REF] Demo Evidence
+
+No Elevator Pitches exist, because this feature had no DISCUSS wave, so that gate has nothing to
+run. No DELIVER demo touched AWS. The closest thing to a demo is WS-1 and WS-2 against fakes,
+plus lambda-smoke run locally, and neither is evidence about AWS.
+
+## Wave: DELIVER / [REF] Quality gates
+
+| Gate | Result |
+|---|---|
+| Phase 3.5 full run | 3274 of 3275, one OP-13 call-log flake, fixed in 33b57f2 (450 of 450 runs after) |
+| Phase 4 review | REJECTED, one revision pass (batches A, B, C, D). **No re-review ran**; the skill allows one revision, then proceed |
+| Phase 5 mutation | 100% after new tests, 93.8% first pass. Gate >= 80% |
+| Full workspace nextest at 5300ebb | 3307 of 3307, 21 skipped, 1629 s, `-j 4` |
+| `cargo xtask check-probes` | OK, 20 sites, 1 pre-existing allowlisted stub, not this feature's |
+| Clippy `-D warnings`, fmt, check-arch | OK at the mutation gate |
+| `des-verify-integrity` | "All 49 steps have complete DES traces" |
+| CI | **Not run** |
+
+## Wave: DELIVER / [REF] Pre-requisites
+
+From `## Wave: DEVOPS / [REF] Pre-requisites` and DISTILL's list. Rows not named here were
+confirmed earlier or are DELIVER work the gates above cover.
+
+| # | Status at DELIVER close |
+|---|---|
+| P-1 | Local suites green. serve-smoke in CI has not run |
+| P-2, P-3 | Landed. `cargo deny` in CI has not run on this work |
+| P-4 | The image and lambda-smoke exist. A green lambda-smoke on `main` is owed: smoke ran locally only, with a faster release profile |
+| P-5 | Owed: `lambda measure`, a blocking gate for Stage 2 |
+| P-11, P-12 | Operator, at cut-over |
+| P-15 | Owed: simulator on the applied pass policy, then the first production publish |
+| P-17 | Owed: still unverified |
+| P-18 | Owed: the 429 at cap 3 is unverified until the trial |
+
+Also owed: the 140 MB measurements, metric checks, connect time against the 10 s init, and
+read_through timing on Lambda. The operator needs `ecr:BatchDeleteImage`.
+
+## Wave: DELIVER / [WHY] Upstream Issues
+
+- **`lambda rollback --to`** is deferred and refused, though the design said it existed. Use
+  `lambda deploy <older-sha>`.
+- **`lambda measure`** cold calls use the raw candidate URL, so cold through CloudFront is
+  unmeasured. R-STZ-1's text is unchanged. Open for the user (08-08).
+- **Partial config change.** A deploy refuses if any function came out unchanged (B1), so a
+  partial config change needs a new build, and `status` DRIFT persists until one lands.
+- **H1 undo.** An update-alias that errored after AWS applied it is treated as not flipped.
+- **`read_through`** was added to fetch. The design did not have it.
+- **05-01.** Any failed probe search, including 429 and 503, sets `not_live`, where the host's
+  timer does so only on 500. Open for the user.
+- **DES.** `.nwave/des-config.json` `tdd_phases` lists 5 phases, and `des-log-phase` rejects those
+  names, so logging used 3 phases. 08-09 is logged twice (rework), and 08-02 logs GREEN FAIL, then
+  PASS.
+
+## Wave: DELIVER / [HOW] Mutation testing report
+
+Per-feature, gate >= 80%, on git-archive exports of 7da2669. **292 caught, 0 missed, 100%** after
+the new tests in 5300ebb. First pass 274 of 292, 93.8%. Excluded: 2 equivalent, 1 timeout (counted
+neither way), 123 unviable. 153 by cargo mutants, 139 by hand. No production bug found and no
+production code changed. The full cargo mutants set was not rerun after the tests; each survivor
+was.
+
+| File | Total caught | First-pass rate |
+|---|---|---|
+| `decide.rs` | 45 | 100% |
+| `config.rs` | 32 | 93.8% |
+| `index_holder.rs` | 21 | 90.5% |
+| `pass.rs` | 58 | 100% |
+| `s3.rs` | 67 | 91.0% |
+| adapter `lib.rs` `call_budget` | 13 | 100% |
+| `client_settings.rs` | 3 | 100% |
+| `ssm.rs` | 6 | 100% |
+| `dispatch.rs` | 25 | 100% |
+| `adapter-index-store` `lib.rs` (feature diff only) | 21 | 61.9%, below the gate on first pass |
+| `ports` `index_object.rs` constant | 1 | 100% |
+
+The 18 real gaps, all killed by new tests: 8 read_through columns; record key and content type;
+head, record and fetch budgets; the 4xx boundary; DuckDB caps; config trim; config prefix.
+
+Not in scope: `main.rs`, `search.rs`, `probe.rs` and `no_publish.rs` of the Lambda crate, and
+index-store code outside the diff.

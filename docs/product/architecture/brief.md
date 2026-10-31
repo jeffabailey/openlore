@@ -72,7 +72,8 @@ reports 21).**
 
 Shipped slice extensions:
 
-- **scale-to-zero-hosting: DESIGNED (2026-10-26, ADR-090 proposed; not built).** It moves the indexer
+- **scale-to-zero-hosting: DELIVERED IN CODE, NOT DEPLOYED (2026-10-31; ADR-090 still proposed).**
+  Nothing has run against real AWS, and CI has not seen it. It moves the indexer
   off the PDS host onto AWS Lambda in us-east-1. The review app and PDS stay on the host. There are
   no DISCUSS artifacts; the requirements are the SPIKE-6 criteria and the spike findings.
   - **Shape**: three functions from one signed image:
@@ -130,7 +131,8 @@ Shipped slice extensions:
     `indexer_search_handler_read_only`.
   - Platform: signed arm64 image (only from green commits), digest deploy with auto-rollback
     (`deploy/indexer/`), 15-minute host timer, 3 CloudWatch alarms (~$1/month).
-  - **Superseded in production by scale-to-zero-hosting (ADR-090, designed 2026-10-26)**. The host
+  - **To be superseded in production by scale-to-zero-hosting (ADR-090, delivered in code
+    2026-10-31, not deployed)**. The host still serves production. The host
     container, Caddy site and timers run in parallel during the trial and are retired after 7 green
     days. Self-hosted `serve` keeps everything above.
   - ADR-080..083 accepted (ADR-083 §4 reversed). See `docs/architecture/indexer-deployment/`
@@ -1340,7 +1342,7 @@ C4Container
   Rel(ec2, ebs, "")
 ```
 
-### Indexer hosting (scale-to-zero-hosting, ADR-090, designed 2026-10-26)
+### Indexer hosting (scale-to-zero-hosting, ADR-090, delivered in code 2026-10-31, not deployed)
 
 The indexer leaves the PDS host. The PDS and the review app stay there (ADR-075, unchanged for the
 app).
