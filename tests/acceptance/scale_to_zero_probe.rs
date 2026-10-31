@@ -236,7 +236,6 @@ fn the_probe_writes_no_stale_index_line_when_it_has_nothing_to_compare_or_nothin
 ///   Then the health line says the index is live
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (probe mode)"]
 fn a_pass_exactly_45_minutes_old_still_counts_as_recent() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let edge = CannedEdge::answering(200, 200);
@@ -284,7 +283,6 @@ enum Failure {
 ///     | the pass record holds a time nobody can read                | no age for a last pass       |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (probe mode)"]
 fn the_probe_says_the_index_is_not_live_and_why_for_each_failure() {
     use Failure::*;
     let refusing = openlore_test_support::refusing_address();
@@ -360,7 +358,6 @@ fn the_probe_says_the_index_is_not_live_and_why_for_each_failure() {
 ///   And the line is written inside the probe's 30-second limit
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (probe mode, bounded client timeouts)"]
 fn a_public_index_that_hangs_is_not_live_and_the_probe_still_reports_it_in_time() {
     // On its own thread, so a probe that really hangs fails this test at the
     // limit instead of hanging the suite.
@@ -431,7 +428,6 @@ fn the_probe_refuses_an_event_that_is_not_an_object_and_does_nothing_else() {
 ///   Then the invocation succeeds with one health line saying the index is not live
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (probe mode, adapter-index-query health)"]
 fn a_health_answer_the_probe_cannot_read_counts_as_a_failed_health_check() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let edge = CannedEdge::with_health_body(200, 200, "not a health answer".to_string());
