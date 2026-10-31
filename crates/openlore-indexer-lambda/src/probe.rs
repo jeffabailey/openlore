@@ -15,7 +15,10 @@ use ports::{HealthBody, IndexQueryPort, LastPass, SearchDimension};
 use serde_json::{json, Value};
 use tokio::time::Instant;
 
-use crate::decide::{not_live, ProbeFacts, LAST_PASS_STALE_AFTER};
+use crate::decide::{
+    not_live, served_index_stale, ProbeFacts, ServedIndex, LAST_PASS_STALE_AFTER,
+    SERVED_INDEX_MARGIN,
+};
 use crate::search::run_read_probe;
 use crate::{events_through, Environment, FunctionError, InitRefused, ProbeDriven};
 
@@ -54,11 +57,14 @@ impl ProbeFunction {
     pub async fn handle(&self, event: Value) -> Result<Value, FunctionError> {
         refuse_a_non_object_event(&event)?;
         let search = self.canned_search().await;
-        let healthz_ok = self.healthz_ok().await;
+        let health = passed_health(self.edge.health().await);
         let last_pass = self.last_pass().await;
         let now = self.driven.clock.now_utc();
-        let line = health_line(&search, healthz_ok, last_pass.as_ref(), now);
+        let line = health_line(&search, health.is_some(), last_pass.as_ref(), now);
         self.events.emit(&line);
+        if let Some(stale) = stale_index_line(health.as_ref(), last_pass.as_ref(), now) {
+            self.events.emit(&stale);
+        }
         Ok(line)
     }
 
@@ -73,13 +79,6 @@ impl ProbeFunction {
             status,
             took: sent.elapsed(),
         }
-    }
-
-    async fn healthz_ok(&self) -> bool {
-        self.edge
-            .health()
-            .await
-            .is_ok_and(|health| says_ok(&health))
     }
 
     /// The record, when there is one that could be read (UI-12).
@@ -108,6 +107,12 @@ fn refuse_a_non_object_event(event: &Value) -> Result<(), FunctionError> {
 /// As health-timer.sh: `"status":"ok"` in a 200 (`health` makes a 503 an error).
 fn says_ok(health: &HealthBody) -> bool {
     health.status == "ok"
+}
+
+/// The health answer, when the check passed; a failed one says nothing about
+/// what is served (D-STZ-48).
+fn passed_health<E>(answer: Result<HealthBody, E>) -> Option<HealthBody> {
+    answer.ok().filter(says_ok)
 }
 
 /// How the canned search went.
@@ -143,6 +148,38 @@ fn health_line(
         "last_pass_exit_code": last_pass.map(|record| record.exit_code),
         "not_live": u8::from(!liveness.causes.is_empty()),
     })
+}
+
+/// What a passed health check says is served.
+fn served_index(health: Option<&HealthBody>) -> ServedIndex<'_> {
+    match health.map(|answer| answer.last_successful_pass_at.as_deref()) {
+        None => ServedIndex::Unknown,
+        Some(None) => ServedIndex::NothingPublished,
+        Some(Some(published_at)) => ServedIndex::PublishedAt(published_at),
+    }
+}
+
+/// The `indexer.lambda.served_index_stale` line (D-STZ-48, alarm A10), when the
+/// served index lags the record at `now`. `lag_s` is null when nothing is served.
+fn stale_index_line(
+    health: Option<&HealthBody>,
+    last_pass: Option<&LastPass>,
+    now: DateTime<Utc>,
+) -> Option<Value> {
+    let recorded = last_pass.and_then(|record| record.index_published_at.as_deref());
+    let record_age = last_pass.and_then(|record| age_of(record, now));
+    let stale = served_index_stale(
+        served_index(health),
+        recorded,
+        record_age,
+        SERVED_INDEX_MARGIN,
+    )?;
+    Some(json!({
+        "event": "indexer.lambda.served_index_stale",
+        "served": health.and_then(|answer| answer.last_successful_pass_at.as_deref()),
+        "recorded": recorded,
+        "lag_s": stale.lag.map(|lag| lag.as_secs()),
+    }))
 }
 
 /// How long ago the recorded pass finished; `None` for a time nobody can read,
@@ -244,6 +281,24 @@ mod tests {
         assert!(!says_ok(&answering("store_unusable")));
     }
 
+    // bypass: the three shapes of one answer; the stale line itself is a property below.
+    #[test]
+    fn only_a_passed_health_check_says_what_is_served() {
+        let answering = |status: &str| HealthBody {
+            status: status.to_string(),
+            last_successful_pass_at: Some("2026-10-27T13:45:01Z".to_string()),
+        };
+        assert_eq!(
+            passed_health(Ok::<_, ()>(answering("ok"))),
+            Some(answering("ok"))
+        );
+        assert_eq!(
+            passed_health(Ok::<_, ()>(answering("store_unusable"))),
+            None
+        );
+        assert_eq!(passed_health(Err::<HealthBody, _>(())), None);
+    }
+
     fn record_finished(seconds_before: i64, now: DateTime<Utc>, exit_code: i32) -> LastPass {
         LastPass {
             pass_id: "a-pass".to_string(),
@@ -287,6 +342,38 @@ mod tests {
                 "last_pass_exit_code": exit_code,
                 "not_live": i32::from(!live),
             }));
+        }
+    }
+
+    proptest! {
+        // The whole line, compared whole: a settled record and a served index
+        // behind it, by any lag, or none served at all.
+        #[test]
+        fn the_stale_line_names_both_times_and_the_lag_between_them(
+            lag_s in proptest::option::of(1_i64..100_000),
+            record_age_s in 121_i64..10_000,
+        ) {
+            let now = DateTime::UNIX_EPOCH + chrono::Duration::days(20_000);
+            let recorded_at = now - chrono::Duration::days(1);
+            let recorded = recorded_at.to_rfc3339();
+            let served = lag_s.map(|lag| (recorded_at - chrono::Duration::seconds(lag)).to_rfc3339());
+            let health = HealthBody {
+                status: "ok".to_string(),
+                last_successful_pass_at: served.clone(),
+            };
+            let record = LastPass {
+                index_published_at: Some(recorded.clone()),
+                ..record_finished(record_age_s, now, 0)
+            };
+
+            let line = stale_index_line(Some(&health), Some(&record), now);
+
+            prop_assert_eq!(line, Some(json!({
+                "event": "indexer.lambda.served_index_stale",
+                "served": served,
+                "recorded": recorded,
+                "lag_s": lag_s,
+            })));
         }
     }
 

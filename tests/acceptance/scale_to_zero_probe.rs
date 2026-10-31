@@ -112,7 +112,6 @@ fn a_failed_pass_that_just_ran_does_not_also_make_the_index_look_dead() {
 ///     | nothing published       | no figure    |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (probe mode, served_index_stale)"]
 fn the_probe_reports_a_search_stuck_on_an_old_copy_without_calling_the_index_dead() {
     each_row(
         [(Some(SERVED_AT), json!(899)), (None, json!(null))],
@@ -171,7 +170,6 @@ enum NoReading {
 ///     | the record is exactly 2 minutes old, so a reload may be running |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (probe mode, served_index_stale)"]
 fn the_probe_writes_no_stale_index_line_when_it_has_nothing_to_compare_or_nothing_lags() {
     use NoReading::*;
     each_row(
