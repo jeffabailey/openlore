@@ -10,28 +10,37 @@
 //!   mapping. The write probe (D-STZ-39) writes only
 //!   `index/.write-probe`, and the pure [`write_probe_outcome`] reads its PUTs.
 //! * [`SsmRepoDidListAdapter`] implements `RepoDidListSourcePort` over SSM
-//!   `GetParameter`, returning the raw text.
+//!   `GetParameter`, returning the raw text (see `ssm`).
+//!
+//! The port probes are sync (ADR-009) and their calls are async: see `run_probe`.
 //!
 //! The only crate besides the Lambda root that may link `aws-*` (xtask
 //! `aws_sdk_only_in_lambda_edge`).
 //
-// SCAFFOLD: true  (the port probes and the SSM adapter still panic: 06-02, 06-03.
-// Contract: tests/acceptance/scale_to_zero_object_store_real_io.rs)
+// SCAFFOLD: true  (the write probe still panics: 06-03. Contract:
+// tests/acceptance/scale_to_zero_object_store_real_io.rs)
 
 #![forbid(unsafe_code)]
 
 mod client_settings;
 mod s3;
+mod ssm;
 
+use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use aws_config::{BehaviorVersion, Region, SdkConfig};
+use aws_smithy_http_client::tls::rustls_provider::CryptoMode;
+use aws_smithy_http_client::tls::Provider;
+use aws_smithy_http_client::Builder as HttpClientBuilder;
 use ports::{
     HeadOutcome, IndexObjectError, IndexObjectReadPort, IndexObjectWritePort, LastPass,
-    ObjectVersion, ProbeOutcome, PublishMetadata, PublishOutcome, RepoDidListError,
-    RepoDidListSourcePort, WriteCondition, PUBLISH_OPERATION_TIMEOUT,
+    ObjectVersion, ProbeOutcome, ProbeRefusalReason, ProbeRefused, PublishMetadata, PublishOutcome,
+    RepoDidListError, RepoDidListSourcePort, WriteCondition, PUBLISH_OPERATION_TIMEOUT,
 };
+use tokio::runtime::{Builder as RuntimeBuilder, Handle};
 
 pub use client_settings::{client_settings, ClientSettings};
 pub use ports::{
@@ -76,6 +85,47 @@ pub fn call_budget(call: StoreCall) -> CallBudget {
     CallBudget {
         operation_timeout: Duration::from_secs(seconds),
         max_attempts: 1,
+    }
+}
+
+/// What every client starts from: the HTTP client `default-features = false`
+/// leaves out (D-STZ-36), built once, and one attempt even for a call with no
+/// override.
+pub(crate) async fn shared_config(region: &str) -> SdkConfig {
+    let http_client = HttpClientBuilder::new()
+        .tls_provider(Provider::Rustls(CryptoMode::Ring))
+        .build_https();
+    aws_config::defaults(BehaviorVersion::latest())
+        .http_client(http_client)
+        .region(Region::new(region.to_string()))
+        .retry_config(client_settings(StoreCall::PassGet).retry)
+        .load()
+        .await
+}
+
+/// Wait for a probe's async call from its sync `probe` (ADR-009).
+///
+/// Init calls a probe through `spawn_blocking` (D-STZ-39), so the thread can reach
+/// the runtime it came from, and the connection the call opens stays with that
+/// runtime for the calls after it. Called on a thread that is running async work,
+/// this panics, which is why init does not.
+///
+/// The handle is the caller's and not one kept from `connect`: a current-thread
+/// runtime that nobody is running cannot drive a handle's I/O, so a kept handle
+/// could wait forever. With no runtime around, the call gets one of its own, for
+/// as long as it lasts.
+fn run_probe(call: impl Future<Output = ProbeOutcome>, reason: ProbeRefusalReason) -> ProbeOutcome {
+    if let Ok(runtime) = Handle::try_current() {
+        return runtime.block_on(call);
+    }
+    match RuntimeBuilder::new_current_thread().enable_all().build() {
+        Ok(own_runtime) => own_runtime.block_on(call),
+        Err(failed) => ProbeRefused {
+            reason,
+            detail: format!("no runtime for the probe: {failed}"),
+            structured: serde_json::json!({}),
+        }
+        .into(),
     }
 }
 
@@ -134,7 +184,10 @@ impl S3IndexObjectAdapter {
 #[async_trait]
 impl IndexObjectReadPort for S3IndexObjectAdapter {
     fn probe(&self) -> ProbeOutcome {
-        panic!("Not yet implemented -- RED scaffold")
+        run_probe(
+            self.store.read_probe(),
+            ProbeRefusalReason::IndexObjectUnusable,
+        )
     }
 
     async fn head(&self) -> Result<HeadOutcome, IndexObjectError> {
@@ -173,24 +226,81 @@ impl IndexObjectWritePort for S3IndexObjectAdapter {
 
 /// `RepoDidListSourcePort` over SSM.
 pub struct SsmRepoDidListAdapter {
-    _location: SsmLocation,
+    list: ssm::DidListParameter,
 }
 
 impl SsmRepoDidListAdapter {
     /// Build the adapter (credentials from the standard provider chain).
     pub async fn connect(location: SsmLocation) -> Result<Self, RepoDidListError> {
-        let _ = location;
-        panic!("Not yet implemented -- RED scaffold")
+        Ok(Self {
+            list: ssm::DidListParameter::connect(location).await,
+        })
     }
 }
 
 #[async_trait]
 impl RepoDidListSourcePort for SsmRepoDidListAdapter {
     fn probe(&self) -> ProbeOutcome {
-        panic!("Not yet implemented -- RED scaffold")
+        run_probe(self.list.probe(), ProbeRefusalReason::IndexerConfigInvalid)
     }
 
     async fn current(&self) -> Result<String, RepoDidListError> {
-        panic!("Not yet implemented -- RED scaffold")
+        self.list.read().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::oneshot;
+
+    use super::*;
+
+    /// A probe that leaves a task behind it, as a call leaves a pooled connection.
+    /// The task answers only if the runtime it landed on is still there.
+    async fn probe_leaving_a_task(
+        asked: oneshot::Receiver<()>,
+        answer: oneshot::Sender<()>,
+    ) -> ProbeOutcome {
+        tokio::spawn(async move {
+            if asked.await.is_ok() {
+                let _ = answer.send(());
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        ProbeOutcome::Ok
+    }
+
+    // bypass: two fixed ways to be called.
+    #[tokio::test]
+    async fn on_a_blocking_thread_a_probe_stays_on_the_callers_runtime() {
+        let (ask, asked) = oneshot::channel();
+        let (answer, answered) = oneshot::channel();
+
+        let outcome = tokio::task::spawn_blocking(move || {
+            run_probe(
+                probe_leaving_a_task(asked, answer),
+                ProbeRefusalReason::IndexObjectUnusable,
+            )
+        })
+        .await
+        .expect("the probe answered");
+
+        assert!(matches!(outcome, ProbeOutcome::Ok));
+        ask.send(()).expect("the task is still there");
+        assert_eq!(answered.await, Ok(()));
+    }
+
+    // bypass: two fixed ways to be called.
+    #[test]
+    fn with_no_runtime_around_a_probe_runs_on_its_own() {
+        let (_ask, asked) = oneshot::channel();
+        let (answer, _answered) = oneshot::channel();
+
+        let outcome = run_probe(
+            probe_leaving_a_task(asked, answer),
+            ProbeRefusalReason::IndexObjectUnusable,
+        );
+
+        assert!(matches!(outcome, ProbeOutcome::Ok));
     }
 }

@@ -4,9 +4,6 @@
 //! It returns the RAW text. Validation stays in the existing ADR-081 loader
 //! (`appview_domain::did_list::read_did_list`), so a malformed list is refused
 //! exactly as on the host.
-//
-// SCAFFOLD: true  (trait surface only, DISTILL-proposed names; the SSM adapter
-// lands in DELIVER in `adapter-s3-index-object`)
 
 use async_trait::async_trait;
 

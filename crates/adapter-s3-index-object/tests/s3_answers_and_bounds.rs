@@ -12,14 +12,19 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use adapter_s3_index_object::{S3IndexObjectAdapter, S3Location, StoreCall};
+use adapter_s3_index_object::{
+    S3IndexObjectAdapter, S3Location, SsmLocation, SsmRepoDidListAdapter, StoreCall,
+};
 use ports::{
     HeadOutcome, IndexObjectError, IndexObjectReadPort, IndexObjectWritePort, LastPass,
-    PublishMetadata, PublishOutcome, WriteCondition,
+    ProbeOutcome, ProbeRefusalReason, PublishMetadata, PublishOutcome, RepoDidListSourcePort,
+    WriteCondition,
 };
 
 const LIMIT: Duration = Duration::from_secs(35);
+const TWO_SECONDS: Duration = Duration::from_secs(2);
 const THREE_SECONDS: Duration = Duration::from_secs(3);
+const FIVE_SECONDS: Duration = Duration::from_secs(5);
 /// A budget's overrun: scheduling, and the connection closing.
 const MARGIN: Duration = Duration::from_secs(2);
 
@@ -127,13 +132,28 @@ impl LoopbackStore {
         log.iter().map(|head| Seen { head: head.clone() }).collect()
     }
 
-    async fn adapter(&self) -> S3IndexObjectAdapter {
+    fn set_credentials() {
         for (key, value) in [
             ("AWS_ACCESS_KEY_ID", "testing"),
             ("AWS_SECRET_ACCESS_KEY", "testing"),
         ] {
             std::env::set_var(key, value);
         }
+    }
+
+    async fn did_list(&self) -> SsmRepoDidListAdapter {
+        Self::set_credentials();
+        SsmRepoDidListAdapter::connect(SsmLocation {
+            region: "us-east-1".to_string(),
+            endpoint_url: Some(self.endpoint.clone()),
+            parameter: "/openlore/test/repo-dids".to_string(),
+        })
+        .await
+        .expect("connect")
+    }
+
+    async fn adapter(&self) -> S3IndexObjectAdapter {
+        Self::set_credentials();
         S3IndexObjectAdapter::connect(S3Location {
             region: "us-east-1".to_string(),
             endpoint_url: Some(self.endpoint.clone()),
@@ -547,4 +567,145 @@ async fn a_pass_record_that_is_refused_is_a_failure_and_goes_to_its_own_key() {
             sent[0].head
         );
     }
+}
+
+/// A connection that is taken and never answered.
+fn hold_silently(stream: &mut TcpStream) {
+    let mut held = [0u8; 1];
+    let _ = stream.read(&mut held);
+}
+
+/// Init's way in: sync, on a blocking thread of the running runtime.
+async fn read_probe_as_init_runs_it(adapter: &Arc<S3IndexObjectAdapter>) -> ProbeOutcome {
+    let adapter = Arc::clone(adapter);
+    tokio::task::spawn_blocking(move || IndexObjectReadPort::probe(adapter.as_ref()))
+        .await
+        .expect("the probe answered")
+}
+
+/// The same HEAD and GET as `head`: an empty store passes, a missing one refuses.
+#[tokio::test]
+async fn a_read_probe_passes_on_a_reachable_store_and_refuses_a_missing_one() {
+    for (body, reachable) in [(NO_SUCH_KEY, true), (NO_SUCH_BUCKET, false)] {
+        let store = LoopbackStore::answering(move |seen, stream| {
+            let body = if seen.method() == "HEAD" { "" } else { body };
+            answer_with(stream, "404 Not Found", &[], body);
+        });
+        let adapter = Arc::new(store.adapter().await);
+
+        let outcome = read_probe_as_init_runs_it(&adapter).await;
+
+        let refused = matches!(
+            outcome,
+            ProbeOutcome::Refused {
+                reason: ProbeRefusalReason::IndexObjectUnusable,
+                ..
+            }
+        );
+        assert_eq!(refused, !reachable, "{outcome:?}");
+        assert_eq!(matches!(outcome, ProbeOutcome::Ok), reachable);
+        let sent: Vec<String> = store
+            .requests()
+            .iter()
+            .map(|r| r.method().to_string())
+            .collect();
+        assert_eq!(sent, ["HEAD", "GET"]);
+    }
+}
+
+#[tokio::test]
+async fn a_read_probe_refuses_a_store_that_refuses_it_after_one_attempt() {
+    let store = LoopbackStore::answering(|_, stream| {
+        answer_with(stream, "403 Forbidden", &[], "");
+    });
+    let adapter = Arc::new(store.adapter().await);
+
+    let outcome = read_probe_as_init_runs_it(&adapter).await;
+
+    assert!(
+        matches!(outcome, ProbeOutcome::Refused { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(store.requests().len(), 1);
+}
+
+/// § Timeouts: the probe has 2 s of its own, not the freshness check's 1 s.
+#[tokio::test]
+async fn a_silent_store_refuses_a_read_probe_at_its_two_seconds() {
+    let store = LoopbackStore::answering(|_, stream| hold_silently(stream));
+    let adapter = Arc::new(store.adapter().await);
+    let started = Instant::now();
+
+    let outcome = read_probe_as_init_runs_it(&adapter).await;
+
+    let took = started.elapsed();
+    assert!(
+        matches!(outcome, ProbeOutcome::Refused { .. }),
+        "{outcome:?}"
+    );
+    assert!(took >= TWO_SECONDS - Duration::from_millis(200), "{took:?}");
+    assert!(took < TWO_SECONDS + MARGIN, "{took:?}");
+}
+
+/// RIO-4's whitespace, which moto's seed does not send: the kill for a trimmed list.
+#[tokio::test]
+async fn the_list_keeps_the_whitespace_it_was_saved_with() {
+    let store = LoopbackStore::answering(|_, stream| {
+        let body = r#"{"Parameter":{"Value":"  did:plc:a\ndid:plc:b\n"}}"#;
+        answer_with(stream, "200 OK", &[], body);
+    });
+    let list = store.did_list().await;
+
+    let read = list.current().await;
+
+    assert_eq!(read.as_deref(), Ok("  did:plc:a\ndid:plc:b\n"));
+    let sent = store.requests();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0].header("x-amz-target"),
+        Some("AmazonSSM.GetParameter")
+    );
+}
+
+/// Every failure is a failure and a refused probe, after one attempt each.
+#[tokio::test]
+async fn a_list_the_store_will_not_give_fails_and_refuses_the_probe() {
+    let missing = r#"{"__type":"ParameterNotFound"}"#;
+    for status in ["400 Bad Request", "500 Internal Server Error"] {
+        let store = LoopbackStore::answering(move |_, stream| {
+            answer_with(stream, status, &[], missing);
+        });
+        let list = Arc::new(store.did_list().await);
+
+        let read = list.current().await;
+        let probed = Arc::clone(&list);
+        let outcome = tokio::task::spawn_blocking(move || probed.probe())
+            .await
+            .expect("the probe answered");
+
+        assert!(read.is_err(), "{status}: {read:?}");
+        let ProbeOutcome::Refused { reason, .. } = outcome else {
+            panic!("{status}: {outcome:?}")
+        };
+        assert_eq!(reason, ProbeRefusalReason::IndexerConfigInvalid);
+        assert_eq!(store.requests().len(), 2, "{status}: one attempt each");
+    }
+}
+
+/// § Timeouts: 5 s, whichever way the parameter is read.
+#[tokio::test]
+async fn a_silent_parameter_store_fails_at_its_five_seconds() {
+    let store = LoopbackStore::answering(|_, stream| hold_silently(stream));
+    let list = store.did_list().await;
+    let started = Instant::now();
+
+    let read = list.current().await;
+
+    let took = started.elapsed();
+    assert!(read.is_err(), "{read:?}");
+    assert!(
+        took >= FIVE_SECONDS - Duration::from_millis(200),
+        "{took:?}"
+    );
+    assert!(took < FIVE_SECONDS + MARGIN, "{took:?}");
 }

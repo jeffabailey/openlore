@@ -21,25 +21,22 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use aws_config::timeout::TimeoutConfig;
-use aws_config::{BehaviorVersion, Region};
 use aws_sdk_s3::config::http::HttpResponse;
 use aws_sdk_s3::error::{DisplayErrorContext, ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
-use aws_smithy_http_client::tls::rustls_provider::CryptoMode;
-use aws_smithy_http_client::tls::Provider;
-use aws_smithy_http_client::Builder as HttpClientBuilder;
 use ports::{
-    HeadOutcome, IndexObjectError, LastPass, ObjectVersion, PublishMetadata, PublishOutcome,
-    WriteCondition,
+    HeadOutcome, IndexObjectError, LastPass, ObjectVersion, ProbeOutcome, ProbeRefusalReason,
+    ProbeRefused, PublishMetadata, PublishOutcome, WriteCondition,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
 use crate::client_settings::{client_settings, ClientSettings};
-use crate::{call_budget, S3Location, StoreCall};
+use crate::{call_budget, shared_config, S3Location, StoreCall};
 
 /// `x-amz-meta-published-at` (D-STZ-12).
 const PUBLISHED_AT_KEY: &str = "published-at";
@@ -184,6 +181,20 @@ fn published_version(
     })
 }
 
+/// D-STZ-39: the probe proves the role reaches the store. An index that is not
+/// there yet is a reachable store (D-STZ-13), and every failure refuses the start.
+fn read_probe_outcome(checked: Result<HeadOutcome, IndexObjectError>) -> ProbeOutcome {
+    match checked {
+        Ok(HeadOutcome::Present(_) | HeadOutcome::Absent) => ProbeOutcome::Ok,
+        Err(failed) => ProbeRefused {
+            reason: ProbeRefusalReason::IndexObjectUnusable,
+            detail: failed.to_string(),
+            structured: json!({}),
+        }
+        .into(),
+    }
+}
+
 /// DuckDB opens a truncated file, because opening reads only metadata, so a short
 /// body has to stop here.
 fn whole_body(written: u64, object_size: u64) -> Result<(), IndexObjectError> {
@@ -304,18 +315,9 @@ async fn write_body(mut body: ByteStream, file: &mut File) -> Result<u64, IndexO
     Ok(written)
 }
 
-/// The shared client: the HTTP client `default-features = false` leaves out
-/// (D-STZ-36), built once, and one attempt even for a call with no override.
+/// The shared client (see `shared_config`), at the configured endpoint.
 async fn client_at(location: &S3Location) -> Client {
-    let http_client = HttpClientBuilder::new()
-        .tls_provider(Provider::Rustls(CryptoMode::Ring))
-        .build_https();
-    let shared = aws_config::defaults(BehaviorVersion::latest())
-        .http_client(http_client)
-        .region(Region::new(location.region.clone()))
-        .retry_config(client_settings(StoreCall::PassGet).retry)
-        .load()
-        .await;
+    let shared = shared_config(&location.region).await;
     let config = aws_sdk_s3::config::Builder::from(&shared);
     let config = match &location.endpoint_url {
         Some(endpoint) => config.endpoint_url(endpoint).force_path_style(true),
@@ -352,11 +354,20 @@ impl IndexObjectStore {
     }
 
     pub(crate) async fn head(&self) -> Result<HeadOutcome, IndexObjectError> {
-        within(StoreCall::FreshnessHead, self.head_within_budget()).await
+        self.head_as(StoreCall::FreshnessHead).await
     }
 
-    async fn head_within_budget(&self) -> Result<HeadOutcome, IndexObjectError> {
-        let call = StoreCall::FreshnessHead;
+    /// The read probe: the same check as `head`, under its own budget and through
+    /// the same role, so it cannot use `HeadBucket` either.
+    pub(crate) async fn read_probe(&self) -> ProbeOutcome {
+        read_probe_outcome(self.head_as(StoreCall::ReadProbeHead).await)
+    }
+
+    async fn head_as(&self, call: StoreCall) -> Result<HeadOutcome, IndexObjectError> {
+        within(call, self.head_within_budget(call)).await
+    }
+
+    async fn head_within_budget(&self, call: StoreCall) -> Result<HeadOutcome, IndexObjectError> {
         let checked = self
             .client
             .head_object()
@@ -650,6 +661,35 @@ mod tests {
 
             prop_assert_eq!(parse_pass_record(&stored), Ok(record));
         }
+    }
+
+    // bypass: the three shapes a check can end in, each a fixed case.
+    #[test]
+    fn a_probe_passes_on_any_answer_but_a_failure() {
+        let version = ObjectVersion {
+            etag: "e".to_string(),
+            published_at: None,
+            pass_id: None,
+            size_bytes: 0,
+        };
+        let unusable = |checked| {
+            matches!(
+                read_probe_outcome(checked),
+                ProbeOutcome::Refused {
+                    reason: ProbeRefusalReason::IndexObjectUnusable,
+                    ..
+                }
+            )
+        };
+
+        assert!(!unusable(Ok(HeadOutcome::Present(version))));
+        assert!(!unusable(Ok(HeadOutcome::Absent)));
+        assert!(unusable(Err(IndexObjectError::Refused {
+            detail: "no such bucket".to_string()
+        })));
+        assert!(unusable(Err(IndexObjectError::Unavailable {
+            detail: "no answer".to_string()
+        })));
     }
 
     // bypass: the one way an answer can name no version: three fixed absences.

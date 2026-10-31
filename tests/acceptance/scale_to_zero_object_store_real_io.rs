@@ -381,7 +381,7 @@ fn a_bucket_that_does_not_exist_is_a_store_failure_never_no_index_yet() {
 ///   And reading a parameter that does not exist fails
 /// ```
 #[test]
-#[ignore = "requires_external: moto; RED scaffold: DELIVER adapter-s3-index-object"]
+#[ignore = "requires_external: moto"]
 fn the_did_list_is_read_verbatim_from_a_real_parameter_store() {
     let endpoint = moto();
     moto_credentials();
@@ -414,7 +414,7 @@ fn the_did_list_is_read_verbatim_from_a_real_parameter_store() {
 ///   And the probes of a missing bucket and a missing parameter are refused
 /// ```
 #[test]
-#[ignore = "requires_external: moto; RED scaffold: DELIVER adapter-s3-index-object"]
+#[ignore = "requires_external: moto"]
 fn the_start_up_probes_tell_a_reachable_store_from_a_missing_one() {
     let endpoint = moto();
     moto_credentials();
