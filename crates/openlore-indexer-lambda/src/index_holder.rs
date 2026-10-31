@@ -20,14 +20,52 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
-use adapter_index_store::{write_ahead_log_path, DuckDbCaps, IndexStoreAdapter};
+use adapter_index_store::{write_ahead_log_path, DuckDbCaps};
 use adapter_xrpc_query_server::HealthHandler;
 use openlore_indexer::config::IndexerConfig;
-use openlore_indexer::health::{health_handler, published_at_of_fetched, store_usability};
+use openlore_indexer::health::{health_handler, published_at_of_fetched};
 use openlore_indexer::search_handler::SharedIndexReads;
 use ports::{IndexObjectReadPort, ObjectVersion};
 
+use self::read_only::ReadOnlyIndex;
 use crate::InitRefused;
+
+mod read_only {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use adapter_index_store::{DuckDbCaps, IndexStoreAdapter};
+    use openlore_indexer::health::{store_usability, StoreUsability};
+    use openlore_indexer::search_handler::SharedIndexReads;
+    use ports::IndexStoreError;
+
+    /// A copy's store as a search may hold it (D-STZ-38), which exists only after
+    /// one read through it. The field is private to this module, so nothing
+    /// outside it, the holder included, can name a write on the adapter, and the
+    /// read port it hands out has no way back to one.
+    pub(super) struct ReadOnlyIndex(Arc<IndexStoreAdapter>);
+
+    impl ReadOnlyIndex {
+        pub(super) fn opened(path: &Path, caps: DuckDbCaps) -> Result<Self, IndexStoreError> {
+            let store = IndexStoreAdapter::open_capped(path, caps)?;
+            store.read_through()?;
+            Ok(Self(Arc::new(store)))
+        }
+
+        pub(super) fn reads(&self) -> SharedIndexReads {
+            Arc::clone(&self.0) as SharedIndexReads
+        }
+
+        pub(super) fn usability(&self) -> StoreUsability {
+            store_usability(Arc::clone(&self.0))
+        }
+
+        /// TEST-FAULT seam: it poisons the handle, and writes nothing to the index.
+        pub(super) fn poison_for_test_fault(&self) {
+            self.0.poison_for_test_fault();
+        }
+    }
+}
 
 /// The file of one copy in `/tmp` and its log, removed when the copy is dropped.
 /// So a failed download or open leaves nothing behind, and a retired copy gives
@@ -65,7 +103,7 @@ impl ReloadAttempts {
 
 /// One open copy of the index and the object version it holds.
 pub(crate) struct HeldIndex {
-    store: Arc<IndexStoreAdapter>,
+    store: ReadOnlyIndex,
     version: Option<ObjectVersion>,
     /// After `store`: fields drop in order, so the store closes before its file goes.
     _file: ScratchFile,
@@ -93,10 +131,8 @@ impl HeldIndex {
             threads: config.duckdb_threads,
         };
         off_the_runtime(move || {
-            let store = IndexStoreAdapter::open_capped(&file.0, caps).map_err(refused)?;
-            store.read_through().map_err(refused)?;
             Ok(Self {
-                store: Arc::new(store),
+                store: ReadOnlyIndex::opened(&file.0, caps).map_err(refused)?,
                 version,
                 _file: file,
             })
@@ -111,14 +147,14 @@ impl HeldIndex {
 
     /// This copy as a search sees it: through its read port alone.
     pub(crate) fn reads(&self) -> SharedIndexReads {
-        Arc::clone(&self.store) as SharedIndexReads
+        self.store.reads()
     }
 
     /// `/healthz` over this copy: its usability and the version's stamp.
     pub(crate) fn health(&self) -> HealthHandler {
         health_handler(
             published_at_of_fetched(self.version.as_ref()),
-            store_usability(Arc::clone(&self.store)),
+            self.store.usability(),
         )
     }
 
