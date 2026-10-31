@@ -1756,6 +1756,77 @@ fn the_msrv_job_checks_each_floor_on_its_own_toolchain_before_the_tests_run() {
     }
 }
 
+/// The jobs that build what is signed, and the jobs that hold `id-token: write`.
+const SIGNING_PATH_JOBS: [&str; 4] = [
+    "review-app-build",
+    "review-app-image",
+    "indexer-build",
+    "indexer-image",
+];
+
+/// The `uses:` lines of a job, read whole.
+fn action_lines(job: &str) -> Vec<&str> {
+    job.lines()
+        .map(|line| line.trim().trim_start_matches("- "))
+        .filter(|line| line.starts_with("uses:"))
+        .collect()
+}
+
+/// Pinned as the Trivy step is: the full commit, then the exact version it was at.
+fn is_pinned(line: &str) -> bool {
+    let Some((action, version)) = line.split_once(" # ") else {
+        return false;
+    };
+    let commit = action
+        .rsplit_once('@')
+        .map_or("", |(_, reference)| reference);
+    let exact = version
+        .strip_prefix('v')
+        .map(|numbers| numbers.split('.').collect::<Vec<_>>());
+    commit.len() == 40
+        && commit
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        && exact.is_some_and(|parts| {
+            parts.len() == 3 && parts.iter().all(|part| part.parse::<u32>().is_ok())
+        })
+}
+
+/// A moved tag would run new code with `id-token: write` and `packages: write`, on the path that
+/// produces what `deploy.sh` trusts, so every action there is a commit.
+#[test]
+fn every_action_on_the_signing_path_is_pinned_to_a_commit() {
+    let commit = "ed142fd0673e97e23eac54620cfb913e5ce36c25";
+    assert!(is_pinned(&format!("uses: a/b@{commit} # v0.36.0")));
+    for loose in [
+        "uses: a/b@v3".to_string(),
+        format!("uses: a/b@{commit}"),
+        format!("uses: a/b@{commit} # v3"),
+        format!("uses: a/b@{commit} # master"),
+        "uses: a/b@ed142fd # v0.36.0".to_string(),
+        format!("uses: a/b@{} # v0.36.0", commit.to_uppercase()),
+    ] {
+        assert!(!is_pinned(&loose), "{loose}");
+    }
+
+    let ci = read(".github/workflows/ci.yml");
+    for name in SIGNING_PATH_JOBS {
+        let actions = action_lines(job(&ci, name));
+        assert!(!actions.is_empty(), "{name}: the job was not read");
+        let loose: Vec<_> = actions
+            .into_iter()
+            .filter(|line| !is_pinned(line))
+            .collect();
+        assert!(loose.is_empty(), "{name}: {loose:?}");
+    }
+    assert!(
+        job(&ci, "msrv").contains("dtolnay/rust-toolchain@"),
+        "the msrv job installs its toolchain"
+    );
+    let on_a_branch = ci.lines().find(|line| line.contains("@master"));
+    assert_eq!(on_a_branch, None, "master moves");
+}
+
 const LAMBDA_SMOKE: &str = "deploy/indexer/smoke/lambda-smoke.sh";
 const RACE_SHIM: &str = "deploy/indexer/smoke/race_shim.py";
 const LAMBDA_SMOKE_STEP: &str = "- name: lambda-smoke (the image as Lambda runs it)";
