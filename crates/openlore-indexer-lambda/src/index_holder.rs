@@ -105,6 +105,11 @@ impl HeldIndex {
             store_usability(Arc::clone(&self.store)),
         )
     }
+
+    /// TEST-FAULT seam (`store_poisoned_after_first_search`, debug builds only).
+    pub(crate) fn poison_for_test_fault(&self) {
+        self.store.poison_for_test_fault();
+    }
 }
 
 /// The copy being served. A swap takes effect for the next answer, and the last

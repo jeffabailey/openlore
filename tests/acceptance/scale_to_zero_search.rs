@@ -426,7 +426,6 @@ fn two_warm_instances_disagree_for_at_most_about_a_minute_after_a_publish() {
 ///     | a look at an unknown address                     | knows no such place       |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (dispatch shared with serve)"]
 fn the_search_entry_turns_away_what_the_self_hosted_index_turns_away() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = given_a_warm_instance_serving_priyas_claim(&world);
@@ -507,7 +506,6 @@ fn the_search_entry_turns_away_what_the_self_hosted_index_turns_away() {
 ///   Then she is told the index is busy and to retry in a second
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (dispatch timeout; new TEST_FAULT token search_store_slow)"]
 fn a_search_the_index_cannot_answer_within_5_seconds_is_told_to_retry_shortly() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = given_a_warm_instance_under_fault(&world, Fault::SearchStoreIsSlow);
@@ -542,7 +540,6 @@ fn given_a_warm_instance_under_fault(world: &LambdaWorld, fault: Fault) -> Searc
 ///   And she is not told that nothing matched
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (dispatch store error)"]
 fn a_search_the_index_cannot_read_fails_loudly_never_as_an_empty_result() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = given_a_warm_instance_under_fault(&world, Fault::SearchCannotReadTheStore);
@@ -575,7 +572,6 @@ fn a_search_the_index_cannot_read_fails_loudly_never_as_an_empty_result() {
 ///   Then it answers that its store is unusable, not that it is ok
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (health through dispatch; fault store_poisoned_after_first_search, UI-5)"]
 fn an_index_whose_store_breaks_while_it_runs_says_so_instead_of_looking_healthy() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let search = given_a_warm_instance_under_fault(&world, Fault::StorePoisonedAfterFirstSearch);

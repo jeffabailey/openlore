@@ -7,13 +7,14 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use adapter_xrpc_query_server::{
-    dispatch, BodyRead, Handlers, PublicAnswer, PublicRequest, REQUEST_TIMEOUT,
+    dispatch, BodyRead, Handlers, PublicAnswer, PublicRequest, QueryHandler, REQUEST_TIMEOUT,
 };
 use chrono::{DateTime, Utc};
-use openlore_indexer::config::IndexerConfig;
+use openlore_indexer::config::{IndexerConfig, TestFault};
 use openlore_indexer::events::Events;
 use openlore_indexer::run::search_answers;
-use ports::{HeadOutcome, IndexObjectError, IndexReadPort};
+use openlore_indexer::search_handler::{slow_index, unreadable_index, SharedIndexReads};
+use ports::{HeadOutcome, IndexObjectError};
 use serde_json::{json, Map, Value};
 
 use crate::decide::{freshness_due, reload_needed, HeadSeen, Reload, FRESHNESS_TTL};
@@ -51,7 +52,7 @@ impl SearchFunction {
     /// response.
     pub async fn handle(&self, event: Value) -> Value {
         self.freshen().await;
-        let handlers = handlers_over(&self.index.current(), &self.events);
+        let handlers = handlers_over(&self.index.current(), &self.events, self.config.test_fault);
         let request = PublicRequest {
             method: text_at(&event, "/requestContext/http/method"),
             path: text_at(&event, "/rawPath"),
@@ -119,12 +120,40 @@ fn head_seen(head: Result<HeadOutcome, IndexObjectError>) -> HeadSeen {
 /// The public surface over one copy, composed per request so the next answer
 /// comes from the copy a swap left in place, and a retired copy is held by
 /// nothing. A search holds `IndexReadPort` and nothing that writes.
-fn handlers_over(index: &HeldIndex, events: &Events) -> Handlers {
-    let reads: Arc<dyn IndexReadPort + Send + Sync> = index.reads();
+fn handlers_over(index: &Arc<HeldIndex>, events: &Events, fault: Option<TestFault>) -> Handlers {
+    let answers = search_answers(reads_under(fault, index.reads()), events);
     Handlers {
-        query: search_answers(reads, events),
+        query: answers_under(fault, answers, index),
         health: Some(index.health()),
     }
+}
+
+/// The TEST-ONLY read faults (debug builds only; config refuses the seam in a
+/// release build). They act here, per request, so init reads a healthy index.
+fn reads_under(fault: Option<TestFault>, reads: SharedIndexReads) -> SharedIndexReads {
+    match fault {
+        Some(TestFault::SearchStoreReadFails) => unreadable_index(),
+        Some(TestFault::SearchStoreSlow) => slow_index(reads),
+        _ => reads,
+    }
+}
+
+/// The TEST-ONLY running-store fault: a health read leaves the store alone, and
+/// the search that answers poisons it.
+fn answers_under(
+    fault: Option<TestFault>,
+    answers: QueryHandler,
+    index: &Arc<HeldIndex>,
+) -> QueryHandler {
+    if fault != Some(TestFault::StorePoisonedAfterFirstSearch) {
+        return answers;
+    }
+    let index = Arc::clone(index);
+    Arc::new(move |request| {
+        let answer = answers(request);
+        index.poison_for_test_fault();
+        answer
+    })
 }
 
 fn text_at<'event>(event: &'event Value, pointer: &str) -> &'event str {

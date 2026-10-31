@@ -100,14 +100,22 @@ pub enum TestFault {
     SearchStoreReadFails,
     /// The first author purge fails; later ones succeed.
     PurgeFails,
+    /// Every search read of a Lambda search instance outlasts the request's
+    /// time limit. Self-host never acts on it.
+    SearchStoreSlow,
+    /// A Lambda search instance's store is poisoned once a search has answered,
+    /// so it started usable. Self-host never acts on it.
+    StorePoisonedAfterFirstSearch,
 }
 
 impl TestFault {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 6] = [
         Self::FirstPassPanics,
         Self::StorePoisoned,
         Self::SearchStoreReadFails,
         Self::PurgeFails,
+        Self::SearchStoreSlow,
+        Self::StorePoisonedAfterFirstSearch,
     ];
 
     /// The seam's value naming this fault.
@@ -117,6 +125,8 @@ impl TestFault {
             Self::StorePoisoned => "store_poisoned",
             Self::SearchStoreReadFails => "search_store_read_fails",
             Self::PurgeFails => "purge_fails",
+            Self::SearchStoreSlow => "search_store_slow",
+            Self::StorePoisonedAfterFirstSearch => "store_poisoned_after_first_search",
         }
     }
 
@@ -751,7 +761,7 @@ mod tests {
     /// derived from `TestFault::ALL`, `token` or `from_token`), with near
     /// misses of each. Every setting is trimmed, so surrounding whitespace
     /// still names the fault, and a blank value provokes nothing.
-    const FAULT_SEAM_TABLE: [(&str, SeamOutcome); 18] = [
+    const FAULT_SEAM_TABLE: [(&str, SeamOutcome); 22] = [
         (
             "first_pass_panics",
             SeamOutcome::Loads(TestFault::FirstPassPanics),
@@ -765,6 +775,14 @@ mod tests {
             SeamOutcome::Loads(TestFault::SearchStoreReadFails),
         ),
         ("purge_fails", SeamOutcome::Loads(TestFault::PurgeFails)),
+        (
+            "search_store_slow",
+            SeamOutcome::Loads(TestFault::SearchStoreSlow),
+        ),
+        (
+            "store_poisoned_after_first_search",
+            SeamOutcome::Loads(TestFault::StorePoisonedAfterFirstSearch),
+        ),
         ("purge_fails ", SeamOutcome::Loads(TestFault::PurgeFails)),
         (
             "\tstore_poisoned\n",
@@ -778,6 +796,8 @@ mod tests {
         ("purge", SeamOutcome::Refused),
         ("search_store_read_fail", SeamOutcome::Refused),
         ("store_poisoned_", SeamOutcome::Refused),
+        ("search_store_slo", SeamOutcome::Refused),
+        ("store_poisoned_after_first", SeamOutcome::Refused),
         ("first pass panics", SeamOutcome::Refused),
         ("first-pass-panics", SeamOutcome::Refused),
         ("purge_fails,store_poisoned", SeamOutcome::Refused),
@@ -792,11 +812,13 @@ mod tests {
             TestFault::StorePoisoned => "store_poisoned",
             TestFault::SearchStoreReadFails => "search_store_read_fails",
             TestFault::PurgeFails => "purge_fails",
+            TestFault::SearchStoreSlow => "search_store_slow",
+            TestFault::StorePoisonedAfterFirstSearch => "store_poisoned_after_first_search",
         }
     }
 
     /// A value from the literal table, or a generated lower-case string that
-    /// is none of the four literal tokens (so always refused).
+    /// is none of the literal tokens (so always refused).
     fn arb_fault_seam_value() -> impl Strategy<Value = (String, SeamOutcome)> {
         prop_oneof![
             proptest::sample::select(FAULT_SEAM_TABLE.to_vec())
@@ -808,6 +830,8 @@ mod tests {
                         "store_poisoned",
                         "search_store_read_fails",
                         "purge_fails",
+                        "search_store_slow",
+                        "store_poisoned_after_first_search",
                     ]
                     .contains(&value.as_str())
                 })
@@ -853,7 +877,7 @@ mod tests {
     /// so the table cannot silently fall behind a new fault.
     #[test]
     fn every_test_fault_has_a_literal_row() {
-        assert_eq!(TestFault::ALL.len(), 4, "a new fault needs a literal row");
+        assert_eq!(TestFault::ALL.len(), 6, "a new fault needs a literal row");
         for fault in TestFault::ALL {
             let rows: Vec<&str> = FAULT_SEAM_TABLE
                 .iter()

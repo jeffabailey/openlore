@@ -12,9 +12,10 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use adapter_index_store::SEARCH_ROW_CAP;
-use adapter_xrpc_query_server::{IndexUnavailable, QueryHandler};
+use adapter_xrpc_query_server::{IndexUnavailable, QueryHandler, REQUEST_TIMEOUT};
 use appview_domain::{
     compose_results, near_match_suggestion, NetworkSearchResult, SUGGESTION_MAX_DISTANCE,
 };
@@ -27,6 +28,9 @@ use ports::{IndexReadPort, IndexStoreError, IndexedClaim, SearchDimension};
 /// The shared read handle the search handler closes over: the process's one
 /// index handle (ADR-080), seen through its read port only.
 pub type SharedIndexReads = Arc<dyn IndexReadPort + Send + Sync>;
+
+/// How far past the request's time limit a read of a slow index runs.
+const SLOW_READ_OVERRUN: Duration = Duration::from_secs(1);
 
 /// A search that matched more than [`SEARCH_ROW_CAP`] claims and was cut
 /// there (ADR-083 §3). Carries the dimension and the cap only: never the value.
@@ -107,6 +111,40 @@ impl IndexReadPort for UnreadableIndex {
     }
     fn objects_near(&self, _: &str, _: usize) -> Result<Vec<String>, IndexStoreError> {
         Self::failure()
+    }
+}
+
+/// TEST-FAULT seam (`OPENLORE_INDEXER_TEST_FAULT=search_store_slow`, debug
+/// builds only): `reads`, each read outlasting the request's time limit.
+pub fn slow_index(reads: SharedIndexReads) -> SharedIndexReads {
+    Arc::new(SlowIndex(reads))
+}
+
+/// The read port of an index too slow to answer in time.
+struct SlowIndex(SharedIndexReads);
+
+impl SlowIndex {
+    fn reads(&self) -> &dyn IndexReadPort {
+        std::thread::sleep(REQUEST_TIMEOUT + SLOW_READ_OVERRUN);
+        self.0.as_ref()
+    }
+}
+
+impl IndexReadPort for SlowIndex {
+    fn query_by_object(&self, object: &str) -> Result<Vec<IndexedClaim>, IndexStoreError> {
+        self.reads().query_by_object(object)
+    }
+    fn query_by_contributor(&self, did: &Did) -> Result<Vec<IndexedClaim>, IndexStoreError> {
+        self.reads().query_by_contributor(did)
+    }
+    fn query_by_subject(&self, subject: &str) -> Result<Vec<IndexedClaim>, IndexStoreError> {
+        self.reads().query_by_subject(subject)
+    }
+    fn get_by_cid(&self, cid: &Cid) -> Result<Option<IndexedClaim>, IndexStoreError> {
+        self.reads().get_by_cid(cid)
+    }
+    fn objects_near(&self, object: &str, within: usize) -> Result<Vec<String>, IndexStoreError> {
+        self.reads().objects_near(object, within)
     }
 }
 
