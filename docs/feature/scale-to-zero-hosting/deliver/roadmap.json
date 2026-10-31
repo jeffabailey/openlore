@@ -1541,7 +1541,7 @@
             "tofu fmt -check deploy/tofu/environments/prod-indexer",
             "cargo test -p xtask --test scale_to_zero_platform --test scale_to_zero_architecture"
           ],
-          "implementation_notes": "RED driver OP-5. Reader contract: literal function_name, no for_each or dynamic. Per-function roles exactly as the DEVOPS table, including the conditional PutObject statements and the ListBucket prefix condition. prevent_destroy on the bucket. Commit .terraform.lock.hcl. NO tofu plan or apply. EXEMPT FROM PARADIGM: conventions.test_paradigm. FROM 02-04: the pass function's environment must set OPENLORE_INDEXER_PURGE_UNLISTED=1, or the purge stays off silently; assert it in the tofu checks.",
+          "implementation_notes": "RED driver OP-5. Reader contract: literal function_name, no for_each or dynamic. Per-function roles exactly as the DEVOPS table, including the conditional PutObject statements and the ListBucket prefix condition. prevent_destroy on the bucket. Commit .terraform.lock.hcl. NO tofu plan or apply. EXEMPT FROM PARADIGM: conventions.test_paradigm. FROM 02-04: the pass function's environment must set OPENLORE_INDEXER_PURGE_UNLISTED=1, or the purge stays off silently; assert it in the tofu checks. FROM 06-04: all three functions need OPENLORE_INDEXER_LAMBDA_BUCKET, OPENLORE_INDEXER_LAMBDA_INDEX_KEY and OPENLORE_INDEXER_LAMBDA_LAST_PASS_KEY (required, no defaults, stricter than the DESIGN function table); pass needs OPENLORE_INDEXER_LAMBDA_DID_PARAMETER. From 04-03: a no-publish run with no usable start is exit 2 with no_publish:true, so decide whether A2 filters that mark.",
           "estimate_hours": 7,
           "depends_on": [
             "06-04"
@@ -1695,7 +1695,7 @@
             "cargo test -p xtask --test scale_to_zero_ci",
             "shellcheck deploy/indexer/smoke/lambda-smoke.sh"
           ],
-          "implementation_notes": "No DISTILL scenario: the root's only end-to-end run (DWD-STZ-3), so its real proof is the first main-push CI run. RIE pinned by version and sha256, mounted, never in the image. moto by the same digest as rio-object-store. The smoke reads lambda-env.json. Shim is Python stdlib, in the job only. Seed helper is built in indexer-build. EXEMPT FROM PARADIGM: conventions.test_paradigm.",
+          "implementation_notes": "No DISTILL scenario: the root's only end-to-end run (DWD-STZ-3), so its real proof is the first main-push CI run. RIE pinned by version and sha256, mounted, never in the image. moto by the same digest as rio-object-store. The smoke reads lambda-env.json. Shim is Python stdlib, in the job only. Seed helper is built in indexer-build. EXEMPT FROM PARADIGM: conventions.test_paradigm. FROM 06-04: this is the binary's first real start. The smoke must pass AWS_REGION to the emulator; Lambda sets it in production.",
           "estimate_hours": 8,
           "depends_on": [
             "07-01",
