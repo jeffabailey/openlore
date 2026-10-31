@@ -136,7 +136,6 @@ fn the_first_pass_creates_the_index_and_records_itself() {
 ///   And the pass record names the 14:15 pass, completed, not published, seeing the 14:00 index
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (publish only on change)"]
 fn a_pass_that_changes_nothing_publishes_nothing_but_still_records_itself() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     given_the_first_pass_published_priyas_claim(&world);
@@ -165,7 +164,6 @@ fn a_pass_that_changes_nothing_publishes_nothing_but_still_records_itself() {
 ///   And a search instance that starts afterwards finds both of Priya's claims
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (conditional publish on change)"]
 fn a_pass_that_indexes_a_new_claim_replaces_exactly_the_version_it_started_from() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     given_the_first_pass_published_priyas_claim(&world);
@@ -437,7 +435,6 @@ fn an_emptied_did_list_purges_nobody_and_publishes_nothing() {
 ///     | Priya's PDS stopped answering   | 3    |
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (record with no object, D-STZ-48)"]
 fn a_pass_on_an_empty_bucket_with_nothing_to_publish_records_that_no_index_exists() {
     each_row(
         [
