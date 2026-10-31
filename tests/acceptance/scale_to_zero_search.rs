@@ -27,7 +27,7 @@
 //!
 //! Story line (Pillar 2): SE-1 fresh deployment → SE-2 published index read at
 //! start → SE-3 a later publish reaches the warm instance → SE-4 nothing
-//! changed → SE-5 the index is reset → SE-7 an empty instance gets its first
+//! changed (SE-3b: nothing of the old copy stays) → SE-5 the index is reset → SE-7 an empty instance gets its first
 //! index → SE-8 two instances. Error paths follow.
 #![cfg(unix)]
 
@@ -213,6 +213,54 @@ fn a_warm_instance_picks_up_a_newly_published_claim_within_a_minute() {
         "the second swap happened"
     );
     search.assert_scratch_within_two_index_sizes();
+}
+
+/// SE-3b (review note 02-05). A reload brings the next copy into a file of its own, so the
+/// new index here holds nothing the old one did: what Maria gets comes from the new file.
+/// ```gherkin
+/// @driving_port @real-io @D-STZ-10 @R-STZ-10 @C2 @contract-shape:bounded-change
+/// Scenario: A reload serves what the new index holds, and nothing only the old one held
+///   Given a warm search instance serves Priya's cargo-pin claim
+///   And the operator took Priya off the list and listed Dmitri
+///   And the next pass published an index holding only Dmitri's claim
+///   When Maria searches 61 seconds after the instance last looked
+///   Then she finds Dmitri's claim, and no longer finds Priya's
+///   And the index reports when the new copy was published
+/// ```
+#[test]
+fn a_reload_serves_what_the_new_index_holds_and_nothing_only_the_old_one_held() {
+    let world = LambdaWorld::listing(&[Author::Priya]);
+    let search = given_a_warm_instance_serving_priyas_claim(&world);
+    world.publishes(Author::Dmitri, &[FERRITE_REPRODUCIBLE_BUILDS]);
+    world.operator_lists(&[Author::Dmitri]);
+    world.time_passes(10 * SECOND);
+    let run = world.cold_pass_instance().schedule_fires();
+    assert!(run.published(), "{}", run.dump());
+    world.time_passes(61 * SECOND);
+
+    let reply = search.maria_searches("reproducible-builds");
+
+    assert_eq!(
+        reply.subjects_by(Author::Dmitri),
+        vec![FERRITE_REPRODUCIBLE_BUILDS.subject.to_string()],
+        "{}",
+        reply.text()
+    );
+    assert!(
+        reply.subjects_by(Author::Priya).is_empty(),
+        "{}",
+        reply.text()
+    );
+    let health = search.health();
+    let reported = health.json()["last_successful_pass_at"].clone();
+    let published = world.bucket.current().and_then(|v| v.published_at);
+    let time = |text: Option<&str>| text.map(chrono::DateTime::parse_from_rfc3339);
+    assert_eq!(
+        time(reported.as_str()),
+        time(published.as_deref()),
+        "{}",
+        health.text()
+    );
 }
 
 /// SE-4 (the one counted check of this suite: at most one check per TTL, and a

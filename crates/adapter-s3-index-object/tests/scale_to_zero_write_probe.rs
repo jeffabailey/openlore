@@ -19,7 +19,7 @@ use adapter_s3_index_object::{
     call_budget, location_names_write_probe_key, write_probe_outcome, RepeatAnswer,
     S3IndexObjectAdapter, S3Location, StoreCall, WriteProbeSeen, WRITE_PROBE_KEY,
 };
-use ports::{ProbeOutcome, ProbeRefusalReason};
+use ports::{IndexObjectError, ProbeOutcome, ProbeRefusalReason};
 
 const INDEX_KEY: &str = "index/index.duckdb";
 const LAST_PASS_KEY: &str = "index/last-pass.json";
@@ -96,16 +96,26 @@ fn the_write_checks_marker_can_never_be_the_index() {
         .enable_all()
         .build()
         .expect("a test runtime");
-    let built = rt.block_on(S3IndexObjectAdapter::connect(S3Location {
-        region: "us-east-1".to_string(),
-        endpoint_url: Some("http://127.0.0.1:9".to_string()),
-        bucket: "openlore-indexer-index-test".to_string(),
-        index_key: WRITE_PROBE_KEY.to_string(),
-        last_pass_key: LAST_PASS_KEY.to_string(),
-    }));
-    assert!(
-        built.is_err(),
+    let built = |index_key: &str| {
+        rt.block_on(S3IndexObjectAdapter::connect(S3Location {
+            region: "us-east-1".to_string(),
+            endpoint_url: Some("http://127.0.0.1:9".to_string()),
+            bucket: "openlore-indexer-index-test".to_string(),
+            index_key: index_key.to_string(),
+            last_pass_key: LAST_PASS_KEY.to_string(),
+        }))
+    };
+    assert_eq!(
+        built(WRITE_PROBE_KEY).err(),
+        Some(IndexObjectError::ProbeRefused {
+            detail: format!("a configured key is the write probe's key {WRITE_PROBE_KEY}"),
+        }),
         "connect refuses a location naming the marker"
+    );
+    assert_eq!(
+        built(INDEX_KEY).err(),
+        None,
+        "the same location on the proper key builds, so that refusal is the marker's"
     );
 }
 

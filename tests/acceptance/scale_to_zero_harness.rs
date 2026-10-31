@@ -1,10 +1,10 @@
 //! scale-to-zero-hosting — checks of the acceptance harness itself.
 //!
-//! Every RED scenario stops at the first scaffold panic, so nothing after that
-//! panic has ever run. These tests run the doubles and the fixture builders the
-//! scenarios lean on, so a harness bug cannot wait for DELIVER and look like a
-//! product bug. `FakeIndexBucket`'s contract is the one RIO-1..3 hold the real
-//! S3 adapter to. They run green at hand-off; they are not scenarios.
+//! The doubles and fixture builders whose failure no scenario would show, and the
+//! positive controls of the oracles the scenarios lean on. A double the scenarios
+//! drive has no test here: the scenarios fail when it stops doing its job, and
+//! RIO-1..3 hold the real S3 adapter to the conditional writes `FakeIndexBucket`
+//! answers with. These are not scenarios.
 #![cfg(unix)]
 
 #[path = "../common/state_delta.rs"]
@@ -15,8 +15,8 @@ mod indexer_lambda;
 
 use indexer_lambda::*;
 use ports::{
-    HeadOutcome, IndexObjectError, IndexObjectReadPort, IndexObjectWritePort, LastPass,
-    ProbeOutcome, PublishMetadata, PublishOutcome, RepoDidListSourcePort, WriteCondition,
+    IndexObjectError, IndexObjectReadPort, IndexObjectWritePort, LastPass, ProbeOutcome,
+    PublishMetadata, WriteCondition,
 };
 use serde_json::json;
 
@@ -45,66 +45,6 @@ fn record() -> LastPass {
         published: false,
         index_published_at: None,
     }
-}
-
-#[test]
-fn the_fake_bucket_keeps_the_conditional_write_contract() {
-    let rt = runtime();
-    let bucket = FakeIndexBucket::default();
-    let dir = tempfile::tempdir().expect("scratch");
-    let src = dir.path().join("index.duckdb");
-    std::fs::write(&src, b"v1").expect("v1");
-
-    assert_eq!(
-        rt.block_on(bucket.head()).expect("head"),
-        HeadOutcome::Absent
-    );
-    assert_eq!(
-        rt.block_on(bucket.fetch_to(&dir.path().join("x")))
-            .expect("get"),
-        None
-    );
-
-    let first = rt
-        .block_on(bucket.publish_if_match(&src, WriteCondition::IfNoneMatch, metadata("p1"), LIMIT))
-        .expect("publish");
-    let PublishOutcome::Published(v1) = first else {
-        panic!("creates the object: {first:?}")
-    };
-    let created_again = rt.block_on(bucket.publish_if_match(
-        &src,
-        WriteCondition::IfNoneMatch,
-        metadata("p2"),
-        LIMIT,
-    ));
-    assert_eq!(created_again, Ok(PublishOutcome::Conflict));
-    let stale = rt.block_on(bucket.publish_if_match(
-        &src,
-        WriteCondition::IfMatch("\"stale\"".to_string()),
-        metadata("p3"),
-        LIMIT,
-    ));
-    assert_eq!(stale, Ok(PublishOutcome::Conflict));
-
-    bucket.another_writer_publishes_during_the_next_pass();
-    let lost = rt.block_on(bucket.publish_if_match(
-        &src,
-        WriteCondition::IfMatch(v1.etag.clone()),
-        metadata("p4"),
-        LIMIT,
-    ));
-    assert_eq!(lost, Ok(PublishOutcome::Conflict));
-    assert_eq!(
-        bucket.current().and_then(|v| v.pass_id).as_deref(),
-        Some("another-writer")
-    );
-
-    bucket.operator_resets_the_index();
-    assert_eq!(
-        rt.block_on(bucket.head()).expect("head"),
-        HeadOutcome::Absent
-    );
-    assert_eq!(bucket.versions().len(), 2, "a reset leaves the versions");
 }
 
 #[test]
@@ -173,17 +113,6 @@ fn each_narrow_trouble_fails_only_its_own_request() {
     bucket.recovers();
     assert!(rt.block_on(bucket.put_last_pass(&record())).is_ok());
     assert_eq!(bucket.last_pass(), Some(record()));
-}
-
-#[test]
-fn the_fake_did_list_answers_what_the_operator_saved_and_counts_reads() {
-    let rt = runtime();
-    let list = FakeDidList::default();
-    list.saves("did:plc:a");
-    assert_eq!(rt.block_on(list.current()).as_deref(), Ok("did:plc:a"));
-    list.fails(true);
-    assert!(rt.block_on(list.current()).is_err());
-    assert_eq!(list.reads(), 2);
 }
 
 #[test]
@@ -319,21 +248,6 @@ fn a_stalled_check_fails_after_the_operation_timeout_and_a_stalled_download_outl
 }
 
 #[test]
-fn a_damaged_index_is_as_large_as_the_one_it_replaced() {
-    let rt = runtime();
-    let bucket = FakeIndexBucket::default();
-    let dir = tempfile::tempdir().expect("scratch");
-    let src = dir.path().join("index.duckdb");
-    std::fs::write(&src, vec![b'i'; 4096]).expect("v1");
-    rt.block_on(bucket.publish_if_match(&src, WriteCondition::IfNoneMatch, metadata("p1"), LIMIT))
-        .expect("publish");
-
-    bucket.holds_a_damaged_index();
-
-    assert_eq!(bucket.current().map(|v| v.bytes.len()), Some(4096));
-}
-
-#[test]
 fn each_row_reports_every_failing_row_not_only_the_first() {
     let report = std::panic::catch_unwind(|| {
         each_row([1, 2, 3], |row| assert_eq!(*row, 2, "row {row}"));
@@ -366,52 +280,64 @@ fn a_function_url_response_reads_back_as_a_reply() {
     assert_eq!(encoded.text(), "{}");
 }
 
-#[test]
-fn the_canned_edge_answers_health_and_search_with_its_statuses() {
-    let edge = CannedEdge::answering(503, 200);
-    let get = |path: &str, method: &str| {
-        let mut stream =
-            std::net::TcpStream::connect(edge.url().trim_start_matches("http://")).expect("edge");
-        let request = format!("{method} {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 0\r\n\r\n");
-        std::io::Write::write_all(&mut stream, request.as_bytes()).expect("send");
-        let mut answer = String::new();
-        std::io::Read::read_to_string(&mut stream, &mut answer).expect("read");
-        answer
-    };
-    assert!(get(SEARCH_PATH, "POST").starts_with("HTTP/1.1 200"));
-    assert!(get(HEALTH_PATH, "GET").starts_with("HTTP/1.1 503"));
-    assert_eq!(edge.asked(), [SEARCH_PATH, HEALTH_PATH], "in order");
-
-    let serving_nothing = CannedEdge::serving_an_index_published_at(None);
-    let mut stream =
-        std::net::TcpStream::connect(serving_nothing.url().trim_start_matches("http://"))
-            .expect("edge");
-    std::io::Write::write_all(
-        &mut stream,
-        b"GET /healthz HTTP/1.1\r\nhost: x\r\ncontent-length: 0\r\n\r\n",
-    )
-    .expect("send");
-    let mut answer = String::new();
-    std::io::Read::read_to_string(&mut stream, &mut answer).expect("read");
-    assert!(
-        answer.contains(r#""last_successful_pass_at":null"#),
-        "{answer}"
-    );
-}
-
 /// The CID of Priya's self-attested cargo-pin claim (L-13). A pass recomputes the
 /// CID and rejects a record keyed by anything else, so a harness that drifted
 /// here would look like a pass that indexes nothing.
 const KNOWN_CID: &str = "bafyreidvsg2jhgnuaar25mbs7pnnko3jxjkyyt4eimltn6mxgdto2oomua";
 
 #[test]
-fn the_world_seeds_records_keyed_by_their_cid_and_reaches_every_pds() {
+fn the_world_seeds_records_keyed_by_their_cid() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     let keys = world.publishes(Author::Priya, &[claims::CARGO_PIN_REPRODUCIBLE_BUILDS]);
     assert_eq!(keys, [KNOWN_CID], "the claim's CID has not moved");
-    world.pds_goes_down(Author::Priya);
-    world.pds_goes_down(Author::Dmitri);
-    world.pds_goes_down(Author::Ghost);
+}
+
+/// Not a scenario: the positive control of every "PDS down" scenario, on each host the
+/// cast lives on. A real pass reaches the author, then cannot. `Author::Ghost` has no PDS
+/// to take down: `pds_goes_down` leaves nothing to reach there, and a pass of that author
+/// is skipped with or without it.
+#[test]
+fn a_pds_that_goes_down_stops_a_real_pass_reaching_its_author() {
+    each_row([Author::Priya, Author::Dmitri, Author::Tomas], |author| {
+        let world = LambdaWorld::listing(&[*author]);
+        world.publishes(*author, &[claims::CARGO_PIN_REPRODUCIBLE_BUILDS]);
+
+        let reached = world.cold_pass_instance().schedule_fires();
+
+        reached.assert_exit(Exit::Completed);
+        assert!(reached.published(), "{}", reached.dump());
+        world.pds_goes_down(*author);
+
+        let cut_off = world.cold_pass_instance().schedule_fires();
+
+        cut_off.assert_exit(Exit::AllSkipped);
+    });
+}
+
+/// Not a scenario: the positive control of SE-E6's `/tmp` bound. A failed reload is only
+/// seen by that bound if what it leaves is as large as the index, which is why a damaged
+/// index is. So the copies that three failed reloads would leak, if one outlived its
+/// failure, are fetched from the fake beside the running instance's own copy.
+#[test]
+fn a_leaked_copy_of_a_damaged_index_breaks_the_scratch_bound() {
+    let world = LambdaWorld::listing(&[Author::Priya]);
+    world.publishes(Author::Priya, &[claims::CARGO_PIN_REPRODUCIBLE_BUILDS]);
+    world.given_a_pass_published_the_index();
+    let search = world.cold_search_instance();
+    let served = world.bucket.current().map_or(0, |v| v.bytes.len() as u64);
+    world.bucket.holds_a_damaged_index();
+    search.assert_scratch_within_two_sizes_of(served);
+
+    let rt = runtime();
+    for attempt in 1..=3 {
+        let leaked = search.scratch.join(format!("index.duckdb.{attempt}"));
+        rt.block_on(world.bucket.fetch_to(&leaked)).expect("a copy");
+    }
+
+    let bound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        search.assert_scratch_within_two_sizes_of(served);
+    }));
+    assert!(bound.is_err(), "three leaked copies fit the bound");
 }
 
 #[test]

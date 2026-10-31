@@ -667,6 +667,48 @@ fn a_pass_never_overwrites_an_index_somebody_else_published_while_it_ran() {
     );
 }
 
+/// PA-E1b (the first publish is create-only, so the race has its own condition. RIO-1
+/// holds the real store to refusing it)
+/// ```gherkin
+/// @driving_port @real-io @D-STZ-6 @D-STZ-41 @C7c @error @contract-shape:bounded-change
+/// Scenario: A first pass never overwrites an index somebody else created while it ran
+///   Given no index has been published yet
+///   And Priya approved a cargo-pin claim
+///   And another writer creates the index while the first pass runs
+///   When the schedule fires the pass
+///   Then the pass reports exit 2 for a publish conflict and logs it
+///   And the other writer's version is the current index
+/// ```
+#[test]
+fn a_first_pass_never_overwrites_an_index_somebody_else_created_while_it_ran() {
+    let world = LambdaWorld::listing(&[Author::Priya]);
+    world.publishes(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
+    world.bucket.another_writer_publishes_during_the_next_pass();
+    let before = world.pass_universe();
+
+    let run = when_the_next_schedule_fires(&world);
+
+    let summary = run.assert_exit(Exit::Failed);
+    assert_cause(&summary, "publish_conflict", &run);
+    assert_state_delta(
+        &before,
+        &world.pass_universe(),
+        &world.pass_universe_names(),
+        &recorded_only(&summary, Exit::Failed, Value::Null)
+            .with_slot("index.etag", changed())
+            .with_slot("index.published_at", changed())
+            .with_slot("index.version_count", grew_by(1))
+            .with_slot("events.lambda.publish_conflict.count", grew_by(1))
+            .with_slot("write_check_marker.versions", set_to(json!(1))),
+    );
+    let current = world.bucket.current().expect("an index object");
+    assert_eq!(
+        current.pass_id.as_deref(),
+        Some("another-writer"),
+        "no lost update"
+    );
+}
+
 /// PA-E2
 /// ```gherkin
 /// @driving_port @real-io @D-STZ-9 @ADR-080-7 @C6b @error @contract-shape:bounded-change
