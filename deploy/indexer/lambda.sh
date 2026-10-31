@@ -96,8 +96,8 @@ VARIANT_VERSIONS=()   # ...and the throwaway versions to delete
 now_ms() { jq -n 'now * 1000 | floor'; }
 
 # Only a missing object is an empty bucket: anything else is a read that failed, and the record it
-# feeds would say `none` for an index that is there. Every caller runs this in a pipeline inside
-# $(...), where die ends only the subshell, so pipefail carries the 2 out to the caller's set -e.
+# feeds would say `none` for an index that is there. Every caller runs this in a pipeline, most
+# inside $(...), where die ends only the subshell, so pipefail carries the 2 out to its set -e.
 index_head() { # the index object's metadata; {} on an empty bucket
   local errors="$LAMBDA_WORK/index-head-errors"
   aws s3api head-object --region "$REGION" --bucket "$INDEX_BUCKET" --key "$INDEX_KEY" \
