@@ -88,7 +88,6 @@ fn when_the_next_schedule_fires(world: &LambdaWorld) -> PassRun {
 ///   And nothing about the run says it was a no-publish run
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (pass mode)"]
 fn the_first_pass_creates_the_index_and_records_itself() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     world.publishes(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);

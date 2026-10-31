@@ -86,7 +86,6 @@ fn maria_finds_priyas_claim_after_the_scheduled_pass_published_the_index() {
 ///   Then a search instance that starts afterwards finds Tomás's loom claim, attributed to him
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER step 1 (Lambda root) un-ignores the walking skeleton"]
 fn the_operator_adds_an_author_and_with_no_deploy_maria_finds_their_claim() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     world.publishes(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
