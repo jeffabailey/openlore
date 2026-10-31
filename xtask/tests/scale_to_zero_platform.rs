@@ -1103,7 +1103,6 @@ fn the_kill_switch_stops_search_and_the_edge_and_leaves_the_pass_and_the_probe_a
 ///   And an apply never turns the edge back on after a stop
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy/tofu/environments/prod-indexer"]
 fn the_edge_is_one_allowlist_in_front_of_every_path() {
     let (tofu, files) = (prod_indexer_tofu(), prod_indexer_files());
 

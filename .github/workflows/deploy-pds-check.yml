@@ -2,7 +2,7 @@
 #
 # There is NO AWS credential in this workflow and no plan or apply: OpenLore's PDS is applied
 # from a laptop against a saved plan (ADR-068). This only proves the code is well-formed:
-#   - tofu fmt, and init -backend=false + validate for the bootstrap and prod roots
+#   - tofu fmt, and init -backend=false + validate for the bootstrap, prod and prod-indexer roots
 #     (init fetches github.com/jeffabailey/tofu-aws-pds at the pinned tag, so the tag must
 #     exist on GitHub for these steps to pass);
 #   - check-plan.sh parses, is shellcheck-clean, and refuses the deletes it must refuse;
@@ -20,6 +20,7 @@ on:
       - "deploy/**"
       - "deploy/review-app/**"
       - "deploy/indexer/**"
+      - "deploy/tofu/environments/prod-indexer/**"
       - ".github/workflows/deploy-pds-check.yml"
   push:
     branches: [main]
@@ -27,6 +28,7 @@ on:
       - "deploy/**"
       - "deploy/review-app/**"
       - "deploy/indexer/**"
+      - "deploy/tofu/environments/prod-indexer/**"
       - ".github/workflows/deploy-pds-check.yml"
 
 permissions:
@@ -52,10 +54,10 @@ jobs:
       - name: fmt
         run: tofu fmt -check -recursive deploy/tofu
 
-      - name: validate bootstrap and prod roots
+      - name: validate bootstrap, prod and prod-indexer roots
         run: |
           set -euo pipefail
-          for dir in deploy/tofu/bootstrap deploy/tofu/environments/prod; do
+          for dir in deploy/tofu/bootstrap deploy/tofu/environments/prod deploy/tofu/environments/prod-indexer; do
             echo "::group::$dir"
             tofu -chdir="$dir" init -backend=false -input=false -no-color
             tofu -chdir="$dir" validate -no-color
@@ -66,6 +68,15 @@ jobs:
       # same pinned tag as the module itself.
       - name: no workflow may reach a destroy
         run: deploy/tofu/environments/prod/.terraform/modules/pds/scripts/check-no-destroy.sh .github
+
+      # Advisory: findings print and fail nothing.
+      - name: trivy config on prod-indexer
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: deploy/tofu/environments/prod-indexer
+          exit-code: "0"
 
   scripts:
     name: check-plan.sh

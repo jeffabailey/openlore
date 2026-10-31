@@ -733,3 +733,651 @@ fn the_root_has_its_own_state_and_a_provider_that_knows_its_settings() {
         .unwrap_or_else(|| panic!("6.x: {locked}"));
     assert!(minor >= LOWEST_AWS_PROVIDER_MINOR, "{locked}");
 }
+
+/// One row of the DEVOPS alarm table.
+struct AlarmRow {
+    id: &'static str,
+    resource: &'static str,
+    name: &'static str,
+    namespace: &'static str,
+    metric: &'static str,
+    statistic: &'static str,
+    period: &'static str,
+    /// Evaluation periods and datapoints to alarm: the table's "n of n".
+    of: &'static str,
+    operator: &'static str,
+    threshold: &'static str,
+    missing: &'static str,
+    /// The keys and values of `dimensions`, sorted; empty for account level.
+    dimensions: &'static [(&'static str, &'static str)],
+}
+
+const TRIAL: &str = "local.trial_namespace";
+const LAMBDA: &str = r#""AWS/Lambda""#;
+const OPENLORE: &str = "local.indexer_namespace";
+const AT_LEAST: &str = r#""GreaterThanOrEqualToThreshold""#;
+const ABOVE: &str = r#""GreaterThanThreshold""#;
+const NOT_BREACHING: &str = r#""notBreaching""#;
+const SEARCH_ONLY: &[(&str, &str)] =
+    &[("FunctionName", "aws_lambda_function.search.function_name")];
+
+const ALARMS: [AlarmRow; 11] = [
+    AlarmRow {
+        id: "A1-T",
+        resource: "trial_total_outage",
+        name: "openlore-indexer-lambda-total-outage",
+        namespace: TRIAL,
+        metric: "IndexerPassOutage",
+        statistic: "Minimum",
+        period: "900",
+        of: "2",
+        operator: AT_LEAST,
+        threshold: "1",
+        missing: NOT_BREACHING,
+        dimensions: &[],
+    },
+    AlarmRow {
+        id: "A2-T",
+        resource: "trial_pass_failed",
+        name: "openlore-indexer-lambda-pass-failed",
+        namespace: TRIAL,
+        metric: "IndexerFailure",
+        statistic: "Sum",
+        period: "300",
+        of: "1",
+        operator: AT_LEAST,
+        threshold: "1",
+        missing: NOT_BREACHING,
+        dimensions: &[],
+    },
+    AlarmRow {
+        id: "A3-T",
+        resource: "trial_not_live",
+        name: "openlore-indexer-lambda-not-live",
+        namespace: TRIAL,
+        metric: "IndexerNotLive",
+        statistic: "Maximum",
+        period: "300",
+        of: "2",
+        operator: AT_LEAST,
+        threshold: "1",
+        missing: r#""breaching""#,
+        dimensions: &[],
+    },
+    AlarmRow {
+        id: "A4",
+        resource: "search_invocations",
+        name: "openlore-indexer-search-invocations",
+        namespace: LAMBDA,
+        metric: "Invocations",
+        statistic: "Sum",
+        period: "300",
+        of: "1",
+        operator: ABOVE,
+        threshold: "3000",
+        missing: NOT_BREACHING,
+        dimensions: SEARCH_ONLY,
+    },
+    AlarmRow {
+        id: "A5",
+        resource: "index_size",
+        name: "openlore-indexer-index-size",
+        namespace: OPENLORE,
+        metric: "IndexBytes",
+        statistic: "Maximum",
+        period: "900",
+        of: "1",
+        operator: ABOVE,
+        threshold: "104857600",
+        missing: r#""ignore""#,
+        dimensions: &[],
+    },
+    AlarmRow {
+        id: "A6",
+        resource: "lambda_errors",
+        name: "openlore-indexer-lambda-errors",
+        namespace: LAMBDA,
+        metric: "Errors",
+        statistic: "Sum",
+        period: "300",
+        of: "1",
+        operator: AT_LEAST,
+        threshold: "1",
+        missing: NOT_BREACHING,
+        dimensions: &[],
+    },
+    AlarmRow {
+        id: "A7",
+        resource: "lambda_throttles",
+        name: "openlore-indexer-lambda-throttles",
+        namespace: LAMBDA,
+        metric: "Throttles",
+        statistic: "Sum",
+        period: "300",
+        of: "1",
+        operator: AT_LEAST,
+        threshold: "10",
+        missing: NOT_BREACHING,
+        dimensions: &[],
+    },
+    AlarmRow {
+        id: "A8",
+        resource: "search_hourly",
+        name: "openlore-indexer-search-hourly",
+        namespace: LAMBDA,
+        metric: "Invocations",
+        statistic: "Sum",
+        period: "3600",
+        of: "1",
+        operator: ABOVE,
+        threshold: "1900",
+        missing: NOT_BREACHING,
+        dimensions: SEARCH_ONLY,
+    },
+    AlarmRow {
+        id: "A9",
+        resource: "edge_requests",
+        name: "openlore-indexer-edge-requests",
+        namespace: r#""AWS/CloudFront""#,
+        metric: "Requests",
+        statistic: "Sum",
+        period: "3600",
+        of: "1",
+        operator: ABOVE,
+        threshold: "13000",
+        missing: NOT_BREACHING,
+        dimensions: &[
+            ("DistributionId", "aws_cloudfront_distribution.index.id"),
+            ("Region", r#""Global""#),
+        ],
+    },
+    AlarmRow {
+        id: "A10",
+        resource: "freshness_failed",
+        name: "openlore-indexer-freshness-failed",
+        namespace: OPENLORE,
+        metric: "IndexerFreshnessFailed",
+        statistic: "Sum",
+        period: "900",
+        of: "1",
+        operator: AT_LEAST,
+        threshold: "3",
+        missing: NOT_BREACHING,
+        dimensions: &[],
+    },
+    AlarmRow {
+        id: "A11",
+        resource: "search_5xx",
+        name: "openlore-indexer-search-5xx",
+        namespace: LAMBDA,
+        metric: "Url5xxCount",
+        statistic: "Sum",
+        period: "300",
+        of: "2",
+        operator: AT_LEAST,
+        threshold: "1",
+        missing: NOT_BREACHING,
+        dimensions: &[
+            ("FunctionName", "aws_lambda_function.search.function_name"),
+            (
+                "Resource",
+                r#""${aws_lambda_function.search.function_name}:${aws_lambda_alias.search_live.name}""#,
+            ),
+        ],
+    },
+];
+
+/// How many `resource "<kind>"` the root declares.
+fn declared(tofu: &str, kind: &str) -> usize {
+    tofu.matches(&format!(r#"resource "{kind}""#)).count()
+}
+
+/// The `key = value` rows of the `dimensions` map, sorted; none without the map.
+fn dimensions(alarm: &str) -> BTreeMap<&str, &str> {
+    let Some(at) = alarm.find("dimensions") else {
+        return BTreeMap::new();
+    };
+    let open = at + alarm[at..].find('{').expect("a map");
+    braced(alarm, open)
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.trim(), value.trim()))
+        .collect()
+}
+
+#[test]
+fn each_alarm_is_the_row_devops_set() {
+    let tofu = tofu();
+    assert_eq!(declared(&tofu, "aws_cloudwatch_metric_alarm"), ALARMS.len());
+
+    for row in &ALARMS {
+        let alarm = resource(&tofu, "aws_cloudwatch_metric_alarm", row.resource);
+        assert_rows(
+            row.id,
+            alarm,
+            &[
+                ("alarm_name", &format!("\"{}\"", row.name)),
+                ("namespace", row.namespace),
+                ("metric_name", &format!("\"{}\"", row.metric)),
+                ("statistic", &format!("\"{}\"", row.statistic)),
+                ("period", row.period),
+                ("evaluation_periods", row.of),
+                ("datapoints_to_alarm", row.of),
+                ("comparison_operator", row.operator),
+                ("threshold", row.threshold),
+                ("treat_missing_data", row.missing),
+                ("actions_enabled", "var.lambda_alarms_enabled"),
+                ("alarm_actions", "local.alarm_topic"),
+                ("ok_actions", "local.alarm_topic"),
+            ],
+        );
+        let expected: BTreeMap<&str, &str> = row.dimensions.iter().copied().collect();
+        assert_eq!(dimensions(alarm), expected, "{}", row.id);
+        let in_the_trial_only = row.id.ends_with("-T");
+        assert_eq!(
+            setting(alarm, "count"),
+            in_the_trial_only.then_some("local.while_trial"),
+            "{}",
+            row.id
+        );
+    }
+    assert_rows(
+        "the shared values",
+        &tofu,
+        &[
+            ("indexer_namespace", r#""OpenLore/Indexer""#),
+            ("trial_namespace", r#""OpenLore/IndexerLambdaTrial""#),
+            ("alarm_topic", "[local.prod_outputs.backup_alarm_topic_arn]"),
+            ("while_trial", r#"var.phase == "trial" ? 1 : 0"#),
+        ],
+    );
+    let switch = block(&tofu, r#"variable "lambda_alarms_enabled""#);
+    assert_rows("the switch", switch, &[("default", "false")]);
+}
+
+/// Copies, down to the pattern, on the trial group: A2 is not filtered on
+/// `no_publish`, because a gate with no usable start means the store really is
+/// unusable. The trial's namespace keeps the host's metrics out of Lambda's.
+#[test]
+fn the_trial_filters_copy_the_prod_filters_onto_their_own_group_and_namespace() {
+    let tofu = tofu();
+    let prod = read("deploy/tofu/environments/prod/indexer.tf");
+    let rows = [
+        ("trial_pass_outage", "indexer_pass_outage", "1"),
+        ("trial_pass_not_outage", "indexer_pass_not_outage", "0"),
+        ("trial_failure", "indexer_failure", "1"),
+        ("trial_not_live", "indexer_not_live", "$.not_live"),
+    ];
+
+    for (trial, copied, value) in rows {
+        let filter = resource(&tofu, "aws_cloudwatch_log_metric_filter", trial);
+        let original = resource(&prod, "aws_cloudwatch_log_metric_filter", copied);
+        assert_eq!(
+            setting(filter, "pattern"),
+            setting(original, "pattern"),
+            "{trial}"
+        );
+        assert_rows(
+            trial,
+            filter,
+            &[
+                ("count", "local.while_trial"),
+                ("log_group_name", "aws_cloudwatch_log_group.lambda.name"),
+            ],
+        );
+        let metric = setting(only(original, "metric_transformation"), "name").expect("a metric");
+        assert_rows(
+            trial,
+            only(filter, "metric_transformation"),
+            &[
+                ("name", metric),
+                ("namespace", "local.trial_namespace"),
+                ("value", &format!("\"{value}\"")),
+            ],
+        );
+    }
+}
+
+/// The two filters that stay read whichever group the functions write to, and no
+/// filter has a default: one would publish for every other line and A1's Minimum
+/// could never reach 1.
+#[test]
+fn the_size_and_freshness_filters_follow_the_log_group() {
+    let tofu = tofu();
+    let rows = [
+        (
+            "index_bytes",
+            r#""{ $.event = \"indexer.lambda.published\" }""#,
+            "IndexBytes",
+            "$.index_bytes",
+        ),
+        (
+            "freshness_failed",
+            r#""{ $.event = \"indexer.lambda.freshness_check_failed\" || $.event = \"indexer.lambda.served_index_stale\" }""#,
+            "IndexerFreshnessFailed",
+            "1",
+        ),
+    ];
+
+    for (name, pattern, metric, value) in rows {
+        let filter = resource(&tofu, "aws_cloudwatch_log_metric_filter", name);
+        assert_rows(
+            name,
+            filter,
+            &[
+                ("log_group_name", "local.lambda_log_group"),
+                ("pattern", pattern),
+            ],
+        );
+        assert_rows(
+            name,
+            only(filter, "metric_transformation"),
+            &[
+                ("name", &format!("\"{metric}\"")),
+                ("namespace", "local.indexer_namespace"),
+                ("value", &format!("\"{value}\"")),
+            ],
+        );
+    }
+    assert_eq!(declared(&tofu, "aws_cloudwatch_log_metric_filter"), 6);
+    assert!(!tofu.contains("default_value"));
+}
+
+#[test]
+fn the_saved_queries_read_the_log_group_the_functions_write_to() {
+    let tofu = tofu();
+    let rows = [
+        ("cold_starts", "cold-starts", "initDurationMs"),
+        ("memory", "memory", "maxMemoryUsedMB"),
+        ("publishes", "publishes", "indexer.lambda.published"),
+        (
+            "freshness_failures",
+            "freshness-failures",
+            "indexer.lambda.served_index_stale",
+        ),
+        ("probe", "probe", r#""lambda-probe""#),
+    ];
+
+    assert_eq!(
+        declared(&tofu, "aws_cloudwatch_query_definition"),
+        rows.len()
+    );
+    for (name, query, needle) in rows {
+        let definition = resource(&tofu, "aws_cloudwatch_query_definition", name);
+        assert_rows(
+            name,
+            definition,
+            &[
+                ("name", &format!(r#""indexer-lambda/{query}""#)),
+                ("log_group_names", "[local.lambda_log_group]"),
+            ],
+        );
+        assert!(definition.contains(needle), "{name}: {needle}");
+    }
+}
+
+#[test]
+fn the_edge_is_the_distribution_devops_set() {
+    let tofu = tofu();
+    let distribution = resource(&tofu, "aws_cloudfront_distribution", "index");
+    assert_rows(
+        "the distribution",
+        distribution,
+        &[
+            ("aliases", "[local.index_domain]"),
+            ("price_class", r#""PriceClass_100""#),
+            ("http_version", r#""http2and3""#),
+            ("is_ipv6_enabled", "true"),
+        ],
+    );
+    assert!(!distribution.contains("logging_config"), "no client IPs");
+    assert!(!distribution.contains("web_acl_id"), "no WAF");
+    assert_rows(
+        "the certificate",
+        only(distribution, "viewer_certificate"),
+        &[
+            (
+                "acm_certificate_arn",
+                "aws_acm_certificate_validation.index.certificate_arn",
+            ),
+            ("ssl_support_method", r#""sni-only""#),
+            ("minimum_protocol_version", r#""TLSv1.2_2021""#),
+        ],
+    );
+    assert_rows(
+        "the origin",
+        only(only(distribution, "origin"), "custom_origin_config"),
+        &[
+            ("origin_protocol_policy", r#""https-only""#),
+            ("origin_ssl_protocols", r#"["TLSv1.2"]"#),
+            ("origin_read_timeout", "10"),
+        ],
+    );
+
+    let specific = nested(distribution, "ordered_cache_behavior");
+    assert_eq!(specific.len(), 2, "search and the health check");
+    assert_eq!(
+        setting(specific[0], "path_pattern"),
+        Some(r#""/xrpc/org.openlore.appview.searchClaims""#)
+    );
+    assert_eq!(setting(specific[1], "path_pattern"), Some(r#""/healthz""#));
+    let default = only(distribution, "default_cache_behavior");
+    for behavior in specific.into_iter().chain([default]) {
+        assert_rows(
+            "a behavior",
+            behavior,
+            &[
+                ("viewer_protocol_policy", r#""redirect-to-https""#),
+                (
+                    "cache_policy_id",
+                    "data.aws_cloudfront_cache_policy.caching_disabled.id",
+                ),
+                (
+                    "origin_request_policy_id",
+                    "data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id",
+                ),
+                (
+                    "response_headers_policy_id",
+                    "aws_cloudfront_response_headers_policy.strip.id",
+                ),
+            ],
+        );
+        assert_rows(
+            "a behavior",
+            only(behavior, "function_association"),
+            &[("function_arn", "aws_cloudfront_function.edge.arn")],
+        );
+    }
+    assert_rows(
+        "caching",
+        block(
+            &tofu,
+            r#"data "aws_cloudfront_cache_policy" "caching_disabled""#,
+        ),
+        &[("name", r#""Managed-CachingDisabled""#)],
+    );
+    assert_rows(
+        "the forwarded headers",
+        block(
+            &tofu,
+            r#"data "aws_cloudfront_origin_request_policy" "all_viewer_except_host""#,
+        ),
+        &[("name", r#""Managed-AllViewerExceptHostHeader""#)],
+    );
+    assert_rows(
+        "the domain",
+        &tofu,
+        &[("index_domain", r#""index.openlore.jeffbailey.us""#)],
+    );
+    assert_rows(
+        "the certificate",
+        resource(&tofu, "aws_acm_certificate", "index"),
+        &[
+            ("domain_name", "local.index_domain"),
+            ("validation_method", r#""DNS""#),
+        ],
+    );
+}
+
+/// The table's method and path pairs, and nothing else: OP-4 reads that the paths
+/// appear, this reads that nothing was added beside them.
+#[test]
+fn the_edge_function_passes_exactly_three_requests() {
+    let tofu = tofu();
+    assert_rows(
+        "the function",
+        resource(&tofu, "aws_cloudfront_function", "edge"),
+        &[
+            ("name", r#""openlore-index-edge""#),
+            ("runtime", r#""cloudfront-js-2.0""#),
+            ("publish", "true"),
+            ("code", r#"file("${path.module}/edge-function.js")"#),
+        ],
+    );
+    let source = read(&format!("{PROD_INDEXER_ROOT}/edge-function.js"));
+    let allowed: BTreeSet<&str> = source
+        .lines()
+        .filter_map(|line| line.trim().strip_suffix("': true,")?.strip_prefix('\''))
+        .collect();
+
+    assert_eq!(
+        allowed,
+        BTreeSet::from([
+            "GET /healthz",
+            "HEAD /healthz",
+            "POST /xrpc/org.openlore.appview.searchClaims",
+        ])
+    );
+    assert!(source.contains("statusCode: 404"), "not a 403");
+    assert!(
+        source.contains("=== true ? request : NOT_FOUND"),
+        "{source}"
+    );
+}
+
+#[test]
+fn the_edge_strips_every_header_that_names_the_origin() {
+    let tofu = tofu();
+    let policy = resource(&tofu, "aws_cloudfront_response_headers_policy", "strip");
+    assert_rows(
+        "the policy",
+        policy,
+        &[("name", r#""openlore-index-strip""#)],
+    );
+    let removed: BTreeSet<&str> = nested(only(policy, "remove_headers_config"), "items")
+        .into_iter()
+        .map(|item| setting(item, "header").expect("a header"))
+        .collect();
+
+    assert_eq!(
+        removed,
+        BTreeSet::from([
+            r#""x-amzn-remapped-connection""#,
+            r#""x-amzn-remapped-content-length""#,
+            r#""x-amzn-remapped-date""#,
+            r#""x-amzn-remapped-x-amzn-requestid""#,
+            r#""x-amzn-requestid""#,
+            r#""x-amzn-trace-id""#,
+        ])
+    );
+}
+
+/// One budget on the tag: an unfiltered one would fire on the PDS host's spend.
+/// 20 % of the $10 limit is the $2 target.
+#[test]
+fn one_budget_on_the_tag_warns_at_two_dollars_and_at_ten() {
+    let tofu = tofu();
+    assert_eq!(declared(&tofu, "aws_budgets_budget"), 1);
+    let budget = resource(&tofu, "aws_budgets_budget", "indexer");
+    assert_rows(
+        "the budget",
+        budget,
+        &[
+            ("name", r#""openlore-indexer-lambda""#),
+            ("budget_type", r#""COST""#),
+            ("time_unit", r#""MONTHLY""#),
+            ("limit_amount", r#""10""#),
+            ("limit_unit", r#""USD""#),
+        ],
+    );
+    assert_rows(
+        "the budget",
+        only(budget, "cost_filter"),
+        &[
+            ("name", r#""TagKeyValue""#),
+            ("values", r#"["user:Component$openlore-indexer-lambda"]"#),
+        ],
+    );
+    let notifications = nested(budget, "notification");
+    assert_eq!(notifications.len(), 2);
+    for (notification, percent) in notifications.into_iter().zip(["20", "100"]) {
+        assert_rows(
+            percent,
+            notification,
+            &[
+                ("notification_type", r#""ACTUAL""#),
+                ("comparison_operator", r#""GREATER_THAN""#),
+                ("threshold", percent),
+                ("threshold_type", r#""PERCENTAGE""#),
+                (
+                    "subscriber_email_addresses",
+                    "[data.aws_ssm_parameter.contact.value]",
+                ),
+            ],
+        );
+    }
+    assert_rows(
+        "the contact",
+        block(&tofu, r#"data "aws_ssm_parameter" "contact""#),
+        &[("name", r#""/openlore/prod/acme-contact-email""#)],
+    );
+    assert_rows(
+        "the tag",
+        resource(&tofu, "aws_ce_cost_allocation_tag", "component"),
+        &[
+            ("count", "var.cost_allocation_tag_active ? 1 : 0"),
+            ("tag_key", r#""Component""#),
+            ("status", r#""Active""#),
+        ],
+    );
+    assert_rows(
+        "the tag waits for billing data",
+        block(&tofu, r#"variable "cost_allocation_tag_active""#),
+        &[("default", "false")],
+    );
+}
+
+/// Both triggers name the root, the validate loop reaches it, and nothing in the
+/// workflow can hold a credential or change AWS.
+#[test]
+fn the_static_checks_cover_the_new_root_without_credentials() {
+    let workflow = read(".github/workflows/deploy-pds-check.yml");
+    let trigger = format!(r#"      - "{PROD_INDEXER_ROOT}/**""#);
+    assert_eq!(
+        workflow.lines().filter(|line| *line == trigger).count(),
+        2,
+        "pull_request and push"
+    );
+
+    let validated = workflow
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("for dir in "))
+        .expect("the validate loop");
+    assert!(
+        validated
+            .trim_end_matches("; do")
+            .split(' ')
+            .any(|dir| dir == PROD_INDEXER_ROOT),
+        "{validated}"
+    );
+    assert!(workflow.contains("tofu fmt -check -recursive deploy/tofu\n"));
+    assert!(workflow.contains(r#"tofu -chdir="$dir" init -backend=false"#));
+    for refused in [
+        "${{ secrets.",
+        "configure-aws-credentials",
+        "tofu plan",
+        "tofu apply",
+    ] {
+        assert!(!workflow.contains(refused), "{refused}");
+    }
+}

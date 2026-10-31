@@ -21,6 +21,18 @@ variable "schedules_enabled" {
   default     = false
 }
 
+variable "lambda_alarms_enabled" {
+  description = "Alarm actions, off until the bootstrap gate: the first exit-0 pass, a green probe and the test-fires."
+  type        = bool
+  default     = false
+}
+
+variable "cost_allocation_tag_active" {
+  description = "Set once the Component tag has appeared in billing data; AWS refuses the activation before that."
+  type        = bool
+  default     = false
+}
+
 variable "bootstrap_image_uri" {
   description = "Create-time only: the image deploy.sh lambda seed prints. deploy.sh owns the image afterwards."
   type        = string
