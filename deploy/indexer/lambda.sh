@@ -9,6 +9,12 @@
 #   lambda republish                 each function's live image again, through the same gates and
 #                                    flips, so a config change reaches `live` (U-STZ-2)
 #   lambda rollback                  every `live` back to its recorded prev=, `candidate` following
+#   lambda stop [--wait]             the kill switch: search concurrency 0, the distribution off
+#   lambda start                     search concurrency back to 3, the distribution on
+#   lambda pass-off | pass-on        the pass's concurrency 0 / 1, and nothing else
+#   lambda probe-off | probe-on      the probe's concurrency 0 / 1, and nothing else
+#   lambda reset-index               after the typed word `reset`: a delete marker on the index
+#   lambda restore-index <version-id>  that version copied back once, away from a quarter hour
 #
 # Each step below does I/O and stops the deploy with `die`. Decisions are in plain predicates
 # (a jq filter, an awk program), so a gate reads as what it requires.
@@ -27,6 +33,7 @@ RETAINED_VERSIONS=5
 RETAINED_IMAGES=10 # the ECR lifecycle's count of sha-* images
 GATE_ATTEMPTS=30   # 30 s apart, so up to 870 s: a pass's 840 s timeout plus 30 s
 MAX_EDGE_GAP_MS=30000
+SEARCH_CONCURRENCY=3 # fixed, not a saved value: tofu ignores it, so `lambda start` owns it
 
 COPIED_DIGEST=""      # step 6: set while this run's copy is not yet on every $LATEST
 LIVE_VERSIONS=()      # step 7, or a rollback: what each `live` alias holds now
@@ -330,10 +337,10 @@ flip_live() { # $1 = index into LAMBDA_FUNCTIONS, $2 = extra record
     "prev=${LIVE_VERSIONS[$1]} ${IMAGE_SHAS[$1]} ${IMAGE_DIGESTS[$1]} $(date -u +%FT%TZ)${2:+ $2}"
 }
 
-distribution_domain() {
+distribution_field() { # $1 = field -> that field of the distribution serving $INDEX_HOST
   aws cloudfront list-distributions --region "$REGION" |
-    jq -r --arg host "$INDEX_HOST" '.DistributionList.Items[]
-      | select((.Aliases.Items // []) | index($host)) | .DomainName'
+    jq -r --arg host "$INDEX_HOST" --arg field "$1" '.DistributionList.Items[]
+      | select((.Aliases.Items // []) | index($host)) | .[$field]'
 }
 
 # The public name once the edge serves it (a CloudFront `via` header marks it), else the
@@ -346,7 +353,7 @@ edge_url() {
     return 0
   fi
   local domain
-  domain=$(distribution_domain)
+  domain=$(distribution_field DomainName)
   [ -n "$domain" ] || die "refusing: no distribution serves $INDEX_HOST"
   echo "https://$domain"
 }
@@ -632,6 +639,108 @@ lambda_rollback() {
   echo "pre-publish index version: ${index_version:-none}"
 }
 
+set_concurrency() { # $1 = function, $2 = reserved concurrency
+  aws lambda put-function-concurrency --region "$REGION" --function-name "$1" \
+    --reserved-concurrent-executions "$2" >/dev/null
+  echo "$1: reserved concurrency $2"
+}
+
+# Under the If-Match of the config it read, so a concurrent change refuses this one. Returns
+# non-zero rather than dying: search has already changed, and the caller says so.
+set_edge_enabled() { # $1 = true or false
+  local id answer etag config
+  id=$(distribution_field Id) || return 1
+  [ -n "$id" ] || return 1
+  answer=$(aws cloudfront get-distribution-config --region "$REGION" --id "$id") || return 1
+  etag=$(jq -r .ETag <<<"$answer") || return 1
+  config=$(jq -c --argjson enabled "$1" '.DistributionConfig | .Enabled = $enabled' <<<"$answer") ||
+    return 1
+  aws cloudfront update-distribution --region "$REGION" --id "$id" --if-match "$etag" \
+    --distribution-config "$config" >/dev/null || return 1
+  echo "$id: enabled $1, reaching the edge in minutes; watch it with deploy.sh lambda status"
+}
+
+# D-STZ-18d. Search first, for it takes seconds and stops the spend. Pass and probe keep running,
+# so the index stays fresh, and A3 pages for as long as this lasts.
+lambda_stop() { # [--wait]
+  case "$*" in
+    "" | --wait) ;;
+    *) die "refusing: stop takes only --wait, got '$*'" ;;
+  esac
+  lambda_preflight
+  set_concurrency "$LAMBDA_SEARCH" 0
+  set_edge_enabled false ||
+    die "search is stopped, but the edge is not: could not disable the distribution; run stop again"
+  if [ "${1:-}" = --wait ]; then
+    aws cloudfront wait distribution-deployed --region "$REGION" --id "$(distribution_field Id)"
+    echo "the distribution is deployed"
+  fi
+}
+
+# Restores what stop changed and nothing else, and is safe to run twice.
+lambda_start() {
+  [ "$#" = 0 ] || die "refusing: start takes no arguments, got '$*'"
+  lambda_preflight
+  set_concurrency "$LAMBDA_SEARCH" "$SEARCH_CONCURRENCY"
+  set_edge_enabled true ||
+    die "search is back, but the edge is not: could not enable the distribution; run start again"
+}
+
+# One function, and only its concurrency: 0 for maintenance, 1 as tofu sets it, so an apply in
+# between turns the function back on. $3.. are the verb's arguments.
+lambda_switch() { # $1 = function, $2 = reserved concurrency
+  [ "$#" = 2 ] || die "refusing: this switch takes no arguments, got '${*:3}'"
+  lambda_preflight
+  set_concurrency "$1" "$2"
+}
+
+# D-STZ-27. Deleting with no version id leaves a delete marker, so every version stays and the
+# next pass rebuilds with If-None-Match: *. The empty IFS keeps a stray space in the answer: the
+# word must be exact. A closed stdin reads as no word.
+lambda_reset_index() {
+  [ "$#" = 0 ] || die "refusing: reset-index takes no arguments, got '$*'"
+  lambda_preflight
+  local word="" version
+  echo "This deletes s3://$INDEX_BUCKET/$INDEX_KEY. Type reset to go on:" >&2
+  IFS= read -r word || true
+  [ "$word" = reset ] || die "refusing: reset-index needs the exact word reset, got '$word'"
+  version=$(index_head | jq -r '.VersionId // "none"')
+  aws s3api delete-object --region "$REGION" --bucket "$INDEX_BUCKET" --key "$INDEX_KEY" >/dev/null
+  echo "index deleted; its version is now noncurrent: $version"
+  echo "search serves an empty index within 60 s; the next pass rebuilds it, and A10 can fire once"
+  echo "restore: deploy.sh lambda restore-index $version"
+}
+
+# Within a minute of a quarter hour, when the pass schedule (cron 0/15) has one due or running
+# (pure). Base 10, or 08 and 09 are bad octal.
+pass_due_or_running() { # $1 = minute of the hour, two digits
+  case $((10#$1 % 15)) in
+    14 | 0 | 1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# D-STZ-27. The copy is a new current version with the source's metadata, and the source stays.
+# The next pass ingests on top of it, so this is a starting point, not a pin.
+lambda_restore_index() { # $1 = version id
+  [[ "$#" = 1 && -n "$1" ]] || die "refusing: restore-index takes one version id, got '$*'"
+  lambda_preflight
+  local version=$1 head minute copied
+  head=$(aws s3api head-object --region "$REGION" --bucket "$INDEX_BUCKET" --key "$INDEX_KEY" \
+    --version-id "$version") || die "refusing: could not read version $version of the index"
+  jq -r --arg version "$version" \
+    '"version \($version): \(.ContentLength) bytes, published at \(.Metadata["published-at"] // "unknown")"' \
+    <<<"$head"
+  minute=$(date -u +%M)
+  if pass_due_or_running "$minute"; then
+    die "refusing: minute $minute is next to a quarter hour, when a pass is due or running"
+  fi
+  copied=$(aws s3api copy-object --region "$REGION" --bucket "$INDEX_BUCKET" --key "$INDEX_KEY" \
+    --copy-source "$INDEX_BUCKET/$INDEX_KEY?versionId=$version")
+  echo "index restored from $version as version $(jq -r .VersionId <<<"$copied")"
+  echo "until the next pass rewrites the record, A10 can fire once"
+}
+
 lambda_main() {
   local verb="${1:-}"
   shift || true
@@ -639,6 +748,16 @@ lambda_main() {
     deploy) lambda_deploy "$@" ;;
     republish) lambda_republish "$@" ;;
     rollback) lambda_rollback "$@" ;;
-    *) die "usage: deploy.sh lambda deploy <git-sha|digest> | republish | rollback" ;;
+    stop) lambda_stop "$@" ;;
+    start) lambda_start "$@" ;;
+    pass-off) lambda_switch "$LAMBDA_PASS" 0 "$@" ;;
+    pass-on) lambda_switch "$LAMBDA_PASS" 1 "$@" ;;
+    probe-off) lambda_switch "$LAMBDA_PROBE" 0 "$@" ;;
+    probe-on) lambda_switch "$LAMBDA_PROBE" 1 "$@" ;;
+    reset-index) lambda_reset_index "$@" ;;
+    restore-index) lambda_restore_index "$@" ;;
+    *) die "usage: deploy.sh lambda deploy <git-sha|digest> | republish | rollback | stop [--wait]" \
+      "| start | pass-off | pass-on | probe-off | probe-on | reset-index" \
+      "| restore-index <version-id>" ;;
   esac
 }

@@ -1064,7 +1064,6 @@ fn a_rollback_returns_every_function_to_the_version_it_replaced() {
 ///   Then search may run 3 instances and the public edge is switched back on
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda stop/start"]
 fn the_kill_switch_stops_search_and_the_edge_and_leaves_the_pass_and_the_probe_alone() {
     let run_verb = |verb: &str, enabled: bool| {
         let stubs = Stubs::new(Posture {
@@ -1288,7 +1287,6 @@ fn a_republish_carries_the_image_already_live() {
 ///   Then it becomes the current index, and the version it came from stays
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda restore-index"]
 fn restoring_the_index_copies_the_chosen_version_back_once() {
     let stubs = Stubs::new(Posture::default());
 
@@ -1315,7 +1313,6 @@ fn restoring_the_index_copies_the_chosen_version_back_once() {
 ///     | the probe on   | the probe | 1         |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda pass-off/on, probe-off/on"]
 fn maintenance_switches_change_one_function_and_nothing_else() {
     each_row(
         [
@@ -1517,7 +1514,6 @@ fn a_rollback_to_a_version_whose_image_was_removed_is_refused() {
 ///     | the word and a space       |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda reset-index"]
 fn resetting_the_index_needs_the_exact_typed_word() {
     each_row(["yes\n", "RESET\n", "\n", "reset \n"], |answer| {
         let declined = Stubs::new(Posture::default());
@@ -1724,7 +1720,6 @@ fn a_republish_that_does_not_hold_the_image_already_live_is_refused() {
 ///     | 31     |
 /// ```
 #[test]
-#[ignore = "RED: DELIVER writes deploy.sh lambda restore-index"]
 fn restoring_the_index_is_refused_when_a_pass_is_due_or_running() {
     each_row(["14", "00", "31"], |minute| {
         let stubs = Stubs::new(Posture {
