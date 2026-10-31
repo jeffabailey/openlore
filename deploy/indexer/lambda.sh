@@ -418,12 +418,24 @@ distribution_field() { # $1 = field -> that field of the distribution serving $I
   distribution_summary | jq -r --arg field "$1" '.[$field]'
 }
 
+search_status() { # $1 = base URL, $2 = request body file -> the status that search got
+  http_status -X POST -H 'content-type: application/json' --data-binary "@$2" "$1$SEARCH_PATH"
+}
+
+response_headers() { # $1 = URL, $2 = seconds allowed; nothing when nothing answers
+  curl -sS -o /dev/null -D - -m "$2" "$1" 2>/dev/null || true
+}
+
+served_by_cloudfront() { # stdin = response headers; a CloudFront `via` header marks the edge
+  grep -qiE '^via:.*cloudfront'
+}
+
 # The public name once the edge serves it (a CloudFront `via` header marks it), else the
 # distribution's own domain: during the trial the public name is still the host.
 edge_url() {
   local headers
-  headers=$(curl -sS -o /dev/null -D - -m 10 "https://$INDEX_HOST/healthz" 2>/dev/null || true)
-  if grep -qiE '^via:.*cloudfront' <<<"$headers"; then
+  headers=$(response_headers "https://$INDEX_HOST/healthz" 10)
+  if served_by_cloudfront <<<"$headers"; then
     echo "https://$INDEX_HOST"
     return 0
   fi
@@ -441,8 +453,7 @@ start_edge_poller() { # $1 = edge URL
   (
     while :; do
       health=$(http_status "$base/healthz")
-      search=$(http_status -X POST -H 'content-type: application/json' --data-binary "@$body" \
-        "$base$SEARCH_PATH")
+      search=$(search_status "$base" "$body")
       if [ "$health" = 200 ] && [ "$search" = 200 ]; then
         echo "$(now_ms) ok" >>"$EDGE_POLL_LOG"
       else
@@ -478,14 +489,13 @@ edge_checks() { # $1 = edge URL
   code=$(http_status "$base/healthz")
   [ "$code" = 200 ] || die "edge check: GET /healthz answered $code, not 200"
   search_body 120 >"$body"
-  code=$(http_status -X POST -H 'content-type: application/json' --data-binary "@$body" \
-    "$base$SEARCH_PATH")
+  code=$(search_status "$base" "$body")
   [ "$code" = 200 ] || die "edge check: a minimal POST search answered $code, not 200"
   code=$(http_status "$base/")
   [ "$code" = 404 ] || die "edge check: GET / answered $code, not 404"
   code=$(http_status -X POST "$base/healthz")
   [ "$code" = 404 ] || die "edge check: POST /healthz answered $code, not 404"
-  headers=$(curl -sS -o /dev/null -D - -m 10 "$base/healthz" 2>/dev/null || true)
+  headers=$(response_headers "$base/healthz" 10)
   if grep -qi '^x-amzn-' <<<"$headers"; then
     die "edge check: the response carries an x-amzn- header"
   fi
@@ -1479,11 +1489,10 @@ lambda_test_alarm() { # $@ = target
 # One sample of the public name: `<ms> ok|fail edge|host` (a CloudFront `via` header marks the edge).
 watch_sample() { # $1 = base URL, $2 = request body file
   local headers code search answerer=host outcome=fail
-  headers=$(curl -sS -o /dev/null -D - -m 5 "$1/healthz" 2>/dev/null || true)
+  headers=$(response_headers "$1/healthz" 5)
   code=$(awk 'NR == 1 { print $2 }' <<<"$headers")
-  search=$(http_status -X POST -H 'content-type: application/json' --data-binary "@$2" \
-    "$1$SEARCH_PATH")
-  if grep -qiE '^via:.*cloudfront' <<<"$headers"; then answerer=edge; fi
+  search=$(search_status "$1" "$2")
+  if served_by_cloudfront <<<"$headers"; then answerer=edge; fi
   if [ "$code" = 200 ] && [ "$search" = 200 ]; then outcome=ok; fi
   echo "$(now_ms) $outcome $answerer"
 }
