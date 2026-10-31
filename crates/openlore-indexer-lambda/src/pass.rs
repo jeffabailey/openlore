@@ -280,6 +280,8 @@ async fn run_write_probe(driven: &PassDriven) -> Result<(), InitRefused> {
 }
 
 /// One pass's work between two fingerprints, ending with the store closed. The
+/// work carries the purge `Wired` lends it (ADR-082), so a purge shows as a
+/// changed fingerprint and reaches the bucket only through this publish. The
 /// store is checked closed, because a close is what could still fail to fold the
 /// log into the file (P-7).
 fn work_on(wired: Wired, pass: PassLabel, started: Instant, index_path: &Path) -> WorkedPass {

@@ -344,7 +344,6 @@ fn a_warm_pass_rides_out_a_parameter_store_outage_on_its_last_good_list() {
 ///   And a search instance that starts afterwards finds Priya's claim and none of Dmitri's
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (the reused pass purges and the purge changes the fingerprint)"]
 fn an_author_removed_from_the_did_list_leaves_search_on_the_next_pass() {
     let world = LambdaWorld::listing(&[Author::Priya, Author::Dmitri]);
     world.publishes(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
@@ -390,7 +389,6 @@ fn an_author_removed_from_the_did_list_leaves_search_on_the_next_pass() {
 ///   And the index object is exactly the 14:00 one
 /// ```
 #[test]
-#[ignore = "RED scaffold: DELIVER (ADR-082's empty-list rule on the Lambda pass)"]
 fn an_emptied_did_list_purges_nobody_and_publishes_nothing() {
     let world = LambdaWorld::listing(&[Author::Priya]);
     given_the_first_pass_published_priyas_claim(&world);
