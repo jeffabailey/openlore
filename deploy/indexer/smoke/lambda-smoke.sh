@@ -356,7 +356,8 @@ publishes=$(shim_calls_since "$called" \
 [ "$(current_header x-amz-version-id)" != "$seed_version" ] || fail "no new version"
 [ -n "$(current_header x-amz-meta-published-at)" ] || fail "the new version has no published-at"
 pass_id=$(current_header x-amz-meta-pass-id)
-[ -n "$pass_id" ] && [ "$pass_id" != "$SEED_PASS_ID" ] || fail "the new version's pass-id is '$pass_id'"
+[ -n "$pass_id" ] || fail "the new version has no pass-id"
+[ "$pass_id" != "$SEED_PASS_ID" ] || fail "the new version kept the seed's pass-id '$pass_id'"
 [ "$(line_of indexer.lambda.published)" -lt "$(line_of indexer.ingest.pass_summary)" ] \
   || fail "indexer.lambda.published does not come before the pass_summary"
 
