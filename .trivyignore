@@ -1,0 +1,7 @@
+# Read by both image scans in ci.yml. Every entry expires; the scan blocks again after that date.
+
+# libssl3 3.0.20 in gcr.io/distroless/cc-debian12:nonroot (DTLS handshake disclosure). Fixed in
+# Debian 3.0.22, but distroless has not rebuilt: the pinned digest is still the latest. Neither
+# binary loads libssl (they need only libc, libgcc_s, libm, libstdc++; Cargo.lock has no
+# openssl crate). Bump the base digest and drop this line once distroless ships the fix.
+CVE-2026-84782 exp:2026-11-30
