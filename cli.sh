@@ -14,6 +14,9 @@
 #       --object org.openlore.philosophy.memory-safety --confidence 0.85
 #   ./cli.sh claim --help
 #   ./cli.sh graph query --subject https://www.rust-lang.org/
+#   ./cli.sh scrape github rust-lang/rust            # a repo: candidate claims, nothing signed
+#   ./cli.sh scrape github rust-lang/rust --sign 1,3 # sign candidates 1 and 3
+#   ./cli.sh scrape person octocat --repos 5         # a GitHub user and their top 5 repos
 #
 # Environment (optional — same defaults as run.sh, so they share one store):
 #   OPENLORE_HOME           Data/config root (default: ./.openlore-home).
