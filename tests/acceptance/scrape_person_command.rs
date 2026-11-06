@@ -207,9 +207,17 @@ fn scrape_person_with_github_token_set_prints_no_unauthenticated_budget_note() {
         "an authenticated scrape must not warn about the unauthenticated budget; got:\n{}",
         outcome.stdout
     );
+    // The exact authenticated budget: an unauthenticated request would be
+    // answered 59/60, so only the token's own budget proves auth happened.
     assert!(
-        outcome.stdout.contains("authenticated ("),
+        outcome
+            .stdout
+            .contains("authenticated (4982/5000 rate budget)"),
         "an authenticated scrape reports its rate budget; got:\n{}",
         outcome.stdout
+    );
+    assert!(
+        github.fake().saw_token(FIXTURE_VALID_PAT),
+        "the person path must send the PAT to GitHub"
     );
 }

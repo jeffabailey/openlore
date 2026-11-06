@@ -648,8 +648,8 @@ impl GithubAdapter {
 
     /// Record the auth/rate-budget posture (ADR-019 §5) a 200 reported in its
     /// `x-ratelimit-limit` / `x-ratelimit-remaining` headers. A response
-    /// without both headers leaves an earlier report in place. The token is
-    /// NEVER recorded — an AuthReport carries only the budget numbers.
+    /// without both headers leaves an earlier report in place: the last 200
+    /// carrying both headers wins. The token is NEVER recorded — an AuthReport carries only the budget numbers.
     fn observe_auth_report(&self, headers: &reqwest::header::HeaderMap) {
         let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
         if let (Some(limit), Some(remaining)) =
@@ -1229,50 +1229,128 @@ mod tests {
         assert_eq!(rows.len(), 1);
     }
 
-    /// A one-route HTTP stub on `127.0.0.1`: answers every request with
-    /// `body` plus `headers` (200, `Connection: close`) and counts the
-    /// requests it served. `headers` is zero or more `Name: value\r\n` lines.
-    fn serve_json_counting_requests(
-        body: &'static str,
+    /// One route the stub answers: request `path` gets `status`, `headers`
+    /// (zero or more `Name: value\r\n` lines) and `body`.
+    struct StubRoute {
+        path: &'static str,
+        status: u16,
         headers: &'static str,
-    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
-        use std::io::{BufRead, BufReader, Write};
+        body: &'static str,
+    }
+
+    /// One request the stub served, as it arrived on the wire.
+    #[derive(Debug, Clone, PartialEq)]
+    struct SeenRequest {
+        path: String,
+        authorization: Option<String>,
+    }
+
+    /// A path-routed HTTP stub on `127.0.0.1` (`Connection: close`). An
+    /// unrouted path is answered 404 with no headers. Records every request
+    /// it served — its path and `Authorization` header — in arrival order.
+    fn serve_routes(
+        routes: Vec<StubRoute>,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<SeenRequest>>>) {
+        use std::io::{BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind stub");
         let base = format!("http://{}", listener.local_addr().expect("stub addr"));
-        let served = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = served.clone();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
-                let mut line = String::new();
-                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
-                    line.clear();
-                }
-                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let request = read_request_head(&mut BufReader::new(
+                    stream.try_clone().expect("clone stream"),
+                ));
+                let route = routes.iter().find(|route| route.path == request.path);
+                let (status, headers, body) =
+                    route.map_or((404, "", ""), |r| (r.status, r.headers, r.body));
+                log.lock().expect("stub log").push(request);
                 let mut stream = stream;
                 let _ = write!(
                     stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{headers}\
+                    "HTTP/1.1 {status} STUB\r\nContent-Type: application/json\r\n{headers}\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
             }
         });
-        (base, served)
+        (base, seen)
+    }
+
+    /// Read a request line + headers, keeping the path and `Authorization`.
+    fn read_request_head(reader: &mut impl std::io::BufRead) -> SeenRequest {
+        let mut line = String::new();
+        let _ = reader.read_line(&mut line);
+        let path = line
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or_default()
+            .to_string();
+        let mut authorization = None;
+        line.clear();
+        while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+            if let Some((name, value)) = line.split_once(':') {
+                if name.trim().eq_ignore_ascii_case("authorization") {
+                    authorization = Some(value.trim().to_string());
+                }
+            }
+            line.clear();
+        }
+        SeenRequest {
+            path,
+            authorization,
+        }
     }
 
     /// GitHub's real `/users/{u}` body: no `auth` key; the budget lives in
     /// the rate-limit headers.
     const REAL_USER_BODY: &str = r#"{"login":"torvalds","id":1024025,"type":"User"}"#;
     const RATE_LIMIT_HEADERS: &str = "X-RateLimit-Limit: 5000\r\nX-RateLimit-Remaining: 4982\r\n";
+    const LATER_RATE_LIMIT_HEADERS: &str =
+        "X-RateLimit-Limit: 5000\r\nX-RateLimit-Remaining: 4000\r\n";
     const DUMMY_TOKEN: &str = "ghp_DUMMYtoken0000000000000000000000000000";
+    const AUTHENTICATED_4982: AuthReport = AuthReport::Authenticated {
+        remaining: 4982,
+        limit: 5000,
+    };
 
-    /// Resolve `torvalds` once against a stub and take the recorded report.
+    /// A `/users/{login}` route answering `status` with `headers`.
+    fn user_route(path: &'static str, status: u16, headers: &'static str) -> StubRoute {
+        StubRoute {
+            path,
+            status,
+            headers,
+            body: REAL_USER_BODY,
+        }
+    }
+
+    /// Resolve each of `targets` in order with ONE adapter against a stub
+    /// serving `routes`; return the recorded report and the requests seen.
+    async fn auth_report_after_resolving(
+        token: Option<&str>,
+        routes: Vec<StubRoute>,
+        targets: &[&str],
+    ) -> (AuthReport, Vec<SeenRequest>) {
+        let (base, seen) = serve_routes(routes);
+        let adapter = match token {
+            Some(token) => GithubAdapter::with_token(base, token),
+            None => GithubAdapter::for_api_base(base),
+        };
+        let _ = take_last_auth_report();
+        for target in targets {
+            let _ = adapter.resolve_target(target).await;
+        }
+        let requests = seen.lock().expect("stub log").clone();
+        (take_last_auth_report(), requests)
+    }
+
+    /// Resolve `torvalds` once against a stub and take the recorded report,
+    /// plus the `Authorization` header that request carried.
     async fn auth_report_after_resolving_a_user(
         token: Option<&str>,
         headers: &'static str,
-    ) -> AuthReport {
-        let (base, served) = serve_json_counting_requests(REAL_USER_BODY, headers);
+    ) -> (AuthReport, Option<String>) {
+        let (base, seen) = serve_routes(vec![user_route("/users/torvalds", 200, headers)]);
         let adapter = match token {
             Some(token) => GithubAdapter::with_token(base, token),
             None => GithubAdapter::for_api_base(base),
@@ -1287,29 +1365,88 @@ mod tests {
                 user: "torvalds".to_string()
             })
         );
-        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
-        take_last_auth_report()
+        let requests = seen.lock().expect("stub log").clone();
+        assert_eq!(requests.len(), 1, "one /users read: {requests:?}");
+        (take_last_auth_report(), requests[0].authorization.clone())
     }
 
     /// US-CPI-005 / D-6 single fetch: resolving a USER target is the ONE
     /// `/users/{user}` read, and its rate-limit headers carry the auth report:
     /// authenticated only with a token configured and both headers present.
+    /// The token reaches the wire as `Authorization: token <PAT>`, and only
+    /// when one is configured.
     #[tokio::test]
     async fn resolving_a_user_reports_auth_from_its_rate_limit_headers() {
+        let expected_header = format!("token {DUMMY_TOKEN}");
         assert_eq!(
             auth_report_after_resolving_a_user(Some(DUMMY_TOKEN), RATE_LIMIT_HEADERS).await,
-            AuthReport::Authenticated {
-                remaining: 4982,
-                limit: 5000
-            }
+            (AUTHENTICATED_4982, Some(expected_header.clone()))
         );
         assert_eq!(
             auth_report_after_resolving_a_user(None, RATE_LIMIT_HEADERS).await,
-            AuthReport::Anonymous
+            (AuthReport::Anonymous, None)
         );
         assert_eq!(
             auth_report_after_resolving_a_user(Some(DUMMY_TOKEN), "").await,
-            AuthReport::Anonymous
+            (AuthReport::Anonymous, Some(expected_header))
+        );
+    }
+
+    /// A later 200 WITHOUT both rate-limit headers leaves the earlier 200's
+    /// report in place (the both-headers guard).
+    #[tokio::test]
+    async fn a_later_200_without_rate_limit_headers_keeps_the_earlier_report() {
+        let (report, requests) = auth_report_after_resolving(
+            Some(DUMMY_TOKEN),
+            vec![
+                user_route("/users/torvalds", 200, RATE_LIMIT_HEADERS),
+                user_route("/users/linus", 200, "X-RateLimit-Limit: 5000\r\n"),
+            ],
+            &["torvalds", "linus"],
+        )
+        .await;
+
+        assert_eq!(requests.len(), 2, "two reads: {requests:?}");
+        assert_eq!(report, AUTHENTICATED_4982);
+    }
+
+    /// A non-200 response carrying the rate-limit headers records nothing:
+    /// only a 200 reports the auth posture.
+    #[tokio::test]
+    async fn a_non_200_carrying_rate_limit_headers_does_not_record() {
+        let (report, requests) = auth_report_after_resolving(
+            Some(DUMMY_TOKEN),
+            vec![
+                user_route("/users/torvalds", 200, RATE_LIMIT_HEADERS),
+                user_route("/users/ghost", 404, LATER_RATE_LIMIT_HEADERS),
+            ],
+            &["torvalds", "ghost"],
+        )
+        .await;
+
+        assert_eq!(requests.len(), 2, "two reads: {requests:?}");
+        assert_eq!(report, AUTHENTICATED_4982);
+    }
+
+    /// The last 200 carrying both headers wins.
+    #[tokio::test]
+    async fn the_last_200_carrying_both_headers_wins() {
+        let (report, _) = auth_report_after_resolving(
+            Some(DUMMY_TOKEN),
+            vec![
+                user_route("/users/torvalds", 200, RATE_LIMIT_HEADERS),
+                user_route("/users/linus", 200, LATER_RATE_LIMIT_HEADERS),
+            ],
+            &["torvalds", "linus"],
+        )
+        .await;
+
+        assert_eq!(
+            report,
+            AuthReport::Authenticated {
+                remaining: 4000,
+                limit: 5000
+            }
         );
     }
 
@@ -1317,21 +1454,46 @@ mod tests {
         use super::super::{client::auth_report_of, AuthReport};
         use proptest::prelude::*;
 
+        /// Header values as GitHub (or a proxy) might send them: digits,
+        /// whitespace-padded digits, or junk.
+        fn header_value() -> impl Strategy<Value = String> {
+            prop_oneof![
+                any::<u32>().prop_map(|n| n.to_string()),
+                (any::<u32>(), "[ \t]{1,3}", "[ \t]{0,3}")
+                    .prop_map(|(n, before, after)| format!("{before}{n}{after}")),
+                "[a-z ]{0,6}",
+            ]
+        }
+
+        /// Explicit examples the generator might miss: plain, padded,
+        /// non-numeric, negative, and one past `u32::MAX`.
+        #[test]
+        fn header_values_parse_as_trimmed_u32_budgets() {
+            let report = |value: &str| auth_report_of(true, Some(value), Some(value));
+            let budget = |n: u32| AuthReport::Authenticated {
+                remaining: n,
+                limit: n,
+            };
+            assert_eq!(report("4982"), budget(4982));
+            assert_eq!(report(" 5000 "), budget(5000));
+            assert_eq!(report("abc"), AuthReport::Anonymous);
+            assert_eq!(report("-1"), AuthReport::Anonymous);
+            assert_eq!(report("4294967296"), AuthReport::Anonymous);
+            assert_eq!(
+                auth_report_of(true, Some(" 5000 "), Some("\t4982")),
+                super::AUTHENTICATED_4982
+            );
+        }
+
         proptest! {
             /// Universe: every (token configured, limit, remaining) triple,
-            /// header values valid or not. Authenticated iff a token was
-            /// configured and both values parse, and then with those numbers.
+            /// header values valid, padded, or junk. Authenticated iff a token
+            /// was configured and both values parse, and then with those numbers.
             #[test]
             fn authenticated_exactly_when_a_token_was_configured_and_both_headers_parse(
                 token_configured in any::<bool>(),
-                limit in proptest::option::of(prop_oneof![
-                    any::<u32>().prop_map(|n| n.to_string()),
-                    "[a-z ]{0,6}",
-                ]),
-                remaining in proptest::option::of(prop_oneof![
-                    any::<u32>().prop_map(|n| n.to_string()),
-                    "[a-z ]{0,6}",
-                ]),
+                limit in proptest::option::of(header_value()),
+                remaining in proptest::option::of(header_value()),
             ) {
                 let parsed = (
                     limit.as_deref().and_then(|l| l.trim().parse::<u32>().ok()),
