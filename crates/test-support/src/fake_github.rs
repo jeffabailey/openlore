@@ -1185,10 +1185,50 @@ impl FakeGithub {
 type HttpRequest = hyper::Request<hyper::body::Incoming>;
 type HttpResponse = hyper::Response<http_body_util::Full<bytes::Bytes>>;
 
-/// Read-only route handler over the public GitHub REST subset. Records the
-/// request path + any bearer token, then dispatches to the posture-pinned
-/// resolution / harvest responses.
+/// Read-only route handler over the public GitHub REST subset. Serves the
+/// route's response with GitHub's rate-limit headers on every 200.
 async fn github_http_route(
+    fake: FakeGithub,
+    req: HttpRequest,
+) -> Result<HttpResponse, std::convert::Infallible> {
+    let carried_token = extract_bearer_token(&req).is_some();
+    let posture = fake.state.auth.clone();
+    let response = serve_github_route(fake, req).await?;
+    Ok(with_rate_limit_headers(response, &posture, carried_token))
+}
+
+/// Add `X-RateLimit-Limit` / `X-RateLimit-Remaining` to a 200, as GitHub
+/// does: the authenticated budget when the posture is authenticated AND the
+/// request carried a token; otherwise the anonymous budget (limit 60).
+fn with_rate_limit_headers(
+    mut response: HttpResponse,
+    posture: &FakeAuthMode,
+    carried_token: bool,
+) -> HttpResponse {
+    if response.status() != hyper::StatusCode::OK {
+        return response;
+    }
+    let (limit, remaining) = match posture {
+        FakeAuthMode::Authenticated { remaining, limit } if carried_token => (*limit, *remaining),
+        _ => (ANONYMOUS_RATE_LIMIT, ANONYMOUS_RATE_REMAINING),
+    };
+    let headers = response.headers_mut();
+    headers.insert("x-ratelimit-limit", hyper::header::HeaderValue::from(limit));
+    headers.insert(
+        "x-ratelimit-remaining",
+        hyper::header::HeaderValue::from(remaining),
+    );
+    response
+}
+
+/// GitHub's unauthenticated hourly limit, and the remaining budget the
+/// anonymous posture reports.
+const ANONYMOUS_RATE_LIMIT: u32 = 60;
+const ANONYMOUS_RATE_REMAINING: u32 = 59;
+
+/// Records the request path + any bearer token, then dispatches to the
+/// posture-pinned resolution / harvest responses.
+async fn serve_github_route(
     fake: FakeGithub,
     req: HttpRequest,
 ) -> Result<HttpResponse, std::convert::Infallible> {
@@ -1488,22 +1528,12 @@ fn resolve_or_harvest_response(
         None => serde_json::Value::Null,
     };
 
-    let auth_json = match &fake.state.auth {
-        FakeAuthMode::Anonymous => serde_json::json!({ "authenticated": false }),
-        FakeAuthMode::Authenticated { remaining, limit } => serde_json::json!({
-            "authenticated": true,
-            "rate_remaining": remaining,
-            "rate_limit": limit,
-        }),
-    };
-
     json_response(
         200,
         serde_json::json!({
             "target": target_json,
             "language": language_json,
             "html_url": html_url,
-            "auth": auth_json,
         }),
     )
 }
@@ -1652,10 +1682,22 @@ impl<T> Drop for AbortOnDrop<T> {
 mod tests {
     use super::*;
 
+    /// The `(x-ratelimit-limit, x-ratelimit-remaining)` values a response sent.
+    type RateLimitHeaders = (Option<String>, Option<String>);
+
     async fn get_with_optional_token(
         url: &str,
         token: Option<&str>,
     ) -> Result<(u16, serde_json::Value), ()> {
+        get_with_rate_limit_headers(url, token)
+            .await
+            .map(|(status, json, _)| (status, json))
+    }
+
+    async fn get_with_rate_limit_headers(
+        url: &str,
+        token: Option<&str>,
+    ) -> Result<(u16, serde_json::Value, RateLimitHeaders), ()> {
         use http_body_util::BodyExt;
         use hyper::Request;
         use hyper_util::rt::TokioIo;
@@ -1685,10 +1727,17 @@ mod tests {
             .map_err(|_| ())?;
         let resp = sender.send_request(req).await.map_err(|_| ())?;
         let status = resp.status().as_u16();
+        let header = |name: &str| {
+            resp.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        };
+        let rate_limit = (header("x-ratelimit-limit"), header("x-ratelimit-remaining"));
         let body = resp.into_body().collect().await.map_err(|_| ())?.to_bytes();
         let json: serde_json::Value =
             serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
-        Ok((status, json))
+        Ok((status, json, rate_limit))
     }
 
     async fn get_json(url: &str) -> (u16, serde_json::Value) {
@@ -1715,7 +1764,28 @@ mod tests {
             body.get("signals").is_none(),
             "the body carries NO synthetic signals[] — a scrape drives REAL detection"
         );
-        assert_eq!(body["auth"]["authenticated"], false);
+        assert!(
+            body.get("auth").is_none(),
+            "GitHub sends no `auth` body key"
+        );
+    }
+
+    /// The anonymous posture sends GitHub's unauthenticated budget (limit 60)
+    /// in the rate-limit headers on a 200.
+    #[tokio::test]
+    async fn anonymous_posture_sends_the_unauthenticated_rate_limit_headers() {
+        let fake = FakeGithub::for_public_repo("rust-lang/cargo");
+        let handle = fake.serve_http().await;
+
+        let (status, _, rate_limit) = get_with_rate_limit_headers(
+            &format!("{}/repos/rust-lang/cargo", handle.base_url()),
+            None,
+        )
+        .await
+        .expect("GET must complete");
+
+        assert_eq!(status, 200);
+        assert_eq!(rate_limit, (Some("60".to_string()), Some("59".to_string())));
     }
 
     /// RGSD-1: `for_public_repo_with_language` serves a REALISTIC `/repos`
@@ -1950,7 +2020,7 @@ mod tests {
         let fake = FakeGithub::for_public_user("torvalds").authenticated(4982, 5000);
         let handle = fake.serve_http().await;
 
-        let (status, body) = get_with_optional_token(
+        let (status, body, rate_limit) = get_with_rate_limit_headers(
             &format!("{}/users/torvalds", handle.base_url()),
             Some(FIXTURE_VALID_PAT),
         )
@@ -1958,9 +2028,14 @@ mod tests {
         .expect("GET must complete");
 
         assert_eq!(status, 200);
-        assert_eq!(body["auth"]["authenticated"], true);
-        assert_eq!(body["auth"]["rate_remaining"], 4982);
-        assert_eq!(body["auth"]["rate_limit"], 5000);
+        assert!(
+            body.get("auth").is_none(),
+            "GitHub sends no `auth` body key"
+        );
+        assert_eq!(
+            rate_limit,
+            (Some("5000".to_string()), Some("4982".to_string()))
+        );
         assert!(fake.saw_token(FIXTURE_VALID_PAT));
         assert_eq!(
             fake.auth_mode(),

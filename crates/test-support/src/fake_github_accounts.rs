@@ -1375,7 +1375,6 @@ fn repo_endpoint(a: &GithubAccount, r: &GithubRepo, rest: &[&str]) -> (serde_jso
                 "target": {"kind": "repo", "owner": a.login, "repo": r.name, "full_name": format!("{}/{}", a.login, r.name), "private": false},
                 "language": r.language,
                 "html_url": format!("https://github.com/{}/{}", a.login, r.name),
-                "auth": {"authenticated": true, "rate_remaining": 4990, "rate_limit": 5000},
             }),
             200,
         ),

@@ -80,7 +80,7 @@ pub use client::AuthReport;
 // on different threads can never alias one slot. Single-shot take semantics and
 // observable behavior are byte-identical to the global version.
 //
-// This is the effect boundary: the parse (`client::parse_auth_report`) and the
+// This is the effect boundary: the header read (`client::auth_report_of`) and the
 // render (cli `render_auth_report`) are PURE and unit-tested; only the
 // record/read of this slot is the side effect, and it lives in the effect shell
 // where credentials and I/O already live (pure-core/effect-shell; ADR-007 /
@@ -90,8 +90,8 @@ thread_local! {
 }
 
 /// Record the auth/rate-budget posture observed on a harvest response into the
-/// thread-local side channel (see [`LAST_AUTH_REPORT`]). Called from the
-/// harvest paths once the response body is in hand. The token bytes are NEVER
+/// thread-local side channel (see [`LAST_AUTH_REPORT`]). Called from
+/// `send_get_once` on each 200 that carries the rate-limit headers. The token bytes are NEVER
 /// stored here — an [`AuthReport`] carries only the budget numbers
 /// (no-token-leak; US-SCR-004).
 fn record_auth_report(report: AuthReport) {
@@ -279,11 +279,10 @@ impl GithubPort for GithubAdapter {
             }
             ResolvedTarget::User { user } => {
                 // The ONE `/users/{user}` read of a person scrape (US-CPI-005 /
-                // D-6): the auth/rate posture is taken from THIS response, so
-                // the caller needs no second profile read to report it.
+                // D-6): the auth/rate posture is taken from THIS response's
+                // rate-limit headers, so no second profile read is needed.
                 let path = format!("/users/{user}");
                 let body = self.get_public(&path, target).await?;
-                record_auth_report(client::parse_auth_report(&body));
                 self.remember_resolved_account(
                     client::parse_account_profile(&body)
                         .ok()
@@ -307,10 +306,6 @@ impl GithubPort for GithubAdapter {
             Some(body) => body,
             None => self.get_public(&path, &target).await?,
         };
-        // Surface the observed auth/rate-budget posture (ADR-019 §5) through
-        // the effect-shell side channel so the verb can report it. The token
-        // is NEVER recorded — an AuthReport carries only the budget numbers.
-        record_auth_report(client::parse_auth_report(&body));
         // The returned signals are ENTIRELY the product of REAL detection over
         // the live repo facts (`detect_signals`) — the synthetic `signals[]`
         // bridge is retired (RGSD-6). Each fact the five detectors read is
@@ -398,11 +393,9 @@ impl GithubPort for GithubAdapter {
         )
     }
 
-    /// `GET {base}/users/{user}` — the person's public profile. Records the
-    /// auth/rate posture like the other reads (never the token).
+    /// `GET {base}/users/{user}` — the person's public profile.
     async fn read_person(&self, user: &str) -> Result<PersonProfile, GithubError> {
         let body = self.get_public(&format!("/users/{user}"), user).await?;
-        record_auth_report(client::parse_auth_report(&body));
         Ok(client::parse_person_profile(&body, user))
     }
 
@@ -546,14 +539,13 @@ impl GithubAdapter {
     }
 
     /// One public GET of an account profile, strictly reshaped
-    /// ([`client::parse_account_profile`]); records the auth posture.
+    /// ([`client::parse_account_profile`]).
     async fn read_account_at(
         &self,
         path: &str,
         target: &str,
     ) -> Result<GithubAccountProfile, GithubError> {
         let body = self.get_public(path, target).await?;
-        record_auth_report(client::parse_auth_report(&body));
         client::parse_account_profile(&body).map_err(GithubError::ApiShape)
     }
 
@@ -648,7 +640,27 @@ impl GithubAdapter {
             .await
             .map_err(|e| GithubError::Network(format!("request to GitHub failed: {e}")))?;
         self.observe_rate_budget(response.headers());
+        if response.status() == reqwest::StatusCode::OK {
+            self.observe_auth_report(response.headers());
+        }
         Ok(response)
+    }
+
+    /// Record the auth/rate-budget posture (ADR-019 §5) a 200 reported in its
+    /// `x-ratelimit-limit` / `x-ratelimit-remaining` headers. A response
+    /// without both headers leaves an earlier report in place. The token is
+    /// NEVER recorded — an AuthReport carries only the budget numbers.
+    fn observe_auth_report(&self, headers: &reqwest::header::HeaderMap) {
+        let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+        if let (Some(limit), Some(remaining)) =
+            (header("x-ratelimit-limit"), header("x-ratelimit-remaining"))
+        {
+            record_auth_report(client::auth_report_of(
+                self.auth.is_authenticated(),
+                Some(limit),
+                Some(remaining),
+            ));
+        }
     }
 
     /// Remember the rate budget a response reported, when it reported one.
@@ -1218,9 +1230,11 @@ mod tests {
     }
 
     /// A one-route HTTP stub on `127.0.0.1`: answers every request with
-    /// `body` (200, `Connection: close`) and counts the requests it served.
+    /// `body` plus `headers` (200, `Connection: close`) and counts the
+    /// requests it served. `headers` is zero or more `Name: value\r\n` lines.
     fn serve_json_counting_requests(
         body: &'static str,
+        headers: &'static str,
     ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind stub");
@@ -1238,7 +1252,7 @@ mod tests {
                 let mut stream = stream;
                 let _ = write!(
                     stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{headers}\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
@@ -1247,15 +1261,22 @@ mod tests {
         (base, served)
     }
 
-    /// US-CPI-005 / D-6 single fetch: resolving a USER target is the ONE
-    /// `/users/{user}` read — it resolves the kind AND records the auth/rate
-    /// posture that response carried, so no second profile read is needed.
-    #[tokio::test]
-    async fn resolving_a_user_reports_auth_from_its_single_response() {
-        let (base, served) = serve_json_counting_requests(
-            r#"{"login":"torvalds","auth":{"authenticated":true,"rate_remaining":4982,"rate_limit":5000}}"#,
-        );
-        let adapter = GithubAdapter::for_api_base(base);
+    /// GitHub's real `/users/{u}` body: no `auth` key; the budget lives in
+    /// the rate-limit headers.
+    const REAL_USER_BODY: &str = r#"{"login":"torvalds","id":1024025,"type":"User"}"#;
+    const RATE_LIMIT_HEADERS: &str = "X-RateLimit-Limit: 5000\r\nX-RateLimit-Remaining: 4982\r\n";
+    const DUMMY_TOKEN: &str = "ghp_DUMMYtoken0000000000000000000000000000";
+
+    /// Resolve `torvalds` once against a stub and take the recorded report.
+    async fn auth_report_after_resolving_a_user(
+        token: Option<&str>,
+        headers: &'static str,
+    ) -> AuthReport {
+        let (base, served) = serve_json_counting_requests(REAL_USER_BODY, headers);
+        let adapter = match token {
+            Some(token) => GithubAdapter::with_token(base, token),
+            None => GithubAdapter::for_api_base(base),
+        };
         let _ = take_last_auth_report();
 
         let kind = adapter.resolve_target("torvalds").await;
@@ -1266,14 +1287,68 @@ mod tests {
                 user: "torvalds".to_string()
             })
         );
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
+        take_last_auth_report()
+    }
+
+    /// US-CPI-005 / D-6 single fetch: resolving a USER target is the ONE
+    /// `/users/{user}` read, and its rate-limit headers carry the auth report:
+    /// authenticated only with a token configured and both headers present.
+    #[tokio::test]
+    async fn resolving_a_user_reports_auth_from_its_rate_limit_headers() {
         assert_eq!(
-            take_last_auth_report(),
+            auth_report_after_resolving_a_user(Some(DUMMY_TOKEN), RATE_LIMIT_HEADERS).await,
             AuthReport::Authenticated {
                 remaining: 4982,
                 limit: 5000
             }
         );
-        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            auth_report_after_resolving_a_user(None, RATE_LIMIT_HEADERS).await,
+            AuthReport::Anonymous
+        );
+        assert_eq!(
+            auth_report_after_resolving_a_user(Some(DUMMY_TOKEN), "").await,
+            AuthReport::Anonymous
+        );
+    }
+
+    mod auth_report {
+        use super::super::{client::auth_report_of, AuthReport};
+        use proptest::prelude::*;
+
+        proptest! {
+            /// Universe: every (token configured, limit, remaining) triple,
+            /// header values valid or not. Authenticated iff a token was
+            /// configured and both values parse, and then with those numbers.
+            #[test]
+            fn authenticated_exactly_when_a_token_was_configured_and_both_headers_parse(
+                token_configured in any::<bool>(),
+                limit in proptest::option::of(prop_oneof![
+                    any::<u32>().prop_map(|n| n.to_string()),
+                    "[a-z ]{0,6}",
+                ]),
+                remaining in proptest::option::of(prop_oneof![
+                    any::<u32>().prop_map(|n| n.to_string()),
+                    "[a-z ]{0,6}",
+                ]),
+            ) {
+                let parsed = (
+                    limit.as_deref().and_then(|l| l.trim().parse::<u32>().ok()),
+                    remaining.as_deref().and_then(|r| r.trim().parse::<u32>().ok()),
+                );
+                let expected = match (token_configured, parsed) {
+                    (true, (Some(limit), Some(remaining))) => {
+                        AuthReport::Authenticated { remaining, limit }
+                    }
+                    _ => AuthReport::Anonymous,
+                };
+                prop_assert_eq!(
+                    auth_report_of(token_configured, limit.as_deref(), remaining.as_deref()),
+                    expected
+                );
+            }
+        }
     }
 
     mod rate_budget {

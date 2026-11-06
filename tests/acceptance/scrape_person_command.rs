@@ -179,3 +179,37 @@ fn scrape_person_warns_about_the_unauthenticated_rate_limit() {
         outcome.stdout
     );
 }
+
+/// SP-4b: with GITHUB_TOKEN set, GitHub reports the authenticated budget in
+/// its rate-limit headers, so the unauthenticated-budget note stays quiet and
+/// the run reports it is authenticated.
+///
+/// @driving_port @real-io @us-scr-004 @regression
+#[test]
+fn scrape_person_with_github_token_set_prints_no_unauthenticated_budget_note() {
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(
+        FakeGithub::for_public_person(jeff())
+            .with_contributors(vec![FakeContributor::human("jeffabailey", 1, 500)])
+            .authenticated(4982, 5000),
+    );
+
+    let outcome = run_openlore_scrape_with_token(
+        &env,
+        &["scrape", "person", "jeffabailey", "--repos", "3"],
+        github.base_url(),
+        FIXTURE_VALID_PAT,
+    );
+
+    assert_eq!(outcome.status, 0, "stderr:\n{}", outcome.stderr);
+    assert!(
+        !outcome.stdout.contains("Note: without GITHUB_TOKEN"),
+        "an authenticated scrape must not warn about the unauthenticated budget; got:\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("authenticated ("),
+        "an authenticated scrape reports its rate budget; got:\n{}",
+        outcome.stdout
+    );
+}

@@ -91,39 +91,30 @@ pub enum AuthReport {
     Authenticated { remaining: u32, limit: u32 },
 }
 
-/// Parse a harvest response body's `auth` object into an [`AuthReport`]
-/// (ADR-019 §5 rate-budget reporting). PURE — a value-in / value-out reshape
-/// of the already-fetched JSON (the network I/O lives in `lib.rs`), so the
-/// rate-budget parse is testable without any network.
+/// Work out the [`AuthReport`] one response carries (ADR-019 §5) from whether
+/// a token was configured and the `X-RateLimit-Limit` /
+/// `X-RateLimit-Remaining` header values GitHub sends. PURE — the header read
+/// lives in `lib.rs`'s effect shell.
 ///
-/// An `auth.authenticated == true` body MUST also carry `rate_remaining` +
-/// `rate_limit` to be reportable; any other shape (no `auth`, `authenticated:
-/// false`, or an authenticated body missing the budget fields) degrades to
-/// [`AuthReport::Anonymous`] — the harvest ran on the anon budget, so there is
-/// no budget to report. The parse reads ONLY the budget numbers; it never
-/// touches a token (no-token-leak; US-SCR-004).
-pub fn parse_auth_report(body: &serde_json::Value) -> AuthReport {
-    let Some(auth) = body.get("auth") else {
-        return AuthReport::Anonymous;
+/// `Authenticated { remaining, limit }` only when a token was configured AND
+/// both header values parse; otherwise [`AuthReport::Anonymous`]. A rejected
+/// token never reaches here: GitHub answers 401, which is `TokenRejected`.
+/// Reads only the budget numbers, never a token (no-token-leak; US-SCR-004).
+pub fn auth_report_of(
+    token_configured: bool,
+    limit: Option<&str>,
+    remaining: Option<&str>,
+) -> AuthReport {
+    let budget = || {
+        Some(AuthReport::Authenticated {
+            remaining: remaining?.trim().parse().ok()?,
+            limit: limit?.trim().parse().ok()?,
+        })
     };
-    let authenticated = auth
-        .get("authenticated")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    if !authenticated {
-        return AuthReport::Anonymous;
-    }
-    match (
-        auth.get("rate_remaining")
-            .and_then(serde_json::Value::as_u64),
-        auth.get("rate_limit").and_then(serde_json::Value::as_u64),
-    ) {
-        (Some(remaining), Some(limit)) => AuthReport::Authenticated {
-            remaining: remaining as u32,
-            limit: limit as u32,
-        },
-        _ => AuthReport::Anonymous,
-    }
+    token_configured
+        .then(budget)
+        .flatten()
+        .unwrap_or(AuthReport::Anonymous)
 }
 
 /// Read the optional PAT from `GITHUB_TOKEN` (WD-63 env-only). An unset or
@@ -160,7 +151,7 @@ pub fn strip_trailing_slashes(mut s: String) -> String {
 /// [`RepoFacts`](scraper_domain::RepoFacts) the signal detector reads (RGSD-1,
 /// design §2). PURE: a value-in / value-out reshape of the already-fetched JSON
 /// (the network I/O lives in `lib.rs`), mirroring [`parse_tag_names`] /
-/// [`parse_auth_report`].
+/// [`auth_report_of`].
 ///
 /// Reads the top-level `language` (a string → `Some`; `null`/absent → `None`)
 /// and `html_url` (the repo's public URL). When `html_url` is absent the URL is
@@ -230,7 +221,7 @@ pub fn readme_html_url(body: &serde_json::Value, owner: &str, repo: &str) -> Str
 /// Parse a `GET /repos/{owner}/{repo}/tags` 200 body — a JSON array of
 /// `{"name": <tag>}` objects — into the list of tag names (RGSD-3). PURE — a
 /// value-in / value-out reshape of the already-fetched JSON (the network I/O
-/// lives in `lib.rs`), mirroring [`parse_repo_facts`] / [`parse_auth_report`].
+/// lives in `lib.rs`), mirroring [`parse_repo_facts`] / [`auth_report_of`].
 ///
 /// Reads each array entry's `name` string; entries without a string `name` are
 /// dropped (a malformed entry simply yields no tag). A body that is not an
@@ -615,64 +606,6 @@ fn rel_next(link_header: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// `parse_auth_report` reads the harvest response body's `auth` object
-    /// into a typed [`AuthReport`]. PURE — a value-in / value-out reshape of
-    /// the already-fetched JSON, so the rate-budget parse is testable without
-    /// any network (ADR-019 §5). Table-driven over the equivalence classes the
-    /// parser must distinguish:
-    ///
-    /// - an `authenticated: true` body carries the `rate_remaining` /
-    ///   `rate_limit` budget => `Authenticated { remaining, limit }`;
-    /// - `authenticated: false`, a body with NO `auth` object, and an
-    ///   authenticated body that OMITS the budget fields ALL degrade to
-    ///   `Anonymous` (the harvest ran on the anon budget; there is no budget
-    ///   to report).
-    ///
-    /// The budget cases span the boundary values (0/0, partial, full 4982/5000,
-    /// saturated u32) so the parse is exercised across its numeric domain in
-    /// one example-driven sweep (no new PBT dependency on the effect-shell
-    /// crate). Each case ALSO proves the parsed report never carries a token
-    /// value (no-token-leak; US-SCR-004) — `AuthReport` has no token field.
-    #[test]
-    fn parse_auth_report_classifies_authenticated_budget_vs_anonymous() {
-        // Authenticated bodies round-trip their budget across the numeric span.
-        for (remaining, limit) in [(0u32, 0u32), (1, 60), (4982, 5000), (u32::MAX, u32::MAX)] {
-            let body = serde_json::json!({
-                "target": { "kind": "user", "login": "torvalds" },
-                "signals": [],
-                "auth": {
-                    "authenticated": true,
-                    "rate_remaining": remaining,
-                    "rate_limit": limit,
-                },
-            });
-            let report = parse_auth_report(&body);
-            assert_eq!(
-                report,
-                AuthReport::Authenticated { remaining, limit },
-                "an authenticated body must round-trip its {remaining}/{limit} budget"
-            );
-            assert!(
-                !format!("{report:?}").contains("ghp_"),
-                "the parsed report must never carry a token value (no-token-leak)"
-            );
-        }
-
-        // Anonymous / missing-auth / authenticated-without-budget => Anonymous.
-        let anonymous_shapes = [
-            serde_json::json!({ "auth": { "authenticated": false } }),
-            serde_json::json!({ "target": { "kind": "repo" }, "signals": [] }),
-            serde_json::json!({ "auth": { "authenticated": true } }),
-        ];
-        for body in anonymous_shapes {
-            assert_eq!(
-                parse_auth_report(&body),
-                AuthReport::Anonymous,
-                "an unauthenticated / missing-auth / budget-less body must be Anonymous; got body {body}"
-            );
-        }
-    }
 
     /// `resolve_api_base` strips trailing slashes off the configured seam so
     /// downstream path joins do not double-slash. Pinned with an explicit
