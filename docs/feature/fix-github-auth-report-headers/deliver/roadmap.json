@@ -1,0 +1,60 @@
+{
+  "roadmap": {
+    "project_id": "fix-github-auth-report-headers",
+    "created_at": "2026-11-05T00:00:00Z",
+    "total_steps": 1,
+    "source": "docs/feature/fix-github-auth-report-headers/rca.md",
+    "paradigm": "functional (ADR-007)",
+    "out_of_scope": "No change to the GithubPort contract (ADR-019 §1), the verbs' output text, token handling, or the 401 TokenRejected path. Whitespace-only tokens stay as they are. No push until the user says so."
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "The auth report comes from GitHub's rate-limit headers",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Header-based auth report; the note stays quiet with a token",
+          "description": "crates/adapter-github/src/client.rs: add a pure function (e.g. auth_report_of(token_configured: bool, limit: Option<&str>, remaining: Option<&str>) -> AuthReport) returning Authenticated { remaining, limit } only when a token was configured and both header values parse, otherwise Anonymous. Remove parse_auth_report and its tests that lock in the body shape. crates/adapter-github/src/lib.rs: in send_get_once (about :637-666), on a 200 that carries both x-ratelimit-limit and x-ratelimit-remaining, record_auth_report(auth_report_of(self.auth.is_authenticated(), ...)); a response without both headers does not overwrite an earlier report. Remove the four body-based record_auth_report calls (about :286, :313, :405, :556). crates/test-support/src/fake_github.rs: when its posture is authenticated (remaining, limit) and the request carried the token, send X-RateLimit-Limit and X-RateLimit-Remaining on every 200, including the person profile and owned-repos responses; the anonymous posture sends limit 60 (and its remaining); drop the \"auth\" body key (about :1491-1506). Update any fake fixture or test that relied on the body key. The verbs (scrape_person.rs, scrape_github.rs) do not change.",
+          "criteria": [
+            "New acceptance test in tests/acceptance/scrape_person_command.rs next to scrape_person_warns_about_the_unauthenticated_rate_limit: scrape person against an authenticated fake with GITHUB_TOKEN set (the token helper used by tests/acceptance/scrape_auth.rs) exits 0, its stdout does not contain 'Note: without GITHUB_TOKEN', and it contains 'authenticated ('. It fails against today's code: record the RED.",
+            "Adapter test (replacing the body-shaped test at crates/adapter-github/src/lib.rs about :1256): an adapter built with a token, served a real-shaped /users/{u} body with no auth key plus X-RateLimit-Limit: 5000 and X-RateLimit-Remaining: 4982, reports Authenticated { remaining: 4982, limit: 5000 }; without a token, or without the headers, it reports Anonymous.",
+            "Proptest for the pure function: Authenticated only when token_configured and both values parse as numbers, with exactly those numbers; Anonymous otherwise.",
+            "scrape_person_warns_about_the_unauthenticated_rate_limit, SA-1 (tests/acceptance/scrape_auth.rs) and every other scrape_* and adapter-github test pass; the no-token-leak checks still pass."
+          ],
+          "estimated_hours": 2,
+          "dependencies": [],
+          "files_to_modify": [
+            "crates/adapter-github/src/client.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/test-support/src/fake_github.rs",
+            "tests/acceptance/scrape_person_command.rs",
+            "tests/acceptance/scrape_auth.rs (only if a fixture there relied on the body key)",
+            "other tests under tests/acceptance/ or crates/ only where they relied on the body key"
+          ],
+          "test_file": "tests/acceptance/scrape_person_command.rs",
+          "scenario_name": "scrape person with GITHUB_TOKEN set prints no unauthenticated-budget note",
+          "test_command": "cargo test -p adapter-github && cargo nextest run --workspace -E 'test(/scrape/) | package(adapter-github) | package(test-support)'"
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/adapter-github/",
+      "crates/test-support/"
+    ],
+    "test_directories": [
+      "crates/adapter-github/",
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator; RCA approved by user 2026-11-05 (header-based report)",
+    "approved_at": "2026-11-05"
+  }
+}
