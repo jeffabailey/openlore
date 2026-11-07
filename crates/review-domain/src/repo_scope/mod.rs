@@ -35,7 +35,9 @@ pub use choose::{
     choice_to_save, choose_list, differs_from_default, eligible_count, ticked_ids, AccountChoice,
     ChooseList, ChooseRow, PlannedRepo, TicksRoom,
 };
-pub use imports::{classify_import, import_of, import_shape, ImportRefusal, ImportVerdict};
+pub use imports::{
+    classify_import, import_of, import_shape, shown_import_name, ImportRefusal, ImportVerdict,
+};
 pub use limits::{
     admit_account, admit_import, admit_save, chosen_total, default_ticks, LimitRefusal, OtherOwner,
     SavedTicks, ScopeAccount, Standing,

@@ -227,8 +227,9 @@ pub fn import_refusal_message(refusal: ImportRefusal, repo: &str) -> String {
     }
 }
 
-/// AC-005.6: a name that is not `owner/name`.
-pub const IMPORT_SHAPE_MESSAGE: &str = "Enter the repo as owner/name, for example rust-lang/cargo.";
+/// AC-005.6: a name that is neither `owner/name` nor its GitHub link.
+pub const IMPORT_SHAPE_MESSAGE: &str =
+    "Enter the repo as owner/name or its GitHub link, for example rust-lang/cargo.";
 
 /// "2 of 4 ticked: your limit of 10 repos is reached. Untick others to choose more."
 pub fn limit_reached_message(list: &ChooseList) -> String {
@@ -399,14 +400,14 @@ fn nothing_to_choose(list: &ChooseList, name: &str, csrf_token: &str) -> Markup 
     }
 }
 
-/// "Add repo": name a public repo as `owner/name`.
+/// "Add repo": name a public repo as `owner/name` or its GitHub link.
 fn add_repo_form(csrf_token: &str) -> Markup {
     html! {
         form method="post" action=(IMPORTS_PATH) {
             (csrf_field(csrf_token))
             label {
                 "Add a public repo "
-                input type="text" name=(IMPORT_REPO_FIELD) placeholder="owner/name";
+                input type="text" name=(IMPORT_REPO_FIELD) placeholder="owner/name or GitHub link";
             }
             " "
             button type="submit" { (ADD_REPO_LABEL) }

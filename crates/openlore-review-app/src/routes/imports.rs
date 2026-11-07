@@ -12,7 +12,7 @@ use ports::{
 };
 use review_domain::kpi::{import_refusal_event, import_removed_age_event, utc_day, KpiEvent};
 use review_domain::repo_scope::{
-    classify_import, import_shape, ImportRefusal, ImportVerdict, SCAN_REPO_CAP,
+    classify_import, import_shape, shown_import_name, ImportRefusal, ImportVerdict, SCAN_REPO_CAP,
 };
 use review_domain::views::{self, ReposNotice, IMPORT_REPO_FIELD};
 
@@ -88,7 +88,7 @@ fn settle_import(
             }
             Some(ReposNotice::ImportRefused {
                 refusal,
-                repo: typed.trim().to_string(),
+                repo: shown_import_name(typed),
             })
         }
     }

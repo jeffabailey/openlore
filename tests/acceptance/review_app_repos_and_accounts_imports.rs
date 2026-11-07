@@ -109,6 +109,42 @@ fn priya_names_a_public_repo_she_doesnt_own_and_gets_private_suggestions() {
     }
 }
 
+/// IM-1b
+/// ```gherkin
+/// @US-RRA-005 @AC-005.1 @happy @contract-shape:bounded-change
+/// Scenario Outline: Priya adds a repo by its GitHub link
+///   Given Priya is signed in and rust-lang/cargo is a public repo none of her accounts owns
+///   When she adds "<typed>"
+///   Then rust-lang/cargo is listed under "Repos you don't own"
+///   Examples:
+///     | typed                                  |
+///     | https://github.com/rust-lang/cargo     |
+///     | http://www.github.com/rust-lang/cargo/ |
+///     | github.com/rust-lang/cargo.git         |
+///     | https://GitHub.com/rust-lang/cargo?tab=readme |
+/// ```
+#[test]
+fn priya_adds_a_repo_by_its_github_link() {
+    for typed in [
+        "https://github.com/rust-lang/cargo",
+        "http://www.github.com/rust-lang/cargo/",
+        "github.com/rust-lang/cargo.git",
+        "https://GitHub.com/rust-lang/cargo?tab=readme",
+    ] {
+        let world = rra_world();
+        let mut browser = given_owner_verified(&world, Account::Priyaraman);
+
+        when_imports(&mut browser, typed);
+
+        assert_eq!(
+            imported_list(&mut browser),
+            [CARGO.full()],
+            "{typed:?}:\n{}",
+            browser.page.text()
+        );
+    }
+}
+
 /// IM-2 (refusal table — every row: nothing added, nothing else changes)
 /// ```gherkin
 /// @US-RRA-005 @AC-005.1 @AC-005.2 @AC-005.3 @AC-005.6 @D-RRA-T2 @D-RRA-T3 @error @C2b @C6a @C6b @C1b @infrastructure-failure @contract-shape:unbounded-preservation
@@ -120,12 +156,15 @@ fn priya_names_a_public_repo_she_doesnt_own_and_gets_private_suggestions() {
 ///   And for a name not shaped owner/name, GitHub is not asked about any repo
 ///   Examples:
 ///     | setup                                              | who    | typed                     | message |
-///     | Priya is verified as priyaraman                    | Priya  | cargo                     | Enter the repo as owner/name, for example rust-lang/cargo. |
-///     | Priya is verified as priyaraman                    | Priya  | rust-lang/                | Enter the repo as owner/name, for example rust-lang/cargo. |
-///     | Priya is verified as priyaraman                    | Priya  | /cargo                    | Enter the repo as owner/name, for example rust-lang/cargo. |
-///     | Priya is verified as priyaraman                    | Priya  | rust-lang/cargo/issues    | Enter the repo as owner/name, for example rust-lang/cargo. |
-///     | Priya is verified as priyaraman                    | Priya  | rust lang/cargo           | Enter the repo as owner/name, for example rust-lang/cargo. |
+///     | Priya is verified as priyaraman                    | Priya  | cargo                     | Enter the repo as owner/name or its GitHub link, for example rust-lang/cargo. |
+///     | Priya is verified as priyaraman                    | Priya  | rust-lang/                | Enter the repo as owner/name or its GitHub link, for example rust-lang/cargo. |
+///     | Priya is verified as priyaraman                    | Priya  | /cargo                    | Enter the repo as owner/name or its GitHub link, for example rust-lang/cargo. |
+///     | Priya is verified as priyaraman                    | Priya  | rust-lang/cargo/issues    | Enter the repo as owner/name or its GitHub link, for example rust-lang/cargo. |
+///     | Priya is verified as priyaraman                    | Priya  | rust lang/cargo           | Enter the repo as owner/name or its GitHub link, for example rust-lang/cargo. |
+///     | Priya is verified as priyaraman                    | Priya  | https://github.com/rust-lang/cargo/issues | Enter the repo as owner/name or its GitHub link, for example rust-lang/cargo. |
+///     | Priya is verified as priyaraman                    | Priya  | https://gitlab.com/rust-lang/cargo | Enter the repo as owner/name or its GitHub link, for example rust-lang/cargo. |
 ///     | Priya is verified as priyaraman                    | Priya  | tidal-labs/secret-roadmap | We couldn't find a public repo at github.com/tidal-labs/secret-roadmap. Check the spelling. Private repos can't be read. |
+///     | Priya is verified as priyaraman                    | Priya  | https://github.com/tidal-labs/secret-roadmap | We couldn't find a public repo at github.com/tidal-labs/secret-roadmap. Check the spelling. Private repos can't be read. |
 ///     | Priya is verified as priyaraman                    | Priya  | priyaraman/sandbar        | github.com/priyaraman/sandbar is yours. Tick it in your repo list instead. |
 ///     | priya-tidal is listed but needs re-verifying       | Priya  | priya-tidal/reef-ui       | github.com/priya-tidal/reef-ui is yours. Tick it in your repo list instead. |
 ///     | Priya already added rust-lang/cargo                | Priya  | rust-lang/cargo           | github:rust-lang/cargo is already in your list. |
@@ -144,14 +183,30 @@ fn a_repo_that_cannot_be_imported_is_refused_with_the_cause_and_the_fix() {
         GithubOffline,
         GithubRateLimited,
     }
-    const SHAPE: &str = "Enter the repo as owner/name, for example rust-lang/cargo.";
+    const SHAPE: &str =
+        "Enter the repo as owner/name or its GitHub link, for example rust-lang/cargo.";
     const UNREACHABLE: &str = "GitHub could not be reached, so we couldn't check github.com/rust-lang/cargo. Please try again in a few minutes. Nothing was lost.";
-    let rows: [(Setup, &str, String); 12] = [
+    let rows: [(Setup, &str, String); 15] = [
         (Setup::PriyaVerified, "cargo", SHAPE.into()),
         (Setup::PriyaVerified, "rust-lang/", SHAPE.into()),
         (Setup::PriyaVerified, "/cargo", SHAPE.into()),
         (Setup::PriyaVerified, "rust-lang/cargo/issues", SHAPE.into()),
         (Setup::PriyaVerified, "rust lang/cargo", SHAPE.into()),
+        (
+            Setup::PriyaVerified,
+            "https://github.com/rust-lang/cargo/issues",
+            SHAPE.into(),
+        ),
+        (
+            Setup::PriyaVerified,
+            "https://gitlab.com/rust-lang/cargo",
+            SHAPE.into(),
+        ),
+        (
+            Setup::PriyaVerified,
+            "https://github.com/tidal-labs/secret-roadmap",
+            "We couldn't find a public repo at github.com/tidal-labs/secret-roadmap. Check the spelling. Private repos can't be read.".into(),
+        ),
         (
             Setup::PriyaVerified,
             "tidal-labs/secret-roadmap",

@@ -6,15 +6,47 @@ use ports::{ImportedRepo, RepoFacts};
 
 use super::limits::{admit_import, LimitRefusal, ScopeAccount};
 
-/// The `owner/name` an owner typed into "Add repo", when it has that shape.
+/// The `owner/name` an owner typed into "Add repo", when it has that shape:
+/// `owner/name` itself, or the repo's github.com link (with or without the
+/// scheme or `www.`, a trailing `/` or `.git`, a query or a fragment).
 pub fn import_shape(typed: &str) -> Option<(&str, &str)> {
-    let (owner, name) = typed.trim().split_once('/')?;
+    let (owner, name) = github_repo_path(typed.trim()).split_once('/')?;
     let part = |s: &str| {
         !s.is_empty()
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
     (part(owner) && part(name)).then_some((owner, name))
+}
+
+/// The repo a refusal names: the `owner/name` the typed text names, or the
+/// text as typed when it names none.
+pub fn shown_import_name(typed: &str) -> String {
+    import_shape(typed).map_or_else(
+        || typed.trim().to_string(),
+        |(owner, name)| format!("{owner}/{name}"),
+    )
+}
+
+/// The path after `github.com/` of a github.com link, without a trailing
+/// `/`, `.git`, query or fragment; anything else unchanged.
+fn github_repo_path(typed: &str) -> &str {
+    let rest = strip_prefix_ignoring_case(typed, "https://")
+        .or_else(|| strip_prefix_ignoring_case(typed, "http://"))
+        .unwrap_or(typed);
+    let rest = strip_prefix_ignoring_case(rest, "www.").unwrap_or(rest);
+    let Some(path) = strip_prefix_ignoring_case(rest, "github.com/") else {
+        return typed;
+    };
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    let path = path.strip_suffix('/').unwrap_or(path);
+    path.strip_suffix(".git").unwrap_or(path)
+}
+
+fn strip_prefix_ignoring_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = text.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix)
+        .then(|| &text[prefix.len()..])
 }
 
 /// Why a named repo is not imported (DWD-RRA-4: the first that applies).
@@ -103,5 +135,53 @@ pub fn import_of(facts: &RepoFacts) -> ImportedRepo {
     ImportedRepo {
         repo_id: facts.repo_id,
         full_name: facts.full_name.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{import_shape, shown_import_name};
+
+    #[test]
+    fn a_github_link_names_the_same_repo_as_owner_slash_name() {
+        for typed in [
+            "rust-lang/cargo",
+            " rust-lang/cargo ",
+            "https://github.com/rust-lang/cargo",
+            "http://github.com/rust-lang/cargo",
+            "https://www.github.com/rust-lang/cargo/",
+            "github.com/rust-lang/cargo",
+            "www.github.com/rust-lang/cargo",
+            "https://github.com/rust-lang/cargo.git",
+            "HTTPS://GitHub.com/rust-lang/cargo",
+            "https://github.com/rust-lang/cargo?tab=readme-ov-file",
+            "https://github.com/rust-lang/cargo#readme",
+        ] {
+            assert_eq!(
+                import_shape(typed),
+                Some(("rust-lang", "cargo")),
+                "{typed:?}"
+            );
+            assert_eq!(shown_import_name(typed), "rust-lang/cargo", "{typed:?}");
+        }
+    }
+
+    #[test]
+    fn a_link_that_is_not_a_github_repo_has_no_shape() {
+        for typed in [
+            "https://github.com/rust-lang",
+            "https://github.com/rust-lang/",
+            "https://github.com/rust-lang/cargo/issues",
+            "https://github.com/rust-lang/cargo/tree/master",
+            "https://gitlab.com/rust-lang/cargo",
+            "https://github.com.evil.example/rust-lang/cargo",
+            "https://github.com//cargo",
+            "ftp://github.com/rust-lang/cargo",
+            "github.com",
+            "https://",
+        ] {
+            assert_eq!(import_shape(typed), None, "{typed:?}");
+            assert_eq!(shown_import_name(typed), typed.trim(), "{typed:?}");
+        }
     }
 }
