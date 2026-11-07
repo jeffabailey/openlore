@@ -160,5 +160,12 @@ name = "page_mutation_pins"
 path = "tests/page_mutation_pins.rs"
 harness = true
 
+# fix-review-app-repos-link 01-02: dev-only local preview. `launch_local_preview`
+# is #[ignore]d (run by ./review-app-preview.sh); its smoke test is not.
+[[test]]
+name = "review_app_local_preview"
+path = "../../tests/acceptance/review_app_local_preview.rs"
+harness = true
+
 [lints]
 workspace = true
