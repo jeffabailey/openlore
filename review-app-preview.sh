@@ -25,7 +25,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  # The leading comment block (after the shebang), up to the first other line.
+  awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"
   exit 0
 fi
 

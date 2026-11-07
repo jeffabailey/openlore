@@ -8,6 +8,7 @@ use review_domain::failed_write::FailedWrite;
 use review_domain::lifecycle::Tally;
 use review_domain::ownership::OwnershipRefusal;
 use review_domain::plans::{publish_plan, retract_plan, ClaimDraft, PublishPlan};
+use review_domain::repo_scope::LimitRefusal;
 use review_domain::selection::BatchFailure;
 use review_domain::signin::{PermissionMode, SignInFailure};
 use review_domain::views::*;
@@ -1047,8 +1048,29 @@ fn the_batch_result_names_what_landed_and_offers_retry_for_the_rest() {
     assert!(!signed_out.contains("had expired"));
 }
 
-/// Every signed-in queue state leads to "Choose repos" (US-RRA-001): she
-/// reaches it from the queue, whether or not a GitHub account is verified.
+/// Every [`ScanRefused`] variant, in declaration order. The successor match
+/// is exhaustive, so a new variant fails to compile until it is chained in.
+fn every_scan_refusal() -> Vec<ScanRefused> {
+    fn successor(refused: ScanRefused) -> Option<ScanRefused> {
+        match refused {
+            ScanRefused::AlreadyScanning => Some(ScanRefused::DailyLimitReached),
+            ScanRefused::DailyLimitReached => Some(ScanRefused::AppBusy),
+            ScanRefused::AppBusy => None,
+        }
+    }
+    std::iter::successors(Some(ScanRefused::AlreadyScanning), |r| successor(*r)).collect()
+}
+
+/// The queue leads to "Choose repos" (US-RRA-001) for every GitHub step
+/// (not linked with and without listed imports, needs re-verify, verified),
+/// every latest scan (none, or a run in each [`ScanStatus`]) and every notice
+/// (none, nothing to scan, each [`ScanRefused`], one over-limit refusal, a
+/// decline).
+///
+/// `imports_listed` changes the page only for `NotLinked`, so the other steps
+/// run once. `NotLinked` without listed imports and `NeedsReverify` render no
+/// notices: those rows check the footer link only (the nothing-to-scan alert's
+/// own link is pinned by `the_nothing_to_scan_notice_links_choose_repos`).
 #[test]
 fn every_queue_state_links_choose_repos() {
     let link = format!(r#"<a href="{REPOS_PATH}">{CHOOSE_REPOS_LABEL}</a>"#);
@@ -1071,14 +1093,27 @@ fn every_queue_state_links_choose_repos() {
     let scans = std::iter::once(None).chain(ScanStatus::ALL.into_iter().map(|s| Some(run(s))));
     let declined = key();
     let pending = [suggestion()];
+    let over_limit = LimitRefusal {
+        limit: 10,
+        total: 11,
+        excess: 1,
+    };
+    let notices = [
+        None,
+        Some(QueueNotice::NothingToScan),
+        Some(QueueNotice::ScanOverLimit(over_limit)),
+        Some(QueueNotice::Declined(&declined)),
+    ]
+    .into_iter()
+    .chain(
+        every_scan_refusal()
+            .into_iter()
+            .map(|refused| Some(QueueNotice::ScanRefused(refused))),
+    )
+    .collect::<Vec<_>>();
     for latest_scan in scans {
         for (github, imports_listed) in steps {
-            for notice in [
-                None,
-                Some(QueueNotice::NothingToScan),
-                Some(QueueNotice::ScanRefused(ScanRefused::AlreadyScanning)),
-                Some(QueueNotice::Declined(&declined)),
-            ] {
+            for &notice in &notices {
                 let html = review_page_of_scan(
                     &QueueView {
                         handle: "priyaraman.bsky.social",

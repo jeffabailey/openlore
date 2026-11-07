@@ -26,6 +26,7 @@ mod review_app;
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::time::Duration;
 
 use review_app::repos_and_accounts::*;
 use review_app::*;
@@ -111,7 +112,11 @@ fn banner(preview: &LocalPreview) -> String {
     lines.join("\n")
 }
 
-/// Serve the sign-in link on a free loopback port; returns its origin.
+/// How long the sign-in link waits on the browser or the app.
+const SIGN_IN_LINK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Serve the sign-in link on a free loopback port; returns its origin. Each
+/// connection gets its own thread, so a stalled one cannot block the next.
 fn serve_sign_in_link(app_origin: &str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind the sign-in link");
     let origin = format!(
@@ -121,7 +126,8 @@ fn serve_sign_in_link(app_origin: &str) -> String {
     let app_origin = app_origin.to_string();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            answer_sign_in_link(stream, &app_origin);
+            let app_origin = app_origin.clone();
+            std::thread::spawn(move || answer_sign_in_link(stream, &app_origin));
         }
     });
     origin
@@ -130,6 +136,7 @@ fn serve_sign_in_link(app_origin: &str) -> String {
 /// One request: post `?handle=` to the app's `/signin` as its own form would,
 /// then send the browser on to wherever the app sent it (the PDS's authorize).
 fn answer_sign_in_link(mut stream: TcpStream, app_origin: &str) {
+    let _ = stream.set_read_timeout(Some(SIGN_IN_LINK_TIMEOUT));
     let mut request_line = String::new();
     let _ = BufReader::new(&stream).read_line(&mut request_line);
     let reply = match handle_param(&request_line) {
@@ -166,6 +173,7 @@ fn handle_param(request_line: &str) -> Option<String> {
 fn app_sign_in_redirect(app_origin: &str, handle: &str) -> Option<String> {
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .timeout(SIGN_IN_LINK_TIMEOUT)
         .build()
         .ok()?;
     let response = client
@@ -199,6 +207,8 @@ fn local_preview_signs_in_a_fixture_persona_on_loopback_and_reaches_choose_repos
     let printed = banner(&preview);
     let sign_in_link = preview.sign_in_link(preview.sign_in_handle());
     assert!(preview.origin().starts_with("http://127.0.0.1:"));
+    // Formatting checks only: the banner is built from these same values.
+    // The browser walk below is what proves the printed steps work.
     assert!(printed.contains(preview.origin()), "{printed}");
     assert!(printed.contains(&sign_in_link), "{printed}");
     assert!(printed.contains(preview.github_login()), "{printed}");
