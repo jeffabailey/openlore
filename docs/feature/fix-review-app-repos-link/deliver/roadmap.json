@@ -1,0 +1,80 @@
+{
+  "roadmap": {
+    "project_id": "fix-review-app-repos-link",
+    "created_at": "2026-11-06T00:00:00Z",
+    "total_steps": 2,
+    "source": "docs/feature/fix-review-app-repos-link/rca.md",
+    "paradigm": "functional (ADR-007)",
+    "out_of_scope": "The pre-v2 '0 repos read' display, the `let _ =` on mark_repo_read/record_checks in scan.rs, the unlinked-queue 'verify first' copy. No change to routes, budgets, the store or the scan pipeline. No push until the user says so."
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Owners can reach Choose repos from the queue, and preview the app locally",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Queue links to Choose repos; Choose repos links back",
+          "description": "crates/review-domain/src/views/repos.rs: add `pub const CHOOSE_REPOS_LABEL: &str = \"Choose repos\";` and use it for the page title and h1 (about :279,:281); add the existing `back_to_queue()` helper (views/mod.rs about :92, widen visibility only if needed) to the Choose repos page. crates/review-domain/src/views/queue.rs: in `review_page_of_scan`, add `p { a href=(REPOS_PATH) { (CHOOSE_REPOS_LABEL) } }` to the footer every signed-in owner sees, next to the Settings link (about :738), shown whether or not a GitHub account is verified (GET /repos needs only a session; imports work without an account). Add the same link inside the NothingToScan alert (about :639-641). Plain maud <a href>, no htmx.",
+          "criteria": [
+            "New acceptance test in tests/acceptance/review_app_repos_and_accounts.rs next to the US-RRA-001 scenarios: a verified owner (given_owner_verified) opens /review, then follows the 'Choose repos' link by its text with Browser::press (never open(\"/repos\")); the page shows the 'Choose repos' heading and the account's 'Save choice' form; pressing 'Back to your review queue' returns to a page showing 'Your suggestions'. It fails against today's code with no link labelled 'Choose repos': record the RED.",
+            "A second acceptance case: a signed-in owner with no GitHub account linked sees the 'Choose repos' link on the queue and following it reaches the Choose repos page (with the 'Add a public repo' form).",
+            "Page contract in crates/review-domain/tests/page_contracts.rs: every review_page_of_scan state links REPOS_PATH with the CHOOSE_REPOS_LABEL text (property or exhaustive over the queue states the existing contracts enumerate); the NothingToScan notice contains the link.",
+            "All existing review_app_* acceptance tests, review-domain tests and openlore-review-app tests pass; assertions that pinned an exact link list are updated only to include the new link."
+          ],
+          "estimated_hours": 2,
+          "dependencies": [],
+          "files_to_modify": [
+            "crates/review-domain/src/views/queue.rs",
+            "crates/review-domain/src/views/repos.rs",
+            "crates/review-domain/src/views/mod.rs (only if back_to_queue visibility must widen)",
+            "crates/review-domain/tests/page_contracts.rs",
+            "tests/acceptance/review_app_repos_and_accounts.rs"
+          ],
+          "test_file": "tests/acceptance/review_app_repos_and_accounts.rs",
+          "scenario_name": "owner follows Choose repos from the queue and back",
+          "test_command": "cargo test -p review-domain && cargo nextest run -p openlore-review-app"
+        },
+        {
+          "id": "01-02",
+          "name": "Dev-only local preview on the fake Bluesky/PDS/GitHub network",
+          "description": "Add an #[ignore]d launcher test, registered as a [[test]] in crates/openlore-review-app/Cargo.toml, reusing tests/acceptance/support/review_app (ReviewWorld / settings_for / ReviewApp::start with REVIEW_APP_ALLOW_LOOPBACK_HTTP=1). It starts the fake ATProto network, the fake GitHub accounts and the debug review app on 127.0.0.1, prints the app origin and the fixture handle(s) a person can type at sign-in (and, for one persona, that its GitHub is verified so the queue, Choose repos and a scan all work), then blocks until Ctrl-C. Add a small wrapper script `review-app-preview.sh` at the repo root (same style as cli.sh/run.sh) that runs it with `cargo test -p openlore-review-app --test <name> -- --ignored --nocapture`. Verify the session cookie works over http://127.0.0.1 (Secure/__Host- cookies: Chrome/Firefox treat loopback as secure); if it does not, report rather than weaken production cookie flags. A release build must still refuse REVIEW_APP_ALLOW_LOOPBACK_HTTP (unchanged).",
+          "criteria": [
+            "Running the script prints a http://127.0.0.1:<port> origin and at least one sign-in handle, and the app answers GET /healthz 200 while it runs; Ctrl-C stops the app and every fake server.",
+            "A real sign-in walk through the printed origin works end to end with no external network: the launcher's own non-ignored smoke test (or the existing Browser harness) signs in the printed persona, lands on the queue, and follows 'Choose repos'.",
+            "No production code path changes; config.rs still refuses REVIEW_APP_ALLOW_LOOPBACK_HTTP in a release build; cargo nextest run -p openlore-review-app passes (the launcher is ignored by default)."
+          ],
+          "estimated_hours": 2,
+          "dependencies": ["01-01"],
+          "files_to_modify": [
+            "crates/openlore-review-app/Cargo.toml",
+            "tests/acceptance/review_app_local_preview.rs",
+            "review-app-preview.sh",
+            "tests/acceptance/support/review_app/world.rs (only if a print/accessor is needed)"
+          ],
+          "test_file": "tests/acceptance/review_app_local_preview.rs",
+          "scenario_name": "local preview signs in a fixture persona on loopback and reaches Choose repos",
+          "test_command": "cargo nextest run -p openlore-review-app"
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/review-domain/",
+      "crates/openlore-review-app/"
+    ],
+    "test_directories": [
+      "crates/review-domain/tests/",
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator; RCA and fix + preview approved by user 2026-11-06",
+    "approved_at": "2026-11-06"
+  }
+}
