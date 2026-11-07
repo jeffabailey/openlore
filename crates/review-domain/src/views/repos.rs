@@ -11,6 +11,9 @@ use crate::repo_scope::{ChooseList, ImportRefusal, LimitRefusal, TicksRoom, SCAN
 /// Where the choose page lives and its Save form posts.
 pub const REPOS_PATH: &str = "/repos";
 
+/// The name of the choose-repos page and of every link to it.
+pub const CHOOSE_REPOS_LABEL: &str = "Choose repos";
+
 /// The button that stores an account's ticks.
 pub const SAVE_CHOICE_LABEL: &str = "Save choice";
 
@@ -276,9 +279,9 @@ fn counted(n: usize, one: &str, many: &str) -> String {
 /// The choose-repos page.
 pub fn repos_page(view: &ReposView<'_>) -> String {
     page(
-        "Choose repos",
+        CHOOSE_REPOS_LABEL,
         html! {
-            h1 { "Choose repos" }
+            h1 { (CHOOSE_REPOS_LABEL) }
             @match &view.notice {
                 Some(ReposNotice::Saved { reads }) => {
                     p role="status" { strong { (saved_message(*reads)) } }

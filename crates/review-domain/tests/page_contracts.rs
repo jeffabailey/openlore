@@ -1046,3 +1046,75 @@ fn the_batch_result_names_what_landed_and_offers_retry_for_the_rest() {
     assert!(!signed_out.contains("To retract one"));
     assert!(!signed_out.contains("had expired"));
 }
+
+/// Every signed-in queue state leads to "Choose repos" (US-RRA-001): she
+/// reaches it from the queue, whether or not a GitHub account is verified.
+#[test]
+fn every_queue_state_links_choose_repos() {
+    let link = format!(r#"<a href="{REPOS_PATH}">{CHOOSE_REPOS_LABEL}</a>"#);
+    let steps = [
+        (GithubStep::NotLinked, false),
+        (GithubStep::NotLinked, true),
+        (
+            GithubStep::NeedsReverify {
+                login: "priyaraman",
+            },
+            false,
+        ),
+        (
+            GithubStep::Verified {
+                login: "priyaraman",
+            },
+            false,
+        ),
+    ];
+    let scans = std::iter::once(None).chain(ScanStatus::ALL.into_iter().map(|s| Some(run(s))));
+    let declined = key();
+    let pending = [suggestion()];
+    for latest_scan in scans {
+        for (github, imports_listed) in steps {
+            for notice in [
+                None,
+                Some(QueueNotice::NothingToScan),
+                Some(QueueNotice::ScanRefused(ScanRefused::AlreadyScanning)),
+                Some(QueueNotice::Declined(&declined)),
+            ] {
+                let html = review_page_of_scan(
+                    &QueueView {
+                        handle: "priyaraman.bsky.social",
+                        csrf_token: CSRF,
+                        github,
+                        latest_scan,
+                        pending: &pending,
+                        tally: Tally::default(),
+                        notice,
+                    },
+                    &ScanDetails {
+                        imports_listed,
+                        ..ScanDetails::default()
+                    },
+                );
+                assert!(
+                    html.contains(&link),
+                    "{github:?} {imports_listed} {latest_scan:?} {notice:?}: {html}"
+                );
+            }
+        }
+    }
+}
+
+/// The refusal of a scan with nothing to read carries its fix: one click to
+/// "Choose repos" (AC-002.5).
+#[test]
+fn the_nothing_to_scan_notice_links_choose_repos() {
+    let html = verified_queue(
+        None,
+        &[],
+        Tally::default(),
+        Some(QueueNotice::NothingToScan),
+    );
+    let alert = format!(
+        r#"<p role="alert">{NOTHING_TO_SCAN_MESSAGE} <a href="{REPOS_PATH}">{CHOOSE_REPOS_LABEL}</a></p>"#
+    );
+    assert!(html.contains(&alert), "{html}");
+}

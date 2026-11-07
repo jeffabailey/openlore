@@ -117,6 +117,66 @@ fn first_visit_shows_todays_top_5_already_ticked() {
     assert!(!page.shows(&SERDE_FORK.full()) && !page.shows(&OLD_TIDES_ARCHIVED.full()));
 }
 
+/// RC-1a (fix-review-app-repos-link)
+/// ```gherkin
+/// @US-RRA-001 @regression @driving_port
+/// Scenario: Priya follows "Choose repos" from her queue and back
+///   Given Priya is verified as github.com/priyaraman
+///   And she is looking at her review queue
+///   When she presses "Choose repos"
+///   Then she sees the "Choose repos" page with her account's "Save choice" form
+///   When she presses "Back to your review queue"
+///   Then she sees "Your suggestions"
+/// ```
+#[test]
+fn owner_follows_choose_repos_from_the_queue_and_back() {
+    let world = rra_world();
+    let mut browser = given_owner_verified(&world, Account::Priyaraman);
+    browser.open("/review");
+
+    let page = browser.press("Choose repos").clone();
+
+    assert!(page.url.ends_with("/repos"), "{}", page.url);
+    assert!(
+        page.html.contains("<h1>Choose repos</h1>"),
+        "{}",
+        page.text()
+    );
+    assert_eq!(
+        listed_repos(&page, Account::Priyaraman),
+        fulls(&PRIYA_OWNED_RANKED),
+        "her account's Save choice form"
+    );
+
+    let back = browser.press("Back to your review queue");
+
+    assert!(back.shows("Your suggestions"), "{}", back.text());
+}
+
+/// RC-1b (fix-review-app-repos-link)
+/// ```gherkin
+/// @US-RRA-001 @US-RRA-005 @regression @driving_port
+/// Scenario: An owner with no GitHub account linked reaches "Choose repos" from her queue
+///   Given Priya is signed in with no GitHub account linked
+///   When she presses "Choose repos" on her queue
+///   Then she sees the "Choose repos" page with the "Add a public repo" form
+/// ```
+#[test]
+fn owner_without_an_account_reaches_choose_repos_from_the_queue() {
+    let world = rra_world();
+    let mut browser = given_signed_in(&world, Persona::Priya);
+    browser.open("/review");
+
+    let page = browser.press("Choose repos");
+
+    assert!(
+        page.html.contains("<h1>Choose repos</h1>"),
+        "{}",
+        page.text()
+    );
+    assert!(page.shows("Add a public repo"), "{}", page.text());
+}
+
 /// RC-2 (chained on RC-1)
 /// ```gherkin
 /// @US-RRA-001 @AC-001.2 @happy @kpi @KPI-RRA-1 @contract-shape:bounded-change

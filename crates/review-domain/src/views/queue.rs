@@ -637,7 +637,7 @@ fn verified_queue(head: QueueHead<'_>, view: &QueueView<'_>, details: &ScanDetai
                     (declined_notice(key, view.csrf_token))
                 }
                 Some(QueueNotice::NothingToScan) => {
-                    p role="alert" { (NOTHING_TO_SCAN_MESSAGE) }
+                    p role="alert" { (NOTHING_TO_SCAN_MESSAGE) " " (choose_repos_link()) }
                 }
                 Some(QueueNotice::ScanOverLimit(refusal)) => {
                     p role="alert" { (scan_over_limit_message(refusal)) }
@@ -679,6 +679,11 @@ fn verified_queue(head: QueueHead<'_>, view: &QueueView<'_>, details: &ScanDetai
         }
         script src="/assets/triage.js" {}
     }
+}
+
+/// The link to "Choose repos" (US-RRA-001).
+fn choose_repos_link() -> Markup {
+    html! { a href=(REPOS_PATH) { (CHOOSE_REPOS_LABEL) } }
 }
 
 /// The signed-in review queue: the GitHub step until ownership is proven,
@@ -735,6 +740,7 @@ pub fn review_page_of_scan(view: &QueueView<'_>, details: &ScanDetails<'_>) -> S
                 (csrf_field(view.csrf_token))
                 button type="submit" { (SIGN_OUT_LABEL) }
             }
+            p { (choose_repos_link()) }
             p { a href="/settings" { "Settings" } }
         },
     )
