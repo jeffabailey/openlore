@@ -79,8 +79,12 @@ fn settle_import(
                 day: &today,
                 events: &[KpiEvent::ImportAdded.name()],
             };
-            let _ = app.imports_write.add_import(owner_did, &import, tally);
-            None
+            app.imports_write
+                .add_import(owner_did, &import, tally)
+                .ok()
+                .map(|()| ReposNotice::ImportAdded {
+                    repo: import.full_name,
+                })
         }
         ImportVerdict::Refused(refusal) => {
             if let Some(event) = import_refusal_event(refusal) {

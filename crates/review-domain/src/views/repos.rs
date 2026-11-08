@@ -97,6 +97,8 @@ pub enum ReposNotice {
     Saved { reads: usize },
     /// A Save was refused: the total would pass the limit (BR-RRA-3).
     OverLimit(LimitRefusal),
+    /// "Add repo" listed `repo` (`owner/name`); a scan reads it next.
+    ImportAdded { repo: String },
     /// "Add repo" of `repo` (as typed) was refused, nothing changed.
     ImportRefused {
         refusal: ImportRefusal,
@@ -203,6 +205,27 @@ pub fn remove_import_confirm_page(
     )
 }
 
+/// The label of the scan an added repo offers.
+pub const SCAN_NOW_LABEL: &str = "Scan now";
+
+/// After "Add repo": what happens next and where its suggestions show.
+pub fn import_added_message(repo: &str) -> String {
+    format!(
+        "Added github.com/{repo}. Scan now to read it. Its suggestions show in your review \
+         queue, marked \"Not yours to publish\"."
+    )
+}
+
+/// "Scan now": the queue's scan (`POST /scan`), which then opens the queue.
+fn scan_now_form(csrf_token: &str) -> Markup {
+    html! {
+        form method="post" action="/scan" {
+            (csrf_field(csrf_token))
+            button type="submit" { (SCAN_NOW_LABEL) }
+        }
+    }
+}
+
 /// AC-005.*: the cause of a refused "Add repo" of `repo` and the fix.
 pub fn import_refusal_message(refusal: ImportRefusal, repo: &str) -> String {
     match refusal {
@@ -289,6 +312,10 @@ pub fn repos_page(view: &ReposView<'_>) -> String {
                 }
                 Some(ReposNotice::OverLimit(refusal)) => {
                     p role="alert" { strong { (save_over_limit_message(*refusal)) } }
+                }
+                Some(ReposNotice::ImportAdded { repo }) => {
+                    p role="status" { strong { (import_added_message(repo)) } }
+                    (scan_now_form(view.csrf_token))
                 }
                 Some(ReposNotice::ImportRefused { refusal, repo }) => {
                     p role="alert" { strong { (import_refusal_message(*refusal, repo)) } }
@@ -456,6 +483,12 @@ mod tests {
         };
         let notices = [
             (ReposNotice::Saved { reads: 5 }, false),
+            (
+                ReposNotice::ImportAdded {
+                    repo: "rust-lang/cargo".into(),
+                },
+                false,
+            ),
             (
                 ReposNotice::ImportRemoved {
                     repo: "rust-lang/cargo".into(),

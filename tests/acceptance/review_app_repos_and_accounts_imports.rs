@@ -145,6 +145,49 @@ fn priya_adds_a_repo_by_its_github_link() {
     }
 }
 
+/// IM-1c
+/// ```gherkin
+/// @US-RRA-005 @AC-005.1 @AC-005.3 @happy
+/// Scenario: Adding a repo says how to see its suggestions and offers the scan
+///   Given Priya is signed in and rust-lang/cargo is a public repo none of her accounts owns
+///   When she adds "rust-lang/cargo"
+///   Then she sees that a scan reads it and its suggestions are marked "Not yours to publish"
+///   And when she presses "Scan now" on that page, the scan completes
+///   And her queue shows the suggestions about rust-lang/cargo, each marked "Not yours to publish"
+/// ```
+#[test]
+fn adding_a_repo_says_how_to_see_its_suggestions_and_offers_the_scan() {
+    let world = rra_world();
+    let mut browser = given_owner_verified(&world, Account::Priyaraman);
+
+    when_imports(&mut browser, &CARGO.full());
+
+    let added = "Added github.com/rust-lang/cargo. Scan now to read it. Its suggestions show in your review queue, marked \"Not yours to publish\".";
+    assert!(
+        browser.page.shows(added),
+        "expected {added:?}:\n{}",
+        browser.page.text()
+    );
+    browser.press("Scan now");
+    assert_eq!(
+        then_scan_reaches_on_its_own(&mut browser, "completed", 60),
+        "completed"
+    );
+    assert_eq!(
+        phrases_about(&mut browser, CARGO),
+        phrases(&[
+            CARGO.embodies(Philosophy::DependencyPinning),
+            CARGO.embodies(Philosophy::SemanticVersioning),
+            CARGO.embodies(Philosophy::TestDriven),
+        ])
+    );
+    let cards = cards_about(&mut browser, CARGO);
+    assert!(
+        cards.iter().all(|c| c.text.contains(NOT_YOURS)),
+        "{cards:?}"
+    );
+}
+
 /// IM-2 (refusal table — every row: nothing added, nothing else changes)
 /// ```gherkin
 /// @US-RRA-005 @AC-005.1 @AC-005.2 @AC-005.3 @AC-005.6 @D-RRA-T2 @D-RRA-T3 @error @C2b @C6a @C6b @C1b @infrastructure-failure @contract-shape:unbounded-preservation
