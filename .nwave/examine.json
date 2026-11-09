@@ -1,0 +1,6 @@
+{
+  "commands": [
+    {"name": "openlore-review-app", "path": "target/debug/openlore-review-app"}
+  ],
+  "build": "cargo build -p openlore-review-app"
+}
