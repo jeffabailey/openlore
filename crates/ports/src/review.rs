@@ -416,8 +416,11 @@ pub struct ScanRun {
     pub status: ScanStatus,
     pub resume_after: Option<i64>,
     pub counts: ScanCounts,
-    /// How many of its planned repos were read.
-    pub repos_read: usize,
+    /// How many of its planned repos were read — `None` for a run that
+    /// recorded no plan at all (a run kept by a release before this app
+    /// stored scan plans), which has nothing to count. A run that planned
+    /// repos and read none of them counts them: `Some(0)`.
+    pub repos_read: Option<usize>,
 }
 
 /// Owner-scoped scan runs (`scan_runs`).

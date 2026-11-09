@@ -77,7 +77,11 @@ const INTERRUPT_OWNERS_RUNNING_SCANS: &str = "UPDATE scan_runs
 
 // `resume_after` is read raw: the TIMESTAMPTZ overloads of `epoch` & co.
 // live in the ICU extension, which the app never loads.
+// The two plan counts are read apart: a run with no plan row at all has no
+// count of repos read to report, which is not the same as having read none.
 const LATEST_SCAN: &str = "SELECT status, resume_after, new_count, published_count, declined_count,
+        (SELECT count(*) FROM scan_run_repos AS planned
+         WHERE planned.owner_did = scan_runs.owner_did AND planned.run_id = scan_runs.run_id),
         (SELECT count(*) FROM scan_run_repos AS planned
          WHERE planned.owner_did = scan_runs.owner_did AND planned.run_id = scan_runs.run_id
            AND planned.status = 'read')
@@ -158,6 +162,13 @@ fn checks_of_json(stored: &str) -> Vec<AccountCheckRecord> {
 /// A stored count back as a count.
 fn read_count(stored: i32) -> usize {
     usize::try_from(stored).unwrap_or_default()
+}
+
+/// What a run's plan rows say about the repos it read: how many of them are
+/// marked read, and nothing at all when the run has no plan row, so its
+/// count would be a count over nothing (ADR-088 kept such runs).
+fn repos_read_of(planned: i64, read: i64) -> Option<usize> {
+    (planned > 0).then(|| usize::try_from(read).unwrap_or_default())
 }
 
 impl ScanRunPort for ReviewStore {
@@ -336,7 +347,7 @@ impl ScanRunPort for ReviewStore {
                         already_published: read_count(row.get(3)?),
                         declined_hidden: read_count(row.get(4)?),
                     },
-                    usize::try_from(row.get::<_, i64>(5)?).unwrap_or_default(),
+                    repos_read_of(row.get::<_, i64>(5)?, row.get::<_, i64>(6)?),
                 ))
             })
             .optional()
@@ -518,11 +529,11 @@ mod tests {
             store.finish_scan("did:plc:priya", "run-2", last, resume_after, found, KpiTally::NONE).unwrap();
             prop_assert_eq!(
                 store.latest_scan("did:plc:priya").unwrap(),
-                Some(ScanRun { status: last, resume_after, counts: found, repos_read: 0 })
+                Some(ScanRun { status: last, resume_after, counts: found, repos_read: None })
             );
             prop_assert_eq!(
                 store.latest_scan("did:plc:sam").unwrap(),
-                Some(ScanRun { status: other, resume_after: None, counts: other_found, repos_read: 0 })
+                Some(ScanRun { status: other, resume_after: None, counts: other_found, repos_read: None })
             );
         }
 

@@ -307,15 +307,15 @@ pub fn skipped_repo_message(skipped: &SkippedScanRepo) -> String {
 }
 
 /// "No GitHub account to re-check · 1 repo read · 3 new suggestions": a
-/// scan of an owner without accounts read only her imports.
-pub fn imports_only_summary(repos_read: usize, counts: ScanCounts) -> String {
-    summary_after(
-        format!(
-            "{NO_ACCOUNT_TO_RECHECK} · {}",
-            repos_read_message(repos_read)
-        ),
-        counts,
-    )
+/// scan of an owner without accounts read only her imports. A run with no
+/// plan to count says nothing about repos read: "No GitHub account to
+/// re-check · 3 new suggestions".
+pub fn imports_only_summary(repos_read: Option<usize>, counts: ScanCounts) -> String {
+    let head = match repos_read.map(repos_read_message) {
+        Some(read) => format!("{NO_ACCOUNT_TO_RECHECK} · {read}"),
+        None => NO_ACCOUNT_TO_RECHECK.to_string(),
+    };
+    summary_after(head, counts)
 }
 
 /// Whose queue is shown: an owner with a verified account, or one with no
@@ -649,7 +649,9 @@ fn verified_queue(head: QueueHead<'_>, view: &QueueView<'_>, details: &ScanDetai
             }
             (account_check_notices(view.latest_scan, details.account_checks))
             @if let Some(run) = view.latest_scan.filter(|run| run.status == ScanStatus::Completed) {
-                p role="status" { (repos_read_message(run.repos_read)) }
+                @if let Some(read) = run.repos_read {
+                    p role="status" { (repos_read_message(read)) }
+                }
                 @for skip in details.skipped {
                     p role="status" { (skipped_repo_message(skip)) }
                 }
@@ -773,7 +775,7 @@ mod tests {
                 status: ScanStatus::Completed,
                 resume_after: None,
                 counts: ScanCounts::default(),
-                repos_read: 0,
+                repos_read: Some(0),
             }),
             pending: &[],
             tally,
