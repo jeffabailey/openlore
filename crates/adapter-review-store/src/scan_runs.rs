@@ -9,7 +9,7 @@ use ports::{
 };
 
 use crate::secrets::port_error;
-use crate::{db_error, db_id, in_transaction, ReviewStore, StoreError};
+use crate::{db_error, db_id, in_transaction, ReviewStore, ScanWrite, StoreError};
 
 const START_SCAN: &str = "INSERT INTO scan_runs
     (owner_did, run_id, status, started_at) VALUES (?, ?, 'running', now())";
@@ -275,15 +275,18 @@ impl ScanRunPort for ReviewStore {
         run_id: &str,
         position: usize,
     ) -> Result<(), ReviewStoreError> {
-        self.with_connection(|conn| {
-            conn.execute(
-                MARK_REPO_READ,
-                params![owner_did, run_id, stored_count(position)],
-            )
-            .map(drop)
-            .map_err(db_error)
-        })
-        .map_err(port_error)
+        self.admits_scan_write(ScanWrite::MarkRepoRead)
+            .and_then(|()| {
+                self.with_connection(|conn| {
+                    conn.execute(
+                        MARK_REPO_READ,
+                        params![owner_did, run_id, stored_count(position)],
+                    )
+                    .map(drop)
+                    .map_err(db_error)
+                })
+            })
+            .map_err(port_error)
     }
 
     fn record_skipped(
@@ -325,15 +328,18 @@ impl ScanRunPort for ReviewStore {
         run_id: &str,
         checks: &[AccountCheckRecord],
     ) -> Result<(), ReviewStoreError> {
-        self.with_connection(|conn| {
-            conn.execute(
-                RECORD_ACCOUNT_CHECKS,
-                params![checks_json(checks), owner_did, run_id],
-            )
-            .map(drop)
-            .map_err(db_error)
-        })
-        .map_err(port_error)
+        self.admits_scan_write(ScanWrite::RecordAccountChecks)
+            .and_then(|()| {
+                self.with_connection(|conn| {
+                    conn.execute(
+                        RECORD_ACCOUNT_CHECKS,
+                        params![checks_json(checks), owner_did, run_id],
+                    )
+                    .map(drop)
+                    .map_err(db_error)
+                })
+            })
+            .map_err(port_error)
     }
 
     fn latest_scan(&self, owner_did: &str) -> Result<Option<ScanRun>, ReviewStoreError> {

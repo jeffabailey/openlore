@@ -18,7 +18,9 @@ use adapter_github::client::{
     token_days_left, token_expiry_needs_warning, TOKEN_EXPIRATION_HEADER,
 };
 use adapter_github::GithubAdapter;
-use adapter_review_store::{DataKey, DuckDbCaps, MigrationFault, ReviewStore};
+use adapter_review_store::{DataKey, DuckDbCaps, ReviewStore, StoreFaults};
+#[cfg(debug_assertions)]
+use adapter_review_store::{MigrationFault, ScanWriteFault};
 use ports::claim_domain::authority::SigningRefusal;
 use ports::{
     AccountCheckOutcome, KpiTally, OAuthPort, OutsideDefault, ProbeOutcome, ReviewStorePort,
@@ -539,11 +541,17 @@ fn wire(env: &BTreeMap<String, String>) -> Result<Wired, Refusal> {
         memory_limit_mb: Some(config.db_memory_limit_mb),
         threads: Some(config.db_threads),
     };
-    let fault = config.test_fault.map(migration_fault);
-    let store =
-        ReviewStore::open_capped_with(&config.review_db, data_key(secrets.data_key)?, caps, fault)
-            .map(Arc::new)
-            .map_err(|e| refusal(Probe::ReviewStore)(e.to_string()))?;
+    let faults = config
+        .test_fault
+        .map_or_else(StoreFaults::none, store_faults);
+    let store = ReviewStore::open_capped_with_faults(
+        &config.review_db,
+        data_key(secrets.data_key)?,
+        caps,
+        faults,
+    )
+    .map(Arc::new)
+    .map_err(|e| refusal(Probe::ReviewStore)(e.to_string()))?;
     if let Some(previous) = previous {
         let rows = store
             .rekey(&data_key(previous)?)
@@ -579,17 +587,29 @@ fn wire(env: &BTreeMap<String, String>) -> Result<Wired, Refusal> {
     })
 }
 
-/// The store fault a development build's test fault names (DWD-RRA-16).
+/// The store faults a development build's test fault names (DWD-RRA-16):
+/// each name asks the store for exactly one of them (pure, total).
 #[cfg(debug_assertions)]
-fn migration_fault(fault: TestFault) -> MigrationFault {
+fn store_faults(fault: TestFault) -> StoreFaults {
     match fault {
-        TestFault::MigrateBeforeCommit => MigrationFault::StopBeforeCommit,
+        TestFault::MigrateBeforeCommit => StoreFaults {
+            migration: Some(MigrationFault::StopBeforeCommit),
+            ..StoreFaults::none()
+        },
+        TestFault::RefuseMarkRepoRead => StoreFaults {
+            scan_write: Some(ScanWriteFault::RefuseMarkRepoRead),
+            ..StoreFaults::none()
+        },
+        TestFault::RefuseRecordAccountChecks => StoreFaults {
+            scan_write: Some(ScanWriteFault::RefuseRecordAccountChecks),
+            ..StoreFaults::none()
+        },
     }
 }
 
 /// A release build holds no test fault (the type has no values).
 #[cfg(not(debug_assertions))]
-fn migration_fault(fault: TestFault) -> MigrationFault {
+fn store_faults(fault: TestFault) -> StoreFaults {
     match fault {}
 }
 

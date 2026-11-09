@@ -368,8 +368,15 @@ fn halt_of(error: &GithubError) -> Halt {
 }
 
 /// Record how each account's check ended in this run and count the failed
-/// and unfinished ones (ids and outcomes only).
-fn record_checks(app: &App, owner_did: &str, run_id: &str, checked: &[(u64, Checked)]) {
+/// and unfinished ones (ids and outcomes only). A store that refuses the
+/// record is reported: the run has nothing to account for its checks by, so
+/// it ends interrupted rather than claim it finished.
+fn record_checks(
+    app: &App,
+    owner_did: &str,
+    run_id: &str,
+    checked: &[(u64, Checked)],
+) -> Result<(), ReviewStoreError> {
     let records: Vec<AccountCheckRecord> = checked
         .iter()
         .map(|(github_user_id, check)| AccountCheckRecord {
@@ -377,10 +384,12 @@ fn record_checks(app: &App, owner_did: &str, run_id: &str, checked: &[(u64, Chec
             outcome: check.outcome(),
         })
         .collect();
-    let _ = app.scans.record_account_checks(owner_did, run_id, &records);
+    app.scans
+        .record_account_checks(owner_did, run_id, &records)?;
     for record in &records {
         observe(app, LogEvent::ScanAccountChecked(record.outcome));
     }
+    Ok(())
 }
 
 /// How a scan that reads nothing ends, from its accounts' checks: every
@@ -446,7 +455,9 @@ async fn scan_accounts(
         checked.push((account.github_user_id, check));
         account_checks.push(account_check);
     }
-    record_checks(app, owner_did, run_id, &checked);
+    if record_checks(app, owner_did, run_id, &checked).is_err() {
+        return Ended::with_status(ScanStatus::Interrupted);
+    }
     let (scope, moved) = frozen.scope.after_moves(&account_checks);
     let Ok(scope_guard) = app.scope_locks.hold(owner_did).await else {
         return Ended::with_status(ScanStatus::Interrupted);
@@ -541,7 +552,9 @@ async fn resume_scan(
         let check = check_account(app, owner_did, account).await;
         checked.push((account.github_user_id, check));
     }
-    record_checks(app, owner_did, run_id, &checked);
+    if record_checks(app, owner_did, run_id, &checked).is_err() {
+        return Ended::with_status(ScanStatus::Interrupted);
+    }
     let bio_checks: BTreeMap<u64, BioCheck> = checked
         .iter()
         .map(|(id, check)| (*id, check.bio_check()))
@@ -645,7 +658,9 @@ fn listed_sources(app: &App, owner_did: &str) -> Result<ListedSources, ReviewSto
 /// Read the planned repos in order, each marked read at its plan position
 /// once stored; pause when GitHub's budget runs low. Before each repo its
 /// source's presence is re-read: a removed source's repo is not read
-/// (ADR-088 §7).
+/// (ADR-088 §7). A store that refuses the mark ends the run interrupted,
+/// the way an unreadable source list ends it: the repo's suggestions are
+/// kept, the row stays planned, and the resume reads it again.
 async fn read_planned(
     app: &App,
     owner_did: &str,
@@ -666,7 +681,13 @@ async fn read_planned(
             Ok(counts) => found = add_counts(found, counts),
             Err(ended) => return ended.after_finding(found),
         }
-        let _ = app.scans.mark_repo_read(owner_did, run_id, *position);
+        if app
+            .scans
+            .mark_repo_read(owner_did, run_id, *position)
+            .is_err()
+        {
+            return Ended::with_status(ScanStatus::Interrupted).after_finding(found);
+        }
         emit(LogEvent::ScanRepoRead(AccountCheckOutcome::Passed));
     }
     Ended::with_status(ScanStatus::Completed).after_finding(found)

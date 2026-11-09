@@ -1328,10 +1328,18 @@ pub fn scan_viewer_fail_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<
 // the fault names: every occurrence of a fault name sits behind a
 // `#[cfg(...)]` gate, like the viewer fault seams above.
 
-/// The fault names the review app's development build honours.
-/// `StopBeforeCommit` is the store's variant the name maps to (review R7):
-/// a release build must not even hold it.
-const REVIEW_APP_TEST_FAULT_TOKENS: &[&str] = &["migrate_before_commit", "StopBeforeCommit"];
+/// The fault names the review app's development build honours, each with
+/// the store variant it maps to (review R7): a release build must not even
+/// hold the variant. `refuse_*` name a scan write the store refuses every
+/// time it is called (fix-repos-read-truthful S1).
+const REVIEW_APP_TEST_FAULT_TOKENS: &[&str] = &[
+    "migrate_before_commit",
+    "StopBeforeCommit",
+    "refuse_mark_repo_read",
+    "RefuseMarkRepoRead",
+    "refuse_record_account_checks",
+    "RefuseRecordAccountChecks",
+];
 
 /// The source trees the review-app test-fault guard scans.
 const REVIEW_APP_TEST_FAULT_GUARDED_DIRS: &[&str] = &[

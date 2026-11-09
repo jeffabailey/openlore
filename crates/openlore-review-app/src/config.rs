@@ -33,18 +33,30 @@ pub(crate) const SCAN_CONCURRENCY_VAR: &str = "OPENLORE_REVIEW_SCAN_CONCURRENCY"
 /// The test seam that runs a development build's clock ahead, in seconds.
 pub(crate) const CLOCK_SKEW_VAR: &str = "REVIEW_APP_CLOCK_SKEW_SECS";
 
-/// The test seam that cuts a development build's start off at a named
-/// fault (DWD-RRA-16); a release build refuses to start with it set.
+/// The test seam that makes a development build hold a named fault
+/// (DWD-RRA-16) — a start cut off at a migration point, or a scan write the
+/// store refuses; a release build refuses to start with it set.
 pub(crate) const TEST_FAULT_VAR: &str = "REVIEW_APP_TEST_FAULT";
 
-/// A fault a development build can be asked to stop at. In a release build
-/// the type has no values: a release binary cannot hold a fault.
+/// A fault a development build can be asked to hold.
+#[cfg(debug_assertions)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TestFault {
     /// The v1 → v2 store update stops just before COMMIT; the start fails.
-    #[cfg(debug_assertions)]
     MigrateBeforeCommit,
+    /// The store refuses to mark a planned repo read, every time a scan asks
+    /// it to; every other read and write behaves normally.
+    RefuseMarkRepoRead,
+    /// The store refuses to record a run's account checks, every time a scan
+    /// asks it to; every other read and write behaves normally.
+    RefuseRecordAccountChecks,
 }
+
+/// In a release build the type has no values: a release binary cannot hold
+/// a fault (and refuses to start with the seam set at all).
+#[cfg(not(debug_assertions))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TestFault {}
 
 /// How far ahead the clock seam may run: up to 60 days, past ADR-073's
 /// 30-day server-side session expiry (U-38).
@@ -299,6 +311,8 @@ fn clock_skew(value: &str) -> Result<u64, ConfigError> {
 fn test_fault(value: &str) -> Result<TestFault, ConfigError> {
     match value {
         "migrate_before_commit" => Ok(TestFault::MigrateBeforeCommit),
+        "refuse_mark_repo_read" => Ok(TestFault::RefuseMarkRepoRead),
+        "refuse_record_account_checks" => Ok(TestFault::RefuseRecordAccountChecks),
         _ => Err(ConfigError::Invalid {
             name: TEST_FAULT_VAR,
             reason: "not a known test fault",

@@ -145,6 +145,9 @@ pub enum StoreError {
     /// The v1 → v2 step stopped before COMMIT ([`MigrationFault`]): the file
     /// is still v1 and the next start migrates it.
     MigrationStopped,
+    /// This development build was asked to refuse that scan write
+    /// ([`ScanWriteFault`]): nothing of it was stored.
+    ScanWriteRefused,
 }
 
 impl std::fmt::Display for StoreError {
@@ -169,6 +172,9 @@ impl std::fmt::Display for StoreError {
                 f,
                 "review store v1 -> v2 update stopped before it committed (test fault)"
             ),
+            Self::ScanWriteRefused => {
+                write!(f, "review store refused a scan write (test fault)")
+            }
         }
     }
 }
@@ -294,6 +300,9 @@ pub struct ReviewStore {
     key: DataKey,
     /// The DuckDB caps applied at open; the probe reads them back (B11).
     caps: DuckDbCaps,
+    /// The scan write this store refuses, if a development build asked it
+    /// to (DWD-RRA-16); always `None` in a release build.
+    scan_write_fault: Option<ScanWriteFault>,
 }
 
 impl ReviewStore {
@@ -322,6 +331,26 @@ impl ReviewStore {
         caps: DuckDbCaps,
         fault: Option<MigrationFault>,
     ) -> Result<Self, StoreError> {
+        Self::open_capped_with_faults(
+            path,
+            key,
+            caps,
+            StoreFaults {
+                migration: fault,
+                scan_write: None,
+            },
+        )
+    }
+
+    /// [`ReviewStore::open_capped_with`] holding every fault a development
+    /// build named (DWD-RRA-16): the migration point the v1 → v2 step stops
+    /// at, and the scan write every call of it refuses.
+    pub fn open_capped_with_faults(
+        path: &Path,
+        key: DataKey,
+        caps: DuckDbCaps,
+        faults: StoreFaults,
+    ) -> Result<Self, StoreError> {
         let conn = open_file(path, caps)?;
         let conn = match schema_verdict(recorded_version(&conn)?) {
             SchemaVerdict::MigrateFromV1 => {
@@ -330,27 +359,28 @@ impl ReviewStore {
             }
             _ => conn,
         };
-        Self::from_connection(conn, key, caps, fault)
+        Self::from_connection(conn, key, caps, faults)
     }
 
     /// An in-memory store (the image self-test: no disk, no network).
     pub fn open_in_memory(key: DataKey) -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory().map_err(db_error)?;
         apply_caps(&conn, DuckDbCaps::default())?;
-        Self::from_connection(conn, key, DuckDbCaps::default(), None)
+        Self::from_connection(conn, key, DuckDbCaps::default(), StoreFaults::none())
     }
 
     fn from_connection(
         conn: Connection,
         key: DataKey,
         caps: DuckDbCaps,
-        fault: Option<MigrationFault>,
+        faults: StoreFaults,
     ) -> Result<Self, StoreError> {
-        migrate(&conn, fault)?;
+        migrate(&conn, faults.migration)?;
         Ok(Self {
             conn: Mutex::new(conn),
             key,
             caps,
+            scan_write_fault: faults.scan_write,
         })
     }
 
@@ -380,6 +410,13 @@ impl ReviewStore {
     /// The caps applied at open.
     pub(crate) fn caps(&self) -> DuckDbCaps {
         self.caps
+    }
+
+    /// `write` as the fault this store was opened holding answers it: the
+    /// one write a development build was asked to refuse is refused every
+    /// time it is called; every other write is admitted (DWD-RRA-16).
+    pub(crate) fn admits_scan_write(&self, write: ScanWrite) -> Result<(), StoreError> {
+        admits(self.scan_write_fault, write)
     }
 
     /// Seal `plaintext` bound to `aad` under the active key.
@@ -492,6 +529,73 @@ fn stop_at(fault: Option<MigrationFault>) -> Result<(), StoreError> {
 /// A release build never stops the step.
 #[cfg(not(debug_assertions))]
 fn stop_at(fault: Option<MigrationFault>) -> Result<(), StoreError> {
+    match fault {
+        Some(never) => match never {},
+        None => Ok(()),
+    }
+}
+
+/// A scan write a development build can be asked to refuse (DWD-RRA-16):
+/// every call of that one write returns [`StoreError::ScanWriteRefused`],
+/// while every other read and write behaves normally. Only a development
+/// build knows any (review R7).
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanWriteFault {
+    /// Marking a planned repo read.
+    RefuseMarkRepoRead,
+    /// Recording how a run's account checks ended.
+    RefuseRecordAccountChecks,
+}
+
+/// A release build knows no scan-write fault: the type has no values.
+#[cfg(not(debug_assertions))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanWriteFault {}
+
+/// The faults a store is opened holding (DWD-RRA-16). A release build can
+/// name neither: both fault types have no values there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreFaults {
+    /// Where the v1 → v2 step stops instead of committing.
+    pub migration: Option<MigrationFault>,
+    /// The one scan write every call of which is refused.
+    pub scan_write: Option<ScanWriteFault>,
+}
+
+impl StoreFaults {
+    /// A store that holds no fault (production, and every release build).
+    pub const fn none() -> Self {
+        Self {
+            migration: None,
+            scan_write: None,
+        }
+    }
+}
+
+/// One scan write the store makes, as the fault seam names it. Unlike a
+/// fault, a write exists in every build: it is what the store is doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScanWrite {
+    MarkRepoRead,
+    RecordAccountChecks,
+}
+
+/// Whether `fault` refuses `write` (pure, total).
+#[cfg(debug_assertions)]
+fn admits(fault: Option<ScanWriteFault>, write: ScanWrite) -> Result<(), StoreError> {
+    match (fault, write) {
+        (Some(ScanWriteFault::RefuseMarkRepoRead), ScanWrite::MarkRepoRead)
+        | (Some(ScanWriteFault::RefuseRecordAccountChecks), ScanWrite::RecordAccountChecks) => {
+            Err(StoreError::ScanWriteRefused)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// A release build refuses no scan write.
+#[cfg(not(debug_assertions))]
+fn admits(fault: Option<ScanWriteFault>, _write: ScanWrite) -> Result<(), StoreError> {
     match fault {
         Some(never) => match never {},
         None => Ok(()),
