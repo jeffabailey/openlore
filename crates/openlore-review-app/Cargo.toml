@@ -174,5 +174,12 @@ name = "review_app_legacy_run_repos_read"
 path = "../../tests/acceptance/review_app_legacy_run_repos_read.rs"
 harness = true
 
+# A scan the store stops by refusing one of its writes: the run is left
+# interrupted and resumable, never finished with an untrue repos-read count.
+[[test]]
+name = "review_app_scan_store_failure"
+path = "../../tests/acceptance/review_app_scan_store_failure.rs"
+harness = true
+
 [lints]
 workspace = true

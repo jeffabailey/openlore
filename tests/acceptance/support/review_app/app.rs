@@ -19,6 +19,7 @@
 //! | `REVIEW_APP_ALLOW_LOOPBACK_HTTP=1` | accept `http://127.0.0.1` origin + upstreams (test builds only; mirrors the `test-autoconfirm` feature discipline) |
 //! | `REVIEW_APP_CLOCK_SKEW_SECS` | run the clock ahead (development builds only; release refuses) |
 //! | `REVIEW_APP_TEST_FAULT=migrate_before_commit` | review-app-repos-and-accounts MG-3: stop the v1 → v2 update just before COMMIT and exit (development builds only; a release build must refuse to start with it — DELIVER adds it to the xtask release-build guard) |
+//! | `REVIEW_APP_TEST_FAULT=refuse_mark_repo_read` / `=refuse_record_account_checks` | the store refuses that one scan write every time it is called, everything else behaving normally (development builds only; a release build refuses to start with it). [`ReviewApp::restart_without_test_fault`] is "the store accepts those writes again" |
 //!
 //! Launches retry while the app loses the port race (it must know `APP_ORIGIN`
 //! before it starts, so it cannot bind `:0`): fresh ports on a first start; on
@@ -36,6 +37,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
+
+/// The development-build fault seam: which fault the app is asked to hold.
+pub const TEST_FAULT_VAR: &str = "REVIEW_APP_TEST_FAULT";
 
 /// The granular scope set (ADR-073 / SPIKE-3).
 pub const OAUTH_SCOPES: &str =
@@ -388,6 +392,16 @@ impl ReviewApp {
         self.settings
             .extra_env
             .push(("REVIEW_APP_CLOCK_SKEW_SECS".to_string(), secs.to_string()));
+        self.restart()
+    }
+
+    /// Restart the same app (same origin, store and secrets) holding no
+    /// development-build test fault: the store accepts again every write it
+    /// was refusing, and whatever the refused run left behind is still there.
+    pub fn restart_without_test_fault(mut self) -> Self {
+        self.settings
+            .extra_env
+            .retain(|(name, _)| name != TEST_FAULT_VAR);
         self.restart()
     }
 
