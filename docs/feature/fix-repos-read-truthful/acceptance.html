@@ -157,13 +157,13 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 
 <p>P1</p>
 
-<pre><code>A signed-in owner whose review store refuses to save that a repo was read starts a scan; then the store accepts those writes again and she resumes the scan from her queue.
+<pre><code>A signed-in owner whose review store refuses to save that a repo was read starts a scan; then the store accepts those writes again and she picks the unfinished scan up from her queue.
 </code></pre>
 
-<pre><code>The scan ends interrupted, her queue offers to resume it and claims no repos read at all; the resumed scan reads every repo whose read was never saved, finishes, and her queue then counts exactly the repos it read.
+<pre><code>The scan ends interrupted, her queue offers only to resume it and claims no repos read at all; resuming reads every repo whose read was never saved, finishes, and her queue then accounts for exactly as many repos as the resumed scan read, no more and no fewer.
 </code></pre>
 
-<pre><code>She is never told a scan finished when nothing it did was saved: she sees an interrupted scan, resumes it, and gets a repos-read count she can trust.
+<pre><code>She is never told a scan finished when nothing it did was saved: she sees an interrupted scan, picks that same run up rather than starting over, and gets a repos-read count she can trust.
 </code></pre>
 
 <h5>Disposition</h5>
@@ -172,7 +172,7 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 
 <p>tests/acceptance/review_app_scan_store_failure.rs::a_scan_that_cannot_save_that_it_read_a_repo_is_offered_for_resuming</p>
 
-<pre><code>The scan keeps reading the rest of its planned repos after the refused save and only ends interrupted at the end of the plan, instead of stopping at the refusal; and the resume re-plans from scratch instead of picking up the interrupted run&#x27;s frozen plan. Neither loses a repo whose read was never saved and neither reports a finished run with an untrue count, so neither breaks this promise; the frozen-plan resume is a separate promise already observed elsewhere.
+<pre><code>The scan keeps reading the rest of its planned repos after the refused save and only ends interrupted at the end of the plan, instead of stopping at the refusal. That loses no repo whose read was never saved and reports no finished run with an untrue count, so it does not break this promise.
 </code></pre>
 
 <h6>Obligations</h6>
@@ -183,13 +183,13 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 
 <p>P1</p>
 
-<pre><code>A signed-in owner whose review store refuses to save how her GitHub accounts&#x27; checks ended starts a scan; then the store accepts those writes again and she resumes the scan from her queue.
+<pre><code>A signed-in owner whose review store refuses to save how her GitHub accounts&#x27; checks ended starts a scan; then the store accepts those writes again and she picks the unfinished scan up from her queue.
 </code></pre>
 
-<pre><code>The scan ends interrupted, her queue offers to resume it and claims no repos read at all; the resumed scan reads her repos, finishes, and her queue then counts exactly the repos it read.
+<pre><code>The scan ends interrupted, her queue offers only to resume it and claims no repos read at all; resuming reads her repos, finishes, and her queue then accounts for exactly as many repos as the resumed scan read, no more and no fewer.
 </code></pre>
 
-<pre><code>A scan whose record of her account checks could not be saved is shown to her as interrupted and resumable, not as a finished scan that read no repos.
+<pre><code>A scan whose record of her account checks could not be saved is shown to her as interrupted and resumable, not as a finished scan that read no repos, and the count she finally sees is the true one.
 </code></pre>
 
 <h5>Disposition</h5>
@@ -198,7 +198,7 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 
 <p>tests/acceptance/review_app_scan_store_failure.rs::a_scan_that_cannot_save_her_account_checks_is_offered_for_resuming</p>
 
-<pre><code>The run ends interrupted before any repo is read, so the check that no repo whose read was never saved is skipped has nothing to compare; a scan that instead read some repos and then ended interrupted would also pass. It would still lose nothing, because the resume reads the repos again and the count the queue then shows matches them, so this promise is not broken.
+<pre><code>The run ends interrupted before any repo is read, so the check that no repo whose read was never saved is skipped has nothing to compare; a scan that instead read some repos and then ended interrupted would also pass. It still loses nothing, because the resume reads the repos again and the queue then accounts for exactly those, so this promise is not broken.
 </code></pre>
 
 <h6>Obligations</h6>

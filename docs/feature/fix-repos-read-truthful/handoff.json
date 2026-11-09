@@ -7,12 +7,12 @@
 ],
 "disposition": {
 "kind": "Tested",
-"still_passes_if": "F34",
+"still_passes_if": "F42",
 "test": "tests/acceptance/review_app_scan_store_failure.rs::a_scan_that_cannot_save_that_it_read_a_repo_is_offered_for_resuming"
 },
-"expected": "F32",
-"stimulus": "F31",
-"user_result": "F33"
+"expected": "F40",
+"stimulus": "F39",
+"user_result": "F41"
 },
 {
 "covers": [
@@ -20,12 +20,12 @@
 ],
 "disposition": {
 "kind": "Tested",
-"still_passes_if": "F38",
+"still_passes_if": "F46",
 "test": "tests/acceptance/review_app_scan_store_failure.rs::a_scan_that_cannot_save_her_account_checks_is_offered_for_resuming"
 },
-"expected": "F36",
-"stimulus": "F35",
-"user_result": "F37"
+"expected": "F44",
+"stimulus": "F43",
+"user_result": "F45"
 }
 ],
 "S2": [
@@ -72,7 +72,7 @@
 },
 "counters": {
 "E": 5,
-"F": 38,
+"F": 46,
 "P": 2,
 "S": 2
 },
@@ -220,15 +220,15 @@
 "F29": "She can tell a scan that read none of her chosen repos from a run that never recorded any, because the first still reports its count.",
 "F3": "A scan whose store write fails ends Interrupted and is resumable, never Completed with a wrong repos-read count.",
 "F30": "The line is kept for every completed run, plan or no plan; the run kept from before scan plans were stored rejects that.",
-"F31": "A signed-in owner whose review store refuses to save that a repo was read starts a scan; then the store accepts those writes again and she resumes the scan from her queue.",
-"F32": "The scan ends interrupted, her queue offers to resume it and claims no repos read at all; the resumed scan reads every repo whose read was never saved, finishes, and her queue then counts exactly the repos it read.",
-"F33": "She is never told a scan finished when nothing it did was saved: she sees an interrupted scan, resumes it, and gets a repos-read count she can trust.",
-"F34": "The scan keeps reading the rest of its planned repos after the refused save and only ends interrupted at the end of the plan, instead of stopping at the refusal; and the resume re-plans from scratch instead of picking up the interrupted run's frozen plan. Neither loses a repo whose read was never saved and neither reports a finished run with an untrue count, so neither breaks this promise; the frozen-plan resume is a separate promise already observed elsewhere.",
-"F35": "A signed-in owner whose review store refuses to save how her GitHub accounts' checks ended starts a scan; then the store accepts those writes again and she resumes the scan from her queue.",
-"F36": "The scan ends interrupted, her queue offers to resume it and claims no repos read at all; the resumed scan reads her repos, finishes, and her queue then counts exactly the repos it read.",
-"F37": "A scan whose record of her account checks could not be saved is shown to her as interrupted and resumable, not as a finished scan that read no repos.",
-"F38": "The run ends interrupted before any repo is read, so the check that no repo whose read was never saved is skipped has nothing to compare; a scan that instead read some repos and then ended interrupted would also pass. It would still lose nothing, because the resume reads the repos again and the count the queue then shows matches them, so this promise is not broken.",
+"F39": "A signed-in owner whose review store refuses to save that a repo was read starts a scan; then the store accepts those writes again and she picks the unfinished scan up from her queue.",
 "F4": "A scan whose store write fails (marking a repo read, or recording an account's check) ends Interrupted, and the queue offers Resume scan instead of a completed '0 repos read'.",
+"F40": "The scan ends interrupted, her queue offers only to resume it and claims no repos read at all; resuming reads every repo whose read was never saved, finishes, and her queue then accounts for exactly as many repos as the resumed scan read, no more and no fewer.",
+"F41": "She is never told a scan finished when nothing it did was saved: she sees an interrupted scan, picks that same run up rather than starting over, and gets a repos-read count she can trust.",
+"F42": "The scan keeps reading the rest of its planned repos after the refused save and only ends interrupted at the end of the plan, instead of stopping at the refusal. That loses no repo whose read was never saved and reports no finished run with an untrue count, so it does not break this promise.",
+"F43": "A signed-in owner whose review store refuses to save how her GitHub accounts' checks ended starts a scan; then the store accepts those writes again and she picks the unfinished scan up from her queue.",
+"F44": "The scan ends interrupted, her queue offers only to resume it and claims no repos read at all; resuming reads her repos, finishes, and her queue then accounts for exactly as many repos as the resumed scan read, no more and no fewer.",
+"F45": "A scan whose record of her account checks could not be saved is shown to her as interrupted and resumable, not as a finished scan that read no repos, and the count she finally sees is the true one.",
+"F46": "The run ends interrupted before any repo is read, so the check that no repo whose read was never saved is skipped has nothing to compare; a scan that instead read some repos and then ended interrupted would also pass. It still loses nothing, because the resume reads the repos again and the queue then accounts for exactly those, so this promise is not broken.",
 "F6": "The run's stored status is Interrupted, the queue offers 'Resume scan', and no completed-run 'repos read' line is shown; resuming once the store accepts writes reads the repos not yet marked read.",
 "F7": "The run ends Completed (or the queue shows a repos-read count) after a refused store write, or resume skips a repo whose read was never stored.",
 "F8": "A completed run with no plan rows shows no repos-read line; a planned run keeps its true count.",

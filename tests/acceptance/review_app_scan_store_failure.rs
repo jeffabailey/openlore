@@ -19,7 +19,7 @@ mod review_app;
 use std::collections::BTreeSet;
 
 use review_app::app::TEST_FAULT_VAR;
-use review_app::repos_and_accounts::{github_mark, repos_read_since};
+use review_app::repos_and_accounts::{github_mark, repos_read_since, when_scans};
 use review_app::*;
 
 // =============================================================================
@@ -57,8 +57,12 @@ impl RefusedWrite {
 /// What the queue says about repos read, in both its wordings.
 const REPOS_READ_WORDINGS: [&str; 2] = ["repos read", "repo read"];
 
+/// The actions that start a new scan instead of picking up an unfinished
+/// one; the first is what a finished run offers.
+const FRESH_SCAN_LABELS: [&str; 2] = ["Scan again", "Scan my repos"];
+
 /// The action a finished scan offers; a run that is not finished must not.
-const SCAN_AGAIN: &str = "Scan again";
+const SCAN_AGAIN: &str = FRESH_SCAN_LABELS[0];
 
 /// The action an unfinished run offers its owner.
 const RESUME_SCAN: &str = "Resume scan";
@@ -103,14 +107,6 @@ fn given_owner_ready_to_scan(world: &ReviewWorld) -> Browser {
     given_github_verified(world, Persona::Priya)
 }
 
-/// WHEN she runs a scan to its end: the status it ended on, and the repos it
-/// read before it ended.
-fn when_she_scans(world: &ReviewWorld, browser: &mut Browser) -> (String, BTreeSet<String>) {
-    let mark = github_mark(world);
-    let status = when_scan_finishes(browser);
-    (status, repos_read_since(world, mark))
-}
-
 /// WHEN the store accepts those writes again (the app runs again on the same
 /// store, holding no fault).
 fn when_the_store_accepts_writes_again(world: ReviewWorld) -> ReviewWorld {
@@ -126,21 +122,33 @@ fn when_the_store_accepts_writes_again(world: ReviewWorld) -> ReviewWorld {
     }
 }
 
-/// WHEN she resumes the unfinished scan from her queue: the status it ended
-/// on, and the repos the resumed run read.
+/// WHEN she picks the unfinished scan up from her queue — the only scan
+/// action it offers — and it runs to its end: the status it ended on, and the
+/// repos the resumed run read.
 fn when_she_resumes(world: &ReviewWorld, browser: &mut Browser) -> (String, BTreeSet<String>) {
     let mark = github_mark(world);
     let page = browser.open("/review");
+    let queue = page.text();
     assert!(
         page.offers(RESUME_SCAN),
         "WHAT: the queue offers no {RESUME_SCAN:?} to pick the unfinished scan up with.\n\
          WHY: a scan the store cut short keeps the suggestions it found and must be \
          resumable by its owner, or the repos it never recorded are lost to her.\n\
          HOW: end a run whose store write was refused the way an unreadable source \
-         list ends it, so the queue offers {RESUME_SCAN:?}.\nqueue:\n{}",
-        page.text()
+         list ends it, so the queue offers {RESUME_SCAN:?}.\nqueue:\n{queue}"
     );
-    let status = when_scan_finishes(browser);
+    for starting_over in FRESH_SCAN_LABELS {
+        assert!(
+            !page.offers(starting_over),
+            "WHAT: the queue offers {starting_over:?} beside {RESUME_SCAN:?} for a scan \
+             the store cut short.\n\
+             WHY: she is owed the run she already paid for: starting a new scan abandons \
+             the suggestions it found and spends another of her day's scans.\n\
+             HOW: a run that did not finish offers only {RESUME_SCAN:?}.\nqueue:\n{queue}"
+        );
+    }
+    browser.press(RESUME_SCAN);
+    let status = then_scan_reaches_on_its_own(browser, "completed", 60);
     (status, repos_read_since(world, mark))
 }
 
@@ -212,21 +220,50 @@ fn then_the_resume_read_what_was_never_saved(
     );
 }
 
-/// THEN her queue now accounts for exactly the repos the resumed run read.
+/// Every repos-read number the queue claims, in the order it shows them: the
+/// whole number in front of each wording, so an over-count that merely ends
+/// in the true one is read as the number it is.
+fn counts_claimed(text: &str) -> Vec<usize> {
+    let mut claimed: Vec<(usize, usize)> = Vec::new();
+    for wording in REPOS_READ_WORDINGS {
+        let mut from = 0;
+        while let Some(found) = text[from..].find(wording) {
+            let at = from + found;
+            let digits: String = text[..at]
+                .trim_end()
+                .chars()
+                .rev()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<Vec<char>>()
+                .into_iter()
+                .rev()
+                .collect();
+            if let Ok(number) = digits.parse::<usize>() {
+                claimed.push((at, number));
+            }
+            from = at + wording.len();
+        }
+    }
+    claimed.sort_unstable();
+    claimed.into_iter().map(|(_, number)| number).collect()
+}
+
+/// THEN her queue now accounts for exactly the repos the resumed run read —
+/// one count, neither more nor fewer than she actually got.
 fn then_her_queue_counts_exactly(browser: &mut Browser, repos: &BTreeSet<String>) {
-    let expected = match repos.len() {
-        1 => "1 repo read".to_string(),
-        n => format!("{n} repos read"),
-    };
+    let expected = vec![repos.len()];
     let page = browser.open("/review");
     let text = page.text();
-    assert!(
-        text.contains(&expected),
-        "WHAT: after resuming, the queue does not say {expected:?}, though the \
-         resumed scan read {repos:?}.\n\
+    let claimed = counts_claimed(&text);
+    assert_eq!(
+        claimed, expected,
+        "WHAT: after resuming, the queue accounts for {claimed:?} repos read, not \
+         exactly {expected:?}, though the resumed scan read {repos:?}.\n\
          WHY: the whole point of the count is that it matches the repos the scan \
-         actually read and the store actually holds.\n\
-         HOW: mark each planned repo read as it is read, and account for those.\nqueue:\n{text}"
+         actually read and the store actually holds; a larger number tells her repos \
+         were read that never were, a smaller one hides work she is owed.\n\
+         HOW: mark each planned repo read as it is read, and account for exactly \
+         those.\nqueue:\n{text}"
     );
 }
 
@@ -264,7 +301,7 @@ fn a_scan_that_cannot_save_that_it_read_a_repo_is_offered_for_resuming() {
     let world = given_store_refusing(refused);
     let mut browser = given_owner_ready_to_scan(&world);
 
-    let (status, read_before) = when_she_scans(&world, &mut browser);
+    let (status, read_before) = when_scans(&world, &mut browser);
 
     then_the_scan_ended_interrupted(&status, refused);
     then_her_queue_offers_to_resume_and_claims_no_count(&mut browser);
@@ -294,7 +331,7 @@ fn a_scan_that_cannot_save_her_account_checks_is_offered_for_resuming() {
     let world = given_store_refusing(refused);
     let mut browser = given_owner_ready_to_scan(&world);
 
-    let (status, read_before) = when_she_scans(&world, &mut browser);
+    let (status, read_before) = when_scans(&world, &mut browser);
 
     then_the_scan_ended_interrupted(&status, refused);
     then_her_queue_offers_to_resume_and_claims_no_count(&mut browser);
