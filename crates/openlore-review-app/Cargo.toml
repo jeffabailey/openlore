@@ -167,5 +167,12 @@ name = "review_app_local_preview"
 path = "../../tests/acceptance/review_app_local_preview.rs"
 harness = true
 
+# The queue's "repos read" line for a run kept from before scan plans were
+# stored, and for a run that has a plan (its count kept, nought included).
+[[test]]
+name = "review_app_legacy_run_repos_read"
+path = "../../tests/acceptance/review_app_legacy_run_repos_read.rs"
+harness = true
+
 [lints]
 workspace = true
