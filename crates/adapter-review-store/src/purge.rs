@@ -53,9 +53,9 @@ mod tests {
     use crate::DataKey;
     use ports::{
         GithubAccountsWrite, GithubLinkPort, ImportedRepo, ImportedReposWrite, KpiCounterPort,
-        NewWebSession, PlannedScanRepo, RepoChoiceWrite, RepoSource, ReviewStateRead,
-        ReviewStateWrite, SavedRepoChoice, ScanRunPort, SecretStorePort, SessionPort, Suggestion,
-        SuggestionKey, SuggestionSource,
+        NewWebSession, PlanRowStatus, PlannedScanRepo, RepoChoiceWrite, RepoSource,
+        ReviewStateRead, ReviewStateWrite, SavedRepoChoice, ScanPlanRow, ScanRunPort,
+        SecretStorePort, SessionPort, Suggestion, SuggestionKey, SuggestionSource,
     };
     use proptest::prelude::*;
 
@@ -183,13 +183,16 @@ mod tests {
             .save_choice(owner, github_id, &chosen, KpiTally::NONE)
             .unwrap();
         store.start_scan(owner, &format!("run-{owner}")).unwrap();
-        let plan: Vec<PlannedScanRepo> = chosen
+        let plan: Vec<ScanPlanRow> = chosen
             .iter()
-            .map(|c| PlannedScanRepo {
-                repo_id: c.repo_id,
-                full_name: c.full_name.clone(),
-                source: RepoSource::Account(github_id),
-                outside_default: None,
+            .map(|c| ScanPlanRow {
+                repo: PlannedScanRepo {
+                    repo_id: c.repo_id,
+                    full_name: c.full_name.clone(),
+                    source: RepoSource::Account(github_id),
+                    outside_default: None,
+                },
+                status: PlanRowStatus::Planned,
             })
             .collect();
         store

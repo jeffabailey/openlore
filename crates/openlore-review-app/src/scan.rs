@@ -469,10 +469,17 @@ async fn scan_accounts(
     }
     let scan_plan = scope.plan(&account_checks);
     let plan = scan_plan.rows(&frozen.imports);
+    let planned_rows: Vec<ScanPlanRow> = plan
+        .iter()
+        .map(|repo| ScanPlanRow {
+            repo: repo.clone(),
+            status: PlanRowStatus::Planned,
+        })
+        .collect();
     let every_saved = frozen.saved.concat();
     let recorded = app
         .scans
-        .record_plan(owner_did, run_id, &plan)
+        .record_plan(owner_did, run_id, &planned_rows)
         .and_then(|()| {
             app.scans
                 .record_skipped(owner_did, run_id, &named_skips(&scan_plan, &every_saved))
@@ -573,18 +580,19 @@ async fn resume_scan(
         .to_read
         .iter()
         .map(|position| {
-            let row = &resumed.rows[*position];
+            let row = &resumed.rows[*position].repo;
             (*position, row.source, carried_repo(row))
         })
         .collect();
     read_planned(app, owner_did, run_id, &to_read).await
 }
 
-/// A resuming run's own plan: the paused run's rows still `planned` that
-/// [`resume_plan`] reads now or carries, in plan order, and the paused
-/// run's skipped repos.
+/// A resuming run's own plan: the rows of the paused run's plan that
+/// [`resume_plan`] keeps — those the scan already read, taken over `read`,
+/// and those this run reads now or carries, `planned` — in plan order, and
+/// the paused run's skipped repos.
 struct ResumedPlan {
-    rows: Vec<PlannedScanRepo>,
+    rows: Vec<ScanPlanRow>,
     /// Positions in `rows` read now.
     to_read: Vec<usize>,
     skipped: Vec<SkippedScanRepo>,
@@ -611,11 +619,17 @@ impl ResumedPlan {
             .iter()
             .filter_map(|(old, why)| named_carried_skip(&plan[*old].repo, *why));
         Self {
-            rows: kept.iter().map(|old| plan[*old].repo.clone()).collect(),
+            rows: kept
+                .iter()
+                .map(|old| ScanPlanRow {
+                    repo: plan[old.position].repo.clone(),
+                    status: old.status,
+                })
+                .collect(),
             to_read: kept
                 .iter()
                 .enumerate()
-                .filter(|(_, old)| resume.to_read.contains(old))
+                .filter(|(_, old)| resume.to_read.contains(&old.position))
                 .map(|(position, _)| position)
                 .collect(),
             skipped: skipped.iter().cloned().chain(skipped_now).collect(),

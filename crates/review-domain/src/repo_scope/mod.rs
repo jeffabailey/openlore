@@ -50,7 +50,7 @@ pub use plan::{
 };
 pub use resume::{
     resume_plan, resumes_frozen_plan, standing_after_check, BioCheck, CarriedSkip, FrozenRow,
-    ListedSources, Resume, StandingChange,
+    KeptRow, ListedSources, Resume, StandingChange,
 };
 pub use visibility::visible;
 
@@ -399,5 +399,67 @@ mod tests {
             prop_assert_eq!(removed, unlisted);
             prop_assert!(resume.to_read.iter().all(|position| listed.holds(sources[*position])));
         }
+
+        /// L1, L2 and L3. Universe: frozen plans of any rows with any
+        /// status, any bio check of any account and any sources no longer
+        /// listed. A resume takes over as `read` exactly the rows an
+        /// earlier run of the scan already read — whatever the checks and
+        /// the removals say now — reads none of them again, and keeps
+        /// those rows and the rows still to read as one plan in plan
+        /// order, each position once: so the resuming run accounts for the
+        /// whole scan and counts no repo twice.
+        #[test]
+        fn a_resume_keeps_as_read_exactly_the_rows_the_scan_already_read(
+            plan in prop::collection::vec((plan_source(), row_status()), 0..10),
+            checks in prop::collection::btree_map(1u64..5, bio_check(), 0..4),
+            accounts in prop::collection::vec(1u64..5, 0..4),
+            imports in prop::collection::vec(1u64..5, 0..4),
+        ) {
+            let rows: Vec<FrozenRow> = plan
+                .iter()
+                .map(|(source, status)| FrozenRow { source: *source, status: *status })
+                .collect();
+            let listed = ListedSources { accounts, imports };
+
+            let resume = resume_plan(&rows, &checks, &listed.removed_from(&rows));
+
+            let read_before: Vec<usize> = (0..rows.len())
+                .filter(|position| rows[*position].status == PlanRowStatus::Read)
+                .collect();
+            prop_assert_eq!(&resume.already_read, &read_before, "taken over as read");
+            prop_assert!(
+                resume.to_read.iter().all(|position| !read_before.contains(position)),
+                "no row the scan read is read again"
+            );
+
+            let kept = resume.kept();
+            let mut expected: Vec<KeptRow> = read_before
+                .iter()
+                .map(|position| KeptRow { position: *position, status: PlanRowStatus::Read })
+                .chain(resume.to_read.iter().chain(&resume.carried).map(|position| KeptRow {
+                    position: *position,
+                    status: PlanRowStatus::Planned,
+                }))
+                .collect();
+            expected.sort_unstable_by_key(|row| row.position);
+            prop_assert_eq!(&kept, &expected, "kept in plan order, with its status");
+            prop_assert!(
+                kept.windows(2).all(|pair| pair[0].position < pair[1].position),
+                "each position once, in plan order"
+            );
+            prop_assert!(kept.iter().all(|row| row.position < rows.len()), "within the plan");
+        }
+    }
+
+    fn row_status() -> impl Strategy<Value = PlanRowStatus> {
+        proptest::sample::select(PlanRowStatus::ALL.to_vec())
+    }
+
+    fn bio_check() -> impl Strategy<Value = BioCheck> {
+        prop_oneof![
+            Just(BioCheck::Passed),
+            Just(BioCheck::Failed),
+            Just(BioCheck::Unfinished),
+        ]
     }
 }

@@ -20,11 +20,13 @@ const FINISH_SCAN: &str = "UPDATE scan_runs
     WHERE owner_did = ? AND run_id = ?";
 
 // ADR-088 §6: the frozen plan, one row per repo, written before the first read.
+// A row carries the status it is given: `planned` for a repo still to read,
+// `read` for one an earlier run of the same scan read and this run takes over.
 // An imported row has no account (`source_account_id` NULL).
 const RECORD_PLAN_ROW: &str = "INSERT INTO scan_run_repos
     (owner_did, run_id, position, repo_id, full_name, source_kind, source_account_id, status,
      outside_default)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'planned', ?)";
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 // Review R4: a run's rows are written only while the run itself is stored,
 // so a forget-me purge mid-scan (which deletes the run) leaves none behind.
@@ -240,7 +242,7 @@ impl ScanRunPort for ReviewStore {
         &self,
         owner_did: &str,
         run_id: &str,
-        rows: &[PlannedScanRepo],
+        rows: &[ScanPlanRow],
     ) -> Result<(), ReviewStoreError> {
         self.with_connection(|conn| {
             in_transaction(conn, |conn| {
@@ -254,11 +256,12 @@ impl ScanRunPort for ReviewStore {
                             owner_did,
                             run_id,
                             stored_count(position),
-                            db_id(row.repo_id)?,
-                            row.full_name,
-                            source_kind(row.source),
-                            source_account(row.source)?,
-                            row.outside_default.map(OutsideDefault::as_str),
+                            db_id(row.repo.repo_id)?,
+                            row.repo.full_name,
+                            source_kind(row.repo.source),
+                            source_account(row.repo.source)?,
+                            row.status.as_str(),
+                            row.repo.outside_default.map(OutsideDefault::as_str),
                         ],
                     )
                     .map(drop)
@@ -599,7 +602,7 @@ mod tests {
                 })
                 .collect();
             store.start_scan(priya, "run-1").unwrap();
-            store.record_plan(priya, "run-1", &plan).unwrap();
+            store.record_plan(priya, "run-1", &planned(&plan)).unwrap();
             store.mark_repo_read(priya, "run-1", 0).unwrap();
             store.finish_scan(priya, "run-1", ScanStatus::RateLimited, None, NONE_FOUND, KpiTally::NONE).unwrap();
             let carried: Vec<PlannedScanRepo> = store
@@ -611,11 +614,62 @@ mod tests {
                 .collect();
             prop_assert_eq!(&carried[..], &plan[1..]);
             store.start_scan(priya, "run-2").unwrap();
-            store.record_plan(priya, "run-2", &carried).unwrap();
+            store.record_plan(priya, "run-2", &planned(&carried)).unwrap();
             let resumed: Vec<PlannedScanRepo> =
                 store.latest_plan(priya).unwrap().into_iter().map(|row| row.repo).collect();
             prop_assert_eq!(resumed, carried);
         }
+
+        /// L4. Universe: plans of up to ten rows of either source, each row
+        /// with any status a run can give it. A plan written with its row
+        /// statuses reads back with the same repos, in the same order, each
+        /// with the status it was written with — so a resuming run that
+        /// takes over the reads of the scan stores them, and the run's read
+        /// rows are the reads of the whole scan.
+        #[test]
+        fn a_plan_reads_back_with_the_statuses_it_was_written_with(
+            statuses in proptest::collection::vec(
+                proptest::sample::select(PlanRowStatus::ALL.to_vec()), 1..=10),
+        ) {
+            let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
+            let priya = "did:plc:priya";
+            let written: Vec<ScanPlanRow> = statuses
+                .iter()
+                .enumerate()
+                .map(|(i, status)| ScanPlanRow {
+                    repo: PlannedScanRepo {
+                        repo_id: 700 + i as u64,
+                        full_name: format!("priya/repo-{i}"),
+                        source: if i % 2 == 0 {
+                            RepoSource::Account(1)
+                        } else {
+                            RepoSource::Imported(700 + i as u64)
+                        },
+                        outside_default: None,
+                    },
+                    status: *status,
+                })
+                .collect();
+            store.start_scan(priya, "run-1").unwrap();
+            store.record_plan(priya, "run-1", &written).unwrap();
+            prop_assert_eq!(store.latest_plan(priya).unwrap(), written.clone());
+            prop_assert_eq!(
+                store.latest_scan(priya).unwrap().and_then(|run| run.repos_read),
+                Some(statuses.iter().filter(|s| **s == PlanRowStatus::Read).count()),
+                "the run counts the read rows it was given"
+            );
+        }
+    }
+
+    /// The rows of a plan every one of whose repos is still to read.
+    fn planned(repos: &[PlannedScanRepo]) -> Vec<ScanPlanRow> {
+        repos
+            .iter()
+            .map(|repo| ScanPlanRow {
+                repo: repo.clone(),
+                status: PlanRowStatus::Planned,
+            })
+            .collect()
     }
 
     /// Review R4. Universe: `scan_run_repos` (counted directly) and
@@ -643,9 +697,9 @@ mod tests {
         store.start_scan(sam, "run-2").unwrap();
 
         store.purge_owner(priya, KpiTally::NONE).unwrap();
-        store.record_plan(priya, "run-1", &plan).unwrap();
+        store.record_plan(priya, "run-1", &planned(&plan)).unwrap();
         store.record_skipped(priya, "run-1", &skipped).unwrap();
-        store.record_plan(sam, "run-2", &plan).unwrap();
+        store.record_plan(sam, "run-2", &planned(&plan)).unwrap();
 
         let rows_of = |did: &str| -> i64 {
             store
@@ -685,7 +739,7 @@ mod tests {
             },
         ];
         store.start_scan(priya, "run-1").unwrap();
-        store.record_plan(priya, "run-1", &plan).unwrap();
+        store.record_plan(priya, "run-1", &planned(&plan)).unwrap();
         let read: Vec<PlannedScanRepo> = store
             .latest_plan(priya)
             .unwrap()

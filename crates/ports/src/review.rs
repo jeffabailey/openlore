@@ -452,13 +452,15 @@ pub trait ScanRunPort: Send + Sync {
     /// sorted: at startup their scans are scheduled to resume.
     fn owners_with_paused_scans(&self) -> Result<Vec<String>, ReviewStoreError>;
 
-    /// Freeze `run_id`'s plan before its first read (ADR-088 §6): one
-    /// `planned` row per repo, its position the order of `rows`.
+    /// Freeze `run_id`'s plan before its first read (ADR-088 §6): one row
+    /// per repo with the status it carries — `planned` for a repo this run
+    /// still has to read, `read` for one an earlier run of the same scan
+    /// read and this run takes over — its position the order of `rows`.
     fn record_plan(
         &self,
         owner_did: &str,
         run_id: &str,
-        rows: &[PlannedScanRepo],
+        rows: &[ScanPlanRow],
     ) -> Result<(), ReviewStoreError>;
 
     /// The planned repo at `position` of `run_id` was read.
@@ -579,14 +581,20 @@ pub enum PlanRowStatus {
 }
 
 impl PlanRowStatus {
+    pub const ALL: [PlanRowStatus; 3] = [Self::Planned, Self::Read, Self::Skipped];
+
+    /// How a row's status is stored.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Planned => "planned",
+            Self::Read => "read",
+            Self::Skipped => "skipped",
+        }
+    }
+
     /// The status a stored `status` names.
     pub fn parse(stored: &str) -> Option<Self> {
-        match stored {
-            "planned" => Some(Self::Planned),
-            "read" => Some(Self::Read),
-            "skipped" => Some(Self::Skipped),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|status| status.as_str() == stored)
     }
 }
 

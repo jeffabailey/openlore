@@ -86,15 +86,40 @@ pub struct Resume {
     pub to_read: Vec<usize>,
     /// Not read now, kept `planned` for a later resume.
     pub carried: Vec<usize>,
+    /// Read by an earlier run of this scan and taken over `read`, so the
+    /// whole scan is accounted for and the repo is not read again.
+    pub already_read: Vec<usize>,
     pub skipped: Vec<(usize, CarriedSkip)>,
 }
 
+/// One row of the resumed plan the resuming run keeps as its own, with the
+/// status it carries: `read` for a row an earlier run of the scan already
+/// read, `planned` for one this run reads now or carries on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeptRow {
+    pub position: usize,
+    pub status: PlanRowStatus,
+}
+
 impl Resume {
-    /// The rows the resuming run keeps as its own plan, in plan order:
-    /// those it reads now and those it carries.
-    pub fn kept(&self) -> Vec<usize> {
-        let mut kept: Vec<usize> = self.to_read.iter().chain(&self.carried).copied().collect();
-        kept.sort_unstable();
+    /// The rows the resuming run keeps as its own plan, in plan order: the
+    /// rows the scan already read, those it reads now and those it carries,
+    /// each with the status the resuming run gives it.
+    pub fn kept(&self) -> Vec<KeptRow> {
+        let read = self.already_read.iter().map(|position| KeptRow {
+            position: *position,
+            status: PlanRowStatus::Read,
+        });
+        let planned = self
+            .to_read
+            .iter()
+            .chain(&self.carried)
+            .map(|position| KeptRow {
+                position: *position,
+                status: PlanRowStatus::Planned,
+            });
+        let mut kept: Vec<KeptRow> = read.chain(planned).collect();
+        kept.sort_unstable_by_key(|row| row.position);
         kept
     }
 }
@@ -116,13 +141,16 @@ enum CarriedRow {
     Skipped(CarriedSkip),
 }
 
-/// Resume a paused run from its frozen plan (CORE-RRA-5, BR-RRA-4): only
-/// its rows still `planned` are considered, never re-planned from the
-/// choice in force now (design §6.2 step 8). A row of a removed source is
-/// skipped "removed"; an account's rows are read when its bio check passed
-/// now, skipped "account unverified" when it failed (final within the
-/// scan), and stay `planned` for a later resume when it did not finish (or
-/// was not run). Imports need no check.
+/// Resume a paused run from its frozen plan (CORE-RRA-5, BR-RRA-4): the
+/// plan is never re-planned from the choice in force now (design §6.2
+/// step 8). A row this scan already read is taken over `read`, whatever the
+/// bio checks and the removed sources say now: the scan did read it, and it
+/// is not read again. Of the rows still `planned`, one of a removed source
+/// is skipped "removed"; an account's rows are read when its bio check
+/// passed now, skipped "account unverified" when it failed (final within
+/// the scan), and stay `planned` for a later resume when it did not finish
+/// (or was not run). Imports need no check. A row the paused run skipped is
+/// no row of this run's plan.
 pub fn resume_plan(
     rows: &[FrozenRow],
     checks: &BTreeMap<u64, BioCheck>,
@@ -130,12 +158,15 @@ pub fn resume_plan(
 ) -> Resume {
     rows.iter()
         .enumerate()
-        .filter(|(_, row)| row.status == PlanRowStatus::Planned)
         .fold(Resume::default(), |mut resume, (position, row)| {
-            match carried_row(row.source, checks, removed) {
-                CarriedRow::Read => resume.to_read.push(position),
-                CarriedRow::Skipped(reason) => resume.skipped.push((position, reason)),
-                CarriedRow::Carried => resume.carried.push(position),
+            match row.status {
+                PlanRowStatus::Read => resume.already_read.push(position),
+                PlanRowStatus::Skipped => {}
+                PlanRowStatus::Planned => match carried_row(row.source, checks, removed) {
+                    CarriedRow::Read => resume.to_read.push(position),
+                    CarriedRow::Skipped(reason) => resume.skipped.push((position, reason)),
+                    CarriedRow::Carried => resume.carried.push(position),
+                },
             }
             resume
         })
