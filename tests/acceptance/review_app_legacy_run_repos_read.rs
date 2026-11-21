@@ -191,6 +191,39 @@ fn a_run_kept_before_scan_plans_were_stored_says_nothing_about_repos_read() {
     );
 }
 
+/// ```gherkin
+/// @real-io
+/// Scenario: A run kept before scan plans were stored says nothing about repos read once she has no GitHub account
+///   Given Priya's one completed run was kept from before scan plans were stored
+///   And she has removed her only GitHub account and named a public repo to look at
+///   When she opens her queue
+///   Then its summary says there is no GitHub account to re-check
+///   And it says nothing at all about repos read
+/// ```
+#[test]
+fn a_run_kept_before_scan_plans_were_stored_says_nothing_about_repos_read_without_an_account() {
+    let world = given_a_run_kept_before_scan_plans_were_stored();
+    let mut browser = given_signed_in(&world, Persona::Priya);
+    when_removes_account(&mut browser, Account::Priyaraman);
+    given_imported(&mut browser, CARGO);
+
+    let queue = when_she_opens_her_queue(&mut browser);
+
+    assert!(
+        queue.contains(NO_ACCOUNT_TO_RECHECK),
+        "WHAT: her queue does not say {NO_ACCOUNT_TO_RECHECK:?}, so this is not the queue \
+         of an owner with no GitHub account.\n\
+         WHY: the claim below is about that queue's summary; on another page it is vacuous.\n\
+         HOW: once her only account is removed and she names a public repo, her queue \
+         summarises her completed run without an account. Her page was:\n{queue}"
+    );
+    then_her_queue_says_nothing_about_repos_read(&queue);
+    show_queue_evidence(
+        "her queue without a GitHub account, her one completed run kept before scan plans were stored",
+        &mut browser,
+    );
+}
+
 // =============================================================================
 // A run that has a plan keeps its count
 // =============================================================================
