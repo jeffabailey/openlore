@@ -9,12 +9,18 @@
 //! Driving port: the app's HTTP pages, opened by a signed-in owner through the
 //! JS-less browser. GitHub and the ATProto network are the hermetic doubles;
 //! nothing in here opens the app's store.
+//!
+//! Each scenario also shows what the owner sees once it has judged her queue —
+//! her run's stored status, her queue's status region and whether a repos-read
+//! line is there at all — so a reader of the run reads the same thing the
+//! assertions do (`--nocapture`).
 
 #[path = "support/review_app/mod.rs"]
 mod review_app;
 
 use std::collections::BTreeSet;
 
+use review_app::app::show_queue_evidence;
 use review_app::repos_and_accounts::repos::*;
 use review_app::repos_and_accounts::*;
 use review_app::*;
@@ -186,6 +192,10 @@ fn a_run_kept_before_scan_plans_were_stored_says_nothing_about_repos_read() {
     then_it_is_a_finished_scans_queue(&mut browser, &queue);
     then_her_suggestions_are_the_kept_ones(&mut browser);
     then_her_queue_says_nothing_about_repos_read(&queue);
+    show_queue_evidence(
+        "her queue, her one completed run kept before scan plans were stored",
+        &mut browser,
+    );
 }
 
 // =============================================================================
@@ -216,6 +226,10 @@ fn a_scan_that_read_the_repos_it_planned_says_how_many() {
 
     then_it_is_a_finished_scans_queue(&mut browser, &queue);
     then_her_queue_counts_repos_read(&queue, read.len());
+    show_queue_evidence(
+        "her queue, her scan having read the five repos she chose",
+        &mut browser,
+    );
 }
 
 /// ```gherkin
@@ -240,4 +254,8 @@ fn a_scan_that_could_read_none_of_the_repos_it_planned_still_says_so() {
     then_it_is_a_finished_scans_queue(&mut browser, &queue);
     then_her_queue_names_the_repo_it_planned_and_could_not_read(&queue, KELP);
     then_her_queue_counts_repos_read(&queue, read.len());
+    show_queue_evidence(
+        "her queue, her scan having read none of the one repo she chose",
+        &mut browser,
+    );
 }

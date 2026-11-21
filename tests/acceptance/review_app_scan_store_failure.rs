@@ -12,13 +12,18 @@
 //! (`REVIEW_APP_TEST_FAULT`), the same seam the migration scenarios use. The
 //! store, the sign-in, the ownership proof and the scan are the real ones;
 //! only GitHub and the ATProto network are doubles.
+//!
+//! Each scenario also shows what the owner sees at the two moments it judges —
+//! her run's stored status, her queue's status region and the scan action she
+//! is offered, before and after she picks the unfinished run up — so a reader
+//! of the run reads the same thing the assertions do (`--nocapture`).
 
 #[path = "support/review_app/mod.rs"]
 mod review_app;
 
 use std::collections::BTreeSet;
 
-use review_app::app::TEST_FAULT_VAR;
+use review_app::app::{show_queue_evidence, TEST_FAULT_VAR};
 use review_app::repos_and_accounts::{github_mark, repos_read_since, when_scans};
 use review_app::*;
 
@@ -305,6 +310,10 @@ fn a_scan_that_cannot_save_that_it_read_a_repo_is_offered_for_resuming() {
 
     then_the_scan_ended_interrupted(&status, refused);
     then_her_queue_offers_to_resume_and_claims_no_count(&mut browser);
+    show_queue_evidence(
+        &format!("her scan over, her store refusing {}", refused.named()),
+        &mut browser,
+    );
 
     let world = when_the_store_accepts_writes_again(world);
     let (resumed_status, read_by_resume) = when_she_resumes(&world, &mut browser);
@@ -312,6 +321,10 @@ fn a_scan_that_cannot_save_that_it_read_a_repo_is_offered_for_resuming() {
     then_the_scan_ended_completed(&resumed_status);
     then_the_resume_read_what_was_never_saved(&read_before, &read_by_resume);
     then_her_queue_counts_exactly(&mut browser, &read_by_resume);
+    show_queue_evidence(
+        "the run she picked up over, her store saving again",
+        &mut browser,
+    );
 }
 
 /// ```gherkin
@@ -335,6 +348,10 @@ fn a_scan_that_cannot_save_her_account_checks_is_offered_for_resuming() {
 
     then_the_scan_ended_interrupted(&status, refused);
     then_her_queue_offers_to_resume_and_claims_no_count(&mut browser);
+    show_queue_evidence(
+        &format!("her scan over, her store refusing {}", refused.named()),
+        &mut browser,
+    );
 
     let world = when_the_store_accepts_writes_again(world);
     let (resumed_status, read_by_resume) = when_she_resumes(&world, &mut browser);
@@ -342,4 +359,8 @@ fn a_scan_that_cannot_save_her_account_checks_is_offered_for_resuming() {
     then_the_scan_ended_completed(&resumed_status);
     then_the_resume_read_what_was_never_saved(&read_before, &read_by_resume);
     then_her_queue_counts_exactly(&mut browser, &read_by_resume);
+    show_queue_evidence(
+        "the run she picked up over, her store saving again",
+        &mut browser,
+    );
 }

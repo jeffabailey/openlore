@@ -29,6 +29,10 @@
 //! Secrets files (DV-BRA-4): `client-jwk` (from `openlore-review-app
 //! gen-client-jwk`, a DELIVER deliverable), `data-key`, `github-token`,
 //! `log-salt`.
+//!
+//! [`show_queue_evidence`] reads back, in the owner's own words, what her
+//! queue says at one moment of a scenario: a scenario that asserts what she
+//! sees also shows it.
 
 use std::fs;
 use std::net::TcpListener;
@@ -37,6 +41,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
+
+use super::browser::Browser;
+use super::html;
 
 /// The development-build fault seam: which fault the app is asked to hold.
 pub const TEST_FAULT_VAR: &str = "REVIEW_APP_TEST_FAULT";
@@ -551,6 +558,128 @@ fn write_secrets(bin: &Path, dir: &Path, settings: &AppSettings) {
             fs::write(&path, value).expect("write secret");
         }
     }
+}
+
+// =============================================================================
+// What the owner's queue tells her, in her own words
+// =============================================================================
+
+/// Both wordings the queue uses to account for the repos a run read.
+const REPOS_READ_WORDINGS: [&str; 2] = ["repos read", "repo read"];
+
+/// Every scan action the queue can offer its owner.
+const SCAN_ACTIONS: [&str; 3] = ["Scan my repos", "Scan again", "Resume scan"];
+
+/// The action an unfinished run offers its owner.
+const RESUME_SCAN: &str = "Resume scan";
+
+/// What the owner's queue tells her at one moment of her scenario.
+#[derive(Debug, Clone)]
+pub struct QueueEvidence {
+    /// The status her latest run is stored with, as her scan-status page says.
+    pub stored_run_status: String,
+    /// Every status line her queue renders, in page order, as she reads them.
+    pub status_region: Vec<String>,
+    /// The status line accounting for repos read, when her queue carries one.
+    pub repos_read_line: Option<String>,
+    /// Whether either repos-read wording appears anywhere on her queue.
+    pub says_repos_read_anywhere: bool,
+    /// The scan actions her queue offers her.
+    pub scan_actions_offered: Vec<String>,
+}
+
+impl QueueEvidence {
+    /// Whether her queue offers to pick an unfinished run up.
+    pub fn offers_resume(&self) -> bool {
+        self.scan_actions_offered.iter().any(|a| a == RESUME_SCAN)
+    }
+}
+
+/// Every `role="status"` / `role="alert"` line of a page, in page order: the
+/// status region a queue renders for its owner.
+fn status_region(html: &str) -> Vec<String> {
+    html::elements(html, "p")
+        .into_iter()
+        .filter(|paragraph| {
+            let open = &paragraph[..paragraph.find('>').map(|e| e + 1).unwrap_or(0)];
+            html::attr(open, "role").is_some_and(|role| role == "status" || role == "alert")
+        })
+        .map(html::visible_text)
+        .collect()
+}
+
+/// What her queue tells her now, read through her browser over the very pages
+/// she reads, and leaving her on her queue.
+pub fn queue_evidence(browser: &mut Browser) -> QueueEvidence {
+    let stored_run_status = browser
+        .open("/scan/status")
+        .scan_status()
+        .unwrap_or_else(|| "no scan status shown".to_string());
+    let page = browser.open("/review");
+    let text = page.text();
+    let region = status_region(&page.html);
+    QueueEvidence {
+        stored_run_status,
+        repos_read_line: region
+            .iter()
+            .find(|line| REPOS_READ_WORDINGS.iter().any(|w| line.contains(w)))
+            .cloned(),
+        says_repos_read_anywhere: REPOS_READ_WORDINGS.iter().any(|w| text.contains(w)),
+        scan_actions_offered: SCAN_ACTIONS
+            .into_iter()
+            .filter(|action| page.offers(action))
+            .map(str::to_string)
+            .collect(),
+        status_region: region,
+    }
+}
+
+/// Show what she sees at this `moment` of the scenario, beside the assertions
+/// made about it. Every run shows it; a run reads it with `--nocapture`, as it
+/// reads any other output of a test.
+pub fn show_queue_evidence(moment: &str, browser: &mut Browser) -> QueueEvidence {
+    let seen = queue_evidence(browser);
+    println!("==== what she sees: {moment} ====");
+    println!(
+        "  the status her latest run is stored with: {}",
+        seen.stored_run_status
+    );
+    println!("  her queue's status region, verbatim, line by line:");
+    if seen.status_region.is_empty() {
+        println!("    (her queue renders no status line at all)");
+    }
+    for line in &seen.status_region {
+        println!("    | {line}");
+    }
+    match &seen.repos_read_line {
+        Some(line) => println!("  the repos-read line: PRESENT, reading {line:?}"),
+        None if seen.says_repos_read_anywhere => println!(
+            "  the repos-read line: no status line carries it, yet her queue says \
+             \"repos read\" or \"repo read\" somewhere else"
+        ),
+        None => println!(
+            "  the repos-read line: ABSENT, her queue saying neither \"repos read\" \
+             nor \"repo read\" anywhere"
+        ),
+    }
+    println!(
+        "  \"{RESUME_SCAN}\": {}",
+        if seen.offers_resume() {
+            "OFFERED"
+        } else {
+            "not offered"
+        }
+    );
+    println!(
+        "  the scan actions her queue offers: {}",
+        if seen.scan_actions_offered.is_empty() {
+            "(none)".to_string()
+        } else {
+            seen.scan_actions_offered.join(", ")
+        }
+    );
+    println!("==== end of what she sees ====");
+    seen
 }
 
 /// A plain GET (no cookies): (status, lower-cased headers, body).
