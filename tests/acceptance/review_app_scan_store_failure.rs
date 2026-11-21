@@ -24,8 +24,8 @@ mod review_app;
 use std::collections::BTreeSet;
 
 use review_app::app::{
-    show_queue_evidence, REPOS_READ_WORDINGS, RESUME_SCAN, SCAN_AGAIN, SCAN_MY_REPOS,
-    TEST_FAULT_VAR,
+    show_queue_evidence, show_repos_read, REPOS_READ_WORDINGS, RESUME_SCAN, SCAN_AGAIN,
+    SCAN_MY_REPOS, TEST_FAULT_VAR,
 };
 use review_app::repos_and_accounts::{github_mark, repos_read_since, when_scans};
 use review_app::*;
@@ -315,6 +315,8 @@ fn a_scan_that_cannot_save_that_it_read_a_repo_is_offered_for_resuming() {
     then_the_scan_ended_completed(&resumed_status);
     then_the_resume_read_what_was_never_saved(&read_before, &read_by_resume);
     then_her_queue_counts_exactly(&mut browser, &read_by_resume);
+    show_repos_read("the scan her store cut short", &read_before);
+    show_repos_read("the run she picked up", &read_by_resume);
     show_queue_evidence(
         "the run she picked up over, her store saving again",
         &mut browser,
@@ -353,6 +355,8 @@ fn a_scan_that_cannot_save_her_account_checks_is_offered_for_resuming() {
     then_the_scan_ended_completed(&resumed_status);
     then_the_resume_read_what_was_never_saved(&read_before, &read_by_resume);
     then_her_queue_counts_exactly(&mut browser, &read_by_resume);
+    show_repos_read("the scan her store cut short", &read_before);
+    show_repos_read("the run she picked up", &read_by_resume);
     show_queue_evidence(
         "the run she picked up over, her store saving again",
         &mut browser,

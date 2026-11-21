@@ -689,6 +689,21 @@ pub fn show_queue_evidence(moment: &str, browser: &mut Browser) -> QueueEvidence
     seen
 }
 
+/// Show which of her repos GitHub was asked to read during this `moment` of
+/// the scenario, beside the assertions made about them. Every run shows it; a
+/// run reads it with `--nocapture`.
+pub fn show_repos_read(moment: &str, repos: &std::collections::BTreeSet<String>) {
+    println!("==== the repos read: {moment} ====");
+    if repos.is_empty() {
+        println!("  (no repo was read)");
+    }
+    for repo in repos {
+        println!("  - {repo}");
+    }
+    println!("  {} in all", repos.len());
+    println!("==== end of the repos read ====");
+}
+
 /// A plain GET (no cookies): (status, lower-cased headers, body).
 pub fn http_get(url: &str) -> (u16, Vec<(String, String)>, String) {
     let client = reqwest::blocking::Client::builder()
