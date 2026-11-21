@@ -162,13 +162,13 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 
 <p>P1</p>
 
-<pre><code>A signed-in owner whose review store refuses to save that a repo was read starts a scan; then the store accepts those writes again and she picks the unfinished scan up from her queue.
+<pre><code>A signed-in owner whose review store refuses to save that a repo was read starts a scan; her store then refuses to save how her GitHub accounts&#x27; checks ended instead, and she picks that unfinished run up from her queue; then the store accepts those writes again and she picks the run up once more.
 </code></pre>
 
-<pre><code>The scan ends interrupted, her queue offers only to resume it and claims no repos read at all; resuming reads every repo whose read was never saved, finishes, and her queue then accounts for exactly as many repos as the resumed scan read, no more and no fewer.
+<pre><code>Both the scan and the run she picked up under the still-refusing store end interrupted, and after each her queue offers only to pick that run up and claims no repos read at all; once the store accepts those writes, picking the run up reads every repo whose read was never saved, finishes, and her queue then accounts for exactly as many repos as that run read, no more and no fewer.
 </code></pre>
 
-<pre><code>She is never told a scan finished when nothing it did was saved: she sees an interrupted scan, picks that same run up rather than starting over, and gets a repos-read count she can trust.
+<pre><code>She is never told a scan finished when a save of it was refused - neither on her first scan nor when she picks the run up while her store is still refusing a write; she keeps picking that same run up rather than starting over, and the repos-read count she finally sees is one she can trust.
 </code></pre>
 
 <h5>Disposition</h5>
@@ -177,7 +177,7 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 
 <p>tests/acceptance/review_app_scan_store_failure.rs::a_scan_that_cannot_save_that_it_read_a_repo_is_offered_for_resuming</p>
 
-<pre><code>The scan keeps reading the rest of its planned repos after the refused save and only ends interrupted at the end of the plan, instead of stopping at the refusal. That loses no repo whose read was never saved and reports no finished run with an untrue count, so it does not break this promise.
+<pre><code>The run she picks up reads some of her repos before it meets the refused save and only then ends interrupted, provided it saves none of those reads. She loses nothing by that - the pick-up after the store recovers reads them again and the count she finally sees is still exactly the repos that run read - so this promise is not broken.
 </code></pre>
 
 <h6>Obligations</h6>

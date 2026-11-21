@@ -19,7 +19,7 @@
 //! | `REVIEW_APP_ALLOW_LOOPBACK_HTTP=1` | accept `http://127.0.0.1` origin + upstreams (test builds only; mirrors the `test-autoconfirm` feature discipline) |
 //! | `REVIEW_APP_CLOCK_SKEW_SECS` | run the clock ahead (development builds only; release refuses) |
 //! | `REVIEW_APP_TEST_FAULT=migrate_before_commit` | review-app-repos-and-accounts MG-3: stop the v1 → v2 update just before COMMIT and exit (development builds only; a release build must refuse to start with it — DELIVER adds it to the xtask release-build guard) |
-//! | `REVIEW_APP_TEST_FAULT=refuse_mark_repo_read` / `=refuse_record_account_checks` | the store refuses that one scan write every time it is called, everything else behaving normally (development builds only; a release build refuses to start with it). [`ReviewApp::restart_without_test_fault`] is "the store accepts those writes again" |
+//! | `REVIEW_APP_TEST_FAULT=refuse_mark_repo_read` / `=refuse_record_account_checks` | the store refuses that one scan write every time it is called, everything else behaving normally (development builds only; a release build refuses to start with it). [`ReviewApp::restart_refusing`] is "her store refuses that write from now on" and [`ReviewApp::restart_without_test_fault`] is "the store accepts those writes again" |
 //!
 //! Launches retry while the app loses the port race (it must know `APP_ORIGIN`
 //! before it starts, so it cannot bind `:0`): fresh ports on a first start; on
@@ -409,6 +409,20 @@ impl ReviewApp {
         self.settings
             .extra_env
             .retain(|(name, _)| name != TEST_FAULT_VAR);
+        self.restart()
+    }
+
+    /// Restart the same app (same origin, store and secrets) holding `fault`
+    /// on its development-build fault seam: the store now refuses the write
+    /// that fault names instead of whatever it was refusing, and whatever the
+    /// earlier run left behind is still there.
+    pub fn restart_refusing(mut self, fault: &str) -> Self {
+        self.settings
+            .extra_env
+            .retain(|(name, _)| name != TEST_FAULT_VAR);
+        self.settings
+            .extra_env
+            .push((TEST_FAULT_VAR.to_string(), fault.to_string()));
         self.restart()
     }
 

@@ -3,9 +3,10 @@
 //! When the review store refuses one of the writes a scan makes — marking a
 //! planned repo read, or recording how each GitHub account's check ended —
 //! the owner must not be told the scan finished. The run ends interrupted,
-//! her queue offers "Resume scan" instead of a count of repos read, and once
-//! the store accepts those writes again, resuming reads the repos whose
-//! reads were never saved.
+//! her queue offers "Resume scan" instead of a count of repos read, picking
+//! that run up while her store is still refusing a write leaves it
+//! interrupted and hers to pick up again, and once the store accepts those
+//! writes again, resuming reads the repos whose reads were never saved.
 //!
 //! Both refusals are driven through the app's public HTTP port on a
 //! development build started with the review app's fault seam
@@ -13,7 +14,7 @@
 //! store, the sign-in, the ownership proof and the scan are the real ones;
 //! only GitHub and the ATProto network are doubles.
 //!
-//! Each scenario also shows what the owner sees at the two moments it judges —
+//! Each scenario also shows what the owner sees at every moment it judges —
 //! her run's stored status, her queue's status region and the scan action she
 //! is offered, before and after she picks the unfinished run up — so a reader
 //! of the run reads the same thing the assertions do (`--nocapture`).
@@ -53,12 +54,16 @@ impl RefusedWrite {
     }
 
     /// The fault the development build is started with to refuse it.
-    fn fault(self) -> (String, String) {
-        let name = match self {
+    fn fault_name(self) -> &'static str {
+        match self {
             Self::SavingThatARepoWasRead => "refuse_mark_repo_read",
             Self::SavingHerAccountChecks => "refuse_record_account_checks",
-        };
-        (TEST_FAULT_VAR.to_string(), name.to_string())
+        }
+    }
+
+    /// That fault as the development build is given it at its start.
+    fn fault(self) -> (String, String) {
+        (TEST_FAULT_VAR.to_string(), self.fault_name().to_string())
     }
 }
 
@@ -106,6 +111,21 @@ fn given_owner_ready_to_scan(world: &ReviewWorld) -> Browser {
     given_github_verified(world, Persona::Priya)
 }
 
+/// WHEN her store refuses `write` from now on instead of whatever it was
+/// refusing (the app runs again on the same store, holding that fault).
+fn when_her_store_refuses_instead(world: ReviewWorld, write: RefusedWrite) -> ReviewWorld {
+    let ReviewWorld {
+        github,
+        atproto,
+        app,
+    } = world;
+    ReviewWorld {
+        github,
+        atproto,
+        app: app.restart_refusing(write.fault_name()),
+    }
+}
+
 /// WHEN the store accepts those writes again (the app runs again on the same
 /// store, holding no fault).
 fn when_the_store_accepts_writes_again(world: ReviewWorld) -> ReviewWorld {
@@ -121,33 +141,14 @@ fn when_the_store_accepts_writes_again(world: ReviewWorld) -> ReviewWorld {
     }
 }
 
-/// WHEN she picks the unfinished scan up from her queue — the only scan
-/// action it offers — and it runs to its end: the status it ended on, and the
-/// repos the resumed run read.
-fn when_she_resumes(world: &ReviewWorld, browser: &mut Browser) -> (String, BTreeSet<String>) {
+/// WHEN she picks the unfinished scan up from her queue and the run she
+/// picked up ends: the status it ended on, and the repos it read.
+fn when_she_picks_the_run_up(
+    world: &ReviewWorld,
+    browser: &mut Browser,
+) -> (String, BTreeSet<String>) {
     let mark = github_mark(world);
-    let page = browser.open("/review");
-    let queue = page.text();
-    assert!(
-        page.offers(RESUME_SCAN),
-        "WHAT: the queue offers no {RESUME_SCAN:?} to pick the unfinished scan up with.\n\
-         WHY: a scan the store cut short keeps the suggestions it found and must be \
-         resumable by its owner, or the repos it never recorded are lost to her.\n\
-         HOW: end a run whose store write was refused the way an unreadable source \
-         list ends it, so the queue offers {RESUME_SCAN:?}.\nqueue:\n{queue}"
-    );
-    for starting_over in FRESH_SCAN_LABELS {
-        assert!(
-            !page.offers(starting_over),
-            "WHAT: the queue offers {starting_over:?} beside {RESUME_SCAN:?} for a scan \
-             the store cut short.\n\
-             WHY: she is owed the run she already paid for: starting a new scan abandons \
-             the suggestions it found and spends another of her day's scans.\n\
-             HOW: a run that did not finish offers only {RESUME_SCAN:?}.\nqueue:\n{queue}"
-        );
-    }
-    browser.press(RESUME_SCAN);
-    let status = then_scan_reaches_on_its_own(browser, "completed", 60);
+    let status = when_scan_finishes(browser);
     (status, repos_read_since(world, mark))
 }
 
@@ -166,8 +167,9 @@ fn then_the_scan_ended_interrupted(status: &str, write: RefusedWrite) {
     );
 }
 
-/// THEN her queue offers to resume that scan and claims no repos read.
-fn then_her_queue_offers_to_resume_and_claims_no_count(browser: &mut Browser) {
+/// THEN her queue offers to pick that run up — the only scan action it
+/// offers her — and claims no repos read.
+fn then_her_queue_offers_only_resume_and_claims_no_count(browser: &mut Browser) {
     let page = browser.open("/review");
     let text = page.text();
     assert!(
@@ -177,13 +179,19 @@ fn then_her_queue_offers_to_resume_and_claims_no_count(browser: &mut Browser) {
          able to pick that run up rather than start over.\n\
          HOW: record the run as interrupted so the queue offers {RESUME_SCAN:?}.\nqueue:\n{text}"
     );
-    assert!(
-        !page.offers(SCAN_AGAIN),
-        "WHAT: the queue offers {SCAN_AGAIN:?} after a scan the store cut short, \
-         which is what it offers a run that finished.\n\
-         WHY: telling the owner the scan finished hides that nothing of it was saved.\n\
-         HOW: record the run as interrupted, not completed.\nqueue:\n{text}"
-    );
+    for starting_over in FRESH_SCAN_LABELS {
+        assert!(
+            !page.offers(starting_over),
+            "WHAT: the queue offers {starting_over:?} beside {RESUME_SCAN:?} for a scan \
+             the store cut short, and {SCAN_AGAIN:?} is what it offers a run that \
+             finished.\n\
+             WHY: she is owed the run she already paid for: starting a new scan abandons \
+             the suggestions it found and spends another of her day's scans, and telling \
+             her the scan finished hides that nothing of it was saved.\n\
+             HOW: a run that did not finish is recorded interrupted and offers only \
+             {RESUME_SCAN:?}.\nqueue:\n{text}"
+        );
+    }
     for wording in REPOS_READ_WORDINGS {
         assert!(
             !text.contains(wording),
@@ -289,8 +297,12 @@ fn then_the_scan_ended_completed(status: &str) {
 ///   And she is signed in with her GitHub account verified
 ///   When she scans her repos
 ///   Then the scan ended interrupted
-///   And her queue offers to resume it and claims no repos read
-///   When the store accepts those writes again and she resumes
+///   And her queue offers to pick that run up, and only that, claiming no repos read
+///   When her store refuses to save her account checks instead
+///   And she picks the run up
+///   Then the run she picked up ended interrupted too
+///   And her queue still offers only to pick it up, claiming no repos read
+///   When the store accepts those writes again and she picks the run up
 ///   Then the resumed scan read every repo whose read was never saved
 ///   And her queue then accounts for exactly those repos
 /// ```
@@ -303,14 +315,32 @@ fn a_scan_that_cannot_save_that_it_read_a_repo_is_offered_for_resuming() {
     let (status, read_before) = when_scans(&world, &mut browser);
 
     then_the_scan_ended_interrupted(&status, refused);
-    then_her_queue_offers_to_resume_and_claims_no_count(&mut browser);
+    then_her_queue_offers_only_resume_and_claims_no_count(&mut browser);
     show_queue_evidence(
         &format!("her scan over, her store refusing {}", refused.named()),
         &mut browser,
     );
 
+    let still_refused = RefusedWrite::SavingHerAccountChecks;
+    let world = when_her_store_refuses_instead(world, still_refused);
+    let (picked_up_status, read_by_picking_up) = when_she_picks_the_run_up(&world, &mut browser);
+
+    then_the_scan_ended_interrupted(&picked_up_status, still_refused);
+    then_her_queue_offers_only_resume_and_claims_no_count(&mut browser);
+    show_repos_read(
+        "the run she picked up while her store still refused a write",
+        &read_by_picking_up,
+    );
+    show_queue_evidence(
+        &format!(
+            "the run she picked up over, her store refusing {}",
+            still_refused.named()
+        ),
+        &mut browser,
+    );
+
     let world = when_the_store_accepts_writes_again(world);
-    let (resumed_status, read_by_resume) = when_she_resumes(&world, &mut browser);
+    let (resumed_status, read_by_resume) = when_she_picks_the_run_up(&world, &mut browser);
 
     then_the_scan_ended_completed(&resumed_status);
     then_the_resume_read_what_was_never_saved(&read_before, &read_by_resume);
@@ -329,8 +359,8 @@ fn a_scan_that_cannot_save_that_it_read_a_repo_is_offered_for_resuming() {
 ///   And she is signed in with her GitHub account verified
 ///   When she scans her repos
 ///   Then the scan ended interrupted
-///   And her queue offers to resume it and claims no repos read
-///   When the store accepts those writes again and she resumes
+///   And her queue offers to pick that run up, and only that, claiming no repos read
+///   When the store accepts those writes again and she picks the run up
 ///   Then the resumed scan read every repo whose read was never saved
 ///   And her queue then accounts for exactly those repos
 /// ```
@@ -343,14 +373,14 @@ fn a_scan_that_cannot_save_her_account_checks_is_offered_for_resuming() {
     let (status, read_before) = when_scans(&world, &mut browser);
 
     then_the_scan_ended_interrupted(&status, refused);
-    then_her_queue_offers_to_resume_and_claims_no_count(&mut browser);
+    then_her_queue_offers_only_resume_and_claims_no_count(&mut browser);
     show_queue_evidence(
         &format!("her scan over, her store refusing {}", refused.named()),
         &mut browser,
     );
 
     let world = when_the_store_accepts_writes_again(world);
-    let (resumed_status, read_by_resume) = when_she_resumes(&world, &mut browser);
+    let (resumed_status, read_by_resume) = when_she_picks_the_run_up(&world, &mut browser);
 
     then_the_scan_ended_completed(&resumed_status);
     then_the_resume_read_what_was_never_saved(&read_before, &read_by_resume);
