@@ -27,6 +27,7 @@
 mod review_app;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use proptest::prelude::*;
 
@@ -362,6 +363,36 @@ fn a_paused_scan_holding_a_skip_and_a_removed_source() -> impl Strategy<Value = 
         })
 }
 
+/// Show one of the paused plans a property generated and what the run
+/// picking it up does with it. The cases are many and alike; a reader needs
+/// one of them, so each property shows its first (`--nocapture`).
+fn show_one_paused_scan(moment: &str, shown: &AtomicBool, paused: &PausedScan, picked_up: &PickedUp) {
+    if shown.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    println!("==== one of the paused scans: {moment} ====");
+    for (position, repo) in paused.plan.iter().enumerate() {
+        println!("  - {position}: {:?} from {:?}", repo.state, repo.source);
+    }
+    if paused.plan.is_empty() {
+        println!("  (a plan of no repos at all)");
+    }
+    println!("  her accounts' checks now: {:?}", paused.checks);
+    println!("  sources she no longer lists: {:?}", paused.no_longer_listed);
+    println!(
+        "  the run keeps as already read: {:?}",
+        picked_up
+            .kept
+            .iter()
+            .filter(|kept| kept.carries_an_earlier_read)
+            .map(|kept| kept.position)
+            .collect::<Vec<usize>>()
+    );
+    println!("  the run reads now: {:?}", picked_up.reads_now);
+    println!("  the run gives up on: {:?}", picked_up.never_reads);
+    println!("==== end of one of the paused scans ====");
+}
+
 /// The positions of the plan whose repos an earlier run of the scan read.
 fn already_read(plan: &[PlannedRepo]) -> BTreeSet<usize> {
     plan.iter()
@@ -388,6 +419,8 @@ proptest! {
     ) {
         let picked_up = sut_picked_up(&paused.plan, &paused.checks, &paused.no_longer_listed);
 
+        static SHOWN: AtomicBool = AtomicBool::new(false);
+        show_one_paused_scan("one she had read part way", &SHOWN, &paused, &picked_up);
         let kept_as_read: BTreeSet<usize> = picked_up
             .kept
             .iter()
@@ -423,6 +456,13 @@ proptest! {
     ) {
         let picked_up = sut_picked_up(&paused.plan, &paused.checks, &paused.no_longer_listed);
 
+        static SHOWN: AtomicBool = AtomicBool::new(false);
+        show_one_paused_scan(
+            "one whose already-read repo's account checks out now",
+            &SHOWN,
+            &paused,
+            &picked_up,
+        );
         let reads_now: BTreeSet<usize> = picked_up.reads_now.iter().copied().collect();
         let read_again: Vec<usize> = already_read(&paused.plan)
             .intersection(&reads_now)
@@ -453,6 +493,13 @@ proptest! {
     ) {
         let picked_up = sut_picked_up(&paused.plan, &paused.checks, &paused.no_longer_listed);
 
+        static SHOWN: AtomicBool = AtomicBool::new(false);
+        show_one_paused_scan(
+            "one holding a repo given up on and a removed source",
+            &SHOWN,
+            &paused,
+            &picked_up,
+        );
         let kept: Vec<usize> = picked_up.kept.iter().map(|kept| kept.position).collect();
         let mut accounted: Vec<usize> = kept
             .iter()
@@ -598,6 +645,10 @@ fn a_scan_picked_up_after_a_pause_accounts_for_the_repos_of_the_whole_scan() {
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
     given_saved_choice(&mut browser, Account::Priyaraman, &PRIYA_CHOICE_OF_THREE);
     let before_the_pause = given_scan_paused_part_way(&world, &mut browser);
+    show_queue_evidence(
+        "her queue, her scan paused because GitHub's budget was used up",
+        &mut browser,
+    );
 
     let after_picking_up = when_paused_scan_resumes(&world, &mut browser);
 
@@ -629,6 +680,10 @@ fn a_scan_picked_up_twice_accounts_for_every_repo_it_read_along_the_way() {
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
     given_saved_choice(&mut browser, Account::Priyaraman, &PRIYA_CHOICE_OF_THREE);
     let before_the_pause = given_scan_paused_part_way(&world, &mut browser);
+    show_queue_evidence(
+        "her queue, her scan paused because GitHub's budget was used up",
+        &mut browser,
+    );
 
     let first_pick_up = when_she_picks_it_up_and_it_pauses_again(&world, &mut browser);
     let second_pick_up = when_paused_scan_resumes(&world, &mut browser);
@@ -645,5 +700,204 @@ fn a_scan_picked_up_twice_accounts_for_every_repo_it_read_along_the_way() {
         ("the first run she picked up", &first_pick_up),
         ("the second run she picked up", &second_pick_up),
     ]);
+    then_her_queue_accounts_for_the_whole_scan(&seen, &whole_scan);
+}
+
+// =============================================================================
+// Her scan cut short by a store that could not save what it read
+// =============================================================================
+
+/// The repos of the whole scan, however often one of them had to be read:
+/// the repos GitHub was asked to read across its runs, each named once.
+fn repos_of_the_whole_scan(runs: &[(&str, &BTreeSet<String>)]) -> BTreeSet<String> {
+    runs.iter()
+        .flat_map(|(_, read)| (*read).iter().cloned())
+        .collect()
+}
+
+/// The repos more than one run read: the reads her scan had to make again
+/// because the first of them was never saved.
+fn repos_read_again(runs: &[(&str, &BTreeSet<String>)]) -> BTreeSet<String> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut again: BTreeSet<String> = BTreeSet::new();
+    for (_, read) in runs {
+        for repo in *read {
+            if !seen.insert(repo.clone()) {
+                again.insert(repo.clone());
+            }
+        }
+    }
+    again
+}
+
+/// THEN her scan read the three repos she chose, however often it had to
+/// read one of them again: the repos of the whole scan.
+fn then_her_scan_read_the_repos_she_chose(runs: &[(&str, &BTreeSet<String>)]) -> BTreeSet<String> {
+    let whole_scan = repos_of_the_whole_scan(runs);
+    assert_eq!(
+        whole_scan,
+        set_of(&PRIYA_CHOICE_OF_THREE),
+        "WHAT: the runs of her scan read {whole_scan:?} between them, not the three \
+         repos she chose.\n\
+         WHY: every claim below is about a scan that read her three chosen repos; over \
+         any other scan a count of three says nothing.\n\
+         HOW: a scan reads the plan it froze from her choice, and the runs picking it up \
+         finish that plan."
+    );
+    whole_scan
+}
+
+/// THEN no repo the scan had already read and saved was read again by a
+/// later run: the later runs read only what was still owed.
+fn then_what_was_saved_was_not_read_again(
+    saved: &BTreeSet<String>,
+    later_runs: &[(&str, &BTreeSet<String>)],
+) {
+    for (moment, read) in later_runs {
+        let read_again: Vec<&String> = read.intersection(saved).collect();
+        assert!(
+            read_again.is_empty(),
+            "WHAT: {moment} read {read_again:?} again, which her scan had already read \
+             and saved.\n\
+             WHY: the run that was cut short saved those reads, so reading them again \
+             spends her GitHub budget on work her scan had already paid for, and it \
+             hides whether the count she is shown comes from the whole scan or only \
+             from the run that finished.\n\
+             HOW: a run picking a scan up takes over the reads its plan holds and reads \
+             only the repos still owed."
+        );
+    }
+}
+
+/// THEN her scan ended `expected`, as the status she is shown says.
+fn then_the_run_ended(status: &str, expected: &str, moment: &str) {
+    assert_eq!(
+        status, expected,
+        "WHAT: {moment} ended {status:?}, not {expected:?}.\n\
+         WHY: every claim below is about that run ending that way; on another ending \
+         the scenario is not the one under test and its count says nothing.\n\
+         HOW: build the scenario so the run ends {expected:?} before its queue is read."
+    );
+}
+
+/// ```gherkin
+/// @real-io
+/// Scenario: A run cut short keeps the repos it had saved, and the run after it reads only the rest
+///   Given Priya chose three of her repos
+///   And her scan read one of them and paused because GitHub's request budget was used up
+///   When her store stops saving that a repo was read, and she picks the run up
+///   Then that run ends interrupted, having saved nothing new
+///   When her store saves again and she picks the run up once more
+///   Then the last run reads only the repos still owed, never the one already saved
+///   And her queue says three repos read
+/// ```
+#[test]
+fn a_run_cut_short_keeps_what_it_saved_and_the_run_after_it_reads_only_the_rest() {
+    let world = rra_world();
+    let mut browser = given_owner_verified(&world, Account::Priyaraman);
+    given_saved_choice(&mut browser, Account::Priyaraman, &PRIYA_CHOICE_OF_THREE);
+    let saved_before_the_pause = given_scan_paused_part_way(&world, &mut browser);
+    show_repos_read("her scan before GitHub's budget ran out", &saved_before_the_pause);
+    show_queue_evidence(
+        "her queue, her scan paused because GitHub's budget was used up",
+        &mut browser,
+    );
+
+    let world = when_her_store_stops_saving_reads(world);
+    world.github.set_remaining(4_990);
+    let (cut_short, read_while_cut_short) = when_she_picks_the_run_up(&world, &mut browser);
+    show_repos_read(
+        "the run she picked up while her store could not save a read",
+        &read_while_cut_short,
+    );
+    show_queue_evidence(
+        "her queue, the run she picked up cut short",
+        &mut browser,
+    );
+    then_the_run_ended(
+        &cut_short,
+        "interrupted",
+        "the run she picked up while her store could not save a read",
+    );
+
+    let world = when_her_store_saves_reads_again(world);
+    let (last_run, read_by_the_last_run) = when_she_picks_the_run_up(&world, &mut browser);
+
+    show_repos_read("the run she picked up last", &read_by_the_last_run);
+    let seen = show_queue_evidence("her queue, her scan over", &mut browser);
+    then_the_run_ended(&last_run, "completed", "the run she picked up last");
+    then_what_was_saved_was_not_read_again(
+        &saved_before_the_pause,
+        &[
+            ("the run that was cut short", &read_while_cut_short),
+            ("the run she picked up last", &read_by_the_last_run),
+        ],
+    );
+    let whole_scan = then_her_scan_read_the_repos_she_chose(&[
+        ("her scan before the pause", &saved_before_the_pause),
+        ("the run that was cut short", &read_while_cut_short),
+        ("the run she picked up last", &read_by_the_last_run),
+    ]);
+    then_her_queue_accounts_for_the_whole_scan(&seen, &whole_scan);
+}
+
+/// ```gherkin
+/// @real-io
+/// Scenario: Repos her scan had to read again are still counted once each
+///   Given Priya chose three of her repos and her store cannot save that a repo was read
+///   When she scans, and picks the run up after her store saves again, and the budget runs out
+///   And her store stops saving reads once more and she picks the run up
+///   And her store saves again and she picks the run up for the last time
+///   Then two of her repos were read by more than one run
+///   And her queue says three repos read, not one count per read
+/// ```
+#[test]
+fn repos_her_scan_had_to_read_again_are_counted_once_each() {
+    let world = rra_world();
+    let mut browser = given_owner_verified(&world, Account::Priyaraman);
+    given_saved_choice(&mut browser, Account::Priyaraman, &PRIYA_CHOICE_OF_THREE);
+
+    let world = when_her_store_stops_saving_reads(world);
+    let (first, first_run) = when_scans(&world, &mut browser);
+    then_the_run_ended(&first, "interrupted", "her first scan");
+
+    let world = when_her_store_saves_reads_again(world);
+    world.github.budget_runs_low_after_repos(1, 120);
+    let (second, second_run) = when_she_picks_the_run_up(&world, &mut browser);
+    then_the_run_ended(&second, "rate_limited", "the first run she picked up");
+
+    let world = when_her_store_stops_saving_reads(world);
+    world.github.set_remaining(4_990);
+    let (third, third_run) = when_she_picks_the_run_up(&world, &mut browser);
+    then_the_run_ended(&third, "interrupted", "the second run she picked up");
+
+    let world = when_her_store_saves_reads_again(world);
+    let (fourth, fourth_run) = when_she_picks_the_run_up(&world, &mut browser);
+
+    show_repos_read("her first scan, her store saving no read", &first_run);
+    show_repos_read("the first run she picked up", &second_run);
+    show_repos_read("the second run she picked up", &third_run);
+    show_repos_read("the last run she picked up", &fourth_run);
+    let seen = show_queue_evidence("her queue, her scan over", &mut browser);
+    then_the_run_ended(&fourth, "completed", "the last run she picked up");
+
+    let runs = [
+        ("her first scan", &first_run),
+        ("the first run she picked up", &second_run),
+        ("the second run she picked up", &third_run),
+        ("the last run she picked up", &fourth_run),
+    ];
+    let read_again = repos_read_again(&runs);
+    assert!(
+        read_again.len() >= 2,
+        "WHAT: only {read_again:?} was read by more than one run, where this scenario \
+         needs at least two of her repos read again.\n\
+         WHY: the claim below is that the number she is shown counts her repos and not \
+         her scan's read attempts; with fewer repos read twice the two numbers are too \
+         close to tell apart.\n\
+         HOW: let her store lose the read of one repo, save the next, then lose another, \
+         so two different repos are read again."
+    );
+    let whole_scan = then_her_scan_read_the_repos_she_chose(&runs);
     then_her_queue_accounts_for_the_whole_scan(&seen, &whole_scan);
 }

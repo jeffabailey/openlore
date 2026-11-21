@@ -343,6 +343,58 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 
 
 
+<h5>Covers</h5>
+
+<p>P1</p>
+
+<pre><code>Priya chose three of her repos. Her scan reads one of them and pauses because GitHub&#x27;s request budget is used up. Her store then stops saving that a repo was read; she picks the run up and it reads a second repo, cannot save that read and ends interrupted. Her store saves again and she picks the run up once more.
+</code></pre>
+
+<pre><code>The last run reads only the repos still owed and never the one her scan had already saved, and her queue carries exactly one line accounting for repos read, saying three repos read, although that last run read two.
+</code></pre>
+
+<pre><code>She sees that her scan read all three of her repos even though the run that finished read only two of them, and her GitHub budget is not spent reading again what her scan had already saved.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>tests/acceptance/review_app_repos_read_across_resume.rs::a_run_cut_short_keeps_what_it_saved_and_the_run_after_it_reads_only_the_rest</p>
+
+<pre><code>A count that was right after one interruption but fell back to the last run&#x27;s reads after a second one would still pass this one; the repos read again across two pick-ups are observed by the scenario beside it. Shown red on a resume that drops the reads its plan holds, before its green was relied on.
+</code></pre>
+
+<h6>Obligations</h6>
+
+
+
+<h5>Covers</h5>
+
+<p>P2</p>
+
+<pre><code>Priya chose three of her repos and her store cannot save that a repo was read. She scans; her store saves again and she picks the run up, which reads the lost repo again before the budget runs out; her store stops saving reads once more and she picks the run up, which reads a second repo and loses it; her store saves again and she picks the run up for the last time.
+</code></pre>
+
+<pre><code>Two of her repos were read by more than one run, five reads in all, and her queue carries exactly one line accounting for repos read, saying three repos read.
+</code></pre>
+
+<pre><code>However often her scan had to read one of her repos again, the queue tells her how many of her repos were read, not how many reads it took.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>tests/acceptance/review_app_repos_read_across_resume.rs::repos_her_scan_had_to_read_again_are_counted_once_each</p>
+
+<pre><code>A scan whose plan holds more than three repos, or which loses a read more than twice, is not observed here. Shown red on a resume that drops the reads its plan holds, before its green was relied on.
+</code></pre>
+
+<h6>Obligations</h6>
+
+
+
 <h2>Expectations</h2>
 
 <h3>Rows</h3>

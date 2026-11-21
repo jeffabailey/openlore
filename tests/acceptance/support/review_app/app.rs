@@ -48,6 +48,10 @@ use super::html;
 /// The development-build fault seam: which fault the app is asked to hold.
 pub const TEST_FAULT_VAR: &str = "REVIEW_APP_TEST_FAULT";
 
+/// The fault that makes her store refuse to save that a planned repo was
+/// read, every time a scan saves it.
+pub const REFUSE_MARK_REPO_READ: &str = "refuse_mark_repo_read";
+
 /// The granular scope set (ADR-073 / SPIKE-3).
 pub const OAUTH_SCOPES: &str =
     "atproto repo:org.openlore.claim?action=create repo:app.bsky.feed.post?action=create";

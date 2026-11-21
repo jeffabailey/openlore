@@ -1101,6 +1101,48 @@ pub fn when_paused_scan_resumes(world: &ReviewWorld, browser: &mut Browser) -> B
     repos_read_since(world, mark)
 }
 
+/// WHEN her store stops saving that a repo was read, from now on: the app
+/// runs again on the same store, holding that fault, and whatever her runs
+/// already saved is still there.
+pub fn when_her_store_stops_saving_reads(world: ReviewWorld) -> ReviewWorld {
+    let ReviewWorld {
+        github,
+        atproto,
+        app,
+    } = world;
+    ReviewWorld {
+        github,
+        atproto,
+        app: app.restart_refusing(super::app::REFUSE_MARK_REPO_READ),
+    }
+}
+
+/// WHEN her store saves again that a repo was read: the app runs again on
+/// the same store, refusing nothing.
+pub fn when_her_store_saves_reads_again(world: ReviewWorld) -> ReviewWorld {
+    let ReviewWorld {
+        github,
+        atproto,
+        app,
+    } = world;
+    ReviewWorld {
+        github,
+        atproto,
+        app: app.restart_without_test_fault(),
+    }
+}
+
+/// WHEN she picks an unfinished or paused run up and it ends: the status it
+/// ended on, and the repos GitHub was asked to read while it ran.
+pub fn when_she_picks_the_run_up(
+    world: &ReviewWorld,
+    browser: &mut Browser,
+) -> (String, BTreeSet<String>) {
+    let mark = github_mark(world);
+    let status = when_scan_finishes(browser);
+    (status, repos_read_since(world, mark))
+}
+
 /// The latest scan's status (`running`, `rate_limited`, `completed`, …).
 pub fn scan_status(browser: &mut Browser) -> String {
     browser
