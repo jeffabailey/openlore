@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# review-app-oracle — run one public acceptance suite of the review app.
+#
+# EXAMINE entry point (declared in .nwave/examine.json). Some promised
+# behaviour, such as a scan whose store write is refused, can only be caused
+# through the app's development fault seam, which the public `serve` command
+# does not expose. This script runs the prebuilt acceptance suite, which
+# starts the real review app binary over HTTP with that seam.
+#
+# Usage: review-app-oracle SUITE [libtest arguments]
+#   SUITE: store-failure | legacy-run
+# Build first: see "build" in .nwave/examine.json.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+DEPS="$ROOT/target/debug/deps"
+
+case "${1:-}" in
+  store-failure) suite=review_app_scan_store_failure ;;
+  legacy-run) suite=review_app_legacy_run_repos_read ;;
+  *)
+    echo "usage: review-app-oracle {store-failure|legacy-run} [libtest arguments]" >&2
+    exit 2
+    ;;
+esac
+shift
+
+bin=""
+for candidate in "$DEPS/$suite"-*; do
+  case "$candidate" in *.*) continue ;; esac
+  [ -x "$candidate" ] || continue
+  if [ -z "$bin" ] || [ "$candidate" -nt "$bin" ]; then bin="$candidate"; fi
+done
+
+if [ -z "$bin" ]; then
+  echo "review-app-oracle: suite $suite is not built; run the build in .nwave/examine.json" >&2
+  exit 1
+fi
+
+exec "$bin" --test-threads=1 "$@"

@@ -1,6 +1,7 @@
 {
   "commands": [
-    {"name": "openlore-review-app", "path": "target/debug/openlore-review-app"}
+    {"name": "openlore-review-app", "path": "target/debug/openlore-review-app"},
+    {"name": "review-app-oracle", "path": "scripts/examine/review-app-oracle"}
   ],
-  "build": "cargo build -p openlore-review-app"
+  "build": "cargo build -p openlore-review-app && cargo test -p openlore-review-app --test review_app_scan_store_failure --test review_app_legacy_run_repos_read --no-run"
 }
