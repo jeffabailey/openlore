@@ -1,9 +1,145 @@
 {
+"acceptance": {
+"S1": [
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"L5",
+"L5/F120"
+],
+"still_passes_if": "F212",
+"test": "tests/acceptance/review_app_repos_read_across_resume.rs::a_scan_picked_up_after_a_pause_accounts_for_the_repos_of_the_whole_scan"
+},
+"expected": "F210",
+"stimulus": "F31",
+"user_result": "F211"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"L1",
+"L1/F101"
+],
+"still_passes_if": "F216",
+"test": "tests/acceptance/review_app_repos_read_across_resume.rs::a_run_picking_a_paused_scan_up_keeps_every_read_it_already_made"
+},
+"expected": "F214",
+"stimulus": "F213",
+"user_result": "F215"
+},
+{
+"covers": [
+"P2"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"L2",
+"L2/F107"
+],
+"still_passes_if": "F220",
+"test": "tests/acceptance/review_app_repos_read_across_resume.rs::a_repo_already_read_is_not_read_again_by_the_run_picking_the_scan_up"
+},
+"expected": "F218",
+"stimulus": "F217",
+"user_result": "F219"
+},
+{
+"covers": [
+"P2"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"L3",
+"L3/F111"
+],
+"still_passes_if": "F224",
+"test": "tests/acceptance/review_app_repos_read_across_resume.rs::the_plan_a_run_picks_up_never_grows"
+},
+"expected": "F222",
+"stimulus": "F221",
+"user_result": "F223"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"L4/F115"
+],
+"still_passes_if": "F228",
+"test": "tests/acceptance/review_app_repos_read_across_resume.rs::a_frozen_plan_keeps_which_of_its_repos_were_already_read"
+},
+"expected": "F226",
+"stimulus": "F225",
+"user_result": "F227"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"L4/F116"
+],
+"still_passes_if": "F232",
+"test": "tests/acceptance/review_app_repos_read_across_resume.rs::a_frozen_plan_of_repos_none_read_keeps_them_all_still_to_read"
+},
+"expected": "F230",
+"stimulus": "F229",
+"user_result": "F231"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"L4/F117"
+],
+"still_passes_if": "F236",
+"test": "tests/acceptance/review_app_repos_read_across_resume.rs::a_plan_frozen_for_a_run_her_store_no_longer_holds_leaves_nothing_behind"
+},
+"expected": "F234",
+"stimulus": "F233",
+"user_result": "F235"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"T1"
+],
+"still_passes_if": "F240",
+"test": "xtask/src/check_arch.rs (cargo xtask check-arch)"
+},
+"expected": "F238",
+"stimulus": "F237",
+"user_result": "F239"
+}
+]
+},
 "counters": {
 "B": 3,
 "C": 2,
 "E": 6,
-"F": 209,
+"F": 240,
 "L": 5,
 "N": 2,
 "P": 2,
@@ -1031,9 +1167,40 @@
 "F208": "Run ordering within one second rests on insertion order.",
 "F209": "The resume verdict stays in the pure core and the SQL stays in the effect shell: review-domain reaches no I O crate, no adapter depends on an adapter, and only a composition root depends on an adapter, over every workspace member.",
 "F21": "A public observation of a scan in which a read by the paused run was not saved and the resuming run reads that repo again, with the queue count before and after.",
+"F210": "Her queue status region carries exactly one line accounting for repos read, and that line says three repos read.",
+"F211": "She sees that her scan read all three of the repos she chose, although it stopped part way and had to be picked up again.",
+"F212": "A queue that counted the whole scan across one pause but fell back to the last run's count once a scan was picked up twice would still pass: this journey pauses and picks the scan up once.",
+"F213": "A scan is paused with part of its plan already read, and a run picks that plan up, with any mix of its account checks passing, failing or unfinished and any of its sources removed meanwhile.",
+"F214": "The run keeps as already read exactly the repos of that plan an earlier run read, neither more nor fewer.",
+"F215": "What her scan already read stays accounted for, whatever changed while it was paused.",
+"F216": "A run that keeps those reads and then loses them when it writes its plan would still pass this one: what the store keeps is observed by its own rows.",
+"F217": "A run picks up a paused plan that holds a repo already read whose GitHub account passes its check now.",
+"F218": "No repo the run keeps as already read is among the repos it reads now.",
+"F219": "A repo her scan already read is not read again, so it is counted once.",
 "F22": "However many runs repeat a read, the number stays a count of repos and not a count of read attempts: a user who sees the queue after several resumes that re-read the same repos sees the number of different plan repos read, not the sum of the reads.",
+"F220": "A run that read one repo twice within a single run would still pass: this law is about the reads carried over from an earlier run.",
+"F221": "A run picks up a paused plan holding a repo this scan will never read and a repo whose source the owner removed meanwhile.",
+"F222": "The repos the run keeps are part of the plan it picked up, in that plan order, each at most once.",
+"F223": "However often her scan is picked up, it never grows past the choice it started with, so no repo of it can be counted twice.",
+"F224": "A run that kept too few repos, dropping one still to read, would still pass: this law forbids a plan growing, not a plan losing a row.",
+"F225": "A run freezes the plan of her scan with the first of its three repos already read, and the stored plan is read back.",
+"F226": "The plan reads back with the same three repos in the same order, the first of them still already read.",
+"F227": "Her store keeps which of her repos the scan has already read, so that account survives the pause.",
+"F228": "A store that kept every status it was given while the run gave it the wrong ones would still pass: what the run gives it is observed by the resume rows.",
+"F229": "A run freezes the plan of her scan with none of its three repos read yet, and the stored plan is read back.",
 "F23": "The promise gives the user no way to see which repos were re-read, so a correct larger count and an over-count caused by double counting look the same in the queue output.",
+"F230": "The plan reads back with all three repos still to read.",
+"F231": "No repo is counted as read before her scan has read it.",
+"F232": "A store that wrote every row as still to read, whatever it was given, would still pass this one: the already-read case is what tells them apart.",
+"F233": "A plan is frozen for a run her store no longer holds, while her latest run holds a plan of its own.",
+"F234": "No row is written for the run that is gone, and the plan of her latest run reads back empty.",
+"F235": "A scan she asked to be forgotten leaves nothing behind that a later count could name.",
+"F236": "A store that also refused rows for a run it does hold would still pass this one: the other two cases observe that a held run keeps its plan.",
+"F237": "Every member of the workspace is checked for where the rule deciding what a picked-up scan keeps lives, and where the store's SQL lives.",
+"F238": "The crate holding that rule reaches no crate that reads or writes anything outside itself, no adapter depends on another adapter, and only a composition root depends on an adapter.",
+"F239": "The number her queue shows means one thing wherever it is shown, because the rule behind it has one home and the store has another.",
 "F24": "A public observation of a scan with at least two repos re-read across at least two resumes, with the identities of the repos read in each run visible in public output.",
+"F240": "A crate that reached an adapter's data only through the shared contract crate would still pass: the check follows crate dependencies, not the shape of the data they carry.",
 "F25": "The resume verdict names the rows already read and answers with the status each kept row carries.",
 "F26": "The kept-row type is re-exported beside the rest of the resume verdict.",
 "F27": "The plan writer takes rows with their status, and says so in its contract.",

@@ -228,6 +228,9 @@ pub mod repos {
     pub const PRIYA_CHOICE: [Repo; 5] = [TIDEPOOL, QUILL_DOCS, KELP, HARBOR_CLI, FERROUS_NOTES];
     /// Her choice after unticking quill-docs (US-RRA-002, BR-RRA-4).
     pub const PRIYA_CHOICE_WITHOUT_QUILL: [Repo; 4] = [TIDEPOOL, KELP, HARBOR_CLI, FERROUS_NOTES];
+    /// Three repos: a choice small enough that a scan reading one of them,
+    /// pausing and reading the other two is one scan the owner can count.
+    pub const PRIYA_CHOICE_OF_THREE: [Repo; 3] = [TIDEPOOL, QUILL_DOCS, KELP];
 
     // priya-tidal: 4 owned public repos.
     pub const INGEST_BENCH: Repo = Repo::new("priya-tidal", "ingest-bench");

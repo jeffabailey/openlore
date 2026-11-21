@@ -181,5 +181,12 @@ name = "review_app_scan_store_failure"
 path = "../../tests/acceptance/review_app_scan_store_failure.rs"
 harness = true
 
+# The queue's "repos read" count over a whole scan: a run paused for GitHub's
+# budget and the run that picks its plan up account for the scan once.
+[[test]]
+name = "review_app_repos_read_across_resume"
+path = "../../tests/acceptance/review_app_repos_read_across_resume.rs"
+harness = true
+
 [lints]
 workspace = true

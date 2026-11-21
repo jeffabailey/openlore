@@ -156,7 +156,211 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 
 <h2>Slices</h2>
 
-<p>None.</p>
+<h3>S1</h3>
+
+<h5>Covers</h5>
+
+<p>P1</p>
+
+<pre><code>Priya is signed in with her GitHub account verified and has chosen three of her repos. She presses Scan my repos; GitHub reports its request budget low after the first repo is read, so the run pauses. She then presses Resume scan on her queue, and the run that picks the plan up reads the other two repos and ends completed.
+</code></pre>
+
+<pre><code>Her queue status region carries exactly one line accounting for repos read, and that line says three repos read.
+</code></pre>
+
+<pre><code>She sees that her scan read all three of the repos she chose, although it stopped part way and had to be picked up again.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>tests/acceptance/review_app_repos_read_across_resume.rs::a_scan_picked_up_after_a_pause_accounts_for_the_repos_of_the_whole_scan</p>
+
+<pre><code>A queue that counted the whole scan across one pause but fell back to the last run&#x27;s count once a scan was picked up twice would still pass: this journey pauses and picks the scan up once.
+</code></pre>
+
+<h6>Obligations</h6>
+
+
+
+<h5>Covers</h5>
+
+<p>P1</p>
+
+<pre><code>A scan is paused with part of its plan already read, and a run picks that plan up, with any mix of its account checks passing, failing or unfinished and any of its sources removed meanwhile.
+</code></pre>
+
+<pre><code>The run keeps as already read exactly the repos of that plan an earlier run read, neither more nor fewer.
+</code></pre>
+
+<pre><code>What her scan already read stays accounted for, whatever changed while it was paused.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>tests/acceptance/review_app_repos_read_across_resume.rs::a_run_picking_a_paused_scan_up_keeps_every_read_it_already_made</p>
+
+<pre><code>A run that keeps those reads and then loses them when it writes its plan would still pass this one: what the store keeps is observed by its own rows.
+</code></pre>
+
+<h6>Obligations</h6>
+
+
+
+<h5>Covers</h5>
+
+<p>P2</p>
+
+<pre><code>A run picks up a paused plan that holds a repo already read whose GitHub account passes its check now.
+</code></pre>
+
+<pre><code>No repo the run keeps as already read is among the repos it reads now.
+</code></pre>
+
+<pre><code>A repo her scan already read is not read again, so it is counted once.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>tests/acceptance/review_app_repos_read_across_resume.rs::a_repo_already_read_is_not_read_again_by_the_run_picking_the_scan_up</p>
+
+<pre><code>A run that read one repo twice within a single run would still pass: this law is about the reads carried over from an earlier run.
+</code></pre>
+
+<h6>Obligations</h6>
+
+
+
+<h5>Covers</h5>
+
+<p>P2</p>
+
+<pre><code>A run picks up a paused plan holding a repo this scan will never read and a repo whose source the owner removed meanwhile.
+</code></pre>
+
+<pre><code>The repos the run keeps are part of the plan it picked up, in that plan order, each at most once.
+</code></pre>
+
+<pre><code>However often her scan is picked up, it never grows past the choice it started with, so no repo of it can be counted twice.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>tests/acceptance/review_app_repos_read_across_resume.rs::the_plan_a_run_picks_up_never_grows</p>
+
+<pre><code>A run that kept too few repos, dropping one still to read, would still pass: this law forbids a plan growing, not a plan losing a row.
+</code></pre>
+
+<h6>Obligations</h6>
+
+
+
+<h5>Covers</h5>
+
+<p>P1</p>
+
+<pre><code>A run freezes the plan of her scan with the first of its three repos already read, and the stored plan is read back.
+</code></pre>
+
+<pre><code>The plan reads back with the same three repos in the same order, the first of them still already read.
+</code></pre>
+
+<pre><code>Her store keeps which of her repos the scan has already read, so that account survives the pause.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>tests/acceptance/review_app_repos_read_across_resume.rs::a_frozen_plan_keeps_which_of_its_repos_were_already_read</p>
+
+<pre><code>A store that kept every status it was given while the run gave it the wrong ones would still pass: what the run gives it is observed by the resume rows.
+</code></pre>
+
+<h6>Obligations</h6>
+
+
+<h5>Covers</h5>
+
+<p>P1</p>
+
+<pre><code>A run freezes the plan of her scan with none of its three repos read yet, and the stored plan is read back.
+</code></pre>
+
+<pre><code>The plan reads back with all three repos still to read.
+</code></pre>
+
+<pre><code>No repo is counted as read before her scan has read it.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>tests/acceptance/review_app_repos_read_across_resume.rs::a_frozen_plan_of_repos_none_read_keeps_them_all_still_to_read</p>
+
+<pre><code>A store that wrote every row as still to read, whatever it was given, would still pass this one: the already-read case is what tells them apart.
+</code></pre>
+
+<h6>Obligations</h6>
+
+
+<h5>Covers</h5>
+
+<p>P1</p>
+
+<pre><code>A plan is frozen for a run her store no longer holds, while her latest run holds a plan of its own.
+</code></pre>
+
+<pre><code>No row is written for the run that is gone, and the plan of her latest run reads back empty.
+</code></pre>
+
+<pre><code>A scan she asked to be forgotten leaves nothing behind that a later count could name.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>tests/acceptance/review_app_repos_read_across_resume.rs::a_plan_frozen_for_a_run_her_store_no_longer_holds_leaves_nothing_behind</p>
+
+<pre><code>A store that also refused rows for a run it does hold would still pass this one: the other two cases observe that a held run keeps its plan.
+</code></pre>
+
+<h6>Obligations</h6>
+
+
+<h5>Covers</h5>
+
+<p>P1</p>
+
+<pre><code>Every member of the workspace is checked for where the rule deciding what a picked-up scan keeps lives, and where the store&#x27;s SQL lives.
+</code></pre>
+
+<pre><code>The crate holding that rule reaches no crate that reads or writes anything outside itself, no adapter depends on another adapter, and only a composition root depends on an adapter.
+</code></pre>
+
+<pre><code>The number her queue shows means one thing wherever it is shown, because the rule behind it has one home and the store has another.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>xtask/src/check_arch.rs (cargo xtask check-arch)</p>
+
+<pre><code>A crate that reached an adapter&#x27;s data only through the shared contract crate would still pass: the check follows crate dependencies, not the shape of the data they carry.
+</code></pre>
+
+<h6>Obligations</h6>
+
 
 <h2>Expectations</h2>
 

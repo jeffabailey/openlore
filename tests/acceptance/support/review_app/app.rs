@@ -655,6 +655,36 @@ pub fn queue_evidence(browser: &mut Browser) -> QueueEvidence {
     }
 }
 
+/// Every status line of a queue that accounts for repos read, in page order.
+/// A finished run that has a plan carries exactly one; a run with no plan to
+/// count carries none, and two lines would account for one scan twice.
+pub fn repos_read_lines(status_region: &[String]) -> Vec<String> {
+    status_region
+        .iter()
+        .filter(|line| REPOS_READ_WORDINGS.iter().any(|w| line.contains(w)))
+        .cloned()
+        .collect()
+}
+
+/// The whole number a repos-read line accounts for ("3 repos read" → 3): the
+/// number in front of the wording, so a count that merely ends in the true
+/// one is read as the number it is.
+pub fn repos_read_count(line: &str) -> Option<usize> {
+    REPOS_READ_WORDINGS.iter().find_map(|wording| {
+        let at = line.find(wording)?;
+        let digits: String = line[..at]
+            .trim_end()
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<Vec<char>>()
+            .into_iter()
+            .rev()
+            .collect();
+        digits.parse::<usize>().ok()
+    })
+}
+
 /// Show what she sees at this `moment` of the scenario, beside the assertions
 /// made about it. Every run shows it; a run reads it with `--nocapture`, as it
 /// reads any other output of a test.
