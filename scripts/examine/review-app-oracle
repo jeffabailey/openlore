@@ -8,7 +8,7 @@
 # starts the real review app binary over HTTP with that seam.
 #
 # Usage: review-app-oracle SUITE [libtest arguments]
-#   SUITE: store-failure | legacy-run
+#   SUITE: store-failure | legacy-run | across-resume
 # Build first: see "build" in .nwave/examine.json.
 
 set -euo pipefail
@@ -19,8 +19,9 @@ DEPS="$ROOT/target/debug/deps"
 case "${1:-}" in
   store-failure) suite=review_app_scan_store_failure ;;
   legacy-run) suite=review_app_legacy_run_repos_read ;;
+  across-resume) suite=review_app_repos_read_across_resume ;;
   *)
-    echo "usage: review-app-oracle {store-failure|legacy-run} [libtest arguments]" >&2
+    echo "usage: review-app-oracle {store-failure|legacy-run|across-resume} [libtest arguments]" >&2
     exit 2
     ;;
 esac
