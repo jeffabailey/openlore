@@ -689,15 +689,20 @@ mod tests {
             prop_assume!(env.get("REVIEW_APP_ALLOW_LOOPBACK_HTTP").map(|v| v.trim()) != Some("1"));
             let unset = parse_config(&env, BuildProfile::Development).map(|c| c.test_fault);
             prop_assert!(matches!(unset, Ok(None) | Err(_)));
-            for named in [value.as_str(), "migrate_before_commit"] {
+            let known = [
+                ("migrate_before_commit", TestFault::MigrateBeforeCommit),
+                ("refuse_mark_repo_read", TestFault::RefuseMarkRepoRead),
+                ("refuse_record_account_checks", TestFault::RefuseRecordAccountChecks),
+            ];
+            let names = std::iter::once(value.as_str()).chain(known.iter().map(|(name, _)| *name));
+            for named in names {
                 env.insert(TEST_FAULT_VAR.into(), named.to_string());
                 prop_assert_eq!(parse_config(&env, BuildProfile::Release), Err(ConfigError::TestFaultInRelease));
                 if unset.is_ok() {
                     let dev = parse_config(&env, BuildProfile::Development).map(|c| c.test_fault);
-                    let expected = if named == "migrate_before_commit" {
-                        Ok(Some(TestFault::MigrateBeforeCommit))
-                    } else {
-                        Err(ConfigError::Invalid { name: TEST_FAULT_VAR, reason: "not a known test fault" })
+                    let expected = match known.iter().find(|(name, _)| *name == named) {
+                        Some((_, fault)) => Ok(Some(*fault)),
+                        None => Err(ConfigError::Invalid { name: TEST_FAULT_VAR, reason: "not a known test fault" }),
                     };
                     prop_assert_eq!(dev, expected);
                 }
