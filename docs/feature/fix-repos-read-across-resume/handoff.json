@@ -1,0 +1,1158 @@
+{
+"counters": {
+"B": 3,
+"C": 2,
+"E": 6,
+"F": 209,
+"L": 5,
+"N": 2,
+"P": 2,
+"S": 1,
+"T": 1,
+"Y": 10
+},
+"design": {
+"adrs": [
+{
+"key": "001",
+"status": "Proposed",
+"title": "A resumed scan takes over its plan row statuses"
+}
+],
+"paradigm": "functional",
+"slices": {
+"S1": {
+"oracle": "tests/acceptance/review_app_repos_read_across_resume.rs",
+"public_oracle": {
+"expected": "F32",
+"falsifier": "F33",
+"promises": [
+"P1",
+"P2"
+],
+"stimulus": "F31"
+},
+"records": {
+"agreement": [
+{
+"contract": "ScanRunPort record_plan: the rows of a run frozen plan, each with its status",
+"decision": "Migrated",
+"locator": "crates/openlore-review-app/src/scan.rs:475",
+"party": "Producer",
+"reason": "F70"
+},
+{
+"contract": "ScanRunPort record_plan: the rows of a run frozen plan, each with its status",
+"decision": "Migrated",
+"locator": "crates/openlore-review-app/src/scan.rs:627",
+"party": "Producer",
+"reason": "F71"
+},
+{
+"contract": "ScanRunPort record_plan: the rows of a run frozen plan, each with its status",
+"decision": "Migrated",
+"locator": "crates/adapter-review-store/src/purge.rs:196",
+"party": "Producer",
+"reason": "F72"
+},
+{
+"contract": "ScanRunPort record_plan: the rows of a run frozen plan, each with its status",
+"decision": "Migrated",
+"locator": "crates/adapter-review-store/src/scan_runs.rs:239",
+"party": "Consumer",
+"reason": "F73"
+},
+{
+"contract": "ScanRunPort record_plan: the rows of a run frozen plan, each with its status",
+"decision": "Migrated",
+"locator": "crates/ports/src/review.rs:457",
+"party": "Consumer",
+"reason": "F74"
+},
+{
+"contract": "scan_run_repos.status: the stored vocabulary planned, read and skipped",
+"decision": "Migrated",
+"locator": "crates/adapter-review-store/src/scan_runs.rs:27",
+"party": "Producer",
+"reason": "F75"
+},
+{
+"contract": "scan_run_repos.status: the stored vocabulary planned, read and skipped",
+"decision": "UnchangedCompatible",
+"locator": "crates/adapter-review-store/src/scan_runs.rs:73",
+"party": "Consumer",
+"reason": "F76"
+},
+{
+"contract": "scan_run_repos.status: the stored vocabulary planned, read and skipped",
+"decision": "UnchangedCompatible",
+"locator": "crates/adapter-review-store/src/scan_runs.rs:446",
+"party": "Consumer",
+"reason": "F77"
+},
+{
+"contract": "scan_run_repos.status: the stored vocabulary planned, read and skipped",
+"decision": "Migrated",
+"locator": "crates/review-domain/src/repo_scope/resume.rs:126",
+"party": "Consumer",
+"reason": "F78"
+},
+{
+"contract": "scan_run_repos.status: the stored vocabulary planned, read and skipped",
+"decision": "UnchangedCompatible",
+"locator": "crates/adapter-review-store/src/scan_runs.rs:82",
+"party": "Consumer",
+"reason": "F79"
+}
+],
+"architectural_tests": [
+{
+"command": "cargo xtask check-arch",
+"id": "T1",
+"obligation": "F209",
+"oracle": "xtask/src/check_arch.rs"
+}
+],
+"boundaries": {
+"dependency_direction": "F85",
+"driven_ports": [
+"F83",
+"F84"
+],
+"driving_port": "F82",
+"failures": [
+{
+"condition": "F86",
+"id": "B1",
+"observation": "F87",
+"outcome": "Refusal"
+},
+{
+"condition": "F88",
+"id": "B2",
+"observation": "F89",
+"outcome": "Refusal"
+},
+{
+"condition": "F90",
+"id": "B3",
+"observation": "F91",
+"outcome": "Retry"
+}
+]
+},
+"claims": [
+{
+"admitted_input": "F124",
+"bypass": "F126",
+"constructor": "PlanRowStatus::parse",
+"consumer": "review_domain::repo_scope::resume::resume_plan and adapter_review_store::scan_runs::repos_read_of",
+"harm": "F123",
+"id": "C1",
+"owner": "ports::PlanRowStatus",
+"proposition": "F122",
+"public_observation": "F125"
+},
+{
+"admitted_input": "F129",
+"bypass": "F131",
+"constructor": "Resume::kept",
+"consumer": "openlore_review_app::scan::ResumedPlan",
+"harm": "F128",
+"id": "C2",
+"owner": "review_domain::repo_scope::resume::Resume",
+"proposition": "F127",
+"public_observation": "F130"
+}
+],
+"closure": [
+{
+"axis": "Safety",
+"basis": "F155",
+"design": "Pass",
+"evidence": [
+"docs/architecture/models/resume_repos_read.qnt",
+"tests/acceptance/review_app_repos_read_across_resume.rs"
+],
+"runtime": "DesignedNotBuilt",
+"subject": "F154"
+},
+{
+"axis": "Inhabitation",
+"basis": "F156",
+"design": "Pass",
+"evidence": [
+"tests/acceptance/review_app_repos_read_across_resume.rs"
+],
+"runtime": "DesignedNotBuilt",
+"subject": "F154"
+},
+{
+"axis": "PublicReachability",
+"basis": "F157",
+"design": "Pass",
+"evidence": [
+"tests/acceptance/review_app_repos_read_across_resume.rs"
+],
+"runtime": "DesignedNotBuilt",
+"subject": "F154"
+},
+{
+"axis": "Liveness",
+"basis": "F158",
+"design": "Pass",
+"runtime": "DesignedNotBuilt",
+"subject": "F154"
+}
+],
+"constraints": [
+"F41",
+"F42",
+"F43",
+"F44",
+"F45"
+],
+"constructors": [
+{
+"name": "ScanPlanRow",
+"signature": "ScanPlanRow { repo: PlannedScanRepo, status: PlanRowStatus }"
+},
+{
+"name": "KeptRow",
+"signature": "KeptRow { position: usize, status: PlanRowStatus }"
+},
+{
+"name": "Resume::kept",
+"signature": "fn kept(&self) -> Vec<KeptRow>"
+},
+{
+"name": "ScanRunPort::record_plan",
+"signature": "fn record_plan(&self, owner_did: &str, run_id: &str, rows: &[ScanPlanRow]) -> Result<(), ReviewStoreError>"
+}
+],
+"decisions": [
+"F34",
+"F35",
+"F36",
+"F37",
+"F38",
+"F39",
+"F40"
+],
+"equality": [
+{
+"definition": "F98",
+"under": "the queue repos-read line"
+}
+],
+"impact": [
+{
+"decision": "Changed",
+"kind": "pure domain module",
+"locator": "crates/review-domain/src/repo_scope/resume.rs:97",
+"reason": "F58"
+},
+{
+"decision": "Changed",
+"kind": "crate module exports",
+"locator": "crates/review-domain/src/repo_scope/mod.rs:51",
+"reason": "F59"
+},
+{
+"decision": "Changed",
+"kind": "port trait",
+"locator": "crates/ports/src/review.rs:457",
+"reason": "F60"
+},
+{
+"decision": "Changed",
+"kind": "store adapter",
+"locator": "crates/adapter-review-store/src/scan_runs.rs:27",
+"reason": "F61"
+},
+{
+"decision": "Changed",
+"kind": "adapter test seed",
+"locator": "crates/adapter-review-store/src/purge.rs:196",
+"reason": "F62"
+},
+{
+"decision": "Changed",
+"kind": "composition root scan task",
+"locator": "crates/openlore-review-app/src/scan.rs:475",
+"reason": "F63"
+},
+{
+"decision": "Changed",
+"kind": "test target manifest",
+"locator": "crates/openlore-review-app/Cargo.toml:1",
+"reason": "F64"
+},
+{
+"decision": "UnchangedCompatible",
+"kind": "queue view",
+"locator": "crates/review-domain/src/views/queue.rs:651",
+"reason": "F65"
+},
+{
+"decision": "UnchangedCompatible",
+"kind": "port data type",
+"locator": "crates/ports/src/review.rs:423",
+"reason": "F66"
+},
+{
+"decision": "UnchangedCompatible",
+"kind": "acceptance oracle",
+"locator": "tests/acceptance/review_app_scan_store_failure.rs:265",
+"reason": "F67"
+},
+{
+"decision": "UnchangedCompatible",
+"kind": "acceptance oracle",
+"locator": "tests/acceptance/review_app_legacy_run_repos_read.rs:122",
+"reason": "F68"
+},
+{
+"decision": "UnchangedCompatible",
+"kind": "domain property binding",
+"locator": "tests/acceptance/review_app_repos_and_accounts_core.rs:402",
+"reason": "F69"
+}
+],
+"laws": [
+{
+"evidence": [
+"tests/acceptance/review_app_repos_read_across_resume.rs",
+"docs/architecture/models/resume_repos_read.qnt"
+],
+"id": "L1",
+"kind": "Invariant",
+"layer": "Domain",
+"owner": "review_domain::repo_scope::resume::resume_plan",
+"statement": "F99",
+"treatment": {
+"falsifier": "F104",
+"generator": {
+"depth_bound": "one resume of one plan",
+"domain": "F100",
+"must_include": [
+"F101"
+],
+"seed_policy": "the native proptest seeding with its committed regression file",
+"shrinking": "F102",
+"size_bound": "8 rows, 4 accounts, 4 imports, 64 cases"
+},
+"independent_observation": "F103",
+"kind": "Broad"
+}
+},
+{
+"evidence": [
+"tests/acceptance/review_app_repos_read_across_resume.rs"
+],
+"id": "L2",
+"kind": "Invariant",
+"layer": "Domain",
+"owner": "review_domain::repo_scope::resume::Resume",
+"statement": "F105",
+"treatment": {
+"falsifier": "F109",
+"generator": {
+"depth_bound": "one resume of one plan",
+"domain": "F106",
+"must_include": [
+"F107"
+],
+"seed_policy": "the native proptest seeding with its committed regression file",
+"shrinking": "F102",
+"size_bound": "8 rows, 4 accounts, 4 imports, 64 cases"
+},
+"independent_observation": "F108",
+"kind": "Broad"
+}
+},
+{
+"evidence": [
+"tests/acceptance/review_app_repos_read_across_resume.rs"
+],
+"id": "L3",
+"kind": "Invariant",
+"layer": "Domain",
+"owner": "review_domain::repo_scope::resume::Resume",
+"statement": "F110",
+"treatment": {
+"falsifier": "F113",
+"generator": {
+"depth_bound": "one resume of one plan",
+"domain": "F106",
+"must_include": [
+"F111"
+],
+"seed_policy": "the native proptest seeding with its committed regression file",
+"shrinking": "F102",
+"size_bound": "8 rows, 4 accounts, 4 imports, 64 cases"
+},
+"independent_observation": "F112",
+"kind": "Broad"
+}
+},
+{
+"evidence": [
+"tests/acceptance/review_app_repos_read_across_resume.rs"
+],
+"id": "L4",
+"kind": "RoundTrip",
+"layer": "Adapter",
+"owner": "adapter_review_store::scan_runs::record_plan",
+"statement": "F114",
+"treatment": {
+"cases": [
+"F115",
+"F116",
+"F117"
+],
+"kind": "Finite",
+"reason": "F118"
+}
+},
+{
+"evidence": [
+"tests/acceptance/review_app_repos_read_across_resume.rs"
+],
+"id": "L5",
+"kind": "Invariant",
+"layer": "Application",
+"owner": "openlore_review_app::scan::resume_scan",
+"statement": "F119",
+"treatment": {
+"cases": [
+"F120"
+],
+"kind": "Finite",
+"reason": "F121"
+}
+}
+],
+"models": [
+{
+"assumptions": [
+"F147",
+"F148",
+"F149",
+"F150",
+"F151"
+],
+"atoms": [
+{
+"atomicity": "F142",
+"kind": "State",
+"name": "stored",
+"site": "crates/adapter-review-store/src/scan_runs.rs:27",
+"symbol": "scan_run_repos.status"
+},
+{
+"kind": "State",
+"name": "outcome",
+"site": "crates/adapter-review-store/src/scan_runs.rs:17",
+"symbol": "scan_runs.status"
+},
+{
+"kind": "State",
+"name": "harvested",
+"site": "model-only: the repos GitHub served, which no stored row records",
+"symbol": "model-only"
+},
+{
+"kind": "State",
+"name": "saved",
+"site": "model-only: the reads the store accepted, observed through the stored statuses alone",
+"symbol": "model-only"
+},
+{
+"atomicity": "F143",
+"kind": "Action",
+"name": "readAndSave",
+"site": "crates/openlore-review-app/src/scan.rs:686",
+"symbol": "ScanRunPort::mark_repo_read"
+},
+{
+"atomicity": "F144",
+"kind": "Action",
+"name": "readUnsaved",
+"site": "crates/openlore-review-app/src/scan.rs:686",
+"symbol": "ScanRunPort::mark_repo_read"
+},
+{
+"atomicity": "F145",
+"kind": "Action",
+"name": "resumeRun",
+"site": "crates/openlore-review-app/src/scan.rs:626",
+"symbol": "ResumedPlan::record"
+},
+{
+"kind": "Action",
+"name": "pause",
+"site": "crates/openlore-review-app/src/scan.rs:669",
+"symbol": "openlore_review_app::scan::paused"
+},
+{
+"kind": "Action",
+"name": "complete",
+"site": "crates/openlore-review-app/src/scan.rs:276",
+"symbol": "ScanRunPort::finish_scan"
+},
+{
+"kind": "Action",
+"name": "skipRow",
+"site": "crates/openlore-review-app/src/scan.rs:637",
+"symbol": "openlore_review_app::scan::named_carried_skip"
+},
+{
+"atomicity": "F146",
+"kind": "Constant",
+"name": "Positions",
+"site": "crates/review-domain/src/repo_scope/mod.rs:1",
+"symbol": "SCAN_REPO_CAP"
+}
+],
+"language": "Quint",
+"mutants": [
+{
+"description": "F152",
+"id": "N1",
+"kills": [
+"everySavedReadCounted"
+]
+},
+{
+"description": "F153",
+"id": "N2",
+"kills": [
+"everyCountedReadSaved",
+"countsOnlyHarvested"
+]
+}
+],
+"path": "docs/architecture/models/resume_repos_read.qnt",
+"properties": [
+{
+"kind": "Invariant",
+"name": "everySavedReadCounted",
+"site": "crates/review-domain/src/repo_scope/resume.rs:97",
+"statement": "F138",
+"symbol": "review_domain::repo_scope::resume::Resume::kept"
+},
+{
+"kind": "Invariant",
+"name": "everyCountedReadSaved",
+"site": "crates/adapter-review-store/src/scan_runs.rs:170",
+"statement": "F139",
+"symbol": "adapter_review_store::scan_runs::repos_read_of"
+},
+{
+"kind": "Invariant",
+"name": "countsOnlyHarvested",
+"site": "crates/openlore-review-app/src/scan.rs:664",
+"statement": "F140",
+"symbol": "openlore_review_app::scan::read_planned"
+},
+{
+"kind": "Invariant",
+"name": "countNeverExceedsPlan",
+"site": "crates/ports/src/review.rs:423",
+"statement": "F141",
+"symbol": "ports::ScanRun"
+}
+]
+}
+],
+"not_applicable": [
+{
+"analysis": "contract_tests",
+"reason": "F80"
+},
+{
+"analysis": "prefactoring",
+"reason": "F81"
+}
+],
+"observations": [
+{
+"cannot_distinguish": "F93",
+"description": "F92",
+"result_type": "an optional whole number, absent when the run recorded no plan row"
+},
+{
+"cannot_distinguish": "F95",
+"description": "F94",
+"result_type": "the plan rows in position order, each with its repo, its source and its status"
+},
+{
+"cannot_distinguish": "F97",
+"description": "F96",
+"result_type": "one of running, rate limited, interrupted, completed and ownership failed"
+}
+],
+"reuse": [
+{
+"decision": "Reuse",
+"locator": "crates/ports/src/review.rs:555",
+"reason": "F46",
+"symbol": "ScanPlanRow"
+},
+{
+"decision": "Extend",
+"locator": "crates/ports/src/review.rs:457",
+"reason": "F47",
+"symbol": "record_plan"
+},
+{
+"decision": "Reuse",
+"locator": "crates/ports/src/review.rs:465",
+"reason": "F48",
+"symbol": "mark_repo_read"
+},
+{
+"decision": "Reuse",
+"locator": "crates/adapter-review-store/src/scan_runs.rs:170",
+"reason": "F49",
+"symbol": "repos_read_of"
+},
+{
+"decision": "Extend",
+"locator": "crates/review-domain/src/repo_scope/resume.rs:126",
+"reason": "F50",
+"symbol": "resume_plan"
+},
+{
+"decision": "Extend",
+"locator": "crates/review-domain/src/repo_scope/resume.rs:97",
+"reason": "F51",
+"symbol": "kept"
+},
+{
+"decision": "CreateNew",
+"locator": "crates/review-domain/src/repo_scope/resume.rs:91",
+"reason": "F52",
+"symbol": "Resume"
+},
+{
+"decision": "Extend",
+"locator": "crates/openlore-review-app/src/scan.rs:586",
+"reason": "F53",
+"symbol": "ResumedPlan"
+},
+{
+"decision": "Reuse",
+"locator": "crates/ports/src/review.rs:575",
+"reason": "F54",
+"symbol": "PlanRowStatus"
+},
+{
+"decision": "Reuse",
+"locator": "tests/acceptance/support/review_app/repos_and_accounts.rs:1069",
+"reason": "F55",
+"symbol": "given_scan_paused_part_way"
+},
+{
+"decision": "Extend",
+"locator": "crates/review-domain/src/repo_scope/mod.rs:51",
+"reason": "F56",
+"symbol": "resume_plan"
+},
+{
+"decision": "Extend",
+"locator": "crates/adapter-review-store/src/purge.rs:196",
+"reason": "F57",
+"symbol": "record_plan"
+}
+],
+"risks": [
+{
+"allowed": "F161",
+"forbidden": "F162",
+"id": "Y1",
+"kind": "Stressor",
+"owner": "openlore-review-app",
+"preserved": "F160",
+"residue": "F163",
+"source": "F159"
+},
+{
+"allowed": "F166",
+"forbidden": "F167",
+"id": "Y2",
+"kind": "Stressor",
+"owner": "review-domain",
+"preserved": "F165",
+"residue": "F168",
+"source": "F164"
+},
+{
+"allowed": "F171",
+"forbidden": "F172",
+"id": "Y3",
+"kind": "Stressor",
+"owner": "review-domain",
+"preserved": "F170",
+"residue": "F173",
+"source": "F169"
+},
+{
+"allowed": "F176",
+"forbidden": "F177",
+"id": "Y4",
+"kind": "Stressor",
+"owner": "openlore-review-app",
+"preserved": "F175",
+"residue": "F178",
+"source": "F174"
+},
+{
+"allowed": "F181",
+"forbidden": "F182",
+"id": "Y5",
+"kind": "SinglePointOfFailure",
+"owner": "adapter-review-store",
+"preserved": "F180",
+"residue": "F183",
+"source": "F179"
+},
+{
+"allowed": "F186",
+"forbidden": "F187",
+"id": "Y6",
+"kind": "Bypass",
+"owner": "adapter-review-store",
+"preserved": "F185",
+"residue": "F188",
+"source": "F184"
+},
+{
+"allowed": "F191",
+"forbidden": "F192",
+"id": "Y7",
+"kind": "Bypass",
+"owner": "adapter-review-store",
+"preserved": "F190",
+"residue": "F193",
+"source": "F189"
+},
+{
+"allowed": "F196",
+"forbidden": "F197",
+"id": "Y8",
+"kind": "Stressor",
+"owner": "openlore-review-app",
+"preserved": "F195",
+"residue": "F198",
+"source": "F194"
+},
+{
+"allowed": "F201",
+"forbidden": "F202",
+"id": "Y9",
+"kind": "Stressor",
+"owner": "adapter-review-store",
+"preserved": "F200",
+"residue": "F203",
+"source": "F199"
+},
+{
+"allowed": "F206",
+"forbidden": "F207",
+"id": "Y10",
+"kind": "Stressor",
+"owner": "adapter-review-store",
+"preserved": "F205",
+"residue": "F208",
+"source": "F204"
+}
+],
+"states": [
+{
+"kind": "Admitted",
+"owner": "openlore-review-app",
+"state": "F132"
+},
+{
+"kind": "Admitted",
+"owner": "openlore-review-app",
+"state": "F133"
+},
+{
+"kind": "Admitted",
+"owner": "review-domain",
+"state": "F134"
+},
+{
+"kind": "Excluded",
+"owner": "adapter-review-store",
+"state": "F135"
+},
+{
+"kind": "Excluded",
+"owner": "review-domain",
+"state": "F136"
+},
+{
+"kind": "Unknown",
+"owner": "openlore-review-app",
+"state": "F137"
+}
+]
+},
+"supports": [
+"crates/openlore-review-app/Cargo.toml",
+"tests/acceptance/support/review_app/repos_and_accounts.rs",
+"tests/acceptance/support/review_app/app.rs"
+],
+"targets": [
+{
+"change": "Extend",
+"path": "crates/review-domain/src/repo_scope/resume.rs",
+"reason": "F25"
+},
+{
+"change": "Extend",
+"path": "crates/review-domain/src/repo_scope/mod.rs",
+"reason": "F26"
+},
+{
+"change": "Extend",
+"path": "crates/ports/src/review.rs",
+"reason": "F27"
+},
+{
+"change": "Extend",
+"path": "crates/adapter-review-store/src/scan_runs.rs",
+"reason": "F28"
+},
+{
+"change": "Extend",
+"path": "crates/adapter-review-store/src/purge.rs",
+"reason": "F29"
+},
+{
+"change": "Extend",
+"path": "crates/openlore-review-app/src/scan.rs",
+"reason": "F30"
+}
+],
+"verification": [
+"cargo test -p openlore-review-app --test review_app_repos_read_across_resume -- --nocapture",
+"cargo test -p openlore-review-app --test review_app_scan_store_failure",
+"cargo test -p review-domain -p adapter-review-store",
+"cargo xtask check-arch"
+]
+}
+}
+},
+"expectations": {
+"rows": [
+{
+"id": "E1",
+"lacuna": "F8",
+"needs": "F9",
+"promises": [
+"P1"
+],
+"text": "F7"
+},
+{
+"id": "E2",
+"lacuna": "F11",
+"needs": "F12",
+"promises": [
+"P1"
+],
+"text": "F10"
+},
+{
+"id": "E3",
+"lacuna": "F14",
+"needs": "F15",
+"promises": [
+"P1"
+],
+"text": "F13"
+},
+{
+"id": "E4",
+"lacuna": "F17",
+"needs": "F18",
+"promises": [
+"P1"
+],
+"text": "F16"
+},
+{
+"id": "E5",
+"lacuna": "F20",
+"needs": "F21",
+"promises": [
+"P2"
+],
+"text": "F19"
+},
+{
+"id": "E6",
+"lacuna": "F23",
+"needs": "F24",
+"promises": [
+"P2"
+],
+"text": "F22"
+}
+]
+},
+"facts": {
+"F1": "A scan reads 1 of 3 repos, pauses because the GitHub request budget is used up, and then resumes and reads the other 2. The queue then says \"2 repos read\", not 3. Each resume starts a new run that counts only its own reads. User decision (2026-11-21, option A): count the whole scan across its resumes (here \"3 repos read\"); the resumed run takes over the reads the paused run already saved.",
+"F10": "The same whole-scan count is reported when the earlier run ended by interruption rather than by a used-up budget: after a resume of an interrupted scan, the queue reports the repos read by the interrupted run plus those read by the resuming run.",
+"F100": "frozen plans of 0 to 8 rows over account and imported sources, each row planned, read or skipped; a bio check of passed, failed or unfinished per account; any listed-source set",
+"F101": "a plan holding at least one read row and at least one planned row",
+"F102": "native proptest shrinking to the shortest refuting plan",
+"F103": "the positions whose frozen status is read, computed in the test from the generated plan alone",
+"F104": "a kept row carries planned where its frozen row was read, or carries read where its frozen row was not",
+"F105": "A row a resume takes over as read is never among the rows it reads now, so a repo is counted once and read once.",
+"F106": "the same frozen plans, bio checks and listed sources",
+"F107": "a plan holding a read row whose account passes its bio check now",
+"F108": "the intersection of the taken-over positions and the positions to read, which the test computes and asserts empty",
+"F109": "one position appears both as taken over and as to read",
+"F11": "The promise does not say which stops count as \"interrupted\" for the user (a deliberate cancel, a crash, a lost machine), so a user cannot predict from the promise whether the count survives an abrupt kill.",
+"F110": "A resume keeps a subset of the plan it resumes, in plan order, each position at most once, so a plan never grows from one run to the next.",
+"F111": "a plan holding a skipped row and a removed source",
+"F112": "the generated plan positions, against which the kept positions are checked for membership, order and uniqueness",
+"F113": "a kept position is outside the resumed plan, repeats, or breaks plan order",
+"F114": "A plan written with its row statuses reads back with the same repos, the same order and the same statuses.",
+"F115": "a three-row plan written as read, planned, planned reads back as read, planned, planned",
+"F116": "a three-row plan written all planned reads back all planned",
+"F117": "a plan written for a run the store no longer holds writes no row and reads back empty",
+"F118": "The written vocabulary is the closed set planned and read over a plan bounded at ten rows, so the cases exhaust the distinctions the round trip can lose.",
+"F119": "For a three-repo plan paused after one repo and resumed to its end, the queue accounts for three repos read, exactly once.",
+"F12": "A public observation of the queue after a run is interrupted and after a later run resumes the same plan.",
+"F120": "three chosen repos; the GitHub budget runs low after the first; the owner picks the run up; the resumed run reads the other two and completes; the queue status region carries exactly one repos-read line and it reads three repos read",
+"F121": "One public journey with one count: the finite case is the whole observable claim, and the broad laws above cover the plans the journey does not walk.",
+"F122": "A plan row status is one of planned, read and skipped, so no row can be stored read without naming that status, and the count is the size of a set of plan positions, so one row cannot be counted twice.",
+"F123": "An over-count tells the owner that repos were read which were not, and the count is the only account she gets of what her scan did.",
+"F124": "a stored status string read from scan_run_repos",
+"F125": "the repos-read line of the queue",
+"F126": "A row stored with a status string the parser does not know is dropped by the reader, which under-counts rather than over-counts; and the SQL count over the rows lives outside the Rust types, so only the adapter tests hold it.",
+"F127": "A resuming run can write only rows of the plan it resumes, because its rows are built from the kept positions of that plan and from nothing else.",
+"F128": "A resume that planned afresh would count repos of a plan the owner never paused, and would spend her GitHub budget on them.",
+"F129": "the plan rows of the paused run, the bio checks of this resume and the sources listed now",
+"F13": "When a scan is resumed more than once, the queue count keeps accumulating over every run: after the third run the user sees the total of the paused run and all runs that resumed it, not just the two most recent runs.",
+"F130": "the repos the queue accounts for and the repos GitHub was asked to read",
+"F131": "The scan task maps the kept positions onto the rows it was given; a mapping defect there is caught by the acceptance journey, not by a type.",
+"F132": "The latest run plan carries rows read by an earlier run of the same scan, stored read.",
+"F133": "A plan row whose read was never saved stays planned and is read again by a resume, counting once.",
+"F134": "A plan row already read whose source the owner removed meanwhile stays read and counted: the scan did read it, and nothing more is read for that source.",
+"F135": "A row stored read in the latest run that no run of the scan read: only marking a repo read and carrying a stored read status write that value.",
+"F136": "A count shown for a run that is not completed, and a count at all for a run that recorded no plan row.",
+"F137": "A run that started and whose plan write never happened, through a crash between starting the run and freezing its plan: the frozen plan of that scan is lost and the next scan plans afresh, with its own count.",
+"F138": "Every read the store accepted in this scan is still counted by the latest run of it.",
+"F139": "Every row the count names as read is a row whose read the store accepted, so no row is counted twice and none is invented.",
+"F14": "The promise does not say what the user sees when a resuming run reads no repo at all, so a count that did not move cannot be told apart from a count that was reset and rebuilt.",
+"F140": "Every row the count names as read is a row GitHub actually served in this scan.",
+"F141": "The count never exceeds the size of the frozen plan.",
+"F142": "One row per plan position, written inside the plan transaction",
+"F143": "One statement per row",
+"F144": "The refused write: the row keeps its status and the run ends interrupted",
+"F145": "One transaction writing every kept row with its status",
+"F146": "Three positions model a plan bounded at ten repos",
+"F147": "One owner, one scan, one frozen plan of three positions, the bound the slice journey walks",
+"F148": "One run of the owner is live at a time, which the scan admission already holds",
+"F149": "A read either is saved, which turns its row read, or is refused, which ends the run interrupted and leaves the row planned",
+"F15": "A public observation of the queue after each of at least three runs of one scan plan.",
+"F150": "A resume carries the statuses of the plan it resumes; the ghost sets of harvested and saved reads have no runtime symbol",
+"F151": "Bounded symbolic check at twelve steps; no timing, no throughput and no unbounded run chain are covered",
+"F152": "The resume drops the rows already read instead of carrying them, which is the defect reported: the count falls back to the reads of the last run.",
+"F153": "The takeover marks every carried row read, not only the rows already read, which counts repos nobody read.",
+"F154": "The whole-scan repos-read count",
+"F155": "A plan row status is the closed set planned, read and skipped, and the count is the size of a set of plan positions, so a count above the reads the store holds is unrepresentable. The four count invariants were checked symbolically over a three-row plan at twelve steps, and each has a mutant that breaks it.",
+"F156": "A three-row plan whose first row is read by one run and whose other two are read by the run that takes the plan over is built from admitted input: a saved choice of three repos, a GitHub budget that runs low after one repo, and a resume. The queue then shows three repos read.",
+"F157": "The owner presses Resume scan at POST /scan, the scan task builds its resumed plan through Resume::kept in crates/review-domain/src/repo_scope/resume.rs:97, writes it through ScanRunPort record_plan at crates/ports/src/review.rs:457, the store counts the read rows at crates/adapter-review-store/src/scan_runs.rs:170, and the queue renders the line at crates/review-domain/src/views/queue.rs:652 on GET /review. The path is acyclic and every site exists today.",
+"F158": "No liveness claim: a paused scan goes on only when GitHub refills the request budget and the owner, or the automatic resume, starts the next run, both outside the app. The promise is a truthful count at every moment, which is a state invariant and needs no fairness assumption; nothing here claims a scan eventually completes.",
+"F159": "Negated assumption, the store accepts the plan write: it refuses record_plan while a resume freezes its plan.",
+"F16": "The number the queue reports counts repos of that scan plan only, so a user who compares it with the size of the plan sees a number that stays within the plan and does not grow with work from other scans or other plans.",
+"F160": "The rows of the paused run stay exactly as the store holds them, under their own run id.",
+"F161": "The resuming run ends interrupted and its queue shows no repos-read line at all.",
+"F162": "A completed run showing a count below the reads the store holds.",
+"F163": "The owner picks the run up again; until a plan row is written, that new run reports no count.",
+"F164": "Negated assumption, the owner source list is unchanged across runs: an account is removed after one of its repos was read.",
+"F165": "The already-read row stays read and counted, because the scan did read it.",
+"F166": "The count names a repo whose account the owner no longer lists.",
+"F167": "Reading that repo again, or adding any suggestion for it.",
+"F168": "The count accounts for the scan, never for the list in force now.",
+"F169": "Negated assumption, a scan is resumed at most once: the plan is paused and picked up again and again.",
+"F17": "The promise does not say whether a repo whose read failed or returned an error counts as read, so a user seeing a count below the plan size cannot tell an unread repo from a failed one.",
+"F170": "Each resume carries the statuses the one before it stored, so the count accumulates over the whole chain.",
+"F171": "Many runs for one scan, each with its own account checks.",
+"F172": "The count falling back to the reads of the last run.",
+"F173": "The plan never grows: each resume keeps a subset of the plan it resumes.",
+"F174": "Negated assumption, the process survives the resume: the app restarts in the middle of one.",
+"F175": "The rows already written stay; the restart sweep marks the run interrupted so it can be picked up.",
+"F176": "The run is picked up again and re-reads the rows whose marks were never saved.",
+"F177": "Counting a re-read row twice.",
+"F178": "One row per repo in one plan, so one count whatever the number of runs.",
+"F179": "The queue reads the latest run alone: a run that starts and writes no plan row hides the frozen plan of the scan it meant to resume.",
+"F18": "A public observation of the queue count together with the public plan size for the same scan.",
+"F180": "No untrue count: a run with no plan row reports no count at all.",
+"F181": "The next scan plans afresh and starts its own count.",
+"F182": "A count mixing the rows of two scans.",
+"F183": "The frozen plan of the interrupted scan is lost; its repos are read again under the new plan.",
+"F184": "Deserialization: the plan reader drops a row whose stored status string it does not know.",
+"F185": "No unknown status is ever counted as read.",
+"F186": "An under-count, and that repo being read again.",
+"F187": "Treating an unknown status as read.",
+"F188": "Only this adapter writes the column, so the stored values stay the three known ones.",
+"F189": "An outside writer of scan_run_repos, such as an operator with DuckDB in hand.",
+"F19": "When a resuming run reads a plan repo a second time because the earlier read was not saved, the whole-scan count the queue reports rises by one for that repo, never by two.",
+"F190": "Inside the workspace the store adapter is the only implementor of the port, so the app has one writer.",
+"F191": "Nothing: no second writer is admitted.",
+"F192": "A second writer in the app setting a row read.",
+"F193": "A direct write by an operator is outside what the app can hold.",
+"F194": "Second stressor set, not used to derive the design: the owner presses Resume scan while the automatic resume is already running.",
+"F195": "The scan admission allows one run per owner, so the second attempt is refused as already scanning.",
+"F196": "The owner is told a scan is already running.",
+"F197": "Two runs taking the same plan over.",
+"F198": "Even if both ran, each run counts its own rows, so no run could report more than its own plan.",
+"F199": "Second stressor set: a forget-me purge deletes the run while the resume is writing its plan.",
+"F2": "After a budget pause and resume, the queue says how many of the scan plan repos were read in the whole scan, not only in the last run",
+"F20": "The promise reports only a number, so the duplicated work itself (the time and the GitHub requests spent reading the same repo twice) stays invisible to the user.",
+"F200": "The plan write does nothing for a run the store no longer holds, so no row is left behind.",
+"F201": "The resume reads repos and records nothing of them.",
+"F202": "Rows surviving a purge for that owner.",
+"F203": "The owner data is gone, so no count is owed.",
+"F204": "Second stressor set: two runs of one owner carry the same started-at second.",
+"F205": "The latest-run query breaks the tie on insertion order, so the newest run answers.",
+"F206": "Nothing.",
+"F207": "Counting the rows of an older run as the latest.",
+"F208": "Run ordering within one second rests on insertion order.",
+"F209": "The resume verdict stays in the pure core and the SQL stays in the effect shell: review-domain reaches no I O crate, no adapter depends on an adapter, and only a composition root depends on an adapter, over every workspace member.",
+"F21": "A public observation of a scan in which a read by the paused run was not saved and the resuming run reads that repo again, with the queue count before and after.",
+"F22": "However many runs repeat a read, the number stays a count of repos and not a count of read attempts: a user who sees the queue after several resumes that re-read the same repos sees the number of different plan repos read, not the sum of the reads.",
+"F23": "The promise gives the user no way to see which repos were re-read, so a correct larger count and an over-count caused by double counting look the same in the queue output.",
+"F24": "A public observation of a scan with at least two repos re-read across at least two resumes, with the identities of the repos read in each run visible in public output.",
+"F25": "The resume verdict names the rows already read and answers with the status each kept row carries.",
+"F26": "The kept-row type is re-exported beside the rest of the resume verdict.",
+"F27": "The plan writer takes rows with their status, and says so in its contract.",
+"F28": "The plan-row insert writes the status it is given instead of always planned.",
+"F29": "Its seeded plan rows pass their status to the writer.",
+"F3": "When a scan pauses (GitHub request budget used up, or interrupted) and a later run resumes its plan, the queue says \"N repos read\" with N the count of plan repos read in the whole scan: the paused run and every run that resumed it.",
+"F30": "The fresh plan writes planned rows and the resumed plan writes every kept row with the status the verdict gives it.",
+"F31": "Priya is signed in with her GitHub account verified and has chosen three of her repos. She presses Scan my repos; GitHub reports its request budget low after the first repo is read, so the run pauses. She then presses Resume scan on her queue, and the run that picks the plan up reads the other two repos and ends completed.",
+"F32": "Her queue status region carries exactly one repos-read line, and it reads three repos read.",
+"F33": "The line reads two repos read, counting only the run that picked the plan up; or it reads more than three, counting a repo twice; or a completed run shows no repos-read line at all.",
+"F34": "Resume takes over the whole frozen plan. A resuming run records every non-skipped row of the paused run plan as its own plan, each row carrying the status it already holds, so the queue counts the reads of the whole scan and not only of the last run. The alternative, a scan-chain column counted across the runs of one scan, needs a stored schema change and a distinct-repo count to avoid counting a repo twice; the takeover needs neither.",
+"F35": "One writer freezes the plan and its statuses. ScanRunPort record_plan takes plan rows with their status, so freezing the resuming run plan and carrying its already-read rows is one transaction. No second writer of scan_run_repos appears, and the mark-repo-read seam keeps its meaning: a read made now, by this run.",
+"F36": "The count stays a set of plan positions. repos_read_of keeps counting the rows of the latest run whose status is read. A repo has one row per plan, so a repo read again by a resume after an unsaved read counts once, and no counter can be incremented twice.",
+"F37": "The resume verdict owns each kept row status. The pure resume verdict in review-domain returns its kept rows as positions paired with the status the resuming run gives them: read for a row already read, planned for one it reads now or carries. The scan task maps those rows onto plan rows and writes them, and decides nothing about a row itself.",
+"F38": "Carriers and their owners. ScanPlanRow carries one plan row and its status in ports; KeptRow carries one resume verdict row in review-domain; Resume carries the whole verdict; PlanRowStatus and ScanStatus carry row and run state; ReviewStoreError carries store refusals; the per-process scan state stays inside the scan task of the review app, under one admission per owner.",
+"F39": "Each layer states what it owns. Domain: a frozen plan row is planned, read or skipped, and a resume maps the plan it resumes onto its own kept rows. Application: the scan task reads the planned rows in order, pauses on a low GitHub budget, and ends completed, rate limited or interrupted. Adapter: record_plan writes every kept row with its status in one transaction, mark_repo_read turns one row read, latest_scan counts the read rows of the latest run. Infrastructure: a refused or interrupted write leaves the rows the store already holds untouched and the run resumable.",
+"F4": "A plan repo read again by a resume (because the earlier read was not saved) counts once, never twice.",
+"F40": "Quint checks the count across resumes. The four count invariants are checked with quint verify over a three-row plan and twelve steps, because the claim is about state carried from run to run, not a proof over types: Agda would add nothing, and TLC is needed only for a temporal claim this design does not make.",
+"F41": "A scan plan holds at most ten repos in total (SCAN_REPO_CAP, D-RRA-16), so a resume carries at most ten rows. The authority sets no lower bound: a plan of one row is admitted, and a plan of none is a run with nothing to count.",
+"F42": "A plan row position and every stored count live in INTEGER columns: the adapter saturates a position or count above the signed 32-bit maximum and reads a negative one back as zero. This design keeps that existing bound and widens nothing.",
+"F43": "Out of product scope: the words of the repos-read line, and a run kept from before scan plans were stored, which still says nothing about repos read.",
+"F44": "Test budgets: each pure-core property case stays at or under 10 ms over at most 64 cases; the one acceptance scenario drives the real binary over HTTP and stays within a few seconds, the share ADR-091 already accepts for this family of review-app suites; the default cargo test suite keeps its 300 s ceiling.",
+"F45": "The repos-read line is shown only for a completed run, so a paused or interrupted run shows no count at all. This design does not change that, and adds no count to an unfinished run.",
+"F46": "It already pairs a plan row with its status for reads; the same shape now carries a plan row to the writer, so a plan row has one description.",
+"F47": "The single owner of plan-row writes; it takes each row status so freezing a resumed plan and its carried reads is one write.",
+"F48": "Unchanged: it keeps its one meaning, a read this run made now, and stays the seam the store-fault scenarios refuse.",
+"F49": "It already counts the read rows of the latest run and owns the no-plan discriminator; the takeover makes its count the whole scan without changing it.",
+"F5": "The words of the repos-read line, and a run kept before scan plans were stored (it still says nothing about repos read).",
+"F50": "The single owner of the resume verdict; it now also names the rows already read, which no other function can decide.",
+"F51": "It already answers which rows the resuming run keeps; it now answers with the status each kept row carries.",
+"F52": "The verdict needs a new kept-row type beside Resume, pairing a kept plan position with the status the resuming run gives it; no existing type says that, and a bare tuple would leave the meaning to the reader.",
+"F53": "It already maps the resumed verdict onto the rows and positions the store is given; it now carries each row status with it.",
+"F54": "The closed set planned, read and skipped already names every status a row can carry; nothing is added to it.",
+"F55": "The paused-scan and resume steps of the review-app vocabulary already pause a plan on the GitHub budget and pick it up, so the new suite reuses them; only the three-repo choice and the reading of the count are new.",
+"F56": "The module re-exports the resume verdict; the new kept-row type joins that list and nothing else changes there.",
+"F57": "Its seeded plan rows are built for the writer, so they pass the status each row carries.",
+"F58": "The resume verdict names the rows already read and returns a status per kept row.",
+"F59": "The new kept-row type is re-exported beside the rest of the resume verdict.",
+"F6": "After a budget pause then a resume that reads the rest, the queue says \"3 repos read\" for a 3-repo plan",
+"F60": "record_plan takes plan rows with their status.",
+"F61": "The plan-row insert takes the row status instead of always writing planned; its in-crate tests move with it.",
+"F62": "Its seed builds plan rows for record_plan and must pass their status.",
+"F63": "The fresh plan writes planned rows and the resumed plan writes each kept row with its carried status.",
+"F64": "The new acceptance target is declared there, as every review-app suite is.",
+"F65": "It renders the count the store reports for a completed run; the count means more, its shape does not change.",
+"F66": "ScanRun repos_read stays an optional count with the same no-plan discriminator.",
+"F67": "With the mark refused, no row is ever stored read, so there is nothing to take over and its counts stay exactly what the resumed run read.",
+"F68": "A run with no plan row still reports no count, and a plan it reads to the end still counts every row.",
+"F69": "It reads the to-read and skipped fields of the verdict, which keep their meaning and their shape.",
+"F7": "A user whose scan stopped because the GitHub request budget was used up, and who then starts a run that resumes that plan, sees the queue report a \"repos read\" count that covers the repos read by the stopped run plus the repos read by the resuming run, not only the resuming run.",
+"F70": "The fresh plan passes every row as planned.",
+"F71": "The resumed plan passes each kept row with the status the verdict gives it.",
+"F72": "Its proptest seed builds plan rows and passes their status.",
+"F73": "The only implementor writes each row with the status it was given.",
+"F74": "The trait declares the new row shape and its documented meaning.",
+"F75": "The plan-row insert now writes read as well as planned; the vocabulary itself is unchanged.",
+"F76": "The latest-scan count still counts the rows whose status is read.",
+"F77": "The plan reader still parses the same three values and drops an unknown one.",
+"F78": "The resume verdict now reads the read rows as well as the planned ones.",
+"F79": "A row written by an earlier release is planned, read or skipped, the same three values; a store written before this change needs no migration.",
+"F8": "The promise says nothing about when the number becomes visible or what the queue shows while a run is still reading, so a user watching mid-run cannot tell a count that is merely not refreshed yet from a count that lost the earlier run.",
+"F80": "The producers and the consumers of both contracts ship in the one review-app binary and change in the same commit, so the acceptance oracle covers them. The only party that outlives a version is the stored row, and its status vocabulary is unchanged, so a store written by an earlier release reads back with the same three values.",
+"F81": "Each owner the change touches already holds its own decision: the resume verdict in review-domain, the plan write in the store adapter, the mapping in the scan task. No preserving move makes the change easier, and any move would need its own green run before the change for no gain.",
+"F82": "The review app HTTP port of the real binary: POST /scan starts or picks up a scan, GET /review renders the queue with its status region, GET /scan/status reports the stored run status.",
+"F83": "ScanRunPort and ScanPlanRead over the owner encrypted DuckDB store",
+"F84": "The GitHub read port, with its request budget",
+"F85": "The review app composition root wires the adapters to the ports; review-domain and ports hold no I O and depend on no adapter; the store adapter knows the SQL and nothing of the scan task.",
+"F86": "The store refuses the plan write while a resume freezes its plan",
+"F87": "The run is recorded interrupted, the queue offers Resume scan and shows no repos-read line; the rows the store already holds are untouched.",
+"F88": "The store refuses to mark a repo read during a run",
+"F89": "The run ends interrupted, the row stays planned, and a later resume reads that repo again and counts it once.",
+"F9": "A public observation of the queue output after a budget-exhausted run and again after the resuming run, with the repos read by each run known from the public output.",
+"F90": "The GitHub request budget runs low before the next planned repo",
+"F91": "The run is recorded rate limited with a time to resume after, the queue offers Resume scan, and the rows read so far keep their read status for the run that picks the plan up.",
+"F92": "The repos-read line the queue shows for the owner latest run, once that run is completed",
+"F93": "which repos were read, which run of the scan read them, and a plan whose rows were read by one run from a plan whose rows were read by three",
+"F94": "The plan of the owner latest run as the store returns it",
+"F95": "the run that first read a row from the run that took that read over",
+"F96": "The stored status of the owner latest run",
+"F97": "how many of the plan rows the run reached",
+"F98": "Two scans are equal when the latest run of each carries the same number of plan rows with status read. The identity of the repos, and of the run that read each of them, is invisible there, so a resume that takes a read row over is equal to a single run that read that row itself.",
+"F99": "A resuming run keeps as read exactly the rows of the plan it resumes that were already read, whatever the bio checks and the removed sources say."
+},
+"product": {
+"promises": [
+{
+"id": "P1",
+"kind": "Outcome",
+"text": "F3"
+},
+{
+"id": "P2",
+"kind": "Outcome",
+"text": "F4"
+}
+],
+"scope_out": [
+"F5"
+],
+"slices": [
+{
+"id": "S1",
+"observation": "F6",
+"promises": [
+"P1",
+"P2"
+]
+}
+]
+},
+"request": "F1",
+"schema": "nwdes.handoff",
+"scope": {
+"id": "fix-repos-read-across-resume",
+"kind": "Feature"
+},
+"version": 4,
+"work": {
+"size": "M",
+"value": "F2"
+}
+}
