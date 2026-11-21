@@ -1,30 +1,35 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><style>:root{
-  --paper:#fbfaf8; --ink:#14171c; --muted:#5f6672; --rule:#e3e0da;
-  --panel:#ffffff; --accent:#a8590c; --accent-soft:#f5ead9;
+  /* The font stack is inlined here because the nwdes renderer injects only
+     this stylesheet; the nwave_ai page builder takes the same stack from
+     manifest.json. Both carriers are pinned by tests. */
+  --nwave-font-stack:"Lato", -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --paper:#131316; --ink:#F2F2F2; --muted:#A3A3A8; --rule:#313135;
+  --panel:#181820; --raised:#1F1F24; --accent:#FBCF09; --accent-soft:rgba(251,207,9,0.14);
   --ready:#0f766e; --wip:#1d4ed8; --done:#15803d;
   --quar:#a16207; --cont:#7e22ce; --guard:#475569; --dsn:#c2410c;
   --keep:#15803d; --simp:#1d4ed8; --drop:#b91c1c; --unk:#6b7280;
 }
 @media (prefers-color-scheme:dark){
   :root{
-    --paper:#11141a; --ink:#e7e5e0; --muted:#98a0ad; --rule:#252a33;
-    --panel:#171b22; --accent:#e0964a; --accent-soft:#2a2118;
+    --paper:#131316; --ink:#F2F2F2; --muted:#A3A3A8; --rule:#313135;
+    --panel:#181820; --raised:#1F1F24; --accent:#FBCF09; --accent-soft:rgba(251,207,9,0.14);
     --ready:#5eead4; --wip:#93c5fd; --done:#86efac;
     --quar:#fcd34d; --cont:#d8b4fe; --guard:#94a3b8; --dsn:#fb923c;
     --keep:#86efac; --simp:#93c5fd; --drop:#fca5a5; --unk:#9ca3af;
   }
 }
 :root[data-theme="light"]{
-  --paper:#fbfaf8; --ink:#14171c; --muted:#5f6672; --rule:#e3e0da;
-  --panel:#ffffff; --accent:#a8590c; --accent-soft:#f5ead9;
+  --paper:#131316; --ink:#F2F2F2; --muted:#A3A3A8; --rule:#313135;
+  --panel:#181820; --raised:#1F1F24; --accent:#FBCF09; --accent-soft:rgba(251,207,9,0.14);
   --ready:#0f766e; --wip:#1d4ed8; --done:#15803d;
   --quar:#a16207; --cont:#7e22ce; --guard:#475569; --dsn:#c2410c;
   --keep:#15803d; --simp:#1d4ed8; --drop:#b91c1c; --unk:#6b7280;
 }
 :root[data-theme="dark"]{
-  --paper:#11141a; --ink:#e7e5e0; --muted:#98a0ad; --rule:#252a33;
-  --panel:#171b22; --accent:#e0964a; --accent-soft:#2a2118;
+  --paper:#131316; --ink:#F2F2F2; --muted:#A3A3A8; --rule:#313135;
+  --panel:#181820; --raised:#1F1F24; --accent:#FBCF09; --accent-soft:rgba(251,207,9,0.14);
   --ready:#5eead4; --wip:#93c5fd; --done:#86efac;
   --quar:#fcd34d; --cont:#d8b4fe; --guard:#94a3b8; --dsn:#fb923c;
   --keep:#86efac; --simp:#93c5fd; --drop:#fca5a5; --unk:#9ca3af;
@@ -37,7 +42,7 @@ body{
 }
 .wrap{max-width:1180px;margin:0 auto;padding:2.5rem 1.5rem 6rem;
   display:flex;flex-direction:column;gap:1.1rem}
-.brandbar{background:#11141a;border-radius:4px;padding:.7rem 1rem;display:flex;align-items:center}
+.brandbar{background:#131316;border-radius:4px;padding:.7rem 1rem;display:flex;align-items:center}
 .brandbar-logo{height:1.9rem;width:auto;display:block}
 .provenance{
   display:flex;flex-wrap:wrap;gap:.5rem .9rem;align-items:baseline;
@@ -298,6 +303,14 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 <pre><code>When a scan cannot write its results to the store, the run ends in the Interrupted state and never reports itself as Completed.
 </code></pre>
 
+<p>None.</p>
+
+<p>None.</p>
+
+<p>None.</p>
+
+<p>None.</p>
+
 <h4>E2</h4>
 
 <h5>Promises</h5>
@@ -306,6 +319,14 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 
 <pre><code>An interrupted scan can be run again and resumes that run, instead of forcing the user to abandon it and start over.
 </code></pre>
+
+<p>None.</p>
+
+<p>None.</p>
+
+<p>None.</p>
+
+<p>None.</p>
 
 <h4>E3</h4>
 
@@ -316,6 +337,14 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 <pre><code>A run whose store write failed never shows a repos-read count that claims more repos were read than the store actually holds for that run.
 </code></pre>
 
+<p>None.</p>
+
+<p>None.</p>
+
+<p>None.</p>
+
+<p>None.</p>
+
 <h4>E4</h4>
 
 <h5>Promises</h5>
@@ -324,6 +353,14 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 
 <pre><code>A completed run that had no planned repos shows no repos-read line at all, rather than a zero or placeholder count.
 </code></pre>
+
+<p>None.</p>
+
+<p>None.</p>
+
+<p>None.</p>
+
+<p>None.</p>
 
 <h4>E5</h4>
 
@@ -334,12 +371,84 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 <pre><code>A completed run that had planned repos still shows its repos-read line, with the true number of repos read for that run.
 </code></pre>
 
+<p>None.</p>
+
+<p>None.</p>
+
+<p>None.</p>
+
+<p>None.</p>
+
 <h2>Charter</h2>
 
 <p>None.</p>
 
 <h2>Examination</h2>
 
-<p>None.</p>
+<h3>E1</h3>
+
+<p>met</p>
+
+<h4>Observations</h4>
+
+<pre><code>The probe admits two commands: openlore-review-app and review-app-oracle. &quot;openlore-review-app serve --help&quot; lists no options at all (&quot;Usage: openlore-review-app serve&quot;), so no fault seam, fixture sign-in or queue route is reachable by starting the server directly; the declared review-app-oracle suites are therefore the designated public surface for these scenarios. At HEAD ad7687c those suites do render what the owner sees: each scenario prints a block headed &quot;what she sees&quot;, the stored run status, the queue status region verbatim line by line, whether the repos-read line is PRESENT or ABSENT, whether &quot;Resume scan&quot; is offered, and the scan actions offered.
+</code></pre>
+
+<pre><code>Probe &quot;review-app-oracle store-failure --nocapture&quot; (4 passed, 0 failed) printed the owner-visible result of both refused scan writes. For the store refusing to save that a repo was read, and separately for the store refusing to save her account checks, the first block reads identically on the points that matter: &quot;the status her latest run is stored with: interrupted&quot;; status region verbatim &quot;| Your last scan was interrupted. The suggestions found so far are kept; press Resume scan to finish it.&quot;; &quot;the repos-read line: ABSENT, her queue saying neither \&quot;repos read\&quot; nor \&quot;repo read\&quot; anywhere&quot;; &quot;\&quot;Resume scan\&quot;: OFFERED&quot;; &quot;the scan actions her queue offers: Resume scan&quot;. No block reports the status completed for a run whose write was refused, and no repos-read count appears on either interrupted queue.
+</code></pre>
+
+<h3>E2</h3>
+
+<p>met</p>
+
+<h4>Observations</h4>
+
+<pre><code>Probe &quot;review-app-oracle store-failure --nocapture&quot; (4 passed, 0 failed) printed the owner-visible result of both refused scan writes. For the store refusing to save that a repo was read, and separately for the store refusing to save her account checks, the first block reads identically on the points that matter: &quot;the status her latest run is stored with: interrupted&quot;; status region verbatim &quot;| Your last scan was interrupted. The suggestions found so far are kept; press Resume scan to finish it.&quot;; &quot;the repos-read line: ABSENT, her queue saying neither \&quot;repos read\&quot; nor \&quot;repo read\&quot; anywhere&quot;; &quot;\&quot;Resume scan\&quot;: OFFERED&quot;; &quot;the scan actions her queue offers: Resume scan&quot;. No block reports the status completed for a run whose write was refused, and no repos-read count appears on either interrupted queue.
+</code></pre>
+
+<pre><code>The same store-failure probe printed a second block per scenario, headed &quot;the run she picked up over, her store saving again&quot;: &quot;the status her latest run is stored with: completed&quot;, status region &quot;| Ownership re-checked: priyaraman * - 5 new suggestions&quot; then &quot;| 3 repos read&quot; for the refused account-checks scenario and &quot;| Ownership re-checked: priyaraman * - 1 new suggestion&quot; then &quot;| 3 repos read&quot; for the refused repo-read scenario, with &quot;the repos-read line: PRESENT, reading \&quot;3 repos read\&quot;&quot;, &quot;\&quot;Resume scan\&quot;: not offered&quot; and &quot;the scan actions her queue offers: Scan again&quot;. So after the fault the owner resumes the run she had, and that picked-up run reaches completed with a repos-read count, rather than her having to abandon it and start over.
+</code></pre>
+
+<pre><code>Limits of these captures. The suites print the rendered queue and the stored run status, but never a run identifier, so the resumed run is attested by the heading &quot;the run she picked up&quot; rather than by a printed id; they never list which individual repos the resumed scan read, so the S1 falsifier &quot;resume skips a repo whose read was never stored&quot; is not directly exercised by any printed per-repo set; and the count line is compared against the scenario heading (&quot;the five repos she chose&quot;, &quot;none of the one repo she chose&quot;) rather than against a separately printed store count. All evidence comes from the declared acceptance suites rendering the queue, not from a live signed-in session on an installed host.
+</code></pre>
+
+<h3>E3</h3>
+
+<p>met</p>
+
+<h4>Observations</h4>
+
+<pre><code>Probe &quot;review-app-oracle store-failure --nocapture&quot; (4 passed, 0 failed) printed the owner-visible result of both refused scan writes. For the store refusing to save that a repo was read, and separately for the store refusing to save her account checks, the first block reads identically on the points that matter: &quot;the status her latest run is stored with: interrupted&quot;; status region verbatim &quot;| Your last scan was interrupted. The suggestions found so far are kept; press Resume scan to finish it.&quot;; &quot;the repos-read line: ABSENT, her queue saying neither \&quot;repos read\&quot; nor \&quot;repo read\&quot; anywhere&quot;; &quot;\&quot;Resume scan\&quot;: OFFERED&quot;; &quot;the scan actions her queue offers: Resume scan&quot;. No block reports the status completed for a run whose write was refused, and no repos-read count appears on either interrupted queue.
+</code></pre>
+
+<pre><code>A harness negative control fires in both suites at HEAD ad7687c: review_app::state_delta::tests::assert_state_delta_fails_on_hidden_mutation panics with: state-delta assertion failed: slot &quot;hidden.slot&quot;: implicit-unchanged violated; before=&quot;original&quot; after=&quot;mutated&quot;, reported as &quot;should panic ... ok&quot;. The state-delta machinery detects an unexpected state change, which supports trusting the suites PRESENT/ABSENT reports, though it exercises the harness rather than the product.
+</code></pre>
+
+<pre><code>Limits of these captures. The suites print the rendered queue and the stored run status, but never a run identifier, so the resumed run is attested by the heading &quot;the run she picked up&quot; rather than by a printed id; they never list which individual repos the resumed scan read, so the S1 falsifier &quot;resume skips a repo whose read was never stored&quot; is not directly exercised by any printed per-repo set; and the count line is compared against the scenario heading (&quot;the five repos she chose&quot;, &quot;none of the one repo she chose&quot;) rather than against a separately printed store count. All evidence comes from the declared acceptance suites rendering the queue, not from a live signed-in session on an installed host.
+</code></pre>
+
+<h3>E4</h3>
+
+<p>met</p>
+
+<h4>Observations</h4>
+
+<pre><code>Probe &quot;review-app-oracle legacy-run --nocapture&quot; (5 passed, 0 failed) printed three owner-visible queues. (a) The run kept before scan plans were stored: &quot;the status her latest run is stored with: completed&quot;, status region exactly one line &quot;| Ownership re-checked * - 10 new suggestions&quot;, and &quot;the repos-read line: ABSENT, her queue saying neither \&quot;repos read\&quot; nor \&quot;repo read\&quot; anywhere&quot;. (b) Her scan having read none of the one repo she chose: completed, status region includes &quot;| 0 repos read&quot;, &quot;the repos-read line: PRESENT, reading \&quot;0 repos read\&quot;&quot;. (c) Her scan having read the five repos she chose: completed, status region includes &quot;| 5 repos read&quot;, &quot;the repos-read line: PRESENT, reading \&quot;5 repos read\&quot;&quot;. So the no-plan-rows run shows no line and no placeholder, while planned runs keep a count line whose number matches the repos the scenario had read.
+</code></pre>
+
+<pre><code>A harness negative control fires in both suites at HEAD ad7687c: review_app::state_delta::tests::assert_state_delta_fails_on_hidden_mutation panics with: state-delta assertion failed: slot &quot;hidden.slot&quot;: implicit-unchanged violated; before=&quot;original&quot; after=&quot;mutated&quot;, reported as &quot;should panic ... ok&quot;. The state-delta machinery detects an unexpected state change, which supports trusting the suites PRESENT/ABSENT reports, though it exercises the harness rather than the product.
+</code></pre>
+
+<h3>E5</h3>
+
+<p>met</p>
+
+<h4>Observations</h4>
+
+<pre><code>The probe admits two commands: openlore-review-app and review-app-oracle. &quot;openlore-review-app serve --help&quot; lists no options at all (&quot;Usage: openlore-review-app serve&quot;), so no fault seam, fixture sign-in or queue route is reachable by starting the server directly; the declared review-app-oracle suites are therefore the designated public surface for these scenarios. At HEAD ad7687c those suites do render what the owner sees: each scenario prints a block headed &quot;what she sees&quot;, the stored run status, the queue status region verbatim line by line, whether the repos-read line is PRESENT or ABSENT, whether &quot;Resume scan&quot; is offered, and the scan actions offered.
+</code></pre>
+
+<pre><code>Probe &quot;review-app-oracle legacy-run --nocapture&quot; (5 passed, 0 failed) printed three owner-visible queues. (a) The run kept before scan plans were stored: &quot;the status her latest run is stored with: completed&quot;, status region exactly one line &quot;| Ownership re-checked * - 10 new suggestions&quot;, and &quot;the repos-read line: ABSENT, her queue saying neither \&quot;repos read\&quot; nor \&quot;repo read\&quot; anywhere&quot;. (b) Her scan having read none of the one repo she chose: completed, status region includes &quot;| 0 repos read&quot;, &quot;the repos-read line: PRESENT, reading \&quot;0 repos read\&quot;&quot;. (c) Her scan having read the five repos she chose: completed, status region includes &quot;| 5 repos read&quot;, &quot;the repos-read line: PRESENT, reading \&quot;5 repos read\&quot;&quot;. So the no-plan-rows run shows no line and no placeholder, while planned runs keep a count line whose number matches the repos the scenario had read.
+</code></pre>
 
 </body></html>
