@@ -193,7 +193,7 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 
 <p>Extend</p>
 
-<pre><code>The plan-row insert writes the status it is given instead of always planned.
+<pre><code>The plan-row insert writes the status it is given instead of always planned, and the mark-repo-read write names its run, so the store fault seam can count the marks of that run.
 </code></pre>
 
 <p>crates/adapter-review-store/src/purge.rs</p>
@@ -210,6 +210,41 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 <pre><code>The fresh plan writes planned rows and the resumed plan writes every kept row with the status the verdict gives it.
 </code></pre>
 
+<p>crates/openlore-review-app/src/config.rs</p>
+
+<p>Extend</p>
+
+<pre><code>A development build parses one more fault name, refuse_mark_repo_read_after_first, and its in-crate property table gains that row.
+</code></pre>
+
+<p>crates/openlore-review-app/src/wiring.rs</p>
+
+<p>Extend</p>
+
+<pre><code>The fault map asks the store for the new after-first scan-write fault.
+</code></pre>
+
+<p>crates/adapter-review-store/src/lib.rs</p>
+
+<p>Extend</p>
+
+<pre><code>The store carries the scan-write seam: the new development-only fault variant, the runs that already saved a mark, and the pure decision over them.
+</code></pre>
+
+<p>xtask/src/check_arch.rs</p>
+
+<p>Extend</p>
+
+<pre><code>The release-build guard token list gains the new fault name and the store variant it maps to.
+</code></pre>
+
+<p>xtask/tests/review_app_test_fault_guard.rs</p>
+
+<p>Extend</p>
+
+<pre><code>The guard test covers the new name gated and ungated, so the rule stays falsifiable for it.
+</code></pre>
+
 <p>tests/acceptance/review_app_repos_read_across_resume.rs</p>
 
 <h4>Verification</h4>
@@ -218,6 +253,8 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 cargo test -p openlore-review-app --test review_app_scan_store_failure
 cargo test -p review-domain -p adapter-review-store
 cargo xtask check-arch
+cargo test -p xtask --test review_app_test_fault_guard
+cargo test -p openlore-review-app --lib
 </code></pre>
 
 <h4>Supports</h4>
@@ -274,6 +311,18 @@ cargo xtask check-arch
 <pre><code>Quint checks the count across resumes. The four count invariants are checked with quint verify over a three-row plan and twelve steps, because the claim is about state carried from run to run, not a proof over types: Agda would add nothing, and TLC is needed only for a temporal claim this design does not make.
 </code></pre>
 
+<pre><code>A fault that refuses marks after the first: the development-only store fault refuse_mark_repo_read_after_first admits the first mark of each run and refuses every later one, so a run saves one read and then ends interrupted. That is the state an oracle needs to observe the whole-scan count after an interruption, and no other seam reaches it: refuse_mark_repo_read saves nothing, the GitHub seams act before the first read, and the restart sweep marks only a running run interrupted.
+</code></pre>
+
+<pre><code>The seam owns its per-run bookkeeping: the store carries one ScanWriteSeam holding the named fault and the runs that already saved a mark, and the decision stays a pure function of the fault, the write and whether this run already saved a mark, with the set held under the store lock in the effect shell. The scan-write name carries the run of a mark, which the store already has at that call site, so no caller learns anything new.
+</code></pre>
+
+<pre><code>No new ADR and no model change: ADR-091 accepts later faults of this family in the default suite and this one adds one acceptance journey of a few seconds. The Quint model already holds the refused-save transition, and a development-only seam adds no production state, so no model, no property and no checker run changes.
+</code></pre>
+
+<pre><code>A release build still knows no fault name: the new name sits inside the cfg(debug_assertions) parser and the new variant inside the development-only scan-write fault type, and the config property only_a_development_build_takes_the_test_fault_seam with the xtask guard review_app_test_fault_guard, whose token list gains both spellings, keep it so.
+</code></pre>
+
 <h5>Constraints</h5>
 
 <pre><code>A scan plan holds at most ten repos in total (SCAN_REPO_CAP, D-RRA-16), so a resume carries at most ten rows. The authority sets no lower bound: a plan of one row is admitted, and a plan of none is a run with nothing to count.
@@ -289,6 +338,12 @@ cargo xtask check-arch
 </code></pre>
 
 <pre><code>The repos-read line is shown only for a completed run, so a paused or interrupted run shows no count at all. This design does not change that, and adds no count to an unfinished run.
+</code></pre>
+
+<pre><code>One named fault per run of the binary: REVIEW_APP_TEST_FAULT names a single fault, so the journey that needs the after-first refusal and the journey that needs the budget pause are separate runs of the app, and a journey that wants the refusal to stop restarts the binary without the seam.
+</code></pre>
+
+<pre><code>Two plan repos make the refusal observable: with the fault held a run saves its first mark and is refused the next, so a resume of a two-row plan carries one read row, saves the one read it makes and ends completed with the whole-scan count; a longer plan would see the resume refused in its turn and show no count unless the binary is restarted without the seam.
 </code></pre>
 
 <h5>Reuse</h5>
@@ -401,6 +456,87 @@ cargo xtask check-arch
 <pre><code>Its seeded plan rows are built for the writer, so they pass the status each row carries.
 </code></pre>
 
+<p>TestFault</p>
+
+<p>crates/openlore-review-app/src/config.rs:44</p>
+
+<p>Extend</p>
+
+<pre><code>The closed set of fault names a development build honours already holds three; the new name joins it and the release twin still has no values.
+</code></pre>
+
+<p>store_faults</p>
+
+<p>crates/openlore-review-app/src/wiring.rs:593</p>
+
+<p>Extend</p>
+
+<pre><code>The single owner of the name-to-store-fault map; the new name maps to the new scan-write fault and nothing else changes there.
+</code></pre>
+
+<p>ScanWriteFault</p>
+
+<p>crates/adapter-review-store/src/lib.rs:544</p>
+
+<p>Extend</p>
+
+<pre><code>The development-only set of scan writes the store may refuse; the after-first fault is one more member of it, so no second fault vocabulary appears.
+</code></pre>
+
+<p>admits</p>
+
+<p>crates/adapter-review-store/src/lib.rs:586</p>
+
+<p>Extend</p>
+
+<pre><code>The pure decision over a held fault and a write; it now also takes whether this run already saved a mark, which is the only new input the after-first fault needs.
+</code></pre>
+
+<p>ScanWrite</p>
+
+<p>crates/adapter-review-store/src/lib.rs:579</p>
+
+<p>Extend</p>
+
+<pre><code>The closed set of scan writes the seam names; the mark-repo-read member now carries the run it is for, which the store already has at that call site.
+</code></pre>
+
+<p>ScanWriteSeam</p>
+
+<p>crates/adapter-review-store/src/lib.rs:305</p>
+
+<p>CreateNew</p>
+
+<pre><code>Counting the marks of a run needs state beside the held fault; no existing type owns both, and leaving a bare set beside the fault field would let one be set without the other.
+</code></pre>
+
+<p>admits_scan_write</p>
+
+<p>crates/adapter-review-store/src/lib.rs:418</p>
+
+<p>Extend</p>
+
+<pre><code>The one effect-shell site that consults the seam; it names the run, reads and updates the seam state under the store lock and keeps the decision pure.
+</code></pre>
+
+<p>REVIEW_APP_TEST_FAULT_TOKENS</p>
+
+<p>xtask/src/check_arch.rs:1335</p>
+
+<p>Extend</p>
+
+<pre><code>The guard already lists every fault name and store variant it requires to be cfg-gated; the new pair joins that list.
+</code></pre>
+
+<p>the_real_tree_passes</p>
+
+<p>xtask/tests/review_app_test_fault_guard.rs:101</p>
+
+<p>Extend</p>
+
+<pre><code>The guard test already walks the real tree and synthetic gated and ungated shapes; the new name is covered by the same cases.
+</code></pre>
+
 <h5>Impact</h5>
 
 <p>pure domain module</p>
@@ -509,6 +645,78 @@ cargo xtask check-arch
 <p>UnchangedCompatible</p>
 
 <pre><code>It reads the to-read and skipped fields of the verdict, which keep their meaning and their shape.
+</code></pre>
+
+<p>config parser</p>
+
+<p>crates/openlore-review-app/src/config.rs:311</p>
+
+<p>Changed</p>
+
+<pre><code>The development-only parser knows one more name, the fault set one more value, and the in-crate property table one more row.
+</code></pre>
+
+<p>composition root fault map</p>
+
+<p>crates/openlore-review-app/src/wiring.rs:593</p>
+
+<p>Changed</p>
+
+<pre><code>The new name asks the store for the after-first scan-write fault.
+</code></pre>
+
+<p>store fault seam</p>
+
+<p>crates/adapter-review-store/src/lib.rs:544</p>
+
+<p>Changed</p>
+
+<pre><code>A new development-only fault variant, the seam that counts the marks of a run, and the pure decision over them.
+</code></pre>
+
+<p>store write call site</p>
+
+<p>crates/adapter-review-store/src/scan_runs.rs:281</p>
+
+<p>Changed</p>
+
+<pre><code>The mark-repo-read write names its run when it consults the seam; the SQL it runs is unchanged.
+</code></pre>
+
+<p>check-arch guard</p>
+
+<p>xtask/src/check_arch.rs:1335</p>
+
+<p>Changed</p>
+
+<pre><code>The guard requires the new name and its store variant to stay behind cfg gates.
+</code></pre>
+
+<p>guard test</p>
+
+<p>xtask/tests/review_app_test_fault_guard.rs:101</p>
+
+<p>Changed</p>
+
+<pre><code>Its cases cover the new name, so an ungated occurrence of it is still caught.
+</code></pre>
+
+<p>acceptance support</p>
+
+<p>tests/acceptance/support/review_app/app.rs:49</p>
+
+<p>Changed</p>
+
+<pre><code>The support&#x27;s fault table and its restart step name the new fault; the oracle owner writes that, not the crafter.
+</code></pre>
+
+<p>store adapter in-crate tests</p>
+
+<p>crates/adapter-review-store/src/scan_runs.rs:606</p>
+
+<p>Changed</p>
+
+<pre><code>They mark a repo read, so they pass the run to the seam and gain the cases of the after-first fault.
 </code></pre>
 
 <h5>Agreement</h5>
@@ -621,6 +829,61 @@ cargo xtask check-arch
 <p>UnchangedCompatible</p>
 
 <pre><code>A row written by an earlier release is planned, read or skipped, the same three values; a store written before this change needs no migration.
+</code></pre>
+
+<p>REVIEW_APP_TEST_FAULT: the fault names a development build honours</p>
+
+<p>tests/acceptance/support/review_app/app.rs:49</p>
+
+<p>Producer</p>
+
+<p>Migrated</p>
+
+<pre><code>The acceptance support sets the new name for the journey that needs a run to save one read and then be interrupted.
+</code></pre>
+
+<p>REVIEW_APP_TEST_FAULT: the fault names a development build honours</p>
+
+<p>crates/openlore-review-app/src/config.rs:311</p>
+
+<p>Consumer</p>
+
+<p>Migrated</p>
+
+<pre><code>The development-only parser accepts the new name and still refuses every unknown one.
+</code></pre>
+
+<p>REVIEW_APP_TEST_FAULT: the fault names a development build honours</p>
+
+<p>crates/openlore-review-app/src/wiring.rs:593</p>
+
+<p>Consumer</p>
+
+<p>Migrated</p>
+
+<pre><code>The map turns the new name into the after-first scan-write fault the store holds.
+</code></pre>
+
+<p>REVIEW_APP_TEST_FAULT: the fault names a development build honours</p>
+
+<p>xtask/src/check_arch.rs:1335</p>
+
+<p>Consumer</p>
+
+<p>Migrated</p>
+
+<pre><code>The release-build guard knows the new name and requires it to stay behind a cfg gate.
+</code></pre>
+
+<p>REVIEW_APP_TEST_FAULT: the fault names a development build honours</p>
+
+<p>tests/acceptance/review_app_scan_store_failure.rs:265</p>
+
+<p>Producer</p>
+
+<p>UnchangedCompatible</p>
+
+<pre><code>It keeps setting refuse_mark_repo_read, whose meaning is unchanged.
 </code></pre>
 
 <h5>Not applicable</h5>
@@ -930,6 +1193,39 @@ cargo xtask check-arch
 
 <p>tests/acceptance/review_app_repos_read_across_resume.rs</p>
 
+<h6>L6</h6>
+
+<pre><code>With the after-first fault held, the first mark of a repo read in a run is saved and every later mark of that run is refused, while every other read and write of the store behaves normally and a different run&#x27;s first mark is saved again.
+</code></pre>
+
+<p>Invariant</p>
+
+<p>Adapter</p>
+
+<p>adapter_review_store::ScanWriteSeam</p>
+
+<h6>Treatment</h6>
+
+<p>Finite</p>
+
+<h6>Cases</h6>
+
+<pre><code>with the fault held, one run marks its first row read and the store accepts it, then marks a second row read and the store refuses it, the refused row staying planned
+</code></pre>
+
+<pre><code>with the fault held, a second run marks its first row read and the store accepts it, and the plan write and the account-checks write of both runs are accepted
+</code></pre>
+
+<pre><code>with no fault held, one run marks two rows read and both are accepted
+</code></pre>
+
+<pre><code>The seam&#x27;s domain is closed: one fault name, the two named scan writes, and the first-or-later distinction within a run, so these cases exhaust the distinctions the decision can make.
+</code></pre>
+
+<h6>Evidence</h6>
+
+<p>crates/adapter-review-store/src/scan_runs.rs</p>
+
 <h5>Refuted</h5>
 
 <p>None.</p>
@@ -982,6 +1278,29 @@ cargo xtask check-arch
 <pre><code>The scan task maps the kept positions onto the rows it was given; a mapping defect there is caught by the acceptance journey, not by a type.
 </code></pre>
 
+<h6>C3</h6>
+
+<pre><code>A release build cannot hold any store fault, the new one included: both fault types have no values under cfg(not(debug_assertions)) and the start refuses the seam variable outright, so no release binary can refuse a real repo read.
+</code></pre>
+
+<pre><code>A release binary that honoured the fault would refuse a user&#x27;s real reads and leave her scan interrupted with an untrue account of it.
+</code></pre>
+
+<p>openlore_review_app::config::TestFault</p>
+
+<pre><code>the REVIEW_APP_TEST_FAULT value of the environment the binary starts in
+</code></pre>
+
+<p>openlore_review_app::config::test_fault</p>
+
+<p>openlore_review_app::wiring::store_faults and adapter_review_store::ScanWriteSeam</p>
+
+<pre><code>a release build refusing to start while the variable is set, and holding no fault when it is not
+</code></pre>
+
+<pre><code>a binary built with debug assertions on and deployed as production: the types exclude the fault only in a release build, and the xtask guard checks the names stay cfg-gated, not which build is shipped.
+</code></pre>
+
 <h5>States</h5>
 
 <p>Admitted</p>
@@ -1022,6 +1341,20 @@ cargo xtask check-arch
 <p>Unknown</p>
 
 <pre><code>A run that started and whose plan write never happened, through a crash between starting the run and freezing its plan: the frozen plan of that scan is lost and the next scan plans afresh, with its own count.
+</code></pre>
+
+<p>openlore-review-app</p>
+
+<p>Admitted</p>
+
+<pre><code>A run that saved one read and then ended interrupted, its other plan rows still planned.
+</code></pre>
+
+<p>openlore-review-app</p>
+
+<p>Excluded</p>
+
+<pre><code>A release build holding a store fault: both fault types have no values there and the start refuses the seam variable.
 </code></pre>
 
 <p>openlore-review-app</p>
@@ -1302,6 +1635,22 @@ cargo xtask check-arch
 
 <p>None.</p>
 
+<pre><code>The whole-scan repos-read count after an interrupted run
+</code></pre>
+
+<p>PublicReachability</p>
+
+<p>Pass</p>
+
+<p>DesignedNotBuilt</p>
+
+<pre><code>In a development build holding the after-first fault the owner presses Scan my repos at POST /scan; the store saves the first mark through admits_scan_write at crates/adapter-review-store/src/lib.rs:418 and refuses the next, so the run ends interrupted at crates/openlore-review-app/src/scan.rs:686 with one row stored read. She presses Resume scan; the resumed plan carries that row read through Resume::kept at crates/review-domain/src/repo_scope/resume.rs:97, the resume reads the remaining row, and GET /review shows the count of the whole scan. Every site exists today; only the fault name is not built.
+</code></pre>
+
+<h6>Evidence</h6>
+
+<p>tests/acceptance/review_app_repos_read_across_resume.rs</p>
+
 <h5>Risks</h5>
 
 <h6>Y1</h6>
@@ -1514,11 +1863,63 @@ cargo xtask check-arch
 
 <p>adapter-review-store</p>
 
+<h6>Y11</h6>
+
+<p>Bypass</p>
+
+<pre><code>The runs that already saved a mark are held in the store process memory: a restart forgets them.
+</code></pre>
+
+<pre><code>The stored rows and their statuses, which the count reads, are untouched by the seam.
+</code></pre>
+
+<pre><code>After a restart the same run&#x27;s next mark is saved again, so the fault refuses one mark less than before.
+</code></pre>
+
+<pre><code>A count above the reads the store holds.
+</code></pre>
+
+<pre><code>The seam is development-only, and a journey that needs the refusal keeps the binary running across the resume it observes.
+</code></pre>
+
+<p>adapter-review-store</p>
+
+<h6>Y12</h6>
+
+<p>Stressor</p>
+
+<pre><code>Negated assumption, only a development build reads the seam: a release binary starts with REVIEW_APP_TEST_FAULT set to the new name.
+</code></pre>
+
+<pre><code>Every store write behaves normally, because a release build compiles no fault name in.
+</code></pre>
+
+<pre><code>The start refuses with the test-fault-in-release error and says the seam is development-only.
+</code></pre>
+
+<pre><code>A release binary refusing a real repo read.
+</code></pre>
+
+<pre><code>The config property and the xtask guard keep every name behind its cfg gate.
+</code></pre>
+
+<p>openlore-review-app</p>
+
 <h5>Architectural tests</h5>
 
 <h6>T1</h6>
 
 <pre><code>The resume verdict stays in the pure core and the SQL stays in the effect shell: review-domain reaches no I O crate, no adapter depends on an adapter, and only a composition root depends on an adapter, over every workspace member.
+</code></pre>
+
+<p>xtask/src/check_arch.rs</p>
+
+<pre><code>cargo xtask check-arch
+</code></pre>
+
+<h6>T2</h6>
+
+<pre><code>Every review-app test fault name and store fault variant, refuse_mark_repo_read_after_first included, occurs only behind a cfg gate over the app and store source trees, so a release binary honours none of them.
 </code></pre>
 
 <p>xtask/src/check_arch.rs</p>

@@ -188,15 +188,15 @@
 },
 "counters": {
 "B": 3,
-"C": 2,
+"C": 3,
 "E": 6,
-"F": 277,
-"L": 5,
+"F": 336,
+"L": 6,
 "N": 2,
 "P": 2,
 "S": 1,
-"T": 1,
-"Y": 10
+"T": 2,
+"Y": 12
 },
 "design": {
 "adrs": [
@@ -290,6 +290,41 @@
 "locator": "crates/adapter-review-store/src/scan_runs.rs:82",
 "party": "Consumer",
 "reason": "F79"
+},
+{
+"contract": "REVIEW_APP_TEST_FAULT: the fault names a development build honours",
+"decision": "Migrated",
+"locator": "tests/acceptance/support/review_app/app.rs:49",
+"party": "Producer",
+"reason": "F307"
+},
+{
+"contract": "REVIEW_APP_TEST_FAULT: the fault names a development build honours",
+"decision": "Migrated",
+"locator": "crates/openlore-review-app/src/config.rs:311",
+"party": "Consumer",
+"reason": "F308"
+},
+{
+"contract": "REVIEW_APP_TEST_FAULT: the fault names a development build honours",
+"decision": "Migrated",
+"locator": "crates/openlore-review-app/src/wiring.rs:593",
+"party": "Consumer",
+"reason": "F309"
+},
+{
+"contract": "REVIEW_APP_TEST_FAULT: the fault names a development build honours",
+"decision": "Migrated",
+"locator": "xtask/src/check_arch.rs:1335",
+"party": "Consumer",
+"reason": "F310"
+},
+{
+"contract": "REVIEW_APP_TEST_FAULT: the fault names a development build honours",
+"decision": "UnchangedCompatible",
+"locator": "tests/acceptance/review_app_scan_store_failure.rs:265",
+"party": "Producer",
+"reason": "F311"
 }
 ],
 "architectural_tests": [
@@ -297,6 +332,12 @@
 "command": "cargo xtask check-arch",
 "id": "T1",
 "obligation": "F209",
+"oracle": "xtask/src/check_arch.rs"
+},
+{
+"command": "cargo xtask check-arch",
+"id": "T2",
+"obligation": "F336",
 "oracle": "xtask/src/check_arch.rs"
 }
 ],
@@ -350,6 +391,17 @@
 "owner": "review_domain::repo_scope::resume::Resume",
 "proposition": "F127",
 "public_observation": "F130"
+},
+{
+"admitted_input": "F319",
+"bypass": "F321",
+"constructor": "openlore_review_app::config::test_fault",
+"consumer": "openlore_review_app::wiring::store_faults and adapter_review_store::ScanWriteSeam",
+"harm": "F318",
+"id": "C3",
+"owner": "openlore_review_app::config::TestFault",
+"proposition": "F317",
+"public_observation": "F320"
 }
 ],
 "closure": [
@@ -390,6 +442,16 @@
 "design": "Pass",
 "runtime": "DesignedNotBuilt",
 "subject": "F154"
+},
+{
+"axis": "PublicReachability",
+"basis": "F325",
+"design": "Pass",
+"evidence": [
+"tests/acceptance/review_app_repos_read_across_resume.rs"
+],
+"runtime": "DesignedNotBuilt",
+"subject": "F324"
 }
 ],
 "constraints": [
@@ -397,7 +459,9 @@
 "F42",
 "F43",
 "F44",
-"F45"
+"F45",
+"F288",
+"F289"
 ],
 "constructors": [
 {
@@ -424,7 +488,11 @@
 "F37",
 "F38",
 "F39",
-"F40"
+"F40",
+"F284",
+"F285",
+"F286",
+"F287"
 ],
 "equality": [
 {
@@ -504,6 +572,54 @@
 "kind": "domain property binding",
 "locator": "tests/acceptance/review_app_repos_and_accounts_core.rs:402",
 "reason": "F69"
+},
+{
+"decision": "Changed",
+"kind": "config parser",
+"locator": "crates/openlore-review-app/src/config.rs:311",
+"reason": "F299"
+},
+{
+"decision": "Changed",
+"kind": "composition root fault map",
+"locator": "crates/openlore-review-app/src/wiring.rs:593",
+"reason": "F300"
+},
+{
+"decision": "Changed",
+"kind": "store fault seam",
+"locator": "crates/adapter-review-store/src/lib.rs:544",
+"reason": "F301"
+},
+{
+"decision": "Changed",
+"kind": "store write call site",
+"locator": "crates/adapter-review-store/src/scan_runs.rs:281",
+"reason": "F302"
+},
+{
+"decision": "Changed",
+"kind": "check-arch guard",
+"locator": "xtask/src/check_arch.rs:1335",
+"reason": "F303"
+},
+{
+"decision": "Changed",
+"kind": "guard test",
+"locator": "xtask/tests/review_app_test_fault_guard.rs:101",
+"reason": "F304"
+},
+{
+"decision": "Changed",
+"kind": "acceptance support",
+"locator": "tests/acceptance/support/review_app/app.rs:49",
+"reason": "F305"
+},
+{
+"decision": "Changed",
+"kind": "store adapter in-crate tests",
+"locator": "crates/adapter-review-store/src/scan_runs.rs:606",
+"reason": "F306"
 }
 ],
 "laws": [
@@ -617,6 +733,25 @@
 ],
 "kind": "Finite",
 "reason": "F121"
+}
+},
+{
+"evidence": [
+"crates/adapter-review-store/src/scan_runs.rs"
+],
+"id": "L6",
+"kind": "Invariant",
+"layer": "Adapter",
+"owner": "adapter_review_store::ScanWriteSeam",
+"statement": "F312",
+"treatment": {
+"cases": [
+"F313",
+"F314",
+"F315"
+],
+"kind": "Finite",
+"reason": "F316"
 }
 }
 ],
@@ -852,6 +987,60 @@
 "locator": "crates/adapter-review-store/src/purge.rs:196",
 "reason": "F57",
 "symbol": "record_plan"
+},
+{
+"decision": "Extend",
+"locator": "crates/openlore-review-app/src/config.rs:44",
+"reason": "F290",
+"symbol": "TestFault"
+},
+{
+"decision": "Extend",
+"locator": "crates/openlore-review-app/src/wiring.rs:593",
+"reason": "F291",
+"symbol": "store_faults"
+},
+{
+"decision": "Extend",
+"locator": "crates/adapter-review-store/src/lib.rs:544",
+"reason": "F292",
+"symbol": "ScanWriteFault"
+},
+{
+"decision": "Extend",
+"locator": "crates/adapter-review-store/src/lib.rs:586",
+"reason": "F293",
+"symbol": "admits"
+},
+{
+"decision": "Extend",
+"locator": "crates/adapter-review-store/src/lib.rs:579",
+"reason": "F294",
+"symbol": "ScanWrite"
+},
+{
+"decision": "CreateNew",
+"locator": "crates/adapter-review-store/src/lib.rs:305",
+"reason": "F295",
+"symbol": "ScanWriteSeam"
+},
+{
+"decision": "Extend",
+"locator": "crates/adapter-review-store/src/lib.rs:418",
+"reason": "F296",
+"symbol": "admits_scan_write"
+},
+{
+"decision": "Extend",
+"locator": "xtask/src/check_arch.rs:1335",
+"reason": "F297",
+"symbol": "REVIEW_APP_TEST_FAULT_TOKENS"
+},
+{
+"decision": "Extend",
+"locator": "xtask/tests/review_app_test_fault_guard.rs:101",
+"reason": "F298",
+"symbol": "the_real_tree_passes"
 }
 ],
 "risks": [
@@ -954,6 +1143,26 @@
 "preserved": "F205",
 "residue": "F208",
 "source": "F204"
+},
+{
+"allowed": "F328",
+"forbidden": "F329",
+"id": "Y11",
+"kind": "Bypass",
+"owner": "adapter-review-store",
+"preserved": "F327",
+"residue": "F330",
+"source": "F326"
+},
+{
+"allowed": "F333",
+"forbidden": "F334",
+"id": "Y12",
+"kind": "Stressor",
+"owner": "openlore-review-app",
+"preserved": "F332",
+"residue": "F335",
+"source": "F331"
 }
 ],
 "states": [
@@ -986,6 +1195,16 @@
 "kind": "Unknown",
 "owner": "openlore-review-app",
 "state": "F137"
+},
+{
+"kind": "Admitted",
+"owner": "openlore-review-app",
+"state": "F322"
+},
+{
+"kind": "Excluded",
+"owner": "openlore-review-app",
+"state": "F323"
 }
 ]
 },
@@ -1013,7 +1232,7 @@
 {
 "change": "Extend",
 "path": "crates/adapter-review-store/src/scan_runs.rs",
-"reason": "F28"
+"reason": "F278"
 },
 {
 "change": "Extend",
@@ -1024,13 +1243,40 @@
 "change": "Extend",
 "path": "crates/openlore-review-app/src/scan.rs",
 "reason": "F30"
+},
+{
+"change": "Extend",
+"path": "crates/openlore-review-app/src/config.rs",
+"reason": "F279"
+},
+{
+"change": "Extend",
+"path": "crates/openlore-review-app/src/wiring.rs",
+"reason": "F280"
+},
+{
+"change": "Extend",
+"path": "crates/adapter-review-store/src/lib.rs",
+"reason": "F281"
+},
+{
+"change": "Extend",
+"path": "xtask/src/check_arch.rs",
+"reason": "F282"
+},
+{
+"change": "Extend",
+"path": "xtask/tests/review_app_test_fault_guard.rs",
+"reason": "F283"
 }
 ],
 "verification": [
 "cargo test -p openlore-review-app --test review_app_repos_read_across_resume -- --nocapture",
 "cargo test -p openlore-review-app --test review_app_scan_store_failure",
 "cargo test -p review-domain -p adapter-review-store",
-"cargo xtask check-arch"
+"cargo xtask check-arch",
+"cargo test -p xtask --test review_app_test_fault_guard",
+"cargo test -p openlore-review-app --lib"
 ]
 }
 }
@@ -1267,13 +1513,71 @@
 "F275": "Her queue accounts for the repo the interrupted run saved as well as the repos the run after it read.",
 "F276": "A scan stopped by an interruption, not by GitHub's budget, still tells her about the repos it had read before it stopped.",
 "F277": "No public path reaches that state. The store fault seam has one name for this write and it refuses every mark, so the run loses its first read instead of saving it; the other name fires before any repo is read. Every GitHub seam that fails a scan mid-way (offline, unreachable or flawed profile, dropped or rate-limited profile, slow listing) acts in the checks-and-listing phase, before the plan is frozen and before the first read, and a repo made missing or archived is skipped rather than interrupting. The restart sweep marks only a running run interrupted, and the one in-flight delay seam also acts before the first read, so a restart-based scenario would be a race, not an observation. Reaching it needs a new fault name that refuses the second and later marks, which is a declaration of the fault seam, not an oracle change.",
-"F28": "The plan-row insert writes the status it is given instead of always planned.",
+"F278": "The plan-row insert writes the status it is given instead of always planned, and the mark-repo-read write names its run, so the store fault seam can count the marks of that run.",
+"F279": "A development build parses one more fault name, refuse_mark_repo_read_after_first, and its in-crate property table gains that row.",
+"F280": "The fault map asks the store for the new after-first scan-write fault.",
+"F281": "The store carries the scan-write seam: the new development-only fault variant, the runs that already saved a mark, and the pure decision over them.",
+"F282": "The release-build guard token list gains the new fault name and the store variant it maps to.",
+"F283": "The guard test covers the new name gated and ungated, so the rule stays falsifiable for it.",
+"F284": "A fault that refuses marks after the first: the development-only store fault refuse_mark_repo_read_after_first admits the first mark of each run and refuses every later one, so a run saves one read and then ends interrupted. That is the state an oracle needs to observe the whole-scan count after an interruption, and no other seam reaches it: refuse_mark_repo_read saves nothing, the GitHub seams act before the first read, and the restart sweep marks only a running run interrupted.",
+"F285": "The seam owns its per-run bookkeeping: the store carries one ScanWriteSeam holding the named fault and the runs that already saved a mark, and the decision stays a pure function of the fault, the write and whether this run already saved a mark, with the set held under the store lock in the effect shell. The scan-write name carries the run of a mark, which the store already has at that call site, so no caller learns anything new.",
+"F286": "No new ADR and no model change: ADR-091 accepts later faults of this family in the default suite and this one adds one acceptance journey of a few seconds. The Quint model already holds the refused-save transition, and a development-only seam adds no production state, so no model, no property and no checker run changes.",
+"F287": "A release build still knows no fault name: the new name sits inside the cfg(debug_assertions) parser and the new variant inside the development-only scan-write fault type, and the config property only_a_development_build_takes_the_test_fault_seam with the xtask guard review_app_test_fault_guard, whose token list gains both spellings, keep it so.",
+"F288": "One named fault per run of the binary: REVIEW_APP_TEST_FAULT names a single fault, so the journey that needs the after-first refusal and the journey that needs the budget pause are separate runs of the app, and a journey that wants the refusal to stop restarts the binary without the seam.",
+"F289": "Two plan repos make the refusal observable: with the fault held a run saves its first mark and is refused the next, so a resume of a two-row plan carries one read row, saves the one read it makes and ends completed with the whole-scan count; a longer plan would see the resume refused in its turn and show no count unless the binary is restarted without the seam.",
 "F29": "Its seeded plan rows pass their status to the writer.",
+"F290": "The closed set of fault names a development build honours already holds three; the new name joins it and the release twin still has no values.",
+"F291": "The single owner of the name-to-store-fault map; the new name maps to the new scan-write fault and nothing else changes there.",
+"F292": "The development-only set of scan writes the store may refuse; the after-first fault is one more member of it, so no second fault vocabulary appears.",
+"F293": "The pure decision over a held fault and a write; it now also takes whether this run already saved a mark, which is the only new input the after-first fault needs.",
+"F294": "The closed set of scan writes the seam names; the mark-repo-read member now carries the run it is for, which the store already has at that call site.",
+"F295": "Counting the marks of a run needs state beside the held fault; no existing type owns both, and leaving a bare set beside the fault field would let one be set without the other.",
+"F296": "The one effect-shell site that consults the seam; it names the run, reads and updates the seam state under the store lock and keeps the decision pure.",
+"F297": "The guard already lists every fault name and store variant it requires to be cfg-gated; the new pair joins that list.",
+"F298": "The guard test already walks the real tree and synthetic gated and ungated shapes; the new name is covered by the same cases.",
+"F299": "The development-only parser knows one more name, the fault set one more value, and the in-crate property table one more row.",
 "F3": "When a scan pauses (GitHub request budget used up, or interrupted) and a later run resumes its plan, the queue says \"N repos read\" with N the count of plan repos read in the whole scan: the paused run and every run that resumed it.",
 "F30": "The fresh plan writes planned rows and the resumed plan writes every kept row with the status the verdict gives it.",
+"F300": "The new name asks the store for the after-first scan-write fault.",
+"F301": "A new development-only fault variant, the seam that counts the marks of a run, and the pure decision over them.",
+"F302": "The mark-repo-read write names its run when it consults the seam; the SQL it runs is unchanged.",
+"F303": "The guard requires the new name and its store variant to stay behind cfg gates.",
+"F304": "Its cases cover the new name, so an ungated occurrence of it is still caught.",
+"F305": "The support's fault table and its restart step name the new fault; the oracle owner writes that, not the crafter.",
+"F306": "They mark a repo read, so they pass the run to the seam and gain the cases of the after-first fault.",
+"F307": "The acceptance support sets the new name for the journey that needs a run to save one read and then be interrupted.",
+"F308": "The development-only parser accepts the new name and still refuses every unknown one.",
+"F309": "The map turns the new name into the after-first scan-write fault the store holds.",
 "F31": "Priya is signed in with her GitHub account verified and has chosen three of her repos. She presses Scan my repos; GitHub reports its request budget low after the first repo is read, so the run pauses. She then presses Resume scan on her queue, and the run that picks the plan up reads the other two repos and ends completed.",
+"F310": "The release-build guard knows the new name and requires it to stay behind a cfg gate.",
+"F311": "It keeps setting refuse_mark_repo_read, whose meaning is unchanged.",
+"F312": "With the after-first fault held, the first mark of a repo read in a run is saved and every later mark of that run is refused, while every other read and write of the store behaves normally and a different run's first mark is saved again.",
+"F313": "with the fault held, one run marks its first row read and the store accepts it, then marks a second row read and the store refuses it, the refused row staying planned",
+"F314": "with the fault held, a second run marks its first row read and the store accepts it, and the plan write and the account-checks write of both runs are accepted",
+"F315": "with no fault held, one run marks two rows read and both are accepted",
+"F316": "The seam's domain is closed: one fault name, the two named scan writes, and the first-or-later distinction within a run, so these cases exhaust the distinctions the decision can make.",
+"F317": "A release build cannot hold any store fault, the new one included: both fault types have no values under cfg(not(debug_assertions)) and the start refuses the seam variable outright, so no release binary can refuse a real repo read.",
+"F318": "A release binary that honoured the fault would refuse a user's real reads and leave her scan interrupted with an untrue account of it.",
+"F319": "the REVIEW_APP_TEST_FAULT value of the environment the binary starts in",
 "F32": "Her queue status region carries exactly one repos-read line, and it reads three repos read.",
+"F320": "a release build refusing to start while the variable is set, and holding no fault when it is not",
+"F321": "a binary built with debug assertions on and deployed as production: the types exclude the fault only in a release build, and the xtask guard checks the names stay cfg-gated, not which build is shipped.",
+"F322": "A run that saved one read and then ended interrupted, its other plan rows still planned.",
+"F323": "A release build holding a store fault: both fault types have no values there and the start refuses the seam variable.",
+"F324": "The whole-scan repos-read count after an interrupted run",
+"F325": "In a development build holding the after-first fault the owner presses Scan my repos at POST /scan; the store saves the first mark through admits_scan_write at crates/adapter-review-store/src/lib.rs:418 and refuses the next, so the run ends interrupted at crates/openlore-review-app/src/scan.rs:686 with one row stored read. She presses Resume scan; the resumed plan carries that row read through Resume::kept at crates/review-domain/src/repo_scope/resume.rs:97, the resume reads the remaining row, and GET /review shows the count of the whole scan. Every site exists today; only the fault name is not built.",
+"F326": "The runs that already saved a mark are held in the store process memory: a restart forgets them.",
+"F327": "The stored rows and their statuses, which the count reads, are untouched by the seam.",
+"F328": "After a restart the same run's next mark is saved again, so the fault refuses one mark less than before.",
+"F329": "A count above the reads the store holds.",
 "F33": "The line reads two repos read, counting only the run that picked the plan up; or it reads more than three, counting a repo twice; or a completed run shows no repos-read line at all.",
+"F330": "The seam is development-only, and a journey that needs the refusal keeps the binary running across the resume it observes.",
+"F331": "Negated assumption, only a development build reads the seam: a release binary starts with REVIEW_APP_TEST_FAULT set to the new name.",
+"F332": "Every store write behaves normally, because a release build compiles no fault name in.",
+"F333": "The start refuses with the test-fault-in-release error and says the seam is development-only.",
+"F334": "A release binary refusing a real repo read.",
+"F335": "The config property and the xtask guard keep every name behind its cfg gate.",
+"F336": "Every review-app test fault name and store fault variant, refuse_mark_repo_read_after_first included, occurs only behind a cfg gate over the app and store source trees, so a release binary honours none of them.",
 "F34": "Resume takes over the whole frozen plan. A resuming run records every non-skipped row of the paused run plan as its own plan, each row carrying the status it already holds, so the queue counts the reads of the whole scan and not only of the last run. The alternative, a scan-chain column counted across the runs of one scan, needs a stored schema change and a distinct-repo count to avoid counting a repo twice; the takeover needs neither.",
 "F35": "One writer freezes the plan and its statuses. ScanRunPort record_plan takes plan rows with their status, so freezing the resuming run plan and carrying its already-read rows is one transaction. No second writer of scan_run_repos appears, and the mark-repo-read seam keeps its meaning: a read made now, by this run.",
 "F36": "The count stays a set of plan positions. repos_read_of keeps counting the rows of the latest run whose status is read. A repo has one row per plan, so a repo read again by a resume after an unsaved read counts once, and no counter can be incremented twice.",
