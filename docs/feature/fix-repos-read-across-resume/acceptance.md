@@ -13,7 +13,7 @@ Priya is signed in with her GitHub account verified and has chosen three of her 
 ```
 
 ```text
-Her queue status region carries exactly one line accounting for repos read, and that line says three repos read.
+The run she picked up reads the two repos the paused run had not read, and her queue status region carries exactly one line accounting for repos read, saying three repos read.
 ```
 
 ```text
@@ -27,10 +27,11 @@ Tested
 tests\/acceptance\/review\_app\_repos\_read\_across\_resume\.rs\:\:a\_scan\_picked\_up\_after\_a\_pause\_accounts\_for\_the\_repos\_of\_the\_whole\_scan
 
 ```text
-A queue that counted the whole scan across one pause but fell back to the last run's count once a scan was picked up twice would still pass: this journey pauses and picks the scan up once.
+A count that was right after one pause but fell back to the last run's reads after a second pause would still pass this one; the scan picked up twice is what tells them apart.
 ```
 
 ###### Obligations
+
 
 
 
@@ -38,29 +39,32 @@ A queue that counted the whole scan across one pause but fell back to the last r
 
 P1
 
+P2
+
 ```text
-A scan is paused with part of its plan already read, and a run picks that plan up, with any mix of its account checks passing, failing or unfinished and any of its sources removed meanwhile.
+Priya chose three of her repos. Her scan reads one and pauses because GitHub's request budget is used up; she picks it up and it reads a second repo before the budget runs out again; she picks it up once more and it reads the last repo and finishes.
 ```
 
 ```text
-The run keeps as already read exactly the repos of that plan an earlier run read, neither more nor fewer.
+Each of the three runs read a repo none of the others read, the three she chose between them, and her queue carries exactly one line accounting for repos read, saying three repos read.
 ```
 
 ```text
-What her scan already read stays accounted for, whatever changed while it was paused.
+However often her scan had to stop and be picked up, it tells her it read all three of the repos she chose, and it never spends her GitHub budget reading one of them again.
 ```
 
 ##### Disposition
 
 Tested
 
-tests\/acceptance\/review\_app\_repos\_read\_across\_resume\.rs\:\:a\_run\_picking\_a\_paused\_scan\_up\_keeps\_every\_read\_it\_already\_made
+tests\/acceptance\/review\_app\_repos\_read\_across\_resume\.rs\:\:a\_scan\_picked\_up\_twice\_accounts\_for\_every\_repo\_it\_read\_along\_the\_way
 
 ```text
-A run that keeps those reads and then loses them when it writes its plan would still pass this one: what the store keeps is observed by its own rows.
+A scan picked up a fourth time, or a plan of more than three repos, is not observed here: the chain stops at three runs over three repos, the bound this slice walks.
 ```
 
 ###### Obligations
+
 
 
 
@@ -69,25 +73,25 @@ A run that keeps those reads and then loses them when it writes its plan would s
 P2
 
 ```text
-A run picks up a paused plan that holds a repo already read whose GitHub account passes its check now.
+A run picks up a paused plan that holds a repo this scan already read, whatever its GitHub accounts answer to their checks now and whichever of its sources the owner has removed.
 ```
 
 ```text
-No repo the run keeps as already read is among the repos it reads now.
+No repo the scan has already read is among the repos that run reads now.
 ```
 
 ```text
-A repo her scan already read is not read again, so it is counted once.
+A repo her scan already read is not read again, so her GitHub budget is spent only on repos still to read.
 ```
 
 ##### Disposition
 
 Tested
 
-tests\/acceptance\/review\_app\_repos\_read\_across\_resume\.rs\:\:a\_repo\_already\_read\_is\_not\_read\_again\_by\_the\_run\_picking\_the\_scan\_up
+tests\/acceptance\/review\_app\_repos\_read\_across\_resume\.rs\:\:a\_run\_picking\_a\_paused\_scan\_up\_does\_not\_read\_a\_repo\_the\_scan\_already\_read
 
 ```text
-A run that read one repo twice within a single run would still pass: this law is about the reads carried over from an earlier run.
+A run that read one repo twice within a single run would still pass: this law is about the repos earlier runs of the scan already read. Observed red on the wrong behaviour it names (a run that takes on every row of the plan that is not given up) before its green was relied on.
 ```
 
 ###### Obligations
@@ -103,7 +107,7 @@ A run picks up a paused plan holding a repo this scan will never read and a repo
 ```
 
 ```text
-The repos the run keeps are part of the plan it picked up, in that plan order, each at most once.
+The repos it reads now and the repos it gives up on are repos of the plan it picked up, in that plan order, each at most once.
 ```
 
 ```text
@@ -114,101 +118,14 @@ However often her scan is picked up, it never grows past the choice it started w
 
 Tested
 
-tests\/acceptance\/review\_app\_repos\_read\_across\_resume\.rs\:\:the\_plan\_a\_run\_picks\_up\_never\_grows
+tests\/acceptance\/review\_app\_repos\_read\_across\_resume\.rs\:\:a\_run\_picks\_up\_repos\_of\_the\_plan\_it\_was\_given\_and\_no\_others
 
 ```text
-A run that kept too few repos, dropping one still to read, would still pass: this law forbids a plan growing, not a plan losing a row.
+A run that took on too few repos, dropping one still to read, would still pass: this law forbids a plan growing, not a plan losing a row.
 ```
 
 ###### Obligations
 
-
-
-##### Covers
-
-P1
-
-```text
-A run freezes the plan of her scan with the first of its three repos already read, and the stored plan is read back.
-```
-
-```text
-The plan reads back with the same three repos in the same order, the first of them still already read.
-```
-
-```text
-Her store keeps which of her repos the scan has already read, so that account survives the pause.
-```
-
-##### Disposition
-
-Tested
-
-tests\/acceptance\/review\_app\_repos\_read\_across\_resume\.rs\:\:a\_frozen\_plan\_keeps\_which\_of\_its\_repos\_were\_already\_read
-
-```text
-A store that kept every status it was given while the run gave it the wrong ones would still pass: what the run gives it is observed by the resume rows.
-```
-
-###### Obligations
-
-
-##### Covers
-
-P1
-
-```text
-A run freezes the plan of her scan with none of its three repos read yet, and the stored plan is read back.
-```
-
-```text
-The plan reads back with all three repos still to read.
-```
-
-```text
-No repo is counted as read before her scan has read it.
-```
-
-##### Disposition
-
-Tested
-
-tests\/acceptance\/review\_app\_repos\_read\_across\_resume\.rs\:\:a\_frozen\_plan\_of\_repos\_none\_read\_keeps\_them\_all\_still\_to\_read
-
-```text
-A store that wrote every row as still to read, whatever it was given, would still pass this one: the already-read case is what tells them apart.
-```
-
-###### Obligations
-
-
-##### Covers
-
-P1
-
-```text
-A plan is frozen for a run her store no longer holds, while her latest run holds a plan of its own.
-```
-
-```text
-No row is written for the run that is gone, and the plan of her latest run reads back empty.
-```
-
-```text
-A scan she asked to be forgotten leaves nothing behind that a later count could name.
-```
-
-##### Disposition
-
-Tested
-
-tests\/acceptance\/review\_app\_repos\_read\_across\_resume\.rs\:\:a\_plan\_frozen\_for\_a\_run\_her\_store\_no\_longer\_holds\_leaves\_nothing\_behind
-
-```text
-A store that also refused rows for a run it does hold would still pass this one: the other two cases observe that a held run keeps its plan.
-```
-
-###### Obligations
 
 
 ##### Covers
@@ -235,6 +152,35 @@ xtask\/src\/check\_arch\.rs \(cargo xtask check\-arch\)
 
 ```text
 A crate that reached an adapter's data only through the shared contract crate would still pass: the check follows crate dependencies, not the shape of the data they carry.
+```
+
+###### Obligations
+
+
+##### Covers
+
+P1
+
+```text
+A forget-me purge deletes the owner's run between the start of that run and the moment it writes its plan, and the plan is written after it.
+```
+
+```text
+No plan row is left for the run that is gone, and her store holds no row naming her.
+```
+
+```text
+A scan she asked to be forgotten leaves nothing behind that a later count could name.
+```
+
+##### Disposition
+
+Tested
+
+crates\/adapter\-review\-store\/src\/scan\_runs\.rs\:\:a\_purge\_between\_scan\_start\_and\_plan\_write\_leaves\_no\_rows
+
+```text
+A writer that also refused rows for a run her store does hold would still pass this one: that a held run keeps its plan is observed by the journeys, through the count they read.
 ```
 
 ###### Obligations
