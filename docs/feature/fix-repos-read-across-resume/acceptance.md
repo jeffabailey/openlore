@@ -277,6 +277,61 @@ A scan whose plan holds more than three repos, or which loses a read more than t
 
 
 
+##### Covers
+
+P1
+
+```text
+Priya chose three of her repos and her scan read all three and finished, her queue saying three repos read. She then unticks one of them, leaving two, and scans again.
+```
+
+```text
+The new scan reads the two repos she had chosen by then, and her queue carries exactly one line accounting for repos read, saying two repos read, not the five her two scans read between them.
+```
+
+```text
+The number on her queue is about the scan she is looking at: her new scan's count does not carry her earlier scan's reads.
+```
+
+##### Disposition
+
+Tested
+
+tests\/acceptance\/review\_app\_repos\_read\_across\_resume\.rs\:\:a\_new\_scan\_accounts\_for\_its\_own\_repos\_only
+
+```text
+A count that mixed in the reads of another owner's scan would still pass: only her own two scans are observed here. Shown red on a count that adds the reads of her earlier scans (it then said five repos read where the scan read two), before its green was relied on.
+```
+
+###### Obligations
+
+
+##### Covers
+
+P1
+
+```text
+A run saves the read of one repo with its own mark and is then interrupted before it reads the next, and the run picking it up reads only the repos still owed, never the one that run saved.
+```
+
+```text
+Her queue accounts for the repo the interrupted run saved as well as the repos the run after it read.
+```
+
+```text
+A scan stopped by an interruption, not by GitHub's budget, still tells her about the repos it had read before it stopped.
+```
+
+##### Disposition
+
+NotTested
+
+```text
+No public path reaches that state. The store fault seam has one name for this write and it refuses every mark, so the run loses its first read instead of saving it; the other name fires before any repo is read. Every GitHub seam that fails a scan mid-way (offline, unreachable or flawed profile, dropped or rate-limited profile, slow listing) acts in the checks-and-listing phase, before the plan is frozen and before the first read, and a repo made missing or archived is skipped rather than interrupting. The restart sweep marks only a running run interrupted, and the one in-flight delay seam also acts before the first read, so a restart-based scenario would be a race, not an observation. Reaching it needs a new fault name that refuses the second and later marks, which is a declaration of the fault seam, not an oracle change.
+```
+
+docs\/adrs\/ADR\-091\-review\-app\-store\-fault\-seam\-in\-the\-default\-test\-suite\.md
+
 ## Expectations
 
 ### Rows

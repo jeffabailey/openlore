@@ -154,6 +154,35 @@
 "expected": "F267",
 "stimulus": "F266",
 "user_result": "F268"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"L5"
+],
+"still_passes_if": "F273",
+"test": "tests/acceptance/review_app_repos_read_across_resume.rs::a_new_scan_accounts_for_its_own_repos_only"
+},
+"expected": "F271",
+"stimulus": "F270",
+"user_result": "F272"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "NotTested",
+"owner": "docs/adrs/ADR-091-review-app-store-fault-seam-in-the-default-test-suite.md",
+"reason": "F277"
+},
+"expected": "F275",
+"stimulus": "F274",
+"user_result": "F276"
 }
 ]
 },
@@ -161,7 +190,7 @@
 "B": 3,
 "C": 2,
 "E": 6,
-"F": 269,
+"F": 277,
 "L": 5,
 "N": 2,
 "P": 2,
@@ -1230,6 +1259,14 @@
 "F268": "However often her scan had to read one of her repos again, the queue tells her how many of her repos were read, not how many reads it took.",
 "F269": "A scan whose plan holds more than three repos, or which loses a read more than twice, is not observed here. Shown red on a resume that drops the reads its plan holds, before its green was relied on.",
 "F27": "The plan writer takes rows with their status, and says so in its contract.",
+"F270": "Priya chose three of her repos and her scan read all three and finished, her queue saying three repos read. She then unticks one of them, leaving two, and scans again.",
+"F271": "The new scan reads the two repos she had chosen by then, and her queue carries exactly one line accounting for repos read, saying two repos read, not the five her two scans read between them.",
+"F272": "The number on her queue is about the scan she is looking at: her new scan's count does not carry her earlier scan's reads.",
+"F273": "A count that mixed in the reads of another owner's scan would still pass: only her own two scans are observed here. Shown red on a count that adds the reads of her earlier scans (it then said five repos read where the scan read two), before its green was relied on.",
+"F274": "A run saves the read of one repo with its own mark and is then interrupted before it reads the next, and the run picking it up reads only the repos still owed, never the one that run saved.",
+"F275": "Her queue accounts for the repo the interrupted run saved as well as the repos the run after it read.",
+"F276": "A scan stopped by an interruption, not by GitHub's budget, still tells her about the repos it had read before it stopped.",
+"F277": "No public path reaches that state. The store fault seam has one name for this write and it refuses every mark, so the run loses its first read instead of saving it; the other name fires before any repo is read. Every GitHub seam that fails a scan mid-way (offline, unreachable or flawed profile, dropped or rate-limited profile, slow listing) acts in the checks-and-listing phase, before the plan is frozen and before the first read, and a repo made missing or archived is skipped rather than interrupting. The restart sweep marks only a running run interrupted, and the one in-flight delay seam also acts before the first read, so a restart-based scenario would be a race, not an observation. Reaching it needs a new fault name that refuses the second and later marks, which is a declaration of the fault seam, not an oracle change.",
 "F28": "The plan-row insert writes the status it is given instead of always planned.",
 "F29": "Its seeded plan rows pass their status to the writer.",
 "F3": "When a scan pauses (GitHub request budget used up, or interrupted) and a later run resumes its plan, the queue says \"N repos read\" with N the count of plan repos read in the whole scan: the paused run and every run that resumed it.",

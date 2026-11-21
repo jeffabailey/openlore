@@ -615,13 +615,13 @@ fn then_her_queue_accounts_for_the_whole_scan(seen: &QueueEvidence, whole_scan: 
         counted,
         whole_scan.len(),
         "WHAT: her queue says her scan read {counted} repos, when it read {} — {:?} — \
-         between the run that paused and the runs that picked it up.\n\
+         across the runs of that scan.\n\
          WHY: the count is the only account she gets of what her scan did; counting \
          only the run that finished hides the repos the earlier runs read and tells her \
-         repos of her choice were left unread, and a larger count names repos nobody \
-         read.\n\
+         repos of her choice were left unread, while a larger count names repos nobody \
+         read, or repos of a scan before this one.\n\
          HOW: a run picking a paused plan up takes over the reads that plan already \
-         holds, so the count is the count of the whole scan.\n\
+         holds, and a scan counts the repos of its own plan only.\n\
          the line she reads: {:?}",
         whole_scan.len(),
         whole_scan,
@@ -900,4 +900,45 @@ fn repos_her_scan_had_to_read_again_are_counted_once_each() {
     );
     let whole_scan = then_her_scan_read_the_repos_she_chose(&runs);
     then_her_queue_accounts_for_the_whole_scan(&seen, &whole_scan);
+}
+
+// =============================================================================
+// Her next scan counts its own repos
+// =============================================================================
+
+/// ```gherkin
+/// @real-io
+/// Scenario: A new scan accounts for its own repos only
+///   Given Priya chose three of her repos and her scan read all three and finished
+///   And her queue says three repos read
+///   When she unticks one of them, leaving two, and scans again
+///   Then that scan reads the two repos she now chose
+///   And her queue says two repos read, not the five her two scans read between them
+/// ```
+#[test]
+fn a_new_scan_accounts_for_its_own_repos_only() {
+    let world = rra_world();
+    let mut browser = given_owner_verified(&world, Account::Priyaraman);
+    given_saved_choice(&mut browser, Account::Priyaraman, &PRIYA_CHOICE_OF_THREE);
+    let read_by_her_first_scan = given_scanned(&world, &mut browser);
+    show_repos_read("her first scan", &read_by_her_first_scan);
+    let after_her_first_scan = show_queue_evidence("her queue, her first scan over", &mut browser);
+    then_her_queue_accounts_for_the_whole_scan(&after_her_first_scan, &read_by_her_first_scan);
+
+    given_saved_choice(&mut browser, Account::Priyaraman, &PRIYA_CHOICE_OF_TWO);
+    let (status, read_by_her_second_scan) = when_scans(&world, &mut browser);
+
+    show_repos_read("her second scan", &read_by_her_second_scan);
+    let seen = show_queue_evidence("her queue, her second scan over", &mut browser);
+    then_the_run_ended(&status, "completed", "her second scan");
+    assert_eq!(
+        read_by_her_second_scan,
+        set_of(&PRIYA_CHOICE_OF_TWO),
+        "WHAT: her second scan read {read_by_her_second_scan:?}, not the two repos she \
+         had chosen by then.\n\
+         WHY: the claim below is that the count she is shown is of the scan she is \
+         looking at; over a scan that read something else the claim says nothing.\n\
+         HOW: a new scan plans from the choice in force when it starts."
+    );
+    then_her_queue_accounts_for_the_whole_scan(&seen, &read_by_her_second_scan);
 }

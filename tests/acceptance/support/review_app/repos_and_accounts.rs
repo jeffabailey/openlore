@@ -231,6 +231,9 @@ pub mod repos {
     /// Three repos: a choice small enough that a scan reading one of them,
     /// pausing and reading the other two is one scan the owner can count.
     pub const PRIYA_CHOICE_OF_THREE: [Repo; 3] = [TIDEPOOL, QUILL_DOCS, KELP];
+    /// Two repos: the choice she saves for a second scan, smaller than the
+    /// three the scan before it read.
+    pub const PRIYA_CHOICE_OF_TWO: [Repo; 2] = [TIDEPOOL, QUILL_DOCS];
 
     // priya-tidal: 4 owned public repos.
     pub const INGEST_BENCH: Repo = Repo::new("priya-tidal", "ingest-bench");
