@@ -206,11 +206,10 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 
 <p>tests/acceptance/review_app_repos_read_across_resume.rs::a_scan_picked_up_twice_accounts_for_every_repo_it_read_along_the_way</p>
 
-<pre><code>A scan picked up a fourth time, or a plan of more than three repos, is not observed here: the chain stops at three runs over three repos, the bound this slice walks.
+<pre><code>Here every account passes its check and every source stays listed, so a read dropped because its account failed or its source was removed would still pass this journey; the law over those plans is observed by the property that keeps the reads the scan already made.
 </code></pre>
 
 <h6>Obligations</h6>
-
 
 
 
@@ -247,7 +246,7 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 <pre><code>A run picks up a paused plan holding a repo this scan will never read and a repo whose source the owner removed meanwhile.
 </code></pre>
 
-<pre><code>The repos it reads now and the repos it gives up on are repos of the plan it picked up, in that plan order, each at most once.
+<pre><code>The repos it keeps as its own plan and the repos it gives up on are repos of the plan it picked up, in that plan order, each at most once.
 </code></pre>
 
 <pre><code>However often her scan is picked up, it never grows past the choice it started with, so no repo of it can be counted twice.
@@ -314,6 +313,34 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 </code></pre>
 
 <h6>Obligations</h6>
+
+
+<h5>Covers</h5>
+
+<p>P1</p>
+
+<p>P2</p>
+
+<pre><code>A run picks up a paused plan holding repos this scan already read, over any mix of its accounts passing, failing or not finishing their checks now, and any of its sources the owner has removed since - including the account of a repo already read, whose check fails now and which she has removed.
+</code></pre>
+
+<pre><code>The run keeps as already read exactly the repos of that plan this scan already read, neither more nor fewer.
+</code></pre>
+
+<pre><code>What her scan already read stays counted, even when she has since removed the account it came from or that account no longer checks out.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>tests/acceptance/review_app_repos_read_across_resume.rs::a_run_picking_a_paused_scan_up_keeps_every_repo_the_scan_already_read</p>
+
+<pre><code>A run that kept those reads and then wrote them to the store wrongly would still pass: what reaches her queue is observed by the two journeys. Shown red on the regression it names - a read dropped when its source was removed - before its green was relied on.
+</code></pre>
+
+<h6>Obligations</h6>
+
 
 
 <h2>Expectations</h2>

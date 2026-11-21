@@ -28,10 +28,9 @@
 "kind": "Tested",
 "obligations": [
 "L1",
-"L1/F101",
 "L4/F115"
 ],
-"still_passes_if": "F246",
+"still_passes_if": "F256",
 "test": "tests/acceptance/review_app_repos_read_across_resume.rs::a_scan_picked_up_twice_accounts_for_every_repo_it_read_along_the_way"
 },
 "expected": "F244",
@@ -68,7 +67,7 @@
 "still_passes_if": "F252",
 "test": "tests/acceptance/review_app_repos_read_across_resume.rs::a_run_picks_up_repos_of_the_plan_it_was_given_and_no_others"
 },
-"expected": "F251",
+"expected": "F257",
 "stimulus": "F221",
 "user_result": "F223"
 },
@@ -103,6 +102,24 @@
 "expected": "F254",
 "stimulus": "F253",
 "user_result": "F235"
+},
+{
+"covers": [
+"P1",
+"P2"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"L1",
+"L1/F101"
+],
+"still_passes_if": "F261",
+"test": "tests/acceptance/review_app_repos_read_across_resume.rs::a_run_picking_a_paused_scan_up_keeps_every_repo_the_scan_already_read"
+},
+"expected": "F259",
+"stimulus": "F258",
+"user_result": "F260"
 }
 ]
 },
@@ -110,7 +127,7 @@
 "B": 3,
 "C": 2,
 "E": 6,
-"F": 255,
+"F": 261,
 "L": 5,
 "N": 2,
 "P": 2,
@@ -1154,18 +1171,22 @@
 "F243": "Priya chose three of her repos. Her scan reads one and pauses because GitHub's request budget is used up; she picks it up and it reads a second repo before the budget runs out again; she picks it up once more and it reads the last repo and finishes.",
 "F244": "Each of the three runs read a repo none of the others read, the three she chose between them, and her queue carries exactly one line accounting for repos read, saying three repos read.",
 "F245": "However often her scan had to stop and be picked up, it tells her it read all three of the repos she chose, and it never spends her GitHub budget reading one of them again.",
-"F246": "A scan picked up a fourth time, or a plan of more than three repos, is not observed here: the chain stops at three runs over three repos, the bound this slice walks.",
 "F247": "A run picks up a paused plan that holds a repo this scan already read, whatever its GitHub accounts answer to their checks now and whichever of its sources the owner has removed.",
 "F248": "No repo the scan has already read is among the repos that run reads now.",
 "F249": "A repo her scan already read is not read again, so her GitHub budget is spent only on repos still to read.",
 "F25": "The resume verdict names the rows already read and answers with the status each kept row carries.",
 "F250": "A run that read one repo twice within a single run would still pass: this law is about the repos earlier runs of the scan already read. Observed red on the wrong behaviour it names (a run that takes on every row of the plan that is not given up) before its green was relied on.",
-"F251": "The repos it reads now and the repos it gives up on are repos of the plan it picked up, in that plan order, each at most once.",
 "F252": "A run that took on too few repos, dropping one still to read, would still pass: this law forbids a plan growing, not a plan losing a row.",
 "F253": "A forget-me purge deletes the owner's run between the start of that run and the moment it writes its plan, and the plan is written after it.",
 "F254": "No plan row is left for the run that is gone, and her store holds no row naming her.",
 "F255": "A writer that also refused rows for a run her store does hold would still pass this one: that a held run keeps its plan is observed by the journeys, through the count they read.",
+"F256": "Here every account passes its check and every source stays listed, so a read dropped because its account failed or its source was removed would still pass this journey; the law over those plans is observed by the property that keeps the reads the scan already made.",
+"F257": "The repos it keeps as its own plan and the repos it gives up on are repos of the plan it picked up, in that plan order, each at most once.",
+"F258": "A run picks up a paused plan holding repos this scan already read, over any mix of its accounts passing, failing or not finishing their checks now, and any of its sources the owner has removed since - including the account of a repo already read, whose check fails now and which she has removed.",
+"F259": "The run keeps as already read exactly the repos of that plan this scan already read, neither more nor fewer.",
 "F26": "The kept-row type is re-exported beside the rest of the resume verdict.",
+"F260": "What her scan already read stays counted, even when she has since removed the account it came from or that account no longer checks out.",
+"F261": "A run that kept those reads and then wrote them to the store wrongly would still pass: what reaches her queue is observed by the two journeys. Shown red on the regression it names - a read dropped when its source was removed - before its green was relied on.",
 "F27": "The plan writer takes rows with their status, and says so in its contract.",
 "F28": "The plan-row insert writes the status it is given instead of always planned.",
 "F29": "Its seeded plan rows pass their status to the writer.",

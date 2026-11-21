@@ -60,11 +60,10 @@ Tested
 tests\/acceptance\/review\_app\_repos\_read\_across\_resume\.rs\:\:a\_scan\_picked\_up\_twice\_accounts\_for\_every\_repo\_it\_read\_along\_the\_way
 
 ```text
-A scan picked up a fourth time, or a plan of more than three repos, is not observed here: the chain stops at three runs over three repos, the bound this slice walks.
+Here every account passes its check and every source stays listed, so a read dropped because its account failed or its source was removed would still pass this journey; the law over those plans is observed by the property that keeps the reads the scan already made.
 ```
 
 ###### Obligations
-
 
 
 
@@ -107,7 +106,7 @@ A run picks up a paused plan holding a repo this scan will never read and a repo
 ```
 
 ```text
-The repos it reads now and the repos it gives up on are repos of the plan it picked up, in that plan order, each at most once.
+The repos it keeps as its own plan and the repos it gives up on are repos of the plan it picked up, in that plan order, each at most once.
 ```
 
 ```text
@@ -184,6 +183,38 @@ A writer that also refused rows for a run her store does hold would still pass t
 ```
 
 ###### Obligations
+
+
+##### Covers
+
+P1
+
+P2
+
+```text
+A run picks up a paused plan holding repos this scan already read, over any mix of its accounts passing, failing or not finishing their checks now, and any of its sources the owner has removed since - including the account of a repo already read, whose check fails now and which she has removed.
+```
+
+```text
+The run keeps as already read exactly the repos of that plan this scan already read, neither more nor fewer.
+```
+
+```text
+What her scan already read stays counted, even when she has since removed the account it came from or that account no longer checks out.
+```
+
+##### Disposition
+
+Tested
+
+tests\/acceptance\/review\_app\_repos\_read\_across\_resume\.rs\:\:a\_run\_picking\_a\_paused\_scan\_up\_keeps\_every\_repo\_the\_scan\_already\_read
+
+```text
+A run that kept those reads and then wrote them to the store wrongly would still pass: what reaches her queue is observed by the two journeys. Shown red on the regression it names - a read dropped when its source was removed - before its green was relied on.
+```
+
+###### Obligations
+
 
 
 ## Expectations

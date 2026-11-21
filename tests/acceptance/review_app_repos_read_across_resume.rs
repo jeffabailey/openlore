@@ -76,10 +76,20 @@ enum Check {
     Unfinished,
 }
 
-/// What a run picking up a paused plan does with it: which of its repos it
-/// reads now, and which of them this scan will never read.
+/// One repo of the plan the run picking it up keeps as its own, and whether
+/// it keeps it as a repo this scan has already read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KeptRepo {
+    position: usize,
+    carries_an_earlier_read: bool,
+}
+
+/// What a run picking up a paused plan does with it: the repos it keeps as
+/// its own plan, which of them it reads now, and which this scan will never
+/// read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PickedUp {
+    kept: Vec<KeptRepo>,
     reads_now: Vec<usize>,
     never_reads: Vec<usize>,
 }
@@ -91,10 +101,9 @@ struct PickedUp {
 /// What a run picking up the paused plan `plan` does with it, given its own
 /// account checks and the sources the owner still lists.
 ///
-/// ONE call: `resume_plan`, the single owner of that verdict. It is read
-/// through the two answers this feature leaves as they are — the repos the
-/// run reads now, and the repos it will never read — so no line of this
-/// binding moves when the verdict starts naming the repos already read.
+/// ONE call: `resume_plan`, the single owner of that verdict, read through
+/// the plan the run keeps with the status each of its repos carries, the
+/// repos it reads now and the repos it will never read.
 fn sut_picked_up(
     plan: &[PlannedRepo],
     checks: &BTreeMap<Source, Check>,
@@ -140,8 +149,20 @@ fn sut_picked_up(
     let verdict = resume_plan(&rows, &bio_checks, &gone);
 
     PickedUp {
+        kept: verdict
+            .kept()
+            .into_iter()
+            .map(|row| KeptRepo {
+                position: row.position,
+                carries_an_earlier_read: row.status == PlanRowStatus::Read,
+            })
+            .collect(),
         reads_now: verdict.to_read.clone(),
-        never_reads: verdict.skipped.iter().map(|(position, _)| *position).collect(),
+        never_reads: verdict
+            .skipped
+            .iter()
+            .map(|(position, _)| *position)
+            .collect(),
     }
 }
 
@@ -274,6 +295,41 @@ fn a_paused_scan_read_part_way_by_an_account_checking_out() -> impl Strategy<Val
         })
 }
 
+/// Paused scans that always hold a repo this scan already read whose account
+/// fails its check now and whose source the owner has removed since: what the
+/// scan read stands whatever has happened to the source it came from.
+fn a_paused_scan_read_by_a_source_she_has_since_removed() -> impl Strategy<Value = PausedScan> {
+    (
+        a_paused_scan_read_part_way(),
+        an_account(),
+        any::<proptest::sample::Index>(),
+    )
+        .prop_map(|(mut paused, account, at)| {
+            put(
+                &mut paused.plan,
+                at,
+                PlannedRepo {
+                    source: account,
+                    state: RowState::AlreadyRead,
+                },
+            );
+            paused.checks.insert(account, Check::Failed);
+            paused.no_longer_listed.insert(account);
+            paused
+        })
+}
+
+/// Paused scans holding repos this scan already read: some of them from
+/// sources still listed and checking out, some from a source whose check
+/// fails now and which the owner has removed.
+fn a_paused_scan_with_reads_to_keep() -> impl Strategy<Value = PausedScan> {
+    prop_oneof![
+        a_paused_scan_read_part_way(),
+        a_paused_scan_read_part_way_by_an_account_checking_out(),
+        a_paused_scan_read_by_a_source_she_has_since_removed(),
+    ]
+}
+
 /// Paused scans that always hold a repo this scan will never read and a repo
 /// whose source the owner has since removed.
 fn a_paused_scan_holding_a_skip_and_a_removed_source() -> impl Strategy<Value = PausedScan> {
@@ -322,6 +378,42 @@ fn already_read(plan: &[PlannedRepo]) -> BTreeSet<usize> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
+    /// L1 — the run picking a paused plan up keeps as already read exactly
+    /// the repos of that plan this scan already read: whatever its own
+    /// account checks answer now, and whichever of its sources the owner has
+    /// removed since, a repo the scan read stays read and stays counted.
+    #[test]
+    fn a_run_picking_a_paused_scan_up_keeps_every_repo_the_scan_already_read(
+        paused in a_paused_scan_with_reads_to_keep(),
+    ) {
+        let picked_up = sut_picked_up(&paused.plan, &paused.checks, &paused.no_longer_listed);
+
+        let kept_as_read: BTreeSet<usize> = picked_up
+            .kept
+            .iter()
+            .filter(|kept| kept.carries_an_earlier_read)
+            .map(|kept| kept.position)
+            .collect();
+        prop_assert_eq!(
+            kept_as_read.clone(),
+            already_read(&paused.plan),
+            "WHAT: the run picking this paused scan up keeps {:?} as already read, when \
+             the repos this scan has already read are {:?}.\n\
+             WHY: the count her queue shows her is the count of the repos her scan's \
+             plan holds as read; a read dropped here — because the account it came from \
+             fails its check now, or because she has removed that source since — is work \
+             she paid for and is never told about, and a read invented here tells her of \
+             a repo nobody read.\n\
+             HOW: a repo this scan already read is kept as read whatever the checks and \
+             the removed sources say now; they decide what is read NOW, never what was \
+             read then.\n\
+             the paused scan: {:?}",
+            kept_as_read,
+            already_read(&paused.plan),
+            paused
+        );
+    }
+
     /// L2 — whatever this run's own account checks say, a repo of the plan an
     /// earlier run already read is never among the repos it reads now: the
     /// scan reads each of her repos once, and so counts it once.
@@ -361,8 +453,8 @@ proptest! {
     ) {
         let picked_up = sut_picked_up(&paused.plan, &paused.checks, &paused.no_longer_listed);
 
-        let mut accounted: Vec<usize> = picked_up
-            .reads_now
+        let kept: Vec<usize> = picked_up.kept.iter().map(|kept| kept.position).collect();
+        let mut accounted: Vec<usize> = kept
             .iter()
             .chain(&picked_up.never_reads)
             .copied()
@@ -370,7 +462,7 @@ proptest! {
         let distinct: BTreeSet<usize> = accounted.iter().copied().collect();
         accounted.sort_unstable();
         let within_the_plan = accounted.iter().all(|p| *p < paused.plan.len());
-        let in_plan_order = picked_up.reads_now.windows(2).all(|pair| pair[0] < pair[1])
+        let in_plan_order = kept.windows(2).all(|pair| pair[0] < pair[1])
             && picked_up.never_reads.windows(2).all(|pair| pair[0] < pair[1]);
         prop_assert!(
             within_the_plan && in_plan_order && distinct.len() == accounted.len(),
