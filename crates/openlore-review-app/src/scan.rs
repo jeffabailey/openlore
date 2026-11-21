@@ -490,13 +490,22 @@ async fn scan_accounts(
     if plan.is_empty() {
         return ended_reading_nothing(app, &checked);
     }
-    let to_read: Vec<(usize, PlanSource, PlannedRepo)> = plan
+    let to_read: Vec<(RunPosition, PlanSource, PlannedRepo)> = plan
         .iter()
         .enumerate()
-        .map(|(position, row)| (position, row.source, carried_repo(row)))
+        .map(|(position, row)| (RunPosition(position), row.source, carried_repo(row)))
         .collect();
     read_planned(app, owner_did, run_id, &to_read).await
 }
+
+/// A row's position in THIS run's own frozen plan, as [`ScanRunPort::
+/// record_plan`] wrote it: the only position [`ScanRunPort::mark_repo_read`]
+/// may be given. A resume also handles positions of the plan it picks up
+/// (indexes into the paused run's rows, as the resume verdict names them);
+/// those two spaces differ as soon as the resume drops a row, so only this
+/// type reaches the store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RunPosition(usize);
 
 /// Store the BR-RRA-5 moves the scan's listings showed, each named as its
 /// account's listing shows it now, before the plan is written.
@@ -576,11 +585,11 @@ async fn resume_scan(
     if resumed.to_read.is_empty() {
         return ended_reading_nothing(app, &checked);
     }
-    let to_read: Vec<(usize, PlanSource, PlannedRepo)> = resumed
+    let to_read: Vec<(RunPosition, PlanSource, PlannedRepo)> = resumed
         .to_read
         .iter()
         .map(|position| {
-            let row = &resumed.rows[*position].repo;
+            let row = &resumed.rows[position.0].repo;
             (*position, row.source, carried_repo(row))
         })
         .collect();
@@ -593,8 +602,8 @@ async fn resume_scan(
 /// the paused run's skipped repos.
 struct ResumedPlan {
     rows: Vec<ScanPlanRow>,
-    /// Positions in `rows` read now.
-    to_read: Vec<usize>,
+    /// Positions in `rows` — this run's own plan — read now.
+    to_read: Vec<RunPosition>,
     skipped: Vec<SkippedScanRepo>,
 }
 
@@ -613,24 +622,29 @@ impl ResumedPlan {
             })
             .collect();
         let resume = resume_plan(&frozen, checks, &listed.removed_from(&frozen));
+        // Every `kept_row.position` and every position of `resume` indexes
+        // `plan`, the picked-up run's rows; `RunPosition` below indexes the
+        // rows this run freezes for itself, which is where the two spaces part.
         let kept = resume.kept();
         let skipped_now = resume
             .skipped
             .iter()
-            .filter_map(|(old, why)| named_carried_skip(&plan[*old].repo, *why));
+            .filter_map(|(picked_up_position, why)| {
+                named_carried_skip(&plan[*picked_up_position].repo, *why)
+            });
         Self {
             rows: kept
                 .iter()
-                .map(|old| ScanPlanRow {
-                    repo: plan[old.position].repo.clone(),
-                    status: old.status,
+                .map(|kept_row| ScanPlanRow {
+                    repo: plan[kept_row.position].repo.clone(),
+                    status: kept_row.status,
                 })
                 .collect(),
             to_read: kept
                 .iter()
                 .enumerate()
-                .filter(|(_, old)| resume.to_read.contains(&old.position))
-                .map(|(position, _)| position)
+                .filter(|(_, kept_row)| resume.to_read.contains(&kept_row.position))
+                .map(|(position_in_this_run, _)| RunPosition(position_in_this_run))
                 .collect(),
             skipped: skipped.iter().cloned().chain(skipped_now).collect(),
         }
@@ -679,7 +693,7 @@ async fn read_planned(
     app: &App,
     owner_did: &str,
     run_id: &str,
-    to_read: &[(usize, PlanSource, PlannedRepo)],
+    to_read: &[(RunPosition, PlanSource, PlannedRepo)],
 ) -> Ended {
     let mut found = ScanCounts::default();
     for (position, source, repo) in to_read {
@@ -697,7 +711,7 @@ async fn read_planned(
         }
         if app
             .scans
-            .mark_repo_read(owner_did, run_id, *position)
+            .mark_repo_read(owner_did, run_id, position.0)
             .is_err()
         {
             return Ended::with_status(ScanStatus::Interrupted).after_finding(found);
