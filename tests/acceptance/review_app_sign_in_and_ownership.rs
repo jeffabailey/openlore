@@ -721,7 +721,7 @@ fn with_only_the_broad_permission_the_app_says_why_and_still_writes_only_claims(
 /// owner's queue carries ("Scan my repos", "Scan again", "Resume scan").
 fn then_no_scan_can_start(page: &Page, context: &str) {
     let text = page.text();
-    for label in ["Scan my repos", "Scan again", "Resume scan"] {
+    for label in review_app::app::SCAN_ACTIONS {
         assert!(
             !page.offers(label),
             "[{context}] an unverified queue offers {label:?}:\n{text}"

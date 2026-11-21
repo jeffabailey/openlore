@@ -23,7 +23,10 @@ mod review_app;
 
 use std::collections::BTreeSet;
 
-use review_app::app::{show_queue_evidence, TEST_FAULT_VAR};
+use review_app::app::{
+    show_queue_evidence, REPOS_READ_WORDINGS, RESUME_SCAN, SCAN_AGAIN, SCAN_MY_REPOS,
+    TEST_FAULT_VAR,
+};
 use review_app::repos_and_accounts::{github_mark, repos_read_since, when_scans};
 use review_app::*;
 
@@ -59,18 +62,9 @@ impl RefusedWrite {
     }
 }
 
-/// What the queue says about repos read, in both its wordings.
-const REPOS_READ_WORDINGS: [&str; 2] = ["repos read", "repo read"];
-
 /// The actions that start a new scan instead of picking up an unfinished
 /// one; the first is what a finished run offers.
-const FRESH_SCAN_LABELS: [&str; 2] = ["Scan again", "Scan my repos"];
-
-/// The action a finished scan offers; a run that is not finished must not.
-const SCAN_AGAIN: &str = FRESH_SCAN_LABELS[0];
-
-/// The action an unfinished run offers its owner.
-const RESUME_SCAN: &str = "Resume scan";
+const FRESH_SCAN_LABELS: [&str; 2] = [SCAN_AGAIN, SCAN_MY_REPOS];
 
 // =============================================================================
 // Given / When / Then steps

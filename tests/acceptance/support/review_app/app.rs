@@ -564,14 +564,21 @@ fn write_secrets(bin: &Path, dir: &Path, settings: &AppSettings) {
 // What the owner's queue tells her, in her own words
 // =============================================================================
 
-/// Both wordings the queue uses to account for the repos a run read.
-const REPOS_READ_WORDINGS: [&str; 2] = ["repos read", "repo read"];
+/// Both wordings the queue uses to account for the repos a run read; a queue
+/// that holds neither phrase says nothing at all about repos read.
+pub const REPOS_READ_WORDINGS: [&str; 2] = ["repos read", "repo read"];
 
-/// Every scan action the queue can offer its owner.
-const SCAN_ACTIONS: [&str; 3] = ["Scan my repos", "Scan again", "Resume scan"];
+/// The action a verified owner's queue offers before her first scan.
+pub const SCAN_MY_REPOS: &str = "Scan my repos";
+
+/// The action a finished scan offers on the queue.
+pub const SCAN_AGAIN: &str = "Scan again";
 
 /// The action an unfinished run offers its owner.
-const RESUME_SCAN: &str = "Resume scan";
+pub const RESUME_SCAN: &str = "Resume scan";
+
+/// Every scan action the queue can offer its owner.
+pub const SCAN_ACTIONS: [&str; 3] = [SCAN_MY_REPOS, SCAN_AGAIN, RESUME_SCAN];
 
 /// What the owner's queue tells her at one moment of her scenario.
 #[derive(Debug, Clone)]

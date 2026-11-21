@@ -20,7 +20,7 @@ mod review_app;
 
 use std::collections::BTreeSet;
 
-use review_app::app::show_queue_evidence;
+use review_app::app::{show_queue_evidence, REPOS_READ_WORDINGS, SCAN_AGAIN};
 use review_app::repos_and_accounts::repos::*;
 use review_app::repos_and_accounts::*;
 use review_app::*;
@@ -37,13 +37,6 @@ fn repos_read_line(read: usize) -> String {
         n => format!("{n} repos read"),
     }
 }
-
-/// Any wording of the repos-read line, whatever its count: a queue that holds
-/// neither phrase says nothing at all about repos read.
-const REPOS_READ_WORDINGS: [&str; 2] = ["repos read", "repo read"];
-
-/// The action a finished scan offers on the queue.
-const SCAN_AGAIN: &str = "Scan again";
 
 /// What a completed run's summary tells her it found.
 const FOUND: &str = "new suggestion";
