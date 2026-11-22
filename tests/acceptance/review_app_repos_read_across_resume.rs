@@ -366,7 +366,12 @@ fn a_paused_scan_holding_a_skip_and_a_removed_source() -> impl Strategy<Value = 
 /// Show one of the paused plans a property generated and what the run
 /// picking it up does with it. The cases are many and alike; a reader needs
 /// one of them, so each property shows its first (`--nocapture`).
-fn show_one_paused_scan(moment: &str, shown: &AtomicBool, paused: &PausedScan, picked_up: &PickedUp) {
+fn show_one_paused_scan(
+    moment: &str,
+    shown: &AtomicBool,
+    paused: &PausedScan,
+    picked_up: &PickedUp,
+) {
     if shown.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -378,7 +383,10 @@ fn show_one_paused_scan(moment: &str, shown: &AtomicBool, paused: &PausedScan, p
         println!("  (a plan of no repos at all)");
     }
     println!("  her accounts' checks now: {:?}", paused.checks);
-    println!("  sources she no longer lists: {:?}", paused.no_longer_listed);
+    println!(
+        "  sources she no longer lists: {:?}",
+        paused.no_longer_listed
+    );
     println!(
         "  the run keeps as already read: {:?}",
         picked_up
@@ -691,10 +699,7 @@ fn a_scan_picked_up_twice_accounts_for_every_repo_it_read_along_the_way() {
     show_repos_read("her scan before GitHub's budget ran out", &before_the_pause);
     show_repos_read("the first time she picked it up", &first_pick_up);
     show_repos_read("the second time she picked it up", &second_pick_up);
-    let seen = show_queue_evidence(
-        "her queue, the scan she picked up twice over",
-        &mut browser,
-    );
+    let seen = show_queue_evidence("her queue, the scan she picked up twice over", &mut browser);
     let whole_scan = then_the_runs_read_her_chosen_repos_between_them(&[
         ("her scan before the pause", &before_the_pause),
         ("the first run she picked up", &first_pick_up),
@@ -730,19 +735,23 @@ fn repos_read_again(runs: &[(&str, &BTreeSet<String>)]) -> BTreeSet<String> {
     again
 }
 
-/// THEN her scan read the three repos she chose, however often it had to
-/// read one of them again: the repos of the whole scan.
-fn then_her_scan_read_the_repos_she_chose(runs: &[(&str, &BTreeSet<String>)]) -> BTreeSet<String> {
+/// THEN her scan read the repos she chose, however often it had to read one
+/// of them again: the repos of the whole scan.
+fn then_her_scan_read_the_repos_she_chose(
+    runs: &[(&str, &BTreeSet<String>)],
+    chosen: &[Repo],
+) -> BTreeSet<String> {
     let whole_scan = repos_of_the_whole_scan(runs);
     assert_eq!(
         whole_scan,
-        set_of(&PRIYA_CHOICE_OF_THREE),
-        "WHAT: the runs of her scan read {whole_scan:?} between them, not the three \
-         repos she chose.\n\
-         WHY: every claim below is about a scan that read her three chosen repos; over \
-         any other scan a count of three says nothing.\n\
+        set_of(chosen),
+        "WHAT: the runs of her scan read {whole_scan:?} between them, not the repos she \
+         chose, {:?}.\n\
+         WHY: every claim below is about a scan that read the repos she chose; over any \
+         other scan its count says nothing.\n\
          HOW: a scan reads the plan it froze from her choice, and the runs picking it up \
-         finish that plan."
+         finish that plan.",
+        set_of(chosen)
     );
     whole_scan
 }
@@ -797,7 +806,10 @@ fn a_run_cut_short_keeps_what_it_saved_and_the_run_after_it_reads_only_the_rest(
     let mut browser = given_owner_verified(&world, Account::Priyaraman);
     given_saved_choice(&mut browser, Account::Priyaraman, &PRIYA_CHOICE_OF_THREE);
     let saved_before_the_pause = given_scan_paused_part_way(&world, &mut browser);
-    show_repos_read("her scan before GitHub's budget ran out", &saved_before_the_pause);
+    show_repos_read(
+        "her scan before GitHub's budget ran out",
+        &saved_before_the_pause,
+    );
     show_queue_evidence(
         "her queue, her scan paused because GitHub's budget was used up",
         &mut browser,
@@ -810,10 +822,7 @@ fn a_run_cut_short_keeps_what_it_saved_and_the_run_after_it_reads_only_the_rest(
         "the run she picked up while her store could not save a read",
         &read_while_cut_short,
     );
-    show_queue_evidence(
-        "her queue, the run she picked up cut short",
-        &mut browser,
-    );
+    show_queue_evidence("her queue, the run she picked up cut short", &mut browser);
     then_the_run_ended(
         &cut_short,
         "interrupted",
@@ -833,11 +842,14 @@ fn a_run_cut_short_keeps_what_it_saved_and_the_run_after_it_reads_only_the_rest(
             ("the run she picked up last", &read_by_the_last_run),
         ],
     );
-    let whole_scan = then_her_scan_read_the_repos_she_chose(&[
-        ("her scan before the pause", &saved_before_the_pause),
-        ("the run that was cut short", &read_while_cut_short),
-        ("the run she picked up last", &read_by_the_last_run),
-    ]);
+    let whole_scan = then_her_scan_read_the_repos_she_chose(
+        &[
+            ("her scan before the pause", &saved_before_the_pause),
+            ("the run that was cut short", &read_while_cut_short),
+            ("the run she picked up last", &read_by_the_last_run),
+        ],
+        &PRIYA_CHOICE_OF_THREE,
+    );
     then_her_queue_accounts_for_the_whole_scan(&seen, &whole_scan);
 }
 
@@ -898,7 +910,7 @@ fn repos_her_scan_had_to_read_again_are_counted_once_each() {
          HOW: let her store lose the read of one repo, save the next, then lose another, \
          so two different repos are read again."
     );
-    let whole_scan = then_her_scan_read_the_repos_she_chose(&runs);
+    let whole_scan = then_her_scan_read_the_repos_she_chose(&runs, &PRIYA_CHOICE_OF_THREE);
     then_her_queue_accounts_for_the_whole_scan(&seen, &whole_scan);
 }
 
@@ -941,4 +953,98 @@ fn a_new_scan_accounts_for_its_own_repos_only() {
          HOW: a new scan plans from the choice in force when it starts."
     );
     then_her_queue_accounts_for_the_whole_scan(&seen, &read_by_her_second_scan);
+}
+
+// =============================================================================
+// Her scan cut short after it had saved a read of its own
+// =============================================================================
+
+/// THEN the run she picked up read only the repos her scan still owed her:
+/// fewer repos than her queue accounts for, so the count can only come from
+/// the run before it as well.
+fn then_the_run_she_picked_up_read_only_what_was_owed(
+    read_by_the_run_she_picked_up: &BTreeSet<String>,
+    whole_scan: &BTreeSet<String>,
+) {
+    assert!(
+        read_by_the_run_she_picked_up.len() < whole_scan.len(),
+        "WHAT: the run she picked up read {read_by_the_run_she_picked_up:?}, as many \
+         repos as her whole scan read ({whole_scan:?}).\n\
+         WHY: the claim below is that her queue accounts for the whole scan and not \
+         only for the run that finished; while the last run reads everything, both \
+         answers give the same number and the claim cannot tell them apart.\n\
+         HOW: the run before it must save a read of its own, and the run picking its \
+         plan up must read only the repos still owed."
+    );
+    assert!(
+        !read_by_the_run_she_picked_up.is_empty(),
+        "WHAT: the run she picked up read nothing at all.\n\
+         WHY: her scan was cut short with a repo still unread; a run that picks it up \
+         and reads nothing leaves her scan unfinished, whatever the queue then says.\n\
+         HOW: the run picking a plan up reads the repos of it still to read."
+    );
+}
+
+/// ```gherkin
+/// @real-io
+/// Scenario: A run cut short after saving a read of its own keeps it, and the run after it reads only the rest
+///   Given Priya chose two of her repos
+///   And her store saves the first read of a run and refuses the ones after it
+///   When she scans, and that run saves the first repo it reads and is cut short on the second
+///   Then her queue offers to pick the run up and accounts for no repos read yet
+///   When her store saves her reads again and she picks the run up
+///   Then that run reads only the repo still owed, never the one her scan had saved
+///   And her queue says two repos read, although the run that finished read one
+/// ```
+#[test]
+fn a_run_cut_short_after_saving_a_read_of_its_own_keeps_it_for_the_run_after_it() {
+    let world = rra_world();
+    let mut browser = given_owner_verified(&world, Account::Priyaraman);
+    given_saved_choice(&mut browser, Account::Priyaraman, &PRIYA_CHOICE_OF_TWO);
+
+    let world = when_her_store_saves_only_the_first_read_of_a_run(world);
+    let (cut_short, read_before_it_was_cut_short) = when_scans(&world, &mut browser);
+    show_repos_read(
+        "her scan, her store saving only the first read it made",
+        &read_before_it_was_cut_short,
+    );
+    let while_cut_short = show_queue_evidence("her queue, her scan cut short", &mut browser);
+    then_the_run_ended(&cut_short, "interrupted", "her scan");
+    assert_eq!(
+        read_before_it_was_cut_short,
+        set_of(&PRIYA_CHOICE_OF_TWO),
+        "WHAT: her scan read {read_before_it_was_cut_short:?}, not the two repos she \
+         chose.\n\
+         WHY: the claim below is about a run that saved the read of one repo and was \
+         cut short on the next; over a run that read something else it says nothing.\n\
+         HOW: let her scan read its first repo, save it, and be cut short saving the \
+         second."
+    );
+    assert!(
+        repos_read_lines(&while_cut_short.status_region).is_empty(),
+        "WHAT: her queue accounts for repos read while her scan is unfinished: {:?}.\n\
+         WHY: a run that did not finish has not done what a finished run promises, and \
+         a count on it would tell her the scan was over.\n\
+         HOW: account for repos read only on a run that finished.",
+        repos_read_lines(&while_cut_short.status_region)
+    );
+
+    let world = when_her_store_saves_reads_again(world);
+    let (last, read_by_the_run_she_picked_up) = when_she_picks_the_run_up(&world, &mut browser);
+
+    show_repos_read("the run she picked up", &read_by_the_run_she_picked_up);
+    let seen = show_queue_evidence("her queue, her scan over", &mut browser);
+    then_the_run_ended(&last, "completed", "the run she picked up");
+    let whole_scan = then_her_scan_read_the_repos_she_chose(
+        &[
+            (
+                "her scan before it was cut short",
+                &read_before_it_was_cut_short,
+            ),
+            ("the run she picked up", &read_by_the_run_she_picked_up),
+        ],
+        &PRIYA_CHOICE_OF_TWO,
+    );
+    then_the_run_she_picked_up_read_only_what_was_owed(&read_by_the_run_she_picked_up, &whole_scan);
+    then_her_queue_accounts_for_the_whole_scan(&seen, &whole_scan);
 }

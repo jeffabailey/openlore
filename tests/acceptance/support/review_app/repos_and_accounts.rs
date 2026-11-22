@@ -1120,6 +1120,22 @@ pub fn when_her_store_stops_saving_reads(world: ReviewWorld) -> ReviewWorld {
     }
 }
 
+/// WHEN her store starts saving only the first read of each run, refusing
+/// every read that run saves after it: the app runs again on the same store,
+/// holding that fault, and whatever her runs already saved is still there.
+pub fn when_her_store_saves_only_the_first_read_of_a_run(world: ReviewWorld) -> ReviewWorld {
+    let ReviewWorld {
+        github,
+        atproto,
+        app,
+    } = world;
+    ReviewWorld {
+        github,
+        atproto,
+        app: app.restart_refusing(super::app::REFUSE_MARK_REPO_READ_AFTER_FIRST),
+    }
+}
+
 /// WHEN her store saves again that a repo was read: the app runs again on
 /// the same store, refusing nothing.
 pub fn when_her_store_saves_reads_again(world: ReviewWorld) -> ReviewWorld {

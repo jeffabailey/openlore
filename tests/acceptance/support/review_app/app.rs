@@ -52,6 +52,11 @@ pub const TEST_FAULT_VAR: &str = "REVIEW_APP_TEST_FAULT";
 /// read, every time a scan saves it.
 pub const REFUSE_MARK_REPO_READ: &str = "refuse_mark_repo_read";
 
+/// The fault that lets her store save the FIRST read a run saves and refuse
+/// every read that run saves after it, so a run saves a read of its own and
+/// is then cut short.
+pub const REFUSE_MARK_REPO_READ_AFTER_FIRST: &str = "refuse_mark_repo_read_after_first";
+
 /// The granular scope set (ADR-073 / SPIKE-3).
 pub const OAUTH_SCOPES: &str =
     "atproto repo:org.openlore.claim?action=create repo:app.bsky.feed.post?action=create";

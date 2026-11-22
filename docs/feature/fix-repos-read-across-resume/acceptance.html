@@ -165,7 +165,7 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 <pre><code>Priya is signed in with her GitHub account verified and has chosen three of her repos. She presses Scan my repos; GitHub reports its request budget low after the first repo is read, so the run pauses. She then presses Resume scan on her queue, and the run that picks the plan up reads the other two repos and ends completed.
 </code></pre>
 
-<pre><code>The run she picked up reads the two repos the paused run had not read, and her queue status region carries exactly one line accounting for repos read, saying three repos read.
+<pre><code>The run she picked up reads the two repos the paused run had not read, her store saves both of those reads, and her queue status region carries exactly one line accounting for repos read, saying three repos read.
 </code></pre>
 
 <pre><code>She sees that her scan read all three of the repos she chose, although it stopped part way and had to be picked up again.
@@ -181,6 +181,7 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 </code></pre>
 
 <h6>Obligations</h6>
+
 
 
 
@@ -424,23 +425,102 @@ dl.t-detail dd{margin:0;color:var(--ink)}
 
 <p>P1</p>
 
-<pre><code>A run saves the read of one repo with its own mark and is then interrupted before it reads the next, and the run picking it up reads only the repos still owed, never the one that run saved.
+<pre><code>Priya chose two of her repos, and her store saves the first read a run makes and refuses the ones after it. She scans: that run reads her first repo and saves it, reads the second and cannot save it, and ends unfinished. Her store saves her reads again and she picks the run up.
 </code></pre>
 
-<pre><code>Her queue accounts for the repo the interrupted run saved as well as the repos the run after it read.
+<pre><code>While the run is unfinished her queue accounts for no repos read. The run she picks up reads only the repo still owed, never the one her scan had already saved, and her queue then carries exactly one line accounting for repos read, saying two repos read, although that run read one.
 </code></pre>
 
-<pre><code>A scan stopped by an interruption, not by GitHub&#x27;s budget, still tells her about the repos it had read before it stopped.
+<pre><code>A scan stopped by a failure, not by GitHub&#x27;s budget, still tells her about the repo it had read before it stopped, and does not read it again.
 </code></pre>
 
 <h5>Disposition</h5>
 
-<p>NotTested</p>
+<p>Tested</p>
 
-<pre><code>No public path reaches that state. The store fault seam has one name for this write and it refuses every mark, so the run loses its first read instead of saving it; the other name fires before any repo is read. Every GitHub seam that fails a scan mid-way (offline, unreachable or flawed profile, dropped or rate-limited profile, slow listing) acts in the checks-and-listing phase, before the plan is frozen and before the first read, and a repo made missing or archived is skipped rather than interrupting. The restart sweep marks only a running run interrupted, and the one in-flight delay seam also acts before the first read, so a restart-based scenario would be a race, not an observation. Reaching it needs a new fault name that refuses the second and later marks, which is a declaration of the fault seam, not an oracle change.
+<p>tests/acceptance/review_app_repos_read_across_resume.rs::a_run_cut_short_after_saving_a_read_of_its_own_keeps_it_for_the_run_after_it</p>
+
+<pre><code>A scan of more than two repos, where the run picking the plan up is itself cut short, is not observed here. Shown red on a resume that drops the reads its plan holds (the queue then said one repo read where the scan read two), before its green was relied on.
 </code></pre>
 
-<p>docs/adrs/ADR-091-review-app-store-fault-seam-in-the-default-test-suite.md</p>
+<h6>Obligations</h6>
+
+
+
+<h5>Covers</h5>
+
+<p>P1</p>
+
+<pre><code>Every source file of the review app and of her store is checked for the names of its development-only faults, the one that saves a run&#x27;s first read and refuses the rest included.
+</code></pre>
+
+<pre><code>Each of those names and each store fault variant appears only behind a gate that a release build switches off.
+</code></pre>
+
+<pre><code>The build she is served can be asked to lose a read by no one: the seams that make her store refuse a write exist only in a development build.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>xtask/src/check_arch.rs (cargo xtask check-arch)</p>
+
+<pre><code>A name reachable through a value built at run time, rather than written in the source, would still pass: the check reads the source trees of the app and the store.
+</code></pre>
+
+<h6>Obligations</h6>
+
+
+<h5>Covers</h5>
+
+<p>P1</p>
+
+<pre><code>Her store is asked to save the first read of a run and refuse the ones after it, and one run saves a read of its first repo and then of its second.
+</code></pre>
+
+<pre><code>The first of those reads is saved and the second is refused, and the refused repo stays on the plan as still to read.
+</code></pre>
+
+<pre><code>A read her store could not save is not counted and is read again later, so she is never told of a repo whose reading was lost.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>crates/adapter-review-store/src/scan_runs.rs::a_run_saves_its_first_mark_and_is_refused_the_next</p>
+
+<pre><code>A store that refused the first read of the NEXT run as well would still pass this one; the run after it is observed by the row beside this.
+</code></pre>
+
+<h6>Obligations</h6>
+
+
+<h5>Covers</h5>
+
+<p>P1</p>
+
+<pre><code>With that same request held, the run after it saves a read of its own, and both runs write their plan and their account checks.
+</code></pre>
+
+<pre><code>The first read of the run after it is saved again, its later read is refused, and every plan write and account-checks write of both runs is accepted.
+</code></pre>
+
+<pre><code>Only the saving of a read is ever lost while her store is asked to lose it: her scan&#x27;s plan and its account checks are kept as always, and each run can still save a read.
+</code></pre>
+
+<h5>Disposition</h5>
+
+<p>Tested</p>
+
+<p>crates/adapter-review-store/src/scan_runs.rs::the_run_after_it_saves_its_own_first_mark</p>
+
+<pre><code>A store that counted the runs of two different owners together would still pass: one owner&#x27;s two runs are observed here.
+</code></pre>
+
+<h6>Obligations</h6>
+
 
 <h2>Expectations</h2>
 

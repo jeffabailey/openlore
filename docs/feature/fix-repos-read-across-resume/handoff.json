@@ -10,12 +10,13 @@
 "obligations": [
 "L5",
 "L5/F120",
-"L4/F116"
+"L4/F116",
+"L6/F315"
 ],
 "still_passes_if": "F242",
 "test": "tests/acceptance/review_app_repos_read_across_resume.rs::a_scan_picked_up_after_a_pause_accounts_for_the_repos_of_the_whole_scan"
 },
-"expected": "F241",
+"expected": "F337",
 "stimulus": "F31",
 "user_result": "F211"
 },
@@ -176,13 +177,65 @@
 "P1"
 ],
 "disposition": {
-"kind": "NotTested",
-"owner": "docs/adrs/ADR-091-review-app-store-fault-seam-in-the-default-test-suite.md",
-"reason": "F277"
+"kind": "Tested",
+"obligations": [
+"L1",
+"L5"
+],
+"still_passes_if": "F341",
+"test": "tests/acceptance/review_app_repos_read_across_resume.rs::a_run_cut_short_after_saving_a_read_of_its_own_keeps_it_for_the_run_after_it"
 },
-"expected": "F275",
-"stimulus": "F274",
-"user_result": "F276"
+"expected": "F339",
+"stimulus": "F338",
+"user_result": "F340"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"T2"
+],
+"still_passes_if": "F345",
+"test": "xtask/src/check_arch.rs (cargo xtask check-arch)"
+},
+"expected": "F343",
+"stimulus": "F342",
+"user_result": "F344"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"L6/F313"
+],
+"still_passes_if": "F349",
+"test": "crates/adapter-review-store/src/scan_runs.rs::a_run_saves_its_first_mark_and_is_refused_the_next"
+},
+"expected": "F347",
+"stimulus": "F346",
+"user_result": "F348"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"L6/F314"
+],
+"still_passes_if": "F353",
+"test": "crates/adapter-review-store/src/scan_runs.rs::the_run_after_it_saves_its_own_first_mark"
+},
+"expected": "F351",
+"stimulus": "F350",
+"user_result": "F352"
 }
 ]
 },
@@ -190,7 +243,7 @@
 "B": 3,
 "C": 3,
 "E": 6,
-"F": 336,
+"F": 353,
 "L": 6,
 "N": 2,
 "P": 2,
@@ -1475,7 +1528,6 @@
 "F239": "The number her queue shows means one thing wherever it is shown, because the rule behind it has one home and the store has another.",
 "F24": "A public observation of a scan with at least two repos re-read across at least two resumes, with the identities of the repos read in each run visible in public output.",
 "F240": "A crate that reached an adapter's data only through the shared contract crate would still pass: the check follows crate dependencies, not the shape of the data they carry.",
-"F241": "The run she picked up reads the two repos the paused run had not read, and her queue status region carries exactly one line accounting for repos read, saying three repos read.",
 "F242": "A count that was right after one pause but fell back to the last run's reads after a second pause would still pass this one; the scan picked up twice is what tells them apart.",
 "F243": "Priya chose three of her repos. Her scan reads one and pauses because GitHub's request budget is used up; she picks it up and it reads a second repo before the budget runs out again; she picks it up once more and it reads the last repo and finishes.",
 "F244": "Each of the three runs read a repo none of the others read, the three she chose between them, and her queue carries exactly one line accounting for repos read, saying three repos read.",
@@ -1509,10 +1561,6 @@
 "F271": "The new scan reads the two repos she had chosen by then, and her queue carries exactly one line accounting for repos read, saying two repos read, not the five her two scans read between them.",
 "F272": "The number on her queue is about the scan she is looking at: her new scan's count does not carry her earlier scan's reads.",
 "F273": "A count that mixed in the reads of another owner's scan would still pass: only her own two scans are observed here. Shown red on a count that adds the reads of her earlier scans (it then said five repos read where the scan read two), before its green was relied on.",
-"F274": "A run saves the read of one repo with its own mark and is then interrupted before it reads the next, and the run picking it up reads only the repos still owed, never the one that run saved.",
-"F275": "Her queue accounts for the repo the interrupted run saved as well as the repos the run after it read.",
-"F276": "A scan stopped by an interruption, not by GitHub's budget, still tells her about the repos it had read before it stopped.",
-"F277": "No public path reaches that state. The store fault seam has one name for this write and it refuses every mark, so the run loses its first read instead of saving it; the other name fires before any repo is read. Every GitHub seam that fails a scan mid-way (offline, unreachable or flawed profile, dropped or rate-limited profile, slow listing) acts in the checks-and-listing phase, before the plan is frozen and before the first read, and a repo made missing or archived is skipped rather than interrupting. The restart sweep marks only a running run interrupted, and the one in-flight delay seam also acts before the first read, so a restart-based scenario would be a race, not an observation. Reaching it needs a new fault name that refuses the second and later marks, which is a declaration of the fault seam, not an oracle change.",
 "F278": "The plan-row insert writes the status it is given instead of always planned, and the mark-repo-read write names its run, so the store fault seam can count the marks of that run.",
 "F279": "A development build parses one more fault name, refuse_mark_repo_read_after_first, and its in-crate property table gains that row.",
 "F280": "The fault map asks the store for the new after-first scan-write fault.",
@@ -1578,8 +1626,25 @@
 "F334": "A release binary refusing a real repo read.",
 "F335": "The config property and the xtask guard keep every name behind its cfg gate.",
 "F336": "Every review-app test fault name and store fault variant, refuse_mark_repo_read_after_first included, occurs only behind a cfg gate over the app and store source trees, so a release binary honours none of them.",
+"F337": "The run she picked up reads the two repos the paused run had not read, her store saves both of those reads, and her queue status region carries exactly one line accounting for repos read, saying three repos read.",
+"F338": "Priya chose two of her repos, and her store saves the first read a run makes and refuses the ones after it. She scans: that run reads her first repo and saves it, reads the second and cannot save it, and ends unfinished. Her store saves her reads again and she picks the run up.",
+"F339": "While the run is unfinished her queue accounts for no repos read. The run she picks up reads only the repo still owed, never the one her scan had already saved, and her queue then carries exactly one line accounting for repos read, saying two repos read, although that run read one.",
 "F34": "Resume takes over the whole frozen plan. A resuming run records every non-skipped row of the paused run plan as its own plan, each row carrying the status it already holds, so the queue counts the reads of the whole scan and not only of the last run. The alternative, a scan-chain column counted across the runs of one scan, needs a stored schema change and a distinct-repo count to avoid counting a repo twice; the takeover needs neither.",
+"F340": "A scan stopped by a failure, not by GitHub's budget, still tells her about the repo it had read before it stopped, and does not read it again.",
+"F341": "A scan of more than two repos, where the run picking the plan up is itself cut short, is not observed here. Shown red on a resume that drops the reads its plan holds (the queue then said one repo read where the scan read two), before its green was relied on.",
+"F342": "Every source file of the review app and of her store is checked for the names of its development-only faults, the one that saves a run's first read and refuses the rest included.",
+"F343": "Each of those names and each store fault variant appears only behind a gate that a release build switches off.",
+"F344": "The build she is served can be asked to lose a read by no one: the seams that make her store refuse a write exist only in a development build.",
+"F345": "A name reachable through a value built at run time, rather than written in the source, would still pass: the check reads the source trees of the app and the store.",
+"F346": "Her store is asked to save the first read of a run and refuse the ones after it, and one run saves a read of its first repo and then of its second.",
+"F347": "The first of those reads is saved and the second is refused, and the refused repo stays on the plan as still to read.",
+"F348": "A read her store could not save is not counted and is read again later, so she is never told of a repo whose reading was lost.",
+"F349": "A store that refused the first read of the NEXT run as well would still pass this one; the run after it is observed by the row beside this.",
 "F35": "One writer freezes the plan and its statuses. ScanRunPort record_plan takes plan rows with their status, so freezing the resuming run plan and carrying its already-read rows is one transaction. No second writer of scan_run_repos appears, and the mark-repo-read seam keeps its meaning: a read made now, by this run.",
+"F350": "With that same request held, the run after it saves a read of its own, and both runs write their plan and their account checks.",
+"F351": "The first read of the run after it is saved again, its later read is refused, and every plan write and account-checks write of both runs is accepted.",
+"F352": "Only the saving of a read is ever lost while her store is asked to lose it: her scan's plan and its account checks are kept as always, and each run can still save a read.",
+"F353": "A store that counted the runs of two different owners together would still pass: one owner's two runs are observed here.",
 "F36": "The count stays a set of plan positions. repos_read_of keeps counting the rows of the latest run whose status is read. A repo has one row per plan, so a repo read again by a resume after an unsaved read counts once, and no counter can be incremented twice.",
 "F37": "The resume verdict owns each kept row status. The pure resume verdict in review-domain returns its kept rows as positions paired with the status the resuming run gives them: read for a row already read, planned for one it reads now or carries. The scan task maps those rows onto plan rows and writes them, and decides nothing about a row itself.",
 "F38": "Carriers and their owners. ScanPlanRow carries one plan row and its status in ports; KeptRow carries one resume verdict row in review-domain; Resume carries the whole verdict; PlanRowStatus and ScanStatus carry row and run state; ReviewStoreError carries store refusals; the per-process scan state stays inside the scan task of the review app, under one admission per owner.",
