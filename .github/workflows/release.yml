@@ -62,10 +62,27 @@ jobs:
     name: verify (commit + acceptance gates)
     runs-on: ubuntu-latest
     steps:
+      # Same as ci.yml's acceptance job: the workspace's test binaries (each linking
+      # DuckDB) outgrow the ~14 GB free on ubuntu-latest and ld dies with SIGBUS
+      # (v0.2.0's first release run). Drop preinstalled SDKs this job never uses.
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/boost
+          sudo docker image prune --all --force > /dev/null || true
+          df -h /
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # CI-only: dependency debuginfo drops to line tables (as in ci.yml).
+      - name: Slim dependency debuginfo (CI only)
+        run: |
+          mkdir -p "$CARGO_HOME"
+          printf '[profile.dev.package."*"]\ndebug = "line-tables-only"\n' >> "$CARGO_HOME/config.toml"
+        env:
+          CARGO_HOME: /home/runner/.cargo
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
