@@ -113,6 +113,11 @@ ignore = [
   # jose-jwk 0.1.2 is still the latest, so no fixed path exists. Recheck by 2026-12-24
   # (cargo update; drop this entry once p256 0.14 is reachable).
   { id = "RUSTSEC-2026-0387", reason = "no fixed crypto-bigint reachable via atrium-oauth/p256 0.13; recheck 2026-12-24" },
+  # chrono 0.4.45 marked unmaintained (no vulnerability; "No safe upgrade is available"). Used
+  # directly by adapter-duckdb, adapter-github and the review app, and pulled in by duckdb.
+  # Added 2026-11-21 when the advisory first failed CI; pending the owner's choice between this
+  # ignore and a move to jiff/time. Recheck by 2026-12-24.
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, no maintained drop-in yet; recheck 2026-12-24" },
 ]
 
 [sources]
