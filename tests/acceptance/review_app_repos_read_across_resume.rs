@@ -158,9 +158,9 @@ fn sut_picked_up(
                 carries_an_earlier_read: row.status == PlanRowStatus::Read,
             })
             .collect(),
-        reads_now: verdict.to_read.clone(),
+        reads_now: verdict.to_read(),
         never_reads: verdict
-            .skipped
+            .skipped()
             .iter()
             .map(|(position, _)| *position)
             .collect(),

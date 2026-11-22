@@ -401,14 +401,14 @@ fn sut_resume(
     let gone: BTreeSet<PlanSource> = removed.iter().map(|id| PlanSource::Account(*id)).collect();
     let resume = resume_plan(&rows, &bio_checks, &gone);
     let skipped = resume
-        .skipped
+        .skipped()
         .into_iter()
         .map(|(pos, why)| match why {
             CarriedSkip::Removed => (pos, SkipView::Removed),
             CarriedSkip::AccountUnverified => (pos, SkipView::AccountUnverified),
         })
         .collect();
-    (resume.to_read, skipped)
+    (resume.to_read(), skipped)
 }
 
 fn sut_may_sign(

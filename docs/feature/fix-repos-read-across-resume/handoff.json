@@ -236,6 +236,45 @@
 "expected": "F351",
 "stimulus": "F350",
 "user_result": "F352"
+},
+{
+"covers": [
+"P1",
+"P2"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"L1",
+"L1/F101",
+"L2",
+"L2/F107",
+"L3",
+"L3/F111"
+],
+"still_passes_if": "F365",
+"test": "crates/review-domain/src/repo_scope/mod.rs::a_resume_keeps_as_read_exactly_the_rows_the_scan_already_read"
+},
+"expected": "F363",
+"stimulus": "F362",
+"user_result": "F364"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"obligations": [
+"L4/F115",
+"L4/F116"
+],
+"still_passes_if": "F369",
+"test": "crates/adapter-review-store/src/scan_runs.rs::a_plan_reads_back_with_the_statuses_it_was_written_with"
+},
+"expected": "F367",
+"stimulus": "F366",
+"user_result": "F368"
 }
 ]
 },
@@ -243,7 +282,7 @@
 "B": 3,
 "C": 3,
 "E": 6,
-"F": 361,
+"F": 369,
 "L": 6,
 "N": 2,
 "P": 2,
@@ -1693,6 +1732,14 @@
 "F36": "The count stays a set of plan positions. repos_read_of keeps counting the rows of the latest run whose status is read. A repo has one row per plan, so a repo read again by a resume after an unsaved read counts once, and no counter can be incremented twice.",
 "F360": "Repeated reads counted once each, examination 3. (a) across-resume scenario repos_her_scan_had_to_read_again_are_counted_once_each (suite exit 0): run 1, printed as \"her first scan, her store saving no read\", read priyaraman/tidepool (1); the first run she picked up read priyaraman/tidepool again (1); the second read priyaraman/quill-docs (1); the last read priyaraman/kelp and priyaraman/quill-docs (2). That is 5 reads of 3 different plan repos, with two different repos re-read (tidepool in the first resume, quill-docs in the last) across two different resumes, each run's repo identities printed run by run. Queue after the last run: status completed; status region verbatim \"Ownership re-checked: priyaraman - 1 new suggestion\" and \"3 repos read\"; repos-read line PRESENT reading \"3 repos read\"; \"Scan again\" offered. The number is the count of different repos (3), not the count of reads (5) and not 4. (b) store-failure scenario a_scan_that_cannot_save_that_it_read_a_repo_is_offered_for_resuming (suite exit 0, 4 passed): the scan her store cut short read priyaraman/tidepool (1) and that read was not saved; queue then: status interrupted, the interrupted line only, repos-read line ABSENT, \"Resume scan\" OFFERED; a further pick-up with the store still refusing a write read no repo at all (0 in all) and left the same interrupted queue with no repos-read line; the run she finally picked up read priyaraman/estuary, priyaraman/quill-docs and priyaraman/tidepool (3), re-reading tidepool because the first read was not saved; queue then: status completed, \"Ownership re-checked: priyaraman - 1 new suggestion\" and \"3 repos read\", repos-read line PRESENT reading \"3 repos read\". Four reads, three different plan repos, number 3: the re-read repo raised the number by one and not by two, which would have shown \"4 repos read\". In every capture the number before a resume is not shown at all (a paused or interrupted queue carries no repos-read line), so the rise is observable only as the completed scan's number against the printed per-run repo identities.",
 "F361": "The takeover ADR lives at ADR-092: the host moved and ratified this design's ADR as docs/adrs/ADR-092-review-app-resumed-scan-takes-over-plan-row-statuses.md, Accepted on the owner's 2026-11-21 decision, in the repository's ADR home; this design cites it there and keeps no second copy of it, because the key it was first written under names no ADR any more.",
+"F362": "A run picks up a paused plan of up to ten repos of either source, with any mix of statuses its scan gave them, any bio check of any of her accounts, and any sources she still lists.",
+"F363": "It takes over as already read exactly the repos the scan had read, reads none of them again, and keeps those repos and the ones still to read as one plan in plan order, each position once.",
+"F364": "Whatever shape her paused scan is in, what it already read stays counted, is not read again, and her plan does not grow.",
+"F365": "Nothing about what her store keeps of that verdict, or about what her queue then says, is observed here: both are observed by the journeys and by the plan round trip beside this.",
+"F366": "A run freezes a plan of up to ten repos of either source, each repo with any status a run can give it, and the plan is read back.",
+"F367": "The plan reads back with the same repos, in the same order, each with the status it was written with, and the run accounts for exactly its repos written as read.",
+"F368": "Her store keeps which of her repos her scan has read, however her scan got that far, so the count survives every pause and every pick-up.",
+"F369": "A store that kept the statuses of one run and lost those of a second would still pass: one run's plan is written here, while the runs of one scan are observed by the journeys.",
 "F37": "The resume verdict owns each kept row status. The pure resume verdict in review-domain returns its kept rows as positions paired with the status the resuming run gives them: read for a row already read, planned for one it reads now or carries. The scan task maps those rows onto plan rows and writes them, and decides nothing about a row itself.",
 "F38": "Carriers and their owners. ScanPlanRow carries one plan row and its status in ports; KeptRow carries one resume verdict row in review-domain; Resume carries the whole verdict; PlanRowStatus and ScanStatus carry row and run state; ReviewStoreError carries store refusals; the per-process scan state stays inside the scan task of the review app, under one admission per owner.",
 "F39": "Each layer states what it owns. Domain: a frozen plan row is planned, read or skipped, and a resume maps the plan it resumes onto its own kept rows. Application: the scan task reads the planned rows in order, pauses on a low GitHub budget, and ends completed, rate limited or interrupted. Adapter: record_plan writes every kept row with its status in one transaction, mark_repo_read turns one row read, latest_scan counts the read rows of the latest run. Infrastructure: a refused or interrupted write leaves the rows the store already holds untouched and the run resumable.",

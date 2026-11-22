@@ -424,6 +424,72 @@ A store that counted the runs of two different owners together would still pass:
 ###### Obligations
 
 
+##### Covers
+
+P1
+
+P2
+
+```text
+A run picks up a paused plan of up to ten repos of either source, with any mix of statuses its scan gave them, any bio check of any of her accounts, and any sources she still lists.
+```
+
+```text
+It takes over as already read exactly the repos the scan had read, reads none of them again, and keeps those repos and the ones still to read as one plan in plan order, each position once.
+```
+
+```text
+Whatever shape her paused scan is in, what it already read stays counted, is not read again, and her plan does not grow.
+```
+
+##### Disposition
+
+Tested
+
+crates\/review\-domain\/src\/repo\_scope\/mod\.rs\:\:a\_resume\_keeps\_as\_read\_exactly\_the\_rows\_the\_scan\_already\_read
+
+```text
+Nothing about what her store keeps of that verdict, or about what her queue then says, is observed here: both are observed by the journeys and by the plan round trip beside this.
+```
+
+###### Obligations
+
+
+
+
+
+
+
+##### Covers
+
+P1
+
+```text
+A run freezes a plan of up to ten repos of either source, each repo with any status a run can give it, and the plan is read back.
+```
+
+```text
+The plan reads back with the same repos, in the same order, each with the status it was written with, and the run accounts for exactly its repos written as read.
+```
+
+```text
+Her store keeps which of her repos her scan has read, however her scan got that far, so the count survives every pause and every pick-up.
+```
+
+##### Disposition
+
+Tested
+
+crates\/adapter\-review\-store\/src\/scan\_runs\.rs\:\:a\_plan\_reads\_back\_with\_the\_statuses\_it\_was\_written\_with
+
+```text
+A store that kept the statuses of one run and lost those of a second would still pass: one run's plan is written here, while the runs of one scan are observed by the journeys.
+```
+
+###### Obligations
+
+
+
 ## Expectations
 
 ### Rows
