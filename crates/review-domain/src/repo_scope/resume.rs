@@ -102,6 +102,31 @@ pub struct KeptRow {
 }
 
 impl Resume {
+    /// The positions this run reads now.
+    ///
+    /// Read the verdict through these accessors, never through the fields:
+    /// when the verdict becomes one disposition per position, each of them
+    /// is derived over that one sequence and the fields go. Each returns an
+    /// owned answer, the shape a derived view can keep.
+    pub fn to_read(&self) -> Vec<usize> {
+        self.to_read.clone()
+    }
+
+    /// The positions kept `planned` for a later resume.
+    pub fn carried(&self) -> Vec<usize> {
+        self.carried.clone()
+    }
+
+    /// The positions an earlier run of this scan read, taken over `read`.
+    pub fn already_read(&self) -> Vec<usize> {
+        self.already_read.clone()
+    }
+
+    /// The positions this scan never reads, each with its reason.
+    pub fn skipped(&self) -> Vec<(usize, CarriedSkip)> {
+        self.skipped.clone()
+    }
+
     /// The rows the resuming run keeps as its own plan, in plan order: the
     /// rows the scan already read, those it reads now and those it carries,
     /// each with the status the resuming run gives it.
