@@ -786,7 +786,10 @@ mod tests {
             "the refused row stays planned"
         );
         assert_eq!(
-            store.latest_scan(priya).unwrap().and_then(|run| run.repos_read),
+            store
+                .latest_scan(priya)
+                .unwrap()
+                .and_then(|run| run.repos_read),
             Some(1),
             "the run accounts for the one read it saved"
         );
@@ -846,7 +849,10 @@ mod tests {
             "the taken-over read and the read this run saved"
         );
         assert_eq!(
-            store.latest_scan(priya).unwrap().and_then(|run| run.repos_read),
+            store
+                .latest_scan(priya)
+                .unwrap()
+                .and_then(|run| run.repos_read),
             Some(2),
             "the run accounts for the reads of the whole scan so far"
         );

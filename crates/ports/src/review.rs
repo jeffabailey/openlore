@@ -594,7 +594,9 @@ impl PlanRowStatus {
 
     /// The status a stored `status` names.
     pub fn parse(stored: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|status| status.as_str() == stored)
+        Self::ALL
+            .into_iter()
+            .find(|status| status.as_str() == stored)
     }
 }
 

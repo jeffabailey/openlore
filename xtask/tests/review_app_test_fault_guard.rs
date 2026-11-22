@@ -149,7 +149,10 @@ fn an_ungated_after_first_fault_name_fails() {
 
 #[test]
 fn a_gated_after_first_fault_name_passes() {
-    let root = workspace_with("crates/openlore-review-app/src/config.rs", GATED_AFTER_FIRST);
+    let root = workspace_with(
+        "crates/openlore-review-app/src/config.rs",
+        GATED_AFTER_FIRST,
+    );
     assert_eq!(findings(root.path()), Vec::<String>::new());
 }
 
