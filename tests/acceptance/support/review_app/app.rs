@@ -102,7 +102,10 @@ pub struct ReviewApp {
 /// composition root has not been built yet.
 pub fn review_app_binary() -> PathBuf {
     // `CARGO_BIN_EXE_*` is set when these suites live in the app's own crate;
-    // otherwise the binary sits next to this test's `deps/` directory.
+    // otherwise the binary sits in target/<profile>, above this test binary:
+    // next to `deps/` under cargo's classic layout, further up under the newer
+    // build-dir layout (target/<profile>/build/<pkg>/<hash>/...). Walk up to the
+    // first directory that holds it.
     // (`assert_cmd::cargo_bin` would panic before we could classify the miss.)
     let name = format!("openlore-review-app{}", std::env::consts::EXE_SUFFIX);
     let bin = std::env::var_os("CARGO_BIN_EXE_openlore-review-app")
@@ -110,7 +113,10 @@ pub fn review_app_binary() -> PathBuf {
         .unwrap_or_else(|| {
             let exe = std::env::current_exe().expect("current test executable");
             let deps = exe.parent().expect("deps dir");
-            deps.parent().unwrap_or(deps).join(&name)
+            deps.ancestors()
+                .map(|dir| dir.join(&name))
+                .find(|candidate| candidate.is_file())
+                .unwrap_or_else(|| deps.parent().unwrap_or(deps).join(&name))
         });
     if !bin.exists() {
         panic!(
