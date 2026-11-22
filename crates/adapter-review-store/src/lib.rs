@@ -25,6 +25,9 @@ mod secrets;
 mod sessions;
 mod suggestions;
 
+/// Only the development build's fault seam keeps a set (of the runs that
+/// have saved a mark); a release build compiles no seam.
+#[cfg(debug_assertions)]
 use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io::ErrorKind;
@@ -301,10 +304,16 @@ pub struct ReviewStore {
     key: DataKey,
     /// The DuckDB caps applied at open; the probe reads them back (B11).
     caps: DuckDbCaps,
-    /// The scan writes this store refuses, if a development build asked it
-    /// to (DWD-RRA-16), with the bookkeeping that seam needs; a release
-    /// build can name no fault, so the seam refuses nothing there.
+    /// A development build's fault seam: the scan write it was asked to
+    /// refuse, with the bookkeeping the after-first fault needs, under its
+    /// own lock (DWD-RRA-16).
+    #[cfg(debug_assertions)]
     scan_write: Mutex<ScanWriteSeam>,
+    /// A release build carries the fault alone — and [`ScanWriteFault`] has
+    /// no values there, so it is always `None`: no seam state, no lock and
+    /// no lock failure on the path of a saved read.
+    #[cfg(not(debug_assertions))]
+    scan_write: Option<ScanWriteFault>,
 }
 
 impl ReviewStore {
@@ -388,7 +397,10 @@ impl ReviewStore {
             conn: Mutex::new(conn),
             key,
             caps,
+            #[cfg(debug_assertions)]
             scan_write: Mutex::new(ScanWriteSeam::holding(faults.scan_write)),
+            #[cfg(not(debug_assertions))]
+            scan_write: faults.scan_write,
         })
     }
 
@@ -420,17 +432,26 @@ impl ReviewStore {
         self.caps
     }
 
-    /// `write` as the fault this store was opened holding answers it: the
-    /// write a development build was asked to refuse is refused — every
-    /// time it is called, or every time after the run's first mark — and
-    /// every other write is admitted (DWD-RRA-16). The seam's own
-    /// bookkeeping (which runs have saved a mark) is read and updated here,
-    /// under its lock; the decision itself is [`admits`], pure.
+    /// `write` as the fault this development build was opened holding
+    /// answers it: the write it was asked to refuse is refused — every time
+    /// it is called, or every time after the run's first mark — and every
+    /// other write is admitted (DWD-RRA-16). The seam's own bookkeeping
+    /// (which runs have saved a mark) is read and updated here, under its
+    /// lock; the decision itself is [`admits`], pure.
+    #[cfg(debug_assertions)]
     pub(crate) fn admits_scan_write(&self, write: ScanWrite<'_>) -> Result<(), StoreError> {
         self.scan_write
             .lock()
             .map_err(|_| StoreError::Database("scan write seam lock poisoned".into()))?
             .answer(write)
+    }
+
+    /// A release build admits every scan write: it holds no fault (the type
+    /// has no values) and keeps no bookkeeping, so the pure decision is read
+    /// straight off the field — no lock, and no way to fail here.
+    #[cfg(not(debug_assertions))]
+    pub(crate) fn admits_scan_write(&self, write: ScanWrite<'_>) -> Result<(), StoreError> {
+        admits(self.scan_write, write, false)
     }
 
     /// Seal `plaintext` bound to `aad` under the active key.
@@ -605,14 +626,16 @@ pub(crate) enum ScanWrite<'a> {
 /// The fault seam of the scan writes: the fault a development build named,
 /// and the runs that have already saved a mark under it (DWD-RRA-16). The
 /// two belong together — the after-first fault is the fault AND that
-/// bookkeeping — and a store holding no fault keeps no run, so a production
-/// store carries no seam state at all.
+/// bookkeeping — and a seam holding no fault keeps no run. A release build
+/// has no seam at all: it carries the (uninhabited) fault alone.
+#[cfg(debug_assertions)]
 #[derive(Debug)]
 pub(crate) struct ScanWriteSeam {
     fault: Option<ScanWriteFault>,
     runs_with_a_saved_mark: BTreeSet<String>,
 }
 
+#[cfg(debug_assertions)]
 impl ScanWriteSeam {
     /// The seam of a store opened holding `fault` (`None` in production, and
     /// in every release build).
