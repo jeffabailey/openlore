@@ -112,7 +112,7 @@ cargo test -p openlore-review-app --test review_app_scan_store_failure
 cargo test -p review-domain -p adapter-review-store
 cargo xtask check-arch
 cargo test -p xtask --test review_app_test_fault_guard
-cargo test -p openlore-review-app --lib
+cargo test -p openlore-review-app --bins
 ```
 
 #### Supports
@@ -193,6 +193,10 @@ No new ADR and no model change: ADR-091 accepts later faults of this family in t
 
 ```text
 A release build still knows no fault name: the new name sits inside the cfg(debug_assertions) parser and the new variant inside the development-only scan-write fault type, and the config property only_a_development_build_takes_the_test_fault_seam with the xtask guard review_app_test_fault_guard, whose token list gains both spellings, keep it so.
+```
+
+```text
+The takeover ADR lives at ADR-092: the host moved and ratified this design's ADR as docs/adrs/ADR-092-review-app-resumed-scan-takes-over-plan-row-statuses.md, Accepted on the owner's 2026-11-21 decision, in the repository's ADR home; this design cites it there and keeps no second copy of it, because the key it was first written under names no ADR any more.
 ```
 
 ##### Constraints
@@ -2031,4 +2035,4 @@ None.
 
 ## ADRs
 
-- 001 A resumed scan takes over its plan row statuses — Proposed
+None.

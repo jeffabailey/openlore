@@ -243,7 +243,7 @@
 "B": 3,
 "C": 3,
 "E": 6,
-"F": 360,
+"F": 361,
 "L": 6,
 "N": 2,
 "P": 2,
@@ -252,13 +252,6 @@
 "Y": 12
 },
 "design": {
-"adrs": [
-{
-"key": "001",
-"status": "Proposed",
-"title": "A resumed scan takes over its plan row statuses"
-}
-],
 "paradigm": "functional",
 "slices": {
 "S1": {
@@ -545,7 +538,8 @@
 "F284",
 "F285",
 "F286",
-"F287"
+"F287",
+"F361"
 ],
 "equality": [
 {
@@ -1329,7 +1323,7 @@
 "cargo test -p review-domain -p adapter-review-store",
 "cargo xtask check-arch",
 "cargo test -p xtask --test review_app_test_fault_guard",
-"cargo test -p openlore-review-app --lib"
+"cargo test -p openlore-review-app --bins"
 ]
 }
 }
@@ -1698,6 +1692,7 @@
 "F359": "The reported number against the plan, examination 3 (legacy-run suite, exit 0, 6 passed, read together with the across-resume and store-failure scans above). a_scan_that_read_the_repos_it_planned_says_how_many: the plan is the five repos she chose and the queue reads \"5 repos read\" with status completed. a_scan_that_could_read_none_of_the_repos_it_planned_still_says_so: the plan is the one repo she chose and the queue reads \"0 repos read\" together with \"Skipped priyaraman/kelp: archived since you chose it. Untick it, or unarchive it on GitHub.\" and \"We didn't find suggestions in your owned, public repos. Forks and archived repos are skipped.\" a_run_kept_before_scan_plans_were_stored_says_nothing_about_repos_read and its no-account variant: status completed but the repos-read line ABSENT, the queue saying neither \"repos read\" nor \"repo read\" anywhere. The across-resume three-repo plans report \"3 repos read\" and the two-repo second scan reports \"2 repos read\"; every repo name printed in any read list (priyaraman/tidepool, kelp, quill-docs, estuary) belongs to the plan of that scan. In every captured scan the reported number lies between 0 and the plan size and never exceeds it. The plan-confinement scenarios a_run_picks_up_repos_of_the_plan_it_was_given_and_no_others, a_run_picking_a_paused_scan_up_keeps_every_repo_the_scan_already_read and a_run_picking_a_paused_scan_up_does_not_read_a_repo_the_scan_already_read each print one paused scan as a numbered list of plan entries with their state (StillToRead, AlreadyRead, Skipped) and source, the account checks, the sources she no longer lists, and then \"the run keeps as already read\", \"the run reads now\" and \"the run gives up on\" as index lists (printed example: a 10-entry plan, keeps [3, 4, 5], reads now [6, 9], gives up on [2]). In every printed case the kept, read and given-up indices are indices of that same plan only, and no index marked AlreadyRead appears in \"reads now\". Whether a repo whose read failed counts as read is not told apart from an unread repo by any capture: only the archived-skip case prints a reason beside a number below the plan size.",
 "F36": "The count stays a set of plan positions. repos_read_of keeps counting the rows of the latest run whose status is read. A repo has one row per plan, so a repo read again by a resume after an unsaved read counts once, and no counter can be incremented twice.",
 "F360": "Repeated reads counted once each, examination 3. (a) across-resume scenario repos_her_scan_had_to_read_again_are_counted_once_each (suite exit 0): run 1, printed as \"her first scan, her store saving no read\", read priyaraman/tidepool (1); the first run she picked up read priyaraman/tidepool again (1); the second read priyaraman/quill-docs (1); the last read priyaraman/kelp and priyaraman/quill-docs (2). That is 5 reads of 3 different plan repos, with two different repos re-read (tidepool in the first resume, quill-docs in the last) across two different resumes, each run's repo identities printed run by run. Queue after the last run: status completed; status region verbatim \"Ownership re-checked: priyaraman - 1 new suggestion\" and \"3 repos read\"; repos-read line PRESENT reading \"3 repos read\"; \"Scan again\" offered. The number is the count of different repos (3), not the count of reads (5) and not 4. (b) store-failure scenario a_scan_that_cannot_save_that_it_read_a_repo_is_offered_for_resuming (suite exit 0, 4 passed): the scan her store cut short read priyaraman/tidepool (1) and that read was not saved; queue then: status interrupted, the interrupted line only, repos-read line ABSENT, \"Resume scan\" OFFERED; a further pick-up with the store still refusing a write read no repo at all (0 in all) and left the same interrupted queue with no repos-read line; the run she finally picked up read priyaraman/estuary, priyaraman/quill-docs and priyaraman/tidepool (3), re-reading tidepool because the first read was not saved; queue then: status completed, \"Ownership re-checked: priyaraman - 1 new suggestion\" and \"3 repos read\", repos-read line PRESENT reading \"3 repos read\". Four reads, three different plan repos, number 3: the re-read repo raised the number by one and not by two, which would have shown \"4 repos read\". In every capture the number before a resume is not shown at all (a paused or interrupted queue carries no repos-read line), so the rise is observable only as the completed scan's number against the printed per-run repo identities.",
+"F361": "The takeover ADR lives at ADR-092: the host moved and ratified this design's ADR as docs/adrs/ADR-092-review-app-resumed-scan-takes-over-plan-row-statuses.md, Accepted on the owner's 2026-11-21 decision, in the repository's ADR home; this design cites it there and keeps no second copy of it, because the key it was first written under names no ADR any more.",
 "F37": "The resume verdict owns each kept row status. The pure resume verdict in review-domain returns its kept rows as positions paired with the status the resuming run gives them: read for a row already read, planned for one it reads now or carries. The scan task maps those rows onto plan rows and writes them, and decides nothing about a row itself.",
 "F38": "Carriers and their owners. ScanPlanRow carries one plan row and its status in ports; KeptRow carries one resume verdict row in review-domain; Resume carries the whole verdict; PlanRowStatus and ScanStatus carry row and run state; ReviewStoreError carries store refusals; the per-process scan state stays inside the scan task of the review app, under one admission per owner.",
 "F39": "Each layer states what it owns. Domain: a frozen plan row is planned, read or skipped, and a resume maps the plan it resumes onto its own kept rows. Application: the scan task reads the planned rows in order, pauses on a low GitHub budget, and ends completed, rate limited or interrupted. Adapter: record_plan writes every kept row with its status in one transaction, mark_repo_read turns one row read, latest_scan counts the read rows of the latest run. Infrastructure: a refused or interrupted write leaves the rows the store already holds untouched and the run resumable.",
