@@ -541,13 +541,28 @@ pub fn resolve_workspace_bin(name: &str) -> std::path::PathBuf {
     if let Some(p) = std::env::var_os(format!("CARGO_BIN_EXE_{name}")) {
         return p.into();
     }
-    // current_exe() for an integration test = target/<profile>/deps/<test>-<hash>.
-    let mut dir = std::env::current_exe().expect("current_exe for the test binary");
-    dir.pop(); // drop the test executable file name
+    // current_exe() for an integration test is target/<profile>/deps/<test>-<hash>
+    // under cargo's classic layout, and deeper under the newer build-dir layout
+    // (target/<profile>/build/<pkg>/<hash>/...). Walk up from the test binary to
+    // the first directory that holds the bin, which is target/<profile> in both.
+    let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    let exe = std::env::current_exe().expect("current_exe for the test binary");
+    let start = exe
+        .parent()
+        .expect("the test binary has a parent directory");
+    if let Some(found) = start
+        .ancestors()
+        .map(|dir| dir.join(&file))
+        .find(|candidate| candidate.is_file())
+    {
+        return found;
+    }
+    // Not built: keep the classic expectation so the spawn error names it.
+    let mut dir = start.to_path_buf();
     if dir.ends_with("deps") {
         dir.pop(); // deps -> target/<profile>
     }
-    dir.push(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    dir.push(file);
     dir
 }
 
