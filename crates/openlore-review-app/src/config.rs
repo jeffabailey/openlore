@@ -47,6 +47,10 @@ pub(crate) enum TestFault {
     /// The store refuses to mark a planned repo read, every time a scan asks
     /// it to; every other read and write behaves normally.
     RefuseMarkRepoRead,
+    /// The store admits the first repo a run marks read and refuses every
+    /// later one of that run, so the run saves one read and then ends
+    /// interrupted; every other read and write behaves normally.
+    RefuseMarkRepoReadAfterFirst,
     /// The store refuses to record a run's account checks, every time a scan
     /// asks it to; every other read and write behaves normally.
     RefuseRecordAccountChecks,
@@ -312,6 +316,7 @@ fn test_fault(value: &str) -> Result<TestFault, ConfigError> {
     match value {
         "migrate_before_commit" => Ok(TestFault::MigrateBeforeCommit),
         "refuse_mark_repo_read" => Ok(TestFault::RefuseMarkRepoRead),
+        "refuse_mark_repo_read_after_first" => Ok(TestFault::RefuseMarkRepoReadAfterFirst),
         "refuse_record_account_checks" => Ok(TestFault::RefuseRecordAccountChecks),
         _ => Err(ConfigError::Invalid {
             name: TEST_FAULT_VAR,
@@ -692,6 +697,7 @@ mod tests {
             let known = [
                 ("migrate_before_commit", TestFault::MigrateBeforeCommit),
                 ("refuse_mark_repo_read", TestFault::RefuseMarkRepoRead),
+                ("refuse_mark_repo_read_after_first", TestFault::RefuseMarkRepoReadAfterFirst),
                 ("refuse_record_account_checks", TestFault::RefuseRecordAccountChecks),
             ];
             let names = std::iter::once(value.as_str()).chain(known.iter().map(|(name, _)| *name));

@@ -1330,13 +1330,16 @@ pub fn scan_viewer_fail_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<
 
 /// The fault names the review app's development build honours, each with
 /// the store variant it maps to (review R7): a release build must not even
-/// hold the variant. `refuse_*` name a scan write the store refuses every
-/// time it is called (fix-repos-read-truthful S1).
+/// hold the variant. `refuse_*` name a scan write the store refuses: every
+/// time it is called (fix-repos-read-truthful S1), or — `*_after_first` —
+/// every time after the run's first mark (fix-repos-read-across-resume S1).
 const REVIEW_APP_TEST_FAULT_TOKENS: &[&str] = &[
     "migrate_before_commit",
     "StopBeforeCommit",
     "refuse_mark_repo_read",
     "RefuseMarkRepoRead",
+    "refuse_mark_repo_read_after_first",
+    "RefuseMarkRepoReadAfterFirst",
     "refuse_record_account_checks",
     "RefuseRecordAccountChecks",
 ];

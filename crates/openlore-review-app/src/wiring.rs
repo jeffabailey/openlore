@@ -600,6 +600,10 @@ fn store_faults(fault: TestFault) -> StoreFaults {
             scan_write: Some(ScanWriteFault::RefuseMarkRepoRead),
             ..StoreFaults::none()
         },
+        TestFault::RefuseMarkRepoReadAfterFirst => StoreFaults {
+            scan_write: Some(ScanWriteFault::RefuseMarkRepoReadAfterFirst),
+            ..StoreFaults::none()
+        },
         TestFault::RefuseRecordAccountChecks => StoreFaults {
             scan_write: Some(ScanWriteFault::RefuseRecordAccountChecks),
             ..StoreFaults::none()

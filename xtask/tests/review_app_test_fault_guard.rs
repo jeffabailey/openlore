@@ -52,6 +52,33 @@ pub enum MigrationFault {
 pub enum MigrationFault {}
 "#;
 
+/// A synthetic violation with the after-first mark fault name
+/// (fix-repos-read-across-resume S1): the name and its store variant read
+/// with no cfg gate, so a release binary would honour them.
+const UNGATED_AFTER_FIRST: &str = r#"
+fn test_fault(value: &str) -> Option<TestFault> {
+    (value == "refuse_mark_repo_read_after_first")
+        .then_some(TestFault::RefuseMarkRepoReadAfterFirst)
+}
+"#;
+
+/// The production shape of the after-first mark fault name: inside the
+/// development-only parser, the release twin knowing no name.
+const GATED_AFTER_FIRST: &str = r#"
+#[cfg(debug_assertions)]
+fn test_fault(value: &str) -> Result<TestFault, ConfigError> {
+    match value {
+        "refuse_mark_repo_read_after_first" => Ok(TestFault::RefuseMarkRepoReadAfterFirst),
+        _ => Err(ConfigError::Invalid { name: TEST_FAULT_VAR, reason: "unknown" }),
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn test_fault(_value: &str) -> Result<TestFault, ConfigError> {
+    Err(ConfigError::TestFaultInRelease)
+}
+"#;
+
 fn workspace_with(rel: &str, source: &str) -> tempfile::TempDir {
     let root = tempfile::tempdir().expect("temp workspace");
     let path = root.path().join(rel);
@@ -94,6 +121,35 @@ fn an_ungated_store_fault_variant_fails() {
 #[test]
 fn a_gated_store_fault_variant_passes() {
     let root = workspace_with("crates/adapter-review-store/src/lib.rs", GATED_VARIANT);
+    assert_eq!(findings(root.path()), Vec::<String>::new());
+}
+
+#[test]
+fn an_ungated_after_first_fault_name_fails() {
+    for rel in [
+        "crates/openlore-review-app/src/config.rs",
+        "crates/adapter-review-store/src/lib.rs",
+    ] {
+        let root = workspace_with(rel, UNGATED_AFTER_FIRST);
+        let found = findings(root.path());
+        assert!(
+            found
+                .iter()
+                .any(|f| f.contains("`refuse_mark_repo_read_after_first`")),
+            "{rel}: {found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|f| f.contains("`RefuseMarkRepoReadAfterFirst`")),
+            "{rel}: {found:?}"
+        );
+    }
+}
+
+#[test]
+fn a_gated_after_first_fault_name_passes() {
+    let root = workspace_with("crates/openlore-review-app/src/config.rs", GATED_AFTER_FIRST);
     assert_eq!(findings(root.path()), Vec::<String>::new());
 }
 

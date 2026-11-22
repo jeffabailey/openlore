@@ -278,7 +278,7 @@ impl ScanRunPort for ReviewStore {
         run_id: &str,
         position: usize,
     ) -> Result<(), ReviewStoreError> {
-        self.admits_scan_write(ScanWrite::MarkRepoRead)
+        self.admits_scan_write(ScanWrite::MarkRepoRead { run_id })
             .and_then(|()| {
                 self.with_connection(|conn| {
                     conn.execute(
@@ -488,7 +488,7 @@ impl ScanPlanRead for ReviewStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DataKey;
+    use crate::{DataKey, ScanWriteFault, StoreFaults};
     use proptest::prelude::*;
 
     fn status() -> impl Strategy<Value = ScanStatus> {
@@ -716,6 +716,145 @@ mod tests {
         assert_eq!(rows_of(priya), 0, "nothing of the purged DID");
         assert_eq!(store.latest_scan(priya).unwrap(), None);
         assert_eq!(rows_of(sam), 1, "another DID's plan is recorded");
+    }
+
+    /// A store holding the after-first mark fault (DWD-RRA-16).
+    fn store_refusing_marks_after_the_first() -> ReviewStore {
+        ReviewStore::in_memory_with(
+            DataKey::generate(),
+            StoreFaults {
+                scan_write: Some(ScanWriteFault::RefuseMarkRepoReadAfterFirst),
+                ..StoreFaults::none()
+            },
+        )
+        .expect("an in-memory store holding the after-first fault")
+    }
+
+    /// `count` repos of one account, as a plan still to read.
+    fn repos_of_one_account(count: usize) -> Vec<PlannedScanRepo> {
+        (0..count)
+            .map(|i| PlannedScanRepo {
+                repo_id: 900 + i as u64,
+                full_name: format!("priyaraman/repo-{i}"),
+                source: RepoSource::Account(1),
+                outside_default: None,
+            })
+            .collect()
+    }
+
+    /// The stored statuses of one run's plan rows, in position order.
+    fn statuses_of(store: &ReviewStore, owner_did: &str, run_id: &str) -> Vec<String> {
+        store
+            .with_connection(|conn| {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT status FROM scan_run_repos
+                         WHERE owner_did = ? AND run_id = ? ORDER BY position",
+                    )
+                    .map_err(db_error)?;
+                let rows = stmt
+                    .query_map(params![owner_did, run_id], |row| row.get::<_, String>(0))
+                    .map_err(db_error)?;
+                rows.collect::<Result<Vec<String>, _>>().map_err(db_error)
+            })
+            .expect("the stored statuses of the run")
+    }
+
+    /// L6, first case. With the after-first fault held, the first repo a run
+    /// marks read is saved and the next one is refused, naming the test
+    /// fault; the refused row stays planned, so the run that picks the plan
+    /// up has it to read.
+    #[test]
+    fn a_run_saves_its_first_mark_and_is_refused_the_next() {
+        let store = store_refusing_marks_after_the_first();
+        let priya = "did:plc:priya";
+        let repos = repos_of_one_account(3);
+
+        store.start_scan(priya, "run-1").unwrap();
+        store.record_plan(priya, "run-1", &planned(&repos)).unwrap();
+        store
+            .mark_repo_read(priya, "run-1", 0)
+            .expect("the first mark of the run is saved");
+        let refused = store
+            .mark_repo_read(priya, "run-1", 1)
+            .expect_err("every mark of the run after the first is refused");
+
+        assert!(refused.0.contains("refused a scan write"), "{refused:?}");
+        assert_eq!(
+            statuses_of(&store, priya, "run-1"),
+            vec!["read", "planned", "planned"],
+            "the refused row stays planned"
+        );
+        assert_eq!(
+            store.latest_scan(priya).unwrap().and_then(|run| run.repos_read),
+            Some(1),
+            "the run accounts for the one read it saved"
+        );
+    }
+
+    /// L6, second case. The fault counts the marks of each run apart: the
+    /// run that picks the plan up saves its own first mark, and every other
+    /// write of both runs — the plan write and the account checks — is
+    /// admitted.
+    #[test]
+    fn the_run_after_it_saves_its_own_first_mark() {
+        let store = store_refusing_marks_after_the_first();
+        let priya = "did:plc:priya";
+        let repos = repos_of_one_account(3);
+        let checks = [AccountCheckRecord {
+            github_user_id: 1,
+            outcome: AccountCheckOutcome::Passed,
+        }];
+
+        store.start_scan(priya, "run-1").unwrap();
+        store.record_plan(priya, "run-1", &planned(&repos)).unwrap();
+        store.mark_repo_read(priya, "run-1", 0).unwrap();
+        store.mark_repo_read(priya, "run-1", 1).unwrap_err();
+        store
+            .record_account_checks(priya, "run-1", &checks)
+            .expect("the account-checks write of the first run is admitted");
+
+        let carried: Vec<ScanPlanRow> = repos
+            .iter()
+            .enumerate()
+            .map(|(position, repo)| ScanPlanRow {
+                repo: repo.clone(),
+                status: if position == 0 {
+                    PlanRowStatus::Read
+                } else {
+                    PlanRowStatus::Planned
+                },
+            })
+            .collect();
+        store.start_scan(priya, "run-2").unwrap();
+        store
+            .record_plan(priya, "run-2", &carried)
+            .expect("the plan write of the run after it is admitted");
+        store
+            .mark_repo_read(priya, "run-2", 1)
+            .expect("the first mark of the run after it is saved again");
+        store
+            .mark_repo_read(priya, "run-2", 2)
+            .expect_err("and the mark after that one is refused");
+        store
+            .record_account_checks(priya, "run-2", &checks)
+            .expect("the account-checks write of the run after it is admitted");
+
+        assert_eq!(
+            statuses_of(&store, priya, "run-2"),
+            vec!["read", "read", "planned"],
+            "the taken-over read and the read this run saved"
+        );
+        assert_eq!(
+            store.latest_scan(priya).unwrap().and_then(|run| run.repos_read),
+            Some(2),
+            "the run accounts for the reads of the whole scan so far"
+        );
+        assert_eq!(
+            store.latest_account_checks(priya).unwrap(),
+            checks.to_vec(),
+            "the account checks of the run after it read back"
+        );
     }
 
     /// A plan row of either source reads back with that source: an

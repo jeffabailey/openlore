@@ -25,6 +25,7 @@ mod secrets;
 mod sessions;
 mod suggestions;
 
+use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -300,9 +301,10 @@ pub struct ReviewStore {
     key: DataKey,
     /// The DuckDB caps applied at open; the probe reads them back (B11).
     caps: DuckDbCaps,
-    /// The scan write this store refuses, if a development build asked it
-    /// to (DWD-RRA-16); always `None` in a release build.
-    scan_write_fault: Option<ScanWriteFault>,
+    /// The scan writes this store refuses, if a development build asked it
+    /// to (DWD-RRA-16), with the bookkeeping that seam needs; a release
+    /// build can name no fault, so the seam refuses nothing there.
+    scan_write: Mutex<ScanWriteSeam>,
 }
 
 impl ReviewStore {
@@ -364,9 +366,15 @@ impl ReviewStore {
 
     /// An in-memory store (the image self-test: no disk, no network).
     pub fn open_in_memory(key: DataKey) -> Result<Self, StoreError> {
+        Self::in_memory_with(key, StoreFaults::none())
+    }
+
+    /// An in-memory store holding `faults` — [`ReviewStore::open_in_memory`]
+    /// for a scenario that needs the fault seam (the in-crate tests of it).
+    pub(crate) fn in_memory_with(key: DataKey, faults: StoreFaults) -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory().map_err(db_error)?;
         apply_caps(&conn, DuckDbCaps::default())?;
-        Self::from_connection(conn, key, DuckDbCaps::default(), StoreFaults::none())
+        Self::from_connection(conn, key, DuckDbCaps::default(), faults)
     }
 
     fn from_connection(
@@ -380,7 +388,7 @@ impl ReviewStore {
             conn: Mutex::new(conn),
             key,
             caps,
-            scan_write_fault: faults.scan_write,
+            scan_write: Mutex::new(ScanWriteSeam::holding(faults.scan_write)),
         })
     }
 
@@ -413,10 +421,16 @@ impl ReviewStore {
     }
 
     /// `write` as the fault this store was opened holding answers it: the
-    /// one write a development build was asked to refuse is refused every
-    /// time it is called; every other write is admitted (DWD-RRA-16).
-    pub(crate) fn admits_scan_write(&self, write: ScanWrite) -> Result<(), StoreError> {
-        admits(self.scan_write_fault, write)
+    /// write a development build was asked to refuse is refused — every
+    /// time it is called, or every time after the run's first mark — and
+    /// every other write is admitted (DWD-RRA-16). The seam's own
+    /// bookkeeping (which runs have saved a mark) is read and updated here,
+    /// under its lock; the decision itself is [`admits`], pure.
+    pub(crate) fn admits_scan_write(&self, write: ScanWrite<'_>) -> Result<(), StoreError> {
+        self.scan_write
+            .lock()
+            .map_err(|_| StoreError::Database("scan write seam lock poisoned".into()))?
+            .answer(write)
     }
 
     /// Seal `plaintext` bound to `aad` under the active key.
@@ -544,6 +558,11 @@ fn stop_at(fault: Option<MigrationFault>) -> Result<(), StoreError> {
 pub enum ScanWriteFault {
     /// Marking a planned repo read.
     RefuseMarkRepoRead,
+    /// Marking a planned repo read, once the run has already saved one: the
+    /// first mark of each run is admitted and every later mark of that run
+    /// is refused, so the run saves one read and then ends interrupted
+    /// (fix-repos-read-across-resume S1).
+    RefuseMarkRepoReadAfterFirst,
     /// Recording how a run's account checks ended.
     RefuseRecordAccountChecks,
 }
@@ -574,20 +593,85 @@ impl StoreFaults {
 }
 
 /// One scan write the store makes, as the fault seam names it. Unlike a
-/// fault, a write exists in every build: it is what the store is doing.
+/// fault, a write exists in every build: it is what the store is doing. A
+/// mark carries the run it is for — the store holds the run id at that call
+/// site already, so naming it tells no caller anything new.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ScanWrite {
-    MarkRepoRead,
+pub(crate) enum ScanWrite<'a> {
+    MarkRepoRead { run_id: &'a str },
     RecordAccountChecks,
 }
 
-/// Whether `fault` refuses `write` (pure, total).
+/// The fault seam of the scan writes: the fault a development build named,
+/// and the runs that have already saved a mark under it (DWD-RRA-16). The
+/// two belong together — the after-first fault is the fault AND that
+/// bookkeeping — and a store holding no fault keeps no run, so a production
+/// store carries no seam state at all.
+#[derive(Debug)]
+pub(crate) struct ScanWriteSeam {
+    fault: Option<ScanWriteFault>,
+    runs_with_a_saved_mark: BTreeSet<String>,
+}
+
+impl ScanWriteSeam {
+    /// The seam of a store opened holding `fault` (`None` in production, and
+    /// in every release build).
+    fn holding(fault: Option<ScanWriteFault>) -> Self {
+        Self {
+            fault,
+            runs_with_a_saved_mark: BTreeSet::new(),
+        }
+    }
+
+    /// How the seam answers `write`: the pure verdict of [`admits`] over the
+    /// held fault, the write and whether that run already saved a mark; an
+    /// admitted mark is then remembered for the marks after it.
+    fn answer(&mut self, write: ScanWrite<'_>) -> Result<(), StoreError> {
+        let verdict = admits(self.fault, write, self.saved_a_mark(write));
+        if verdict.is_ok() {
+            self.remember(write);
+        }
+        verdict
+    }
+
+    /// Whether the run of `write` already saved a mark (never, for a write
+    /// that is not a mark).
+    fn saved_a_mark(&self, write: ScanWrite<'_>) -> bool {
+        match write {
+            ScanWrite::MarkRepoRead { run_id } => self.runs_with_a_saved_mark.contains(run_id),
+            ScanWrite::RecordAccountChecks => false,
+        }
+    }
+
+    /// Keep an admitted mark's run, so the next mark of that run knows the
+    /// run has saved one. Only a seam holding a fault keeps anything: a
+    /// production store grows no set of runs.
+    fn remember(&mut self, write: ScanWrite<'_>) {
+        if let (Some(_), ScanWrite::MarkRepoRead { run_id }) = (self.fault, write) {
+            self.runs_with_a_saved_mark.insert(run_id.to_owned());
+        }
+    }
+}
+
+/// Whether `fault` refuses `write`, given whether the run of `write` has
+/// already saved a mark (pure, total).
 #[cfg(debug_assertions)]
-fn admits(fault: Option<ScanWriteFault>, write: ScanWrite) -> Result<(), StoreError> {
+fn admits(
+    fault: Option<ScanWriteFault>,
+    write: ScanWrite<'_>,
+    saved_a_mark: bool,
+) -> Result<(), StoreError> {
     match (fault, write) {
-        (Some(ScanWriteFault::RefuseMarkRepoRead), ScanWrite::MarkRepoRead)
+        (Some(ScanWriteFault::RefuseMarkRepoRead), ScanWrite::MarkRepoRead { .. })
         | (Some(ScanWriteFault::RefuseRecordAccountChecks), ScanWrite::RecordAccountChecks) => {
             Err(StoreError::ScanWriteRefused)
+        }
+        (Some(ScanWriteFault::RefuseMarkRepoReadAfterFirst), ScanWrite::MarkRepoRead { .. }) => {
+            if saved_a_mark {
+                Err(StoreError::ScanWriteRefused)
+            } else {
+                Ok(())
+            }
         }
         _ => Ok(()),
     }
@@ -595,7 +679,11 @@ fn admits(fault: Option<ScanWriteFault>, write: ScanWrite) -> Result<(), StoreEr
 
 /// A release build refuses no scan write.
 #[cfg(not(debug_assertions))]
-fn admits(fault: Option<ScanWriteFault>, _write: ScanWrite) -> Result<(), StoreError> {
+fn admits(
+    fault: Option<ScanWriteFault>,
+    _write: ScanWrite<'_>,
+    _saved_a_mark: bool,
+) -> Result<(), StoreError> {
     match fault {
         Some(never) => match never {},
         None => Ok(()),
