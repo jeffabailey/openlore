@@ -626,12 +626,11 @@ impl ResumedPlan {
         // `plan`, the picked-up run's rows; `RunPosition` below indexes the
         // rows this run freezes for itself, which is where the two spaces part.
         let kept = resume.kept();
-        let skipped_now = resume
-            .skipped
-            .iter()
-            .filter_map(|(picked_up_position, why)| {
-                named_carried_skip(&plan[*picked_up_position].repo, *why)
-            });
+        let never_read = resume.skipped();
+        let skipped_now = never_read.iter().filter_map(|(picked_up_position, why)| {
+            named_carried_skip(&plan[*picked_up_position].repo, *why)
+        });
+        let reads_now = resume.to_read();
         Self {
             rows: kept
                 .iter()
@@ -643,7 +642,7 @@ impl ResumedPlan {
             to_read: kept
                 .iter()
                 .enumerate()
-                .filter(|(_, kept_row)| resume.to_read.contains(&kept_row.position))
+                .filter(|(_, kept_row)| reads_now.contains(&kept_row.position))
                 .map(|(position_in_this_run, _)| RunPosition(position_in_this_run))
                 .collect(),
             skipped: skipped.iter().cloned().chain(skipped_now).collect(),

@@ -80,16 +80,28 @@ pub fn standing_after_check(stored: Standing, check: BioCheck) -> StandingChange
     }
 }
 
-/// What a resume does with a paused run's frozen plan (positions in it).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Resume {
-    pub to_read: Vec<usize>,
+/// What a resume does with ONE position of the plan it resumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Disposition {
+    /// Read now by this run.
+    ToRead,
     /// Not read now, kept `planned` for a later resume.
-    pub carried: Vec<usize>,
+    Carried,
     /// Read by an earlier run of this scan and taken over `read`, so the
     /// whole scan is accounted for and the repo is not read again.
-    pub already_read: Vec<usize>,
-    pub skipped: Vec<(usize, CarriedSkip)>,
+    AlreadyRead,
+    /// Never read by this scan, for this reason.
+    Skipped(CarriedSkip),
+}
+
+/// What a resume does with a paused run's frozen plan: ONE disposition per
+/// position of it, in plan order. A position has a single disposition by
+/// construction, so no two answers below can name the same position and the
+/// count of what the scan read cannot double. Read it through the
+/// accessors; the sequence itself is the verdict's own.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Resume {
+    positions: Vec<(usize, Disposition)>,
 }
 
 /// One row of the resumed plan the resuming run keeps as its own, with the
@@ -104,48 +116,65 @@ pub struct KeptRow {
 impl Resume {
     /// The positions this run reads now.
     ///
-    /// Read the verdict through these accessors, never through the fields:
-    /// when the verdict becomes one disposition per position, each of them
-    /// is derived over that one sequence and the fields go. Each returns an
-    /// owned answer, the shape a derived view can keep.
+    /// Every answer below is derived over the one disposition sequence, so
+    /// none of them can name a position another one names.
     pub fn to_read(&self) -> Vec<usize> {
-        self.to_read.clone()
+        self.positions_of(Disposition::ToRead)
     }
 
     /// The positions kept `planned` for a later resume.
     pub fn carried(&self) -> Vec<usize> {
-        self.carried.clone()
+        self.positions_of(Disposition::Carried)
     }
 
     /// The positions an earlier run of this scan read, taken over `read`.
     pub fn already_read(&self) -> Vec<usize> {
-        self.already_read.clone()
+        self.positions_of(Disposition::AlreadyRead)
     }
 
     /// The positions this scan never reads, each with its reason.
     pub fn skipped(&self) -> Vec<(usize, CarriedSkip)> {
-        self.skipped.clone()
+        self.positions
+            .iter()
+            .filter_map(|(position, disposition)| match disposition {
+                Disposition::Skipped(why) => Some((*position, *why)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The rows the resuming run keeps as its own plan, in plan order: the
     /// rows the scan already read, those it reads now and those it carries,
     /// each with the status the resuming run gives it.
     pub fn kept(&self) -> Vec<KeptRow> {
-        let read = self.already_read.iter().map(|position| KeptRow {
-            position: *position,
-            status: PlanRowStatus::Read,
-        });
-        let planned = self
-            .to_read
+        self.positions
             .iter()
-            .chain(&self.carried)
-            .map(|position| KeptRow {
-                position: *position,
-                status: PlanRowStatus::Planned,
-            });
-        let mut kept: Vec<KeptRow> = read.chain(planned).collect();
-        kept.sort_unstable_by_key(|row| row.position);
-        kept
+            .filter_map(|(position, disposition)| {
+                status_kept(*disposition).map(|status| KeptRow {
+                    position: *position,
+                    status,
+                })
+            })
+            .collect()
+    }
+
+    /// The positions whose disposition is `wanted`, in plan order.
+    fn positions_of(&self, wanted: Disposition) -> Vec<usize> {
+        self.positions
+            .iter()
+            .filter(|(_, disposition)| *disposition == wanted)
+            .map(|(position, _)| *position)
+            .collect()
+    }
+}
+
+/// The status the resuming run gives a position it keeps; a skipped one is
+/// no row of its plan.
+fn status_kept(disposition: Disposition) -> Option<PlanRowStatus> {
+    match disposition {
+        Disposition::AlreadyRead => Some(PlanRowStatus::Read),
+        Disposition::ToRead | Disposition::Carried => Some(PlanRowStatus::Planned),
+        Disposition::Skipped(_) => None,
     }
 }
 
@@ -181,20 +210,33 @@ pub fn resume_plan(
     checks: &BTreeMap<u64, BioCheck>,
     removed: &BTreeSet<PlanSource>,
 ) -> Resume {
-    rows.iter()
-        .enumerate()
-        .fold(Resume::default(), |mut resume, (position, row)| {
-            match row.status {
-                PlanRowStatus::Read => resume.already_read.push(position),
-                PlanRowStatus::Skipped => {}
-                PlanRowStatus::Planned => match carried_row(row.source, checks, removed) {
-                    CarriedRow::Read => resume.to_read.push(position),
-                    CarriedRow::Skipped(reason) => resume.skipped.push((position, reason)),
-                    CarriedRow::Carried => resume.carried.push(position),
-                },
-            }
-            resume
-        })
+    Resume {
+        positions: rows
+            .iter()
+            .enumerate()
+            .filter_map(|(position, row)| {
+                disposition_of(row, checks, removed).map(|disposition| (position, disposition))
+            })
+            .collect(),
+    }
+}
+
+/// What a resume does with one row of the plan it resumes, or `None` for a
+/// row the paused run skipped: that is no row of this run's plan.
+fn disposition_of(
+    row: &FrozenRow,
+    checks: &BTreeMap<u64, BioCheck>,
+    removed: &BTreeSet<PlanSource>,
+) -> Option<Disposition> {
+    match row.status {
+        PlanRowStatus::Read => Some(Disposition::AlreadyRead),
+        PlanRowStatus::Skipped => None,
+        PlanRowStatus::Planned => Some(match carried_row(row.source, checks, removed) {
+            CarriedRow::Read => Disposition::ToRead,
+            CarriedRow::Skipped(reason) => Disposition::Skipped(reason),
+            CarriedRow::Carried => Disposition::Carried,
+        }),
+    }
 }
 
 fn carried_row(

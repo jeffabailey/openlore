@@ -388,7 +388,7 @@ mod tests {
                 (1u64..5).map(|id| (id, BioCheck::Passed)).collect();
             let resume = resume_plan(&rows, &checks, &listed.removed_from(&rows));
             let removed: Vec<usize> = resume
-                .skipped
+                .skipped()
                 .iter()
                 .filter(|(_, why)| *why == CarriedSkip::Removed)
                 .map(|(position, _)| *position)
@@ -397,7 +397,7 @@ mod tests {
                 .filter(|position| !listed.holds(sources[*position]))
                 .collect();
             prop_assert_eq!(removed, unlisted);
-            prop_assert!(resume.to_read.iter().all(|position| listed.holds(sources[*position])));
+            prop_assert!(resume.to_read().iter().all(|position| listed.holds(sources[*position])));
         }
 
         /// L1, L2 and L3. Universe: frozen plans of any rows with any
@@ -426,9 +426,10 @@ mod tests {
             let read_before: Vec<usize> = (0..rows.len())
                 .filter(|position| rows[*position].status == PlanRowStatus::Read)
                 .collect();
-            prop_assert_eq!(&resume.already_read, &read_before, "taken over as read");
+            let reads_now = resume.to_read();
+            prop_assert_eq!(&resume.already_read(), &read_before, "taken over as read");
             prop_assert!(
-                resume.to_read.iter().all(|position| !read_before.contains(position)),
+                reads_now.iter().all(|position| !read_before.contains(position)),
                 "no row the scan read is read again"
             );
 
@@ -436,7 +437,7 @@ mod tests {
             let mut expected: Vec<KeptRow> = read_before
                 .iter()
                 .map(|position| KeptRow { position: *position, status: PlanRowStatus::Read })
-                .chain(resume.to_read.iter().chain(&resume.carried).map(|position| KeptRow {
+                .chain(reads_now.iter().chain(&resume.carried()).map(|position| KeptRow {
                     position: *position,
                     status: PlanRowStatus::Planned,
                 }))
