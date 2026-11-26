@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# indexer-ingest-oracle — run the public indexer_ingest acceptance suite.
+#
+# EXAMINE entry point (declared in .nwave/examine.json). Executes the
+# acceptance suite (including FakePlcResolver delayed/split HTTP head checks
+# and real z6Mk openlore-indexer ingest) in the `local-dev` Lima VM on macOS
+# or directly via cargo on Linux.
+#
+# Usage: indexer-ingest-oracle [libtest arguments]
+
+set -euo pipefail
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  exec limactl shell local-dev -- sh -c 'cd ~/openlore && cargo test --test indexer_ingest -- "$@"' -- "$@"
+else
+  ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  cd "$ROOT"
+  exec cargo test --test indexer_ingest -- "$@"
+fi
