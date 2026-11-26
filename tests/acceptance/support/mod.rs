@@ -6168,7 +6168,7 @@ impl FakePlcResolver {
     /// Host the real-`z6Mk` DID document(s) for `dids` (each derived via the
     /// deterministic `FixtureKeypair`), serving each at `GET /<did>`.
     pub fn start(dids: &[&str]) -> Self {
-        use std::io::{Read, Write};
+        use std::io::Write;
         use std::net::TcpListener;
         use std::sync::atomic::Ordering;
 
@@ -6199,9 +6199,14 @@ impl FakePlcResolver {
                 while !shutdown_for_thread.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((mut stream, _peer)) => {
-                            let mut buf = [0u8; 2048];
-                            let read = stream.read(&mut buf).unwrap_or(0);
-                            let request = String::from_utf8_lossy(&buf[..read]);
+                            // The listener is non-blocking (to poll the shutdown
+                            // flag), but the ACCEPTED stream inherits non-blocking
+                            // mode on some platforms (macOS). Force it BLOCKING so
+                            // we reliably read the full HTTP request head until
+                            // `\r\n\r\n` before routing — a partial/empty read
+                            // would otherwise parse an empty path and return 404.
+                            let _ = stream.set_nonblocking(false);
+                            let request = read_http_request_head(&mut stream);
                             // Parse the request-target out of the request line
                             // (`GET /<did> HTTP/1.1`). The path is percent-encoded
                             // by the client (DIDs carry `:`), so decode it before

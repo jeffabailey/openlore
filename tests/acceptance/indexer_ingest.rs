@@ -864,3 +864,160 @@ fn indexer_ingests_only_public_records_no_private_read() {
         );
     }
 }
+
+// =============================================================================
+// PLC DID-document lookup resilience under delayed and split TCP writes
+// =============================================================================
+
+fn fetch_did_document_with_chunked_request(
+    endpoint_url: &str,
+    initial_delay: std::time::Duration,
+    chunks: &[&str],
+    chunk_delay: std::time::Duration,
+) -> String {
+    use std::io::{ErrorKind, Read, Write};
+    use std::net::TcpStream;
+
+    let addr = endpoint_url
+        .strip_prefix("http://")
+        .unwrap_or(endpoint_url);
+    let mut stream = TcpStream::connect(addr)
+        .unwrap_or_else(|e| panic!("connect to PLC endpoint {addr}: {e}"));
+    stream
+        .set_nodelay(true)
+        .expect("disable Nagle so split TCP writes arrive as separate segments");
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .expect("set bounded read timeout on PLC client stream");
+
+    if !initial_delay.is_zero() {
+        std::thread::sleep(initial_delay);
+    }
+
+    for (idx, chunk) in chunks.iter().enumerate() {
+        match stream
+            .write_all(chunk.as_bytes())
+            .and_then(|()| stream.flush())
+        {
+            Ok(()) => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    ErrorKind::BrokenPipe | ErrorKind::ConnectionReset
+                ) =>
+            {
+                break;
+            }
+            Err(e) => panic!("write request chunk {idx} to {addr}: {e}"),
+        }
+        if idx + 1 < chunks.len() && !chunk_delay.is_zero() {
+            std::thread::sleep(chunk_delay);
+        }
+    }
+
+    let mut response = String::new();
+    match stream.read_to_string(&mut response) {
+        Ok(_) => response,
+        Err(e) if e.kind() == ErrorKind::ConnectionReset && !response.is_empty() => response,
+        Err(e) => panic!("read HTTP response from {addr}: {e}"),
+    }
+}
+
+fn assert_http_200_did_document(
+    raw_response: &str,
+    expected_did: &str,
+    scenario_label: &str,
+) -> String {
+    let (head, body) = raw_response.split_once("\r\n\r\n").unwrap_or_else(|| {
+        panic!(
+            "expected complete HTTP response for {scenario_label}; got raw response: \
+             {raw_response:?}"
+        )
+    });
+    let status_line = head.lines().next().unwrap_or("");
+    assert!(
+        status_line.starts_with("HTTP/1.1 200"),
+        "expected HTTP 200 OK for {scenario_label}; got status line {status_line:?} \
+         (full head: {head:?})"
+    );
+    let doc: serde_json::Value = serde_json::from_str(body).unwrap_or_else(|e| {
+        panic!("expected valid JSON DID document for {scenario_label}: {e}; body: {body:?}")
+    });
+    assert_eq!(
+        doc["id"].as_str(),
+        Some(expected_did),
+        "DID document id must match requested DID for {scenario_label}; got {doc}"
+    );
+    let pubkey = doc["verificationMethod"][0]["publicKeyMultibase"]
+        .as_str()
+        .unwrap_or_else(|| {
+            panic!("expected verificationMethod[0].publicKeyMultibase for {scenario_label}; got {doc}")
+        });
+    assert!(
+        pubkey.starts_with("z6Mk"),
+        "expected Ed25519 multibase key starting with z6Mk for {scenario_label}; got {pubkey:?}"
+    );
+    pubkey.to_string()
+}
+
+/// A DID-document lookup over HTTP returns HTTP 200 with the matching DID
+/// document and its Ed25519 multibase verification key when a client pauses
+/// after connecting or splits the HTTP request head across multiple TCP writes.
+#[test]
+fn plc_did_document_lookup_succeeds_for_delayed_and_split_requests() {
+    let resolver = FakePlcResolver::start(&[PRIYA_DID, SVEN_DID]);
+    let pause = std::time::Duration::from_millis(25);
+
+    let delayed_response = fetch_did_document_with_chunked_request(
+        resolver.endpoint_url(),
+        pause,
+        &["GET /did:plc:priya-test HTTP/1.1\r\nHost: localhost\r\n\r\n"],
+        std::time::Duration::ZERO,
+    );
+    let priya_delayed_key = assert_http_200_did_document(
+        &delayed_response,
+        PRIYA_DID,
+        "delayed single-write request",
+    );
+
+    let split_priya_response = fetch_did_document_with_chunked_request(
+        resolver.endpoint_url(),
+        std::time::Duration::ZERO,
+        &[
+            "GET /did:plc:",
+            "priya-test HTTP/1.1\r\n",
+            "Host: localhost\r\n",
+            "\r\n",
+        ],
+        pause,
+    );
+    let priya_split_key = assert_http_200_did_document(
+        &split_priya_response,
+        PRIYA_DID,
+        "split-TCP-write request for Priya",
+    );
+    assert_eq!(
+        priya_split_key, priya_delayed_key,
+        "delayed and split requests for the same DID must return the same verification key"
+    );
+
+    let split_sven_response = fetch_did_document_with_chunked_request(
+        resolver.endpoint_url(),
+        pause,
+        &[
+            "GET /did:plc:",
+            "sven-test HTTP/1.1\r\n",
+            "Host: localhost\r\n\r\n",
+        ],
+        pause,
+    );
+    let sven_key = assert_http_200_did_document(
+        &split_sven_response,
+        SVEN_DID,
+        "delayed split-TCP-write request for Sven",
+    );
+    assert_ne!(
+        sven_key, priya_delayed_key,
+        "distinct DIDs must resolve to their own distinct verification keys"
+    );
+}

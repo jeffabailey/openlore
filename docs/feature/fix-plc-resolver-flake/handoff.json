@@ -1,0 +1,146 @@
+{
+"acceptance": {
+"S1": [
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F17",
+"test": "tests/acceptance/indexer_ingest.rs::plc_did_document_lookup_succeeds_for_delayed_and_split_requests"
+},
+"expected": "F15",
+"stimulus": "F14",
+"user_result": "F16"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F21",
+"test": "tests/acceptance/indexer_ingest.rs::indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam"
+},
+"expected": "F19",
+"stimulus": "F18",
+"user_result": "F20"
+}
+]
+},
+"counters": {
+"E": 3,
+"F": 21,
+"P": 1,
+"S": 1
+},
+"design": {
+"paradigm": "functional",
+"slices": {
+"S1": {
+"oracle": "tests/acceptance/indexer_ingest.rs",
+"public_oracle": {
+"expected": "F6",
+"falsifier": "F7",
+"promises": [
+"P1"
+],
+"stimulus": "F5"
+},
+"targets": [
+{
+"change": "Extend",
+"path": "tests/acceptance/support/mod.rs"
+}
+],
+"verification": [
+"cargo test --test indexer_ingest"
+]
+}
+}
+},
+"expectations": {
+"rows": [
+{
+"blocking": "yes",
+"id": "E1",
+"lacuna": "F9",
+"promises": [
+"P1"
+],
+"text": "F8"
+},
+{
+"blocking": "yes",
+"id": "E2",
+"lacuna": "F11",
+"promises": [
+"P1"
+],
+"text": "F10"
+},
+{
+"blocking": "yes",
+"id": "E3",
+"lacuna": "F13",
+"promises": [
+"P1"
+],
+"text": "F12"
+}
+]
+},
+"facts": {
+"F1": "Fix the open flake indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam: FakePlcResolver in tests/acceptance/support/mod.rs leaves accepted TcpStreams non-blocking and reads only a single chunk instead of the full HTTP request head, causing spurious 404 responses under parallel load or split TCP writes.",
+"F10": "When a client transmits a valid DID HTTP request head in multiple separate writes ending with CRLFCRLF, FakePlcResolver reads the complete head before routing and returns HTTP 200 with the matching DID document instead of 404.",
+"F11": "An oracle that sends the entire request in a single write (even after a delay) does not see whether FakePlcResolver loops until CRLFCRLF or stops after the first partial read.",
+"F12": "Every accepted connection on FakePlcResolver handles delayed or split requests by returning HTTP 200 with the DID document matching the requested DID, not only the first connection.",
+"F13": "An oracle that exercises only a single connection or a single fixture DID does not observe per-stream handling across subsequent accepted connections or verify that the returned document matches the requested DID.",
+"F14": "A client connects to the PLC resolver HTTP endpoint and sends a DID lookup request for Priya after an initial pause, then sends DID lookup requests for Priya and Sven split across multiple TCP writes with pauses between chunks.",
+"F15": "Each delayed and split-write request receives HTTP 200 with a JSON DID document whose id matches the requested DID and whose verification method carries a real Ed25519 multibase key, with matching keys across delayed and split Priya requests and distinct keys between Priya and Sven.",
+"F16": "Delayed and fragmented HTTP requests for Priya and Sven DID documents return HTTP 200 with the matching DID document and verification key instead of spurious 404 responses.",
+"F17": "A resolver that reads only up to the first request-line CRLF rather than waiting for the trailing CRLFCRLF header terminator, or that relies on OS default blocking inheritance instead of explicitly setting blocking mode on accepted sockets.",
+"F18": "The indexer ingests one validly signed claim and one tampered-signature claim from Priya while resolving Priya's real Ed25519 multibase verification key from the PLC resolver HTTP endpoint with no environment key override.",
+"F19": "The indexer verifies and indexes the valid claim attributed to Priya with a non-empty verification record, rejects the tampered claim as a bad signature, and leaves the tampered claim absent from the index.",
+"F2": "FakePlcResolver reliably reads complete HTTP request heads on blocking accepted streams so indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam does not flake under parallel load or fragmented requests",
+"F20": "Ingesting signed claims against the PLC resolver reliably verifies valid claims and rejects tampered signatures using the real decoded Ed25519 key.",
+"F21": "A resolver that only succeeds when the HTTP client writes the full request head in a single immediate TCP segment without delay or fragmentation.",
+"F3": "FakePlcResolver sets every accepted stream to blocking mode and reads the complete HTTP request head until CRLFCRLF so delayed or split client writes receive HTTP 200 with the matching DID document instead of spurious 404",
+"F4": "FakePlcResolver serves HTTP 200 with the matching DID document when a client pauses before writing or sends the HTTP request line across multiple TCP chunks, and indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam passes reliably",
+"F5": "A client connects to FakePlcResolver and sends GET /did:plc:priya-test HTTP/1.1 after a delay and across split TCP writes, and openlore-indexer ingest resolves Priya's real z6Mk key against FakePlcResolver",
+"F6": "FakePlcResolver returns HTTP 200 with Priya's z6Mk DID document for delayed and split-write requests, and indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam passes with 1 verified claim and 1 bad_signature rejection",
+"F7": "FakePlcResolver returns HTTP 404 or an empty/truncated response on a delayed or split-write request, or indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam fails",
+"F8": "When a client connects to FakePlcResolver and delays before sending a valid DID HTTP request, FakePlcResolver waits for the request head and returns HTTP 200 with the matching DID document rather than a spurious 404.",
+"F9": "An oracle that writes the full HTTP request immediately upon connect passes even if accepted streams remain non-blocking and return 404 under scheduling delay."
+},
+"product": {
+"promises": [
+{
+"id": "P1",
+"kind": "Outcome",
+"text": "F3"
+}
+],
+"slices": [
+{
+"id": "S1",
+"observation": "F4",
+"promises": [
+"P1"
+]
+}
+]
+},
+"request": "F1",
+"schema": "nwdes.handoff",
+"scope": {
+"id": "fix-plc-resolver-flake",
+"kind": "Feature"
+},
+"version": 4,
+"work": {
+"size": "M",
+"value": "F2"
+}
+}
