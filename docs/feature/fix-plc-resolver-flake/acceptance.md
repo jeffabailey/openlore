@@ -134,4 +134,26 @@ None.
 
 ## Examination
 
-None.
+### E1
+
+not_examined
+
+```text
+No admitted nwdes examine probe command or public workspace document exposes FakePlcResolver or openlore-indexer (O1, O2); delayed-write HTTP 200 vs 404 behavior could not be observed.
+```
+
+### E2
+
+not_examined
+
+```text
+No admitted nwdes examine probe command or public workspace document exposes FakePlcResolver or openlore-indexer (O1, O2); split-write HTTP request head until CRLFCRLF behavior could not be observed.
+```
+
+### E3
+
+not_examined
+
+```text
+No admitted nwdes examine probe command or public workspace document exposes FakePlcResolver or openlore-indexer (O1, O2); per-connection handling across multiple accepted connections and distinct DIDs could not be observed.
+```
