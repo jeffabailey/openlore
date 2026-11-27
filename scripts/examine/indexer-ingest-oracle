@@ -11,6 +11,10 @@
 set -euo pipefail
 
 if [ "$(uname -s)" = "Darwin" ]; then
+  if [ -z "${LIMA_HOME:-}" ]; then
+    REAL_HOME="$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+    export LIMA_HOME="${REAL_HOME:-$HOME}/.lima"
+  fi
   exec limactl shell local-dev -- sh -c 'cd ~/openlore && cargo test --test indexer_ingest -- "$@"' -- "$@"
 else
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
