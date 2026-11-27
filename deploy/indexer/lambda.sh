@@ -463,8 +463,10 @@ search_status() { # $1 = base URL, $2 = request body file -> the status that sea
   http_status -X POST -H 'content-type: application/json' --data-binary "@$2" "$1$SEARCH_PATH"
 }
 
-response_headers() { # $1 = URL, $2 = seconds allowed; nothing when nothing answers
-  curl -sS -o /dev/null -D - -m "$2" "$1" 2>/dev/null || true
+response_headers() { # $1 = URL, $2 = seconds allowed, $3... = extra curl args; nothing when nothing answers
+  local url="$1" timeout="$2"
+  shift 2
+  curl -sS -o /dev/null -D - -m "$timeout" "$@" "$url" 2>/dev/null || true
 }
 
 served_by_cloudfront() { # stdin = response headers; a CloudFront `via` header marks the edge
@@ -525,6 +527,14 @@ first_200_after() { # $1 = ms (pure); stdin = the poller's log -> ms from $1 to 
   awk -v since="$1" '$2 == "ok" && $1 >= since { printf "%d\n", $1 - since; exit }'
 }
 
+refuse_origin_headers() { # $1 = endpoint label; stdin = response headers
+  local leaked
+  leaked=$(grep -i '^x-amzn-' || true)
+  leaked=${leaked//$'\r'/}
+  [ -z "$leaked" ] ||
+    die "edge check: $1 response carries an x-amzn- header (${leaked//$'\n'/; }); add it to openlore-index-strip in deploy/tofu/environments/prod-indexer/edge.tf"
+}
+
 # Through the public edge: the same answers a client gets, and no sign of the raw function URL.
 edge_checks() { # $1 = edge URL
   local base="$1" body="$LAMBDA_WORK/edge-body" code headers
@@ -538,9 +548,9 @@ edge_checks() { # $1 = edge URL
   code=$(http_status -X POST "$base/healthz")
   [ "$code" = 404 ] || die "edge check: POST /healthz answered $code, not 404"
   headers=$(response_headers "$base/healthz" 10)
-  if grep -qi '^x-amzn-' <<<"$headers"; then
-    die "edge check: the response carries an x-amzn- header"
-  fi
+  refuse_origin_headers "GET /healthz" <<<"$headers"
+  headers=$(response_headers "$base$SEARCH_PATH" 10 -X POST -H 'content-type: application/json' --data-binary "@$body")
+  refuse_origin_headers "POST search" <<<"$headers"
   echo "edge checks passed: healthz, search, GET / 404, POST /healthz 404, no x-amzn- header"
 }
 

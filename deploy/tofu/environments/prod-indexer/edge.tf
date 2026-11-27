@@ -58,6 +58,9 @@ resource "aws_cloudfront_response_headers_policy" "strip" {
     items {
       header = "x-amzn-remapped-x-amzn-requestid"
     }
+    items {
+      header = "x-amzn-errortype"
+    }
   }
 }
 

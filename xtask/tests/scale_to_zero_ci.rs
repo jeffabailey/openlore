@@ -1317,6 +1317,7 @@ fn the_edge_strips_every_header_that_names_the_origin() {
     assert_eq!(
         removed,
         BTreeSet::from([
+            r#""x-amzn-errortype""#,
             r#""x-amzn-remapped-connection""#,
             r#""x-amzn-remapped-content-length""#,
             r#""x-amzn-remapped-date""#,
@@ -1324,6 +1325,184 @@ fn the_edge_strips_every_header_that_names_the_origin() {
             r#""x-amzn-requestid""#,
             r#""x-amzn-trace-id""#,
         ])
+    );
+}
+
+/// Minimal local HTTP edge stub used to run `deploy/indexer/lambda.sh`'s `edge_checks`
+/// against controlled GET `/healthz` and POST search response headers.
+struct StubEdge {
+    addr: std::net::SocketAddr,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl StubEdge {
+    fn start(healthz_headers: &[&str], search_headers: &[&str]) -> Self {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub edge");
+        let addr = listener.local_addr().expect("stub edge addr");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
+        let healthz_extra: Vec<String> = healthz_headers.iter().map(|h| (*h).to_owned()).collect();
+        let search_extra: Vec<String> = search_headers.iter().map(|h| (*h).to_owned()).collect();
+
+        let handle = std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                if stop_flag.load(Ordering::Acquire) {
+                    break;
+                }
+                let mut reader = BufReader::new(stream);
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).is_err() || request_line.is_empty() {
+                    continue;
+                }
+                let mut parts = request_line.split_whitespace();
+                let method = parts.next().unwrap_or("");
+                let path = parts.next().unwrap_or("");
+
+                let mut content_length: usize = 0;
+                let mut header_line = String::new();
+                loop {
+                    header_line.clear();
+                    if reader.read_line(&mut header_line).is_err() {
+                        break;
+                    }
+                    if header_line == "\r\n" || header_line == "\n" || header_line.is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = header_line.split_once(':') {
+                        if name.trim().eq_ignore_ascii_case("content-length") {
+                            content_length = value.trim().parse().unwrap_or(0);
+                        }
+                    }
+                }
+                if content_length > 0 {
+                    let mut body = vec![0u8; content_length];
+                    let _ = reader.read_exact(&mut body);
+                }
+
+                let (status, extra, body): (&str, &[String], &str) = match (method, path) {
+                    ("GET", "/healthz") => ("200 OK", &healthz_extra, "{}"),
+                    ("POST", "/xrpc/org.openlore.appview.searchClaims") => {
+                        ("200 OK", &search_extra, "{}")
+                    }
+                    _ => ("404 Not Found", &[], ""),
+                };
+
+                let mut response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
+                    body.len()
+                );
+                for header in extra {
+                    response.push_str(header);
+                    response.push_str("\r\n");
+                }
+                response.push_str("\r\n");
+                response.push_str(body);
+
+                let mut stream = reader.into_inner();
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        Self {
+            addr,
+            stop,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for StubEdge {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        let _ = std::net::TcpStream::connect(self.addr);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn run_edge_checks(healthz_headers: &[&str], search_headers: &[&str]) -> (Option<i32>, String) {
+    let edge = StubEdge::start(healthz_headers, search_headers);
+    let work = tempfile::tempdir().expect("edge checks work dir");
+    let deploy_script = read(DEPLOY_SCRIPT);
+    let (deploy_defs, _) = deploy_script
+        .split_once("\ncmd=\"${1:-}\"")
+        .expect("deploy.sh dispatch");
+    let defs_path = work.path().join("deploy-defs.sh");
+    std::fs::write(&defs_path, deploy_defs).expect("write deploy defs");
+
+    let output = Command::new("bash")
+        .env_remove("BASH_ENV")
+        .args([
+            "--noprofile",
+            "--norc",
+            "-euo",
+            "pipefail",
+            "-c",
+            "source \"$1\"\nsource \"$2\"\nLAMBDA_WORK=\"$3\"\nedge_checks \"$4\"\n",
+            "--",
+        ])
+        .arg(&defs_path)
+        .arg(workspace().join(LAMBDA_SCRIPT))
+        .arg(work.path())
+        .arg(format!("http://{}", edge.addr))
+        .output()
+        .expect("run edge_checks");
+
+    (
+        output.status.code(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    )
+}
+
+#[test]
+fn the_edge_check_rejects_origin_headers_on_post_search_as_well_as_healthz() {
+    let (clean_status, clean_out) = run_edge_checks(&[], &[]);
+    assert_eq!(
+        clean_status,
+        Some(0),
+        "clean healthz and POST search responses must pass edge checks:\n{clean_out}"
+    );
+
+    let (search_errortype_status, search_errortype_out) =
+        run_edge_checks(&[], &["x-amzn-errortype: ServiceException"]);
+    assert_ne!(
+        search_errortype_status,
+        Some(0),
+        "POST search response carrying x-amzn-errortype must fail edge checks even when GET /healthz is clean:\n{search_errortype_out}"
+    );
+    assert!(
+        search_errortype_out
+            .to_ascii_lowercase()
+            .contains("x-amzn-"),
+        "failure output must report the leaked x-amzn- header:\n{search_errortype_out}"
+    );
+
+    let (search_other_status, search_other_out) =
+        run_edge_checks(&[], &["X-Amzn-RequestId: req-123"]);
+    assert_ne!(
+        search_other_status,
+        Some(0),
+        "POST search response carrying any x-amzn-* header (case-insensitive) must fail edge checks:\n{search_other_out}"
+    );
+
+    let (healthz_leak_status, healthz_leak_out) =
+        run_edge_checks(&["x-amzn-requestid: req-456"], &[]);
+    assert_ne!(
+        healthz_leak_status,
+        Some(0),
+        "GET /healthz response carrying an x-amzn-* header must still fail edge checks:\n{healthz_leak_out}"
     );
 }
 

@@ -1,0 +1,165 @@
+{
+"acceptance": {
+"S1": [
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F20",
+"test": "xtask/tests/scale_to_zero_ci.rs::the_edge_strips_every_header_that_names_the_origin"
+},
+"expected": "F18",
+"stimulus": "F17",
+"user_result": "F19"
+},
+{
+"covers": [
+"P2"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F24",
+"test": "xtask/tests/scale_to_zero_ci.rs::the_edge_check_rejects_origin_headers_on_post_search_as_well_as_healthz"
+},
+"expected": "F22",
+"stimulus": "F21",
+"user_result": "F23"
+}
+]
+},
+"counters": {
+"E": 4,
+"F": 24,
+"P": 2,
+"S": 1
+},
+"design": {
+"paradigm": "functional",
+"slices": {
+"S1": {
+"oracle": "xtask/tests/scale_to_zero_ci.rs",
+"public_oracle": {
+"expected": "F7",
+"falsifier": "F8",
+"promises": [
+"P1",
+"P2"
+],
+"stimulus": "F6"
+},
+"targets": [
+{
+"change": "Extend",
+"path": "deploy/tofu/environments/prod-indexer/edge.tf"
+},
+{
+"change": "Extend",
+"path": "deploy/indexer/lambda.sh"
+}
+],
+"verification": [
+"limactl shell local-dev -- sh -c 'cd ~/openlore && cargo test -p xtask --test scale_to_zero_ci'"
+]
+}
+}
+},
+"expectations": {
+"rows": [
+{
+"id": "E1",
+"lacuna": "F10",
+"promises": [
+"P1"
+],
+"text": "F9"
+},
+{
+"id": "E2",
+"lacuna": "F12",
+"promises": [
+"P1"
+],
+"text": "F11"
+},
+{
+"id": "E3",
+"lacuna": "F14",
+"promises": [
+"P2"
+],
+"text": "F13"
+},
+{
+"id": "E4",
+"lacuna": "F16",
+"promises": [
+"P2"
+],
+"text": "F15"
+}
+]
+},
+"facts": {
+"F1": "Strip x-amzn-errortype in the prod-indexer CloudFront response headers policy (deploy/tofu/environments/prod-indexer/edge.tf) and sample POST search response headers for x-amzn-* headers in edge_checks (deploy/indexer/lambda.sh) in addition to GET /healthz (scale-to-zero-hosting M7).",
+"F10": "Inspecting the policy configuration alone does not observe a live CloudFront edge stripping x-amzn-errortype from an actual origin error response or verify that the policy is attached to the active distribution behavior.",
+"F11": "The CloudFront response headers policy \"strip\" retains all six previously configured x-amzn-* headers in its removed headers list without dropping any of them when x-amzn-errortype is added.",
+"F12": "The promise does not enumerate the six existing x-amzn-* header names, so a check verifying only header count or only x-amzn-errortype could miss a renamed, misspelled, or dropped existing header.",
+"F13": "edge_checks rejects a response when a POST search response contains any x-amzn-* header (including x-amzn-errortype).",
+"F14": "Checking edge_checks only against a happy-path or mocked POST search response may not observe origin error responses that emit x-amzn-errortype, mixed-case header names, or real deployed edge responses.",
+"F15": "edge_checks continues to reject a response when a GET /healthz response contains any x-amzn-* header.",
+"F16": "An oracle focused on the new POST search check could miss a regression in GET /healthz rejection, and edge_checks does not observe x-amzn-* header leakage on routes other than GET /healthz and POST search.",
+"F17": "Inspect the prod-indexer CloudFront response headers strip policy configuration for removed origin headers",
+"F18": "The strip policy removes x-amzn-errortype alongside the existing six x-amzn-* headers and no others",
+"F19": "CloudFront strips x-amzn-errortype and all six existing origin headers from responses before clients see them",
+"F2": "Prevent x-amzn-errortype and other origin x-amzn-* headers from leaking through the CloudFront edge on search or error responses",
+"F20": "Static HCL declares all seven headers in the strip policy, while live CloudFront edge enforcement is not exercised against AWS",
+"F21": "Run the edge verification check against a stubbed edge whose responses vary which endpoint carries an origin header",
+"F22": "The check passes when both health check and POST search are clean, fails when POST search returns x-amzn-errortype or any mixed-case x-amzn-* header even with a clean health check, and still fails when the health check returns an x-amzn-* header",
+"F23": "Deployment edge verification blocks release whenever an origin x-amzn-* header leaks on either POST search or the health check",
+"F24": "POST search returns an x-amzn-* header only on a non-200 error response while 200 POST search responses remain clean",
+"F3": "aws_cloudfront_response_headers_policy.strip removes x-amzn-errortype in addition to the existing six x-amzn-* headers",
+"F4": "edge_checks rejects an x-amzn-* response header on POST search as well as on GET /healthz",
+"F5": "openlore-index-strip removes x-amzn-errortype alongside the existing six x-amzn-* headers, and edge_checks rejects an x-amzn-* header on the POST search response as well as GET /healthz",
+"F6": "Run xtask scale_to_zero_ci tests against deploy/tofu/environments/prod-indexer/edge.tf and deploy/indexer/lambda.sh edge_checks",
+"F7": "openlore-index-strip includes x-amzn-errortype in remove_headers_config, and edge_checks fails when a POST search response carries x-amzn-errortype even if GET /healthz carries no x-amzn-* headers",
+"F8": "openlore-index-strip omits x-amzn-errortype, or edge_checks passes when POST search returns an x-amzn-* header",
+"F9": "The CloudFront response headers policy \"strip\" includes x-amzn-errortype in its removed headers list so that x-amzn-errortype is stripped from responses."
+},
+"product": {
+"promises": [
+{
+"id": "P1",
+"kind": "Outcome",
+"text": "F3"
+},
+{
+"id": "P2",
+"kind": "Outcome",
+"text": "F4"
+}
+],
+"slices": [
+{
+"id": "S1",
+"observation": "F5",
+"promises": [
+"P1",
+"P2"
+]
+}
+]
+},
+"request": "F1",
+"schema": "nwdes.handoff",
+"scope": {
+"id": "fix-edge-x-amzn-errortype-strip",
+"kind": "Feature"
+},
+"version": 4,
+"work": {
+"size": "M",
+"value": "F2"
+}
+}
