@@ -1,0 +1,161 @@
+{
+"acceptance": {
+"S1": [
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F20",
+"test": "crates/adapter-s3-index-object/tests/scale_to_zero_write_probe.rs::whitespace_around_the_write_marker_is_still_recognized_as_the_marker"
+},
+"expected": "F26",
+"stimulus": "F25",
+"user_result": "F27"
+},
+{
+"covers": [
+"P2"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F24",
+"test": "crates/adapter-s3-index-object/tests/scale_to_zero_write_probe.rs::connecting_to_a_location_with_a_padded_write_marker_is_refused"
+},
+"expected": "F22",
+"stimulus": "F21",
+"user_result": "F23"
+}
+]
+},
+"counters": {
+"E": 4,
+"F": 27,
+"P": 2,
+"S": 1
+},
+"design": {
+"paradigm": "functional",
+"slices": {
+"S1": {
+"oracle": "crates/adapter-s3-index-object/tests/scale_to_zero_write_probe.rs",
+"public_oracle": {
+"expected": "F7",
+"falsifier": "F8",
+"promises": [
+"P1",
+"P2"
+],
+"stimulus": "F6"
+},
+"targets": [
+{
+"change": "Extend",
+"path": "crates/ports/src/probe.rs"
+}
+],
+"verification": [
+"limactl shell local-dev -- sh -c 'cd ~/openlore && cargo test -p adapter-s3-index-object --test scale_to_zero_write_probe'"
+]
+}
+}
+},
+"expectations": {
+"rows": [
+{
+"id": "E1",
+"lacuna": "F10",
+"promises": [
+"P1"
+],
+"text": "F9"
+},
+{
+"id": "E2",
+"lacuna": "F12",
+"promises": [
+"P1"
+],
+"text": "F11"
+},
+{
+"id": "E3",
+"lacuna": "F14",
+"promises": [
+"P2"
+],
+"text": "F13"
+},
+{
+"id": "E4",
+"lacuna": "F16",
+"promises": [
+"P2"
+],
+"text": "F15"
+}
+]
+},
+"facts": {
+"F1": "Trim whitespace before comparing index_key and last_pass_key against WRITE_PROBE_KEY in location_names_write_probe_key (crates/ports/src/probe.rs) so padded marker keys are refused at init and connect (scale-to-zero-hosting LOW: marker-key trim).",
+"F10": "An oracle that tests only untrimmed equality or ASCII spaces on a single key does not see whether both index_key and last_pass_key are trimmed identically or whether non-space whitespace (such as tabs or newlines) is handled consistently.",
+"F11": "When neither index_key nor last_pass_key trims to WRITE_PROBE_KEY (including empty or whitespace-only keys, keys with extra non-whitespace characters, path-prefixed/suffixed keys, or keys with internal whitespace), location_names_write_probe_key returns false.",
+"F12": "An oracle that checks only a single ordinary unrelated key does not see false positives on near-miss keys containing WRITE_PROBE_KEY as a substring, prefix, suffix, or case variant, nor on whitespace-only keys.",
+"F13": "S3IndexObjectAdapter::connect refuses with an error any location whose index_key or last_pass_key equals WRITE_PROBE_KEY directly or after trimming leading or trailing whitespace.",
+"F14": "An oracle that checks only exact untrimmed keys or only index_key does not see whether last_pass_key with surrounding whitespace is also refused, whether refusal occurs before any remote S3 network call or storage mutation, or whether the error distinguishes key refusal from unrelated connection failures.",
+"F15": "S3IndexObjectAdapter::connect does not reject a location on the write-probe-key guard when neither index_key nor last_pass_key trims to WRITE_PROBE_KEY.",
+"F16": "An oracle that only asserts connect returns an error for probe keys does not distinguish targeted probe-key refusal from a blanket connection failure or overly broad substring matching.",
+"F2": "Prevent whitespace-padded index or last-pass keys from bypassing the write-probe marker key refusal",
+"F20": "An implementation that trims only ASCII whitespace (space, tab, carriage return, newline) rather than non-ASCII Unicode whitespace would still pass",
+"F21": "Connect to an object-store location whose index key or pass-record key has leading or trailing whitespace around the write-probe marker, and connect to locations with non-marker keys",
+"F22": "Refuses connection with a probe refusal error when either key trims to the write-probe marker and succeeds for non-marker locations",
+"F23": "Startup refuses any configured store location whose index or pass-record key trims to the write-probe marker and accepts valid non-marker locations",
+"F24": "An implementation that trims only ASCII whitespace when checking keys at connect time rather than non-ASCII Unicode whitespace would still pass",
+"F25": "Check whether an index key, pass-record key, or both with leading or trailing spaces, tabs, or newlines around the write-probe marker are recognized as the marker, and whether empty, whitespace-only, uppercase case-variant, padded non-marker, prefixed or suffixed marker paths, and keys with internal whitespace are allowed",
+"F26": "Returns true whenever either or both keys trim to the write-probe marker and false for empty, whitespace-only, case-variant, and all other non-marker keys",
+"F27": "Any index or pass-record key (or both) whose trimmed text matches the write-probe marker is identified as the marker, while empty, whitespace-only, case-variant, and distinct keys are permitted",
+"F3": "location_names_write_probe_key returns true when either key trims to WRITE_PROBE_KEY and false otherwise",
+"F4": "S3IndexObjectAdapter::connect refuses a location whose index_key or last_pass_key trims to WRITE_PROBE_KEY",
+"F5": "location_names_write_probe_key and S3IndexObjectAdapter::connect refuse index_key or last_pass_key when trimming whitespace equals WRITE_PROBE_KEY, while allowing non-marker keys",
+"F6": "Call location_names_write_probe_key and S3IndexObjectAdapter::connect with whitespace-padded WRITE_PROBE_KEY values",
+"F7": "Both return true / Err(IndexObjectError::ProbeRefused) for leading/trailing whitespace around WRITE_PROBE_KEY in either key, and false / Ok for non-marker keys",
+"F8": "A whitespace-padded WRITE_PROBE_KEY in index_key or last_pass_key is accepted instead of refused",
+"F9": "When either index_key or last_pass_key (or both) equals WRITE_PROBE_KEY directly or after trimming leading or trailing whitespace, location_names_write_probe_key returns true."
+},
+"product": {
+"promises": [
+{
+"id": "P1",
+"kind": "Outcome",
+"text": "F3"
+},
+{
+"id": "P2",
+"kind": "Outcome",
+"text": "F4"
+}
+],
+"slices": [
+{
+"id": "S1",
+"observation": "F5",
+"promises": [
+"P1",
+"P2"
+]
+}
+]
+},
+"request": "F1",
+"schema": "nwdes.handoff",
+"scope": {
+"id": "fix-marker-key-trim",
+"kind": "Feature"
+},
+"version": 4,
+"work": {
+"size": "M",
+"value": "F2"
+}
+}

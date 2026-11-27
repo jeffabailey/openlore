@@ -232,9 +232,11 @@ pub enum ProbeRefusalReason {
 pub const WRITE_PROBE_KEY: &str = "index/.write-probe";
 
 /// D-STZ-39: does this location name the write probe's key, as its index or as
-/// its pass record? Pure, so it can be tested without building an adapter.
+/// its pass record? Trims surrounding whitespace before comparing so padded
+/// configuration values cannot bypass the guard. Pure, so it can be tested
+/// without building an adapter.
 pub fn location_names_write_probe_key(index_key: &str, last_pass_key: &str) -> bool {
-    index_key == WRITE_PROBE_KEY || last_pass_key == WRITE_PROBE_KEY
+    index_key.trim() == WRITE_PROBE_KEY || last_pass_key.trim() == WRITE_PROBE_KEY
 }
 
 /// How the repeat PUT of the write probe ended.

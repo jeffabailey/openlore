@@ -119,6 +119,109 @@ fn the_write_checks_marker_can_never_be_the_index() {
     );
 }
 
+fn connect_location(
+    rt: &tokio::runtime::Runtime,
+    index_key: &str,
+    last_pass_key: &str,
+) -> Result<S3IndexObjectAdapter, IndexObjectError> {
+    rt.block_on(S3IndexObjectAdapter::connect(S3Location {
+        region: "us-east-1".to_string(),
+        endpoint_url: Some("http://127.0.0.1:9".to_string()),
+        bucket: "openlore-indexer-index-test".to_string(),
+        index_key: index_key.to_string(),
+        last_pass_key: last_pass_key.to_string(),
+    }))
+}
+
+/// Whitespace padding around the write marker in either configured key is still
+/// recognized as the marker, while non-marker keys remain allowed.
+#[test]
+fn whitespace_around_the_write_marker_is_still_recognized_as_the_marker() {
+    let padded_marker_cases = [
+        (format!(" {WRITE_PROBE_KEY}"), LAST_PASS_KEY.to_string()),
+        (format!("{WRITE_PROBE_KEY} "), LAST_PASS_KEY.to_string()),
+        (
+            format!(" \t{WRITE_PROBE_KEY}\r\n "),
+            LAST_PASS_KEY.to_string(),
+        ),
+        (INDEX_KEY.to_string(), format!(" {WRITE_PROBE_KEY}")),
+        (INDEX_KEY.to_string(), format!("{WRITE_PROBE_KEY} ")),
+        (INDEX_KEY.to_string(), format!("\n\t{WRITE_PROBE_KEY}\t\n")),
+        (format!(" {WRITE_PROBE_KEY}"), format!("{WRITE_PROBE_KEY} ")),
+    ];
+    for (index_key, last_pass_key) in padded_marker_cases {
+        assert!(
+            location_names_write_probe_key(&index_key, &last_pass_key),
+            "expected padded marker to be recognized: index={index_key:?} last_pass={last_pass_key:?}"
+        );
+    }
+
+    let non_marker_cases = [
+        (String::new(), String::new()),
+        (" \t\r\n".to_string(), " ".to_string()),
+        (
+            WRITE_PROBE_KEY.to_ascii_uppercase(),
+            LAST_PASS_KEY.to_string(),
+        ),
+        (format!(" {INDEX_KEY} "), LAST_PASS_KEY.to_string()),
+        (INDEX_KEY.to_string(), format!(" {LAST_PASS_KEY} ")),
+        (
+            format!("prefix/{WRITE_PROBE_KEY}"),
+            LAST_PASS_KEY.to_string(),
+        ),
+        (format!("{WRITE_PROBE_KEY}.bak"), LAST_PASS_KEY.to_string()),
+        (
+            format!(" {WRITE_PROBE_KEY}.bak "),
+            LAST_PASS_KEY.to_string(),
+        ),
+        ("index/ .write-probe".to_string(), LAST_PASS_KEY.to_string()),
+    ];
+    for (index_key, last_pass_key) in non_marker_cases {
+        assert!(
+            !location_names_write_probe_key(&index_key, &last_pass_key),
+            "expected non-marker key to be allowed: index={index_key:?} last_pass={last_pass_key:?}"
+        );
+    }
+}
+
+/// Connecting to a location whose index or pass-record key trims to the write
+/// marker is refused, while non-marker keys are accepted.
+#[test]
+fn connecting_to_a_location_with_a_padded_write_marker_is_refused() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a test runtime");
+
+    let expected_refusal = Some(IndexObjectError::ProbeRefused {
+        detail: format!("a configured key is the write probe's key {WRITE_PROBE_KEY}"),
+    });
+
+    for (index_key, last_pass_key) in [
+        (format!(" {WRITE_PROBE_KEY}"), LAST_PASS_KEY.to_string()),
+        (format!("{WRITE_PROBE_KEY}\n"), LAST_PASS_KEY.to_string()),
+        (INDEX_KEY.to_string(), format!(" {WRITE_PROBE_KEY} ")),
+        (INDEX_KEY.to_string(), format!("\t{WRITE_PROBE_KEY}")),
+    ] {
+        assert_eq!(
+            connect_location(&rt, &index_key, &last_pass_key).err(),
+            expected_refusal,
+            "connect must refuse padded marker: index={index_key:?} last_pass={last_pass_key:?}"
+        );
+    }
+
+    for (index_key, last_pass_key) in [
+        (format!(" {INDEX_KEY} "), LAST_PASS_KEY.to_string()),
+        (INDEX_KEY.to_string(), format!("{WRITE_PROBE_KEY}.bak")),
+    ] {
+        assert_eq!(
+            connect_location(&rt, &index_key, &last_pass_key).err(),
+            None,
+            "connect must allow non-marker location: index={index_key:?} last_pass={last_pass_key:?}"
+        );
+    }
+}
+
 /// TO-1
 /// ```gherkin
 /// @D-STZ-10 @D-STZ-39 @D-STZ-40a @contract-shape:pure-function
