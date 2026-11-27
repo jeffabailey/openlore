@@ -31,7 +31,7 @@
 },
 "counters": {
 "E": 2,
-"F": 20,
+"F": 22,
 "P": 2,
 "S": 1
 },
@@ -63,6 +63,16 @@
 "limactl shell local-dev -- sh -c 'cd ~/openlore && cargo test -p xtask --test scale_to_zero_ci'"
 ]
 }
+}
+},
+"examination": {
+"E1": {
+"reason": "F21",
+"verdict": "not_examined"
+},
+"E2": {
+"reason": "F22",
+"verdict": "not_examined"
 }
 },
 "expectations": {
@@ -99,6 +109,8 @@
 "F19": "Lambda image pulls from the indexer repository require an ARN-segment-aware ArnLike match on the openlore-indexer function ARN",
 "F2": "Prevent cross-schedule and cross-ARN-segment confused-deputy access to the prod-indexer scheduler role and ECR repository",
 "F20": "A pull policy statement with an unexpected Deny effect or an AWS runtime ARN evaluation difference not visible in static policy inspection would still pass",
+"F21": "Blocked by missing public evidence surface (O1, O2, O3): examination workspace projects 0 public files, nwdes examine read refuses deploy/tofu/environments/prod-indexer/iam.tf, and nwdes examine probe refuses xtask (admitting only openlore-review-app, review-app-oracle, indexer-ingest-oracle). Prerequisite: project public policy artifact or admit a public oracle CLI for prod-indexer IAM conditions; owner: host/harness evidence-capture setup; remedy: expose iam.tf or an admitted public oracle command in the examination workspace.",
+"F22": "Blocked by missing public evidence surface (O1, O2, O3): examination workspace projects 0 public files, nwdes examine read refuses deploy/tofu/environments/prod-indexer/ecr.tf, and nwdes examine probe refuses xtask (admitting only openlore-review-app, review-app-oracle, indexer-ingest-oracle). Prerequisite: project public policy artifact or admit a public oracle CLI for prod-indexer ECR policy conditions; owner: host/harness evidence-capture setup; remedy: expose ecr.tf or an admitted public oracle command in the examination workspace.",
 "F3": "scheduler_trust requires aws:SourceArn matching the openlore-indexer schedule group via ArnLike in addition to aws:SourceAccount",
 "F4": "lambda_pulls_images evaluates aws:SourceArn with ArnLike instead of StringLike",
 "F5": "scheduler_trust pins aws:SourceArn with ArnLike to the openlore-indexer schedule group alongside aws:SourceAccount, and lambda_pulls_images uses ArnLike instead of StringLike on aws:SourceArn",

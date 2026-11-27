@@ -114,4 +114,18 @@ None.
 
 ## Examination
 
-None.
+### E1
+
+not_examined
+
+```text
+Blocked by missing public evidence surface (O1, O2, O3): examination workspace projects 0 public files, nwdes examine read refuses deploy/tofu/environments/prod-indexer/iam.tf, and nwdes examine probe refuses xtask (admitting only openlore-review-app, review-app-oracle, indexer-ingest-oracle). Prerequisite: project public policy artifact or admit a public oracle CLI for prod-indexer IAM conditions; owner: host/harness evidence-capture setup; remedy: expose iam.tf or an admitted public oracle command in the examination workspace.
+```
+
+### E2
+
+not_examined
+
+```text
+Blocked by missing public evidence surface (O1, O2, O3): examination workspace projects 0 public files, nwdes examine read refuses deploy/tofu/environments/prod-indexer/ecr.tf, and nwdes examine probe refuses xtask (admitting only openlore-review-app, review-app-oracle, indexer-ingest-oracle). Prerequisite: project public policy artifact or admit a public oracle CLI for prod-indexer ECR policy conditions; owner: host/harness evidence-capture setup; remedy: expose ecr.tf or an admitted public oracle command in the examination workspace.
+```
