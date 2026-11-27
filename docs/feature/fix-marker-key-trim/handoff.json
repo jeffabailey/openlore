@@ -31,7 +31,7 @@
 },
 "counters": {
 "E": 4,
-"F": 27,
+"F": 31,
 "P": 2,
 "S": 1
 },
@@ -59,6 +59,24 @@
 "limactl shell local-dev -- sh -c 'cd ~/openlore && cargo test -p adapter-s3-index-object --test scale_to_zero_write_probe'"
 ]
 }
+}
+},
+"examination": {
+"E1": {
+"reason": "F28",
+"verdict": "not_examined"
+},
+"E2": {
+"reason": "F29",
+"verdict": "not_examined"
+},
+"E3": {
+"reason": "F30",
+"verdict": "not_examined"
+},
+"E4": {
+"reason": "F31",
+"verdict": "not_examined"
 }
 },
 "expectations": {
@@ -115,7 +133,11 @@
 "F25": "Check whether an index key, pass-record key, or both with leading or trailing spaces, tabs, or newlines around the write-probe marker are recognized as the marker, and whether empty, whitespace-only, uppercase case-variant, padded non-marker, prefixed or suffixed marker paths, and keys with internal whitespace are allowed",
 "F26": "Returns true whenever either or both keys trim to the write-probe marker and false for empty, whitespace-only, case-variant, and all other non-marker keys",
 "F27": "Any index or pass-record key (or both) whose trimmed text matches the write-probe marker is identified as the marker, while empty, whitespace-only, case-variant, and distinct keys are permitted",
+"F28": "No admitted nwdes examine probe command (only openlore-review-app, review-app-oracle, indexer-ingest-oracle) exposes location_names_write_probe_key for examiner-supplied index_key/last_pass_key inputs (O1-O3). Prerequisite: declared public probe CLI accepting index_key/last_pass_key; owner: harness/acceptance-designer; remedy: expose a probe script in nwdes examine probe.",
+"F29": "No admitted nwdes examine probe command (only openlore-review-app, review-app-oracle, indexer-ingest-oracle) exposes location_names_write_probe_key to test non-marker, empty, whitespace-only, substring, prefix/suffix, case-variant, or internal-whitespace keys (O1-O3). Prerequisite: declared public probe CLI accepting index_key/last_pass_key; owner: harness/acceptance-designer; remedy: expose a probe script in nwdes examine probe.",
 "F3": "location_names_write_probe_key returns true when either key trims to WRITE_PROBE_KEY and false otherwise",
+"F30": "No admitted nwdes examine probe command (only openlore-review-app, review-app-oracle, indexer-ingest-oracle) exposes S3IndexObjectAdapter::connect with examiner-supplied index_key/last_pass_key to observe ProbeRefused on exact or whitespace-padded WRITE_PROBE_KEY (O1-O3). Prerequisite: declared public probe CLI driving S3IndexObjectAdapter::connect; owner: harness/acceptance-designer; remedy: expose a probe script in nwdes examine probe.",
+"F31": "No admitted nwdes examine probe command (only openlore-review-app, review-app-oracle, indexer-ingest-oracle) exposes S3IndexObjectAdapter::connect with examiner-supplied non-marker index_key/last_pass_key to confirm the write-probe-key guard does not reject non-marker locations (O1-O3). Prerequisite: declared public probe CLI driving S3IndexObjectAdapter::connect; owner: harness/acceptance-designer; remedy: expose a probe script in nwdes examine probe.",
 "F4": "S3IndexObjectAdapter::connect refuses a location whose index_key or last_pass_key trims to WRITE_PROBE_KEY",
 "F5": "location_names_write_probe_key and S3IndexObjectAdapter::connect refuse index_key or last_pass_key when trimming whitespace equals WRITE_PROBE_KEY, while allowing non-marker keys",
 "F6": "Call location_names_write_probe_key and S3IndexObjectAdapter::connect with whitespace-padded WRITE_PROBE_KEY values",

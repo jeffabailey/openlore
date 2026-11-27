@@ -154,4 +154,34 @@ None.
 
 ## Examination
 
-None.
+### E1
+
+not_examined
+
+```text
+No admitted nwdes examine probe command (only openlore-review-app, review-app-oracle, indexer-ingest-oracle) exposes location_names_write_probe_key for examiner-supplied index_key/last_pass_key inputs (O1-O3). Prerequisite: declared public probe CLI accepting index_key/last_pass_key; owner: harness/acceptance-designer; remedy: expose a probe script in nwdes examine probe.
+```
+
+### E2
+
+not_examined
+
+```text
+No admitted nwdes examine probe command (only openlore-review-app, review-app-oracle, indexer-ingest-oracle) exposes location_names_write_probe_key to test non-marker, empty, whitespace-only, substring, prefix/suffix, case-variant, or internal-whitespace keys (O1-O3). Prerequisite: declared public probe CLI accepting index_key/last_pass_key; owner: harness/acceptance-designer; remedy: expose a probe script in nwdes examine probe.
+```
+
+### E3
+
+not_examined
+
+```text
+No admitted nwdes examine probe command (only openlore-review-app, review-app-oracle, indexer-ingest-oracle) exposes S3IndexObjectAdapter::connect with examiner-supplied index_key/last_pass_key to observe ProbeRefused on exact or whitespace-padded WRITE_PROBE_KEY (O1-O3). Prerequisite: declared public probe CLI driving S3IndexObjectAdapter::connect; owner: harness/acceptance-designer; remedy: expose a probe script in nwdes examine probe.
+```
+
+### E4
+
+not_examined
+
+```text
+No admitted nwdes examine probe command (only openlore-review-app, review-app-oracle, indexer-ingest-oracle) exposes S3IndexObjectAdapter::connect with examiner-supplied non-marker index_key/last_pass_key to confirm the write-probe-key guard does not reject non-marker locations (O1-O3). Prerequisite: declared public probe CLI driving S3IndexObjectAdapter::connect; owner: harness/acceptance-designer; remedy: expose a probe script in nwdes examine probe.
+```
