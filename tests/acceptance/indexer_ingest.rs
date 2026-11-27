@@ -878,11 +878,9 @@ fn fetch_did_document_with_chunked_request(
     use std::io::{ErrorKind, Read, Write};
     use std::net::TcpStream;
 
-    let addr = endpoint_url
-        .strip_prefix("http://")
-        .unwrap_or(endpoint_url);
-    let mut stream = TcpStream::connect(addr)
-        .unwrap_or_else(|e| panic!("connect to PLC endpoint {addr}: {e}"));
+    let addr = endpoint_url.strip_prefix("http://").unwrap_or(endpoint_url);
+    let mut stream =
+        TcpStream::connect(addr).unwrap_or_else(|e| panic!("connect to PLC endpoint {addr}: {e}"));
     stream
         .set_nodelay(true)
         .expect("disable Nagle so split TCP writes arrive as separate segments");
@@ -900,12 +898,7 @@ fn fetch_did_document_with_chunked_request(
             .and_then(|()| stream.flush())
         {
             Ok(()) => {}
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    ErrorKind::BrokenPipe | ErrorKind::ConnectionReset
-                ) =>
-            {
+            Err(e) if matches!(e.kind(), ErrorKind::BrokenPipe | ErrorKind::ConnectionReset) => {
                 break;
             }
             Err(e) => panic!("write request chunk {idx} to {addr}: {e}"),
@@ -951,7 +944,9 @@ fn assert_http_200_did_document(
     let pubkey = doc["verificationMethod"][0]["publicKeyMultibase"]
         .as_str()
         .unwrap_or_else(|| {
-            panic!("expected verificationMethod[0].publicKeyMultibase for {scenario_label}; got {doc}")
+            panic!(
+                "expected verificationMethod[0].publicKeyMultibase for {scenario_label}; got {doc}"
+            )
         });
     assert!(
         pubkey.starts_with("z6Mk"),
@@ -974,11 +969,8 @@ fn plc_did_document_lookup_succeeds_for_delayed_and_split_requests() {
         &["GET /did:plc:priya-test HTTP/1.1\r\nHost: localhost\r\n\r\n"],
         std::time::Duration::ZERO,
     );
-    let priya_delayed_key = assert_http_200_did_document(
-        &delayed_response,
-        PRIYA_DID,
-        "delayed single-write request",
-    );
+    let priya_delayed_key =
+        assert_http_200_did_document(&delayed_response, PRIYA_DID, "delayed single-write request");
 
     let split_priya_response = fetch_did_document_with_chunked_request(
         resolver.endpoint_url(),
