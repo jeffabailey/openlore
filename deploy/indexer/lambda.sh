@@ -451,7 +451,7 @@ flip_live() { # $1 = index into LAMBDA_FUNCTIONS, $2 = extra record
 
 distribution_summary() { # the list entry of the distribution serving $INDEX_HOST
   aws cloudfront list-distributions --region "$REGION" |
-    jq -c --arg host "$INDEX_HOST" '.DistributionList.Items[]
+    jq -c --arg host "$INDEX_HOST" '.DistributionList.Items[]?
       | select((.Aliases.Items // []) | index($host))'
 }
 
@@ -481,7 +481,8 @@ edge_url() {
     return 0
   fi
   local domain
-  domain=$(distribution_field DomainName)
+  domain=$(distribution_field DomainName) ||
+    die "refusing: could not read CloudFront distributions for $INDEX_HOST"
   [ -n "$domain" ] || die "refusing: no distribution serves $INDEX_HOST"
   echo "https://$domain"
 }

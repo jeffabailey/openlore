@@ -156,6 +156,17 @@ enum Holder {
     Latest,
 }
 
+/// What `cloudfront list-distributions` answers.
+#[derive(Clone, Copy, Debug)]
+enum CloudFrontList {
+    /// One distribution serving `index.openlore.jeffbailey.us`.
+    Matching,
+    /// Succeeded with this JSON body and no matching alias.
+    NoMatch(&'static str),
+    /// Exited non-zero with this message on stderr.
+    Failed(&'static str),
+}
+
 /// What the stubbed world looks like.
 #[derive(Clone, Copy, Debug)]
 struct Posture {
@@ -217,6 +228,8 @@ struct Posture {
     live_moves_that_fail: &'static [(usize, u32)],
     /// From which `head-object` call on the index it fails, and with what on stderr.
     index_head_fails: Option<(u32, &'static str)>,
+    /// What `cloudfront list-distributions` answers.
+    cloudfront_list: CloudFrontList,
 }
 
 impl Default for Posture {
@@ -249,6 +262,7 @@ impl Default for Posture {
             publish_answers_live: [false; 3],
             live_moves_that_fail: &[],
             index_head_fails: None,
+            cloudfront_list: CloudFrontList::Matching,
         }
     }
 }
@@ -554,6 +568,13 @@ fn aws(posture: Posture, digest: &str) -> String {
     fi"#
             )
         });
+    let cloudfront_list = match posture.cloudfront_list {
+        CloudFrontList::Matching => {
+            r#"echo '{"DistributionList":{"Items":[{"Id":"EDIST","DomainName":"dedge.cloudfront.net","Aliases":{"Items":["index.openlore.jeffbailey.us"]}}]}}'"#.to_string()
+        }
+        CloudFrontList::NoMatch(json) => format!("echo '{json}'"),
+        CloudFrontList::Failed(err) => format!("echo '{err}' >&2; exit 254"),
+    };
     format!(
         r#"
 in_ecr={in_ecr}
@@ -616,7 +637,7 @@ case "$*" in
   *"ssm send-command"*) echo cmd-1 ;;
   *"ssm get-command-invocation"*) echo Success ;;
   *"cloudfront list-distributions"*)
-    echo '{{"DistributionList":{{"Items":[{{"Id":"EDIST","DomainName":"dedge.cloudfront.net","Aliases":{{"Items":["index.openlore.jeffbailey.us"]}}}}]}}}}' ;;
+    {cloudfront_list} ;;
   *"cloudfront get-distribution-config"*)
     echo '{{"ETag":"ECONFIG","DistributionConfig":{{"Enabled":{enabled},"Comment":"index"}}}}' ;;
   *) echo '{{}}' ;;
@@ -3079,4 +3100,78 @@ esac"#
         !called(&calls, &["openlore-indexer-pass.service"]),
         "{calls}"
     );
+}
+
+const CF_ACCESS_DENIED: &str =
+    "An error occurred (AccessDenied) when calling the ListDistributions operation: Access Denied";
+const CF_THROTTLED: &str =
+    "An error occurred (Throttling) when calling the ListDistributions operation: Rate exceeded";
+const EMPTY_DISTRIBUTIONS: &str = r#"{"DistributionList":{"Items":[]}}"#;
+const UNMATCHED_DISTRIBUTIONS: &str = r#"{"DistributionList":{"Items":[{"Id":"EOTHER","DomainName":"dother.cloudfront.net","Aliases":{"Items":["other.example.com"]}}]}}"#;
+
+/// A failed CloudFront read stops with a refusal that names the CloudFront read failure
+/// rather than claiming no distribution serves the host.
+fn assert_cloudfront_read_refused(run: &Run) {
+    assert_ne!(run.status, 0, "{}", run.out);
+    assert_refused(run);
+    assert!(
+        !run.out.contains("no distribution serves"),
+        "failed CloudFront read must not report no distribution serves:\n{}",
+        run.out
+    );
+    let refusal = run
+        .out
+        .lines()
+        .find(|line| line.contains("refusing"))
+        .unwrap_or_else(|| panic!("expected a refusal line\n{}", run.out));
+    let lower = refusal.to_ascii_lowercase();
+    assert!(
+        lower.contains("cloudfront"),
+        "refusal should identify CloudFront: {refusal}"
+    );
+    assert!(
+        lower.contains("could not read")
+            || lower.contains("failed to read")
+            || lower.contains("could not list")
+            || lower.contains("failed to list")
+            || lower.contains("read fail")
+            || lower.contains("list fail"),
+        "refusal should state that CloudFront could not be read: {refusal}"
+    );
+}
+
+/// When reading CloudFront distributions fails, verbs that resolve the edge URL refuse
+/// with a distinct CloudFront read failure message rather than claiming no distribution serves.
+#[test]
+fn a_failed_cloudfront_read_refuses_with_a_cloudfront_read_failure() {
+    each_row([CF_ACCESS_DENIED, CF_THROTTLED, NO_NETWORK], |error| {
+        let stubs = Stubs::new(Posture {
+            cloudfront_list: CloudFrontList::Failed(error),
+            ..Posture::default()
+        });
+
+        let run = stubs.run(&["lambda", "parity"], &[], "");
+
+        assert_reached(&stubs, &["cloudfront list-distributions"]);
+        assert_cloudfront_read_refused(&run);
+    });
+}
+
+/// When listing CloudFront distributions succeeds without a matching alias, resolving
+/// the edge URL still refuses with `no distribution serves`.
+#[test]
+fn an_empty_or_unmatched_cloudfront_distribution_list_refuses_with_no_distribution_serves() {
+    each_row([EMPTY_DISTRIBUTIONS, UNMATCHED_DISTRIBUTIONS], |body| {
+        let stubs = Stubs::new(Posture {
+            cloudfront_list: CloudFrontList::NoMatch(body),
+            ..Posture::default()
+        });
+
+        let run = stubs.run(&["lambda", "parity"], &[], "");
+
+        assert_ne!(run.status, 0, "{}\n{}", run.out, stubs.calls());
+        assert_reached(&stubs, &["cloudfront list-distributions"]);
+        assert_refused(&run);
+        assert!(run.out.contains("no distribution serves"), "{}", run.out);
+    });
 }

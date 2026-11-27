@@ -1,0 +1,151 @@
+{
+"acceptance": {
+"S1": [
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F18",
+"test": "xtask/tests/scale_to_zero_platform.rs::a_failed_cloudfront_read_refuses_with_a_cloudfront_read_failure"
+},
+"expected": "F16",
+"stimulus": "F15",
+"user_result": "F17"
+},
+{
+"covers": [
+"P2"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F22",
+"test": "xtask/tests/scale_to_zero_platform.rs::an_empty_or_unmatched_cloudfront_distribution_list_refuses_with_no_distribution_serves"
+},
+"expected": "F20",
+"stimulus": "F19",
+"user_result": "F21"
+}
+]
+},
+"counters": {
+"E": 3,
+"F": 22,
+"P": 2,
+"S": 1
+},
+"design": {
+"paradigm": "functional",
+"slices": {
+"S1": {
+"oracle": "xtask/tests/scale_to_zero_platform.rs",
+"public_oracle": {
+"expected": "F7",
+"falsifier": "F8",
+"promises": [
+"P1",
+"P2"
+],
+"stimulus": "F6"
+},
+"targets": [
+{
+"change": "Extend",
+"path": "deploy/indexer/lambda.sh"
+}
+],
+"verification": [
+"limactl shell local-dev -- sh -c 'cd ~/openlore && cargo test -p xtask --test scale_to_zero_platform'"
+]
+}
+}
+},
+"expectations": {
+"rows": [
+{
+"id": "E1",
+"lacuna": "F10",
+"promises": [
+"P1"
+],
+"text": "F9"
+},
+{
+"id": "E2",
+"lacuna": "F12",
+"promises": [
+"P1"
+],
+"text": "F11"
+},
+{
+"id": "E3",
+"lacuna": "F14",
+"promises": [
+"P2"
+],
+"text": "F13"
+}
+]
+},
+"facts": {
+"F1": "Report a distinct CloudFront read failure message in edge_url (deploy/indexer/lambda.sh) when aws cloudfront list-distributions fails, instead of aborting without a refusal or reporting that no distribution serves INDEX_HOST (scale-to-zero-hosting LOW: edge_url message on a failed CloudFront read).",
+"F10": "An oracle testing a single stubbed failure may check only for non-zero exit or a loose substring, missing whether stdout stays free of a fallback URL and whether distinct failure causes (auth, network, missing CLI) still identify the failed CloudFront read.",
+"F11": "When aws cloudfront list-distributions fails, edge_url does not claim that no distribution serves the host.",
+"F12": "An oracle that only asserts the new CloudFront failure message is present does not see if the misleading 'no distribution serves' wording is still emitted alongside it on stdout or stderr.",
+"F13": "When aws cloudfront list-distributions succeeds and no distribution has an alias matching the requested host, edge_url refuses with a message containing 'no distribution serves'.",
+"F14": "An oracle testing only an empty distribution list does not see whether non-empty lists with non-matching aliases or distributions lacking aliases still refuse with 'no distribution serves' instead of misreporting a CloudFront read failure.",
+"F15": "Run a Lambda operator command that resolves the public edge address when listing CloudFront distributions fails with access denied, throttling, or a network error",
+"F16": "The command exits non-zero with a refusal message stating CloudFront could not be read and does not claim that no distribution serves the host",
+"F17": "An operator sees a clear refusal that CloudFront could not be read instead of a misleading message that no distribution serves the host",
+"F18": "A refusal that states CloudFront could not be read without echoing the raw AWS error text, or a different operator verb that bypassed shared edge resolution",
+"F19": "Run a Lambda operator command that resolves the public edge address when listing CloudFront distributions succeeds with an empty list or only unrelated aliases",
+"F2": "Give operators an accurate refusal message when CloudFront cannot be read vs when no distribution matches INDEX_HOST",
+"F20": "The command exits non-zero with a refusal stating that no distribution serves the host",
+"F21": "An operator still receives the refusal stating that no distribution serves the host when no matching distribution alias exists",
+"F22": "A CloudFront response that omits the Items array entirely rather than returning an empty array, or a refusal that says no distribution serves without repeating the hostname",
+"F3": "When aws cloudfront list-distributions fails, edge_url refuses with a message identifying the failed CloudFront read rather than claiming no distribution serves the host",
+"F4": "When aws cloudfront list-distributions succeeds with no matching alias, edge_url continues to refuse with 'no distribution serves'",
+"F5": "edge_url fails with a refusal naming the CloudFront read failure when aws cloudfront list-distributions fails, and still reports no distribution serves INDEX_HOST when the list succeeds without a matching alias",
+"F6": "Invoke a deploy.sh lambda verb that calls edge_url when aws cloudfront list-distributions exits non-zero vs when it returns an empty distribution list",
+"F7": "Non-zero list-distributions exits non-zero with a refusal message stating CloudFront could not be read (not 'no distribution serves'); empty distribution list still refuses with 'no distribution serves'",
+"F8": "A failed CloudFront list-distributions call aborts without a CloudFront read refusal message or prints 'no distribution serves'",
+"F9": "When aws cloudfront list-distributions fails, edge_url refuses (non-zero exit without returning a URL) with a message identifying the failed CloudFront read."
+},
+"product": {
+"promises": [
+{
+"id": "P1",
+"kind": "Outcome",
+"text": "F3"
+},
+{
+"id": "P2",
+"kind": "Outcome",
+"text": "F4"
+}
+],
+"slices": [
+{
+"id": "S1",
+"observation": "F5",
+"promises": [
+"P1",
+"P2"
+]
+}
+]
+},
+"request": "F1",
+"schema": "nwdes.handoff",
+"scope": {
+"id": "fix-edge-url-cloudfront-error",
+"kind": "Feature"
+},
+"version": 4,
+"work": {
+"size": "M",
+"value": "F2"
+}
+}
