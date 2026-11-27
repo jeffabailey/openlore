@@ -134,4 +134,26 @@ None.
 
 ## Examination
 
-None.
+### E1
+
+not_examined
+
+```text
+O1, O2: Public examination workspace has no projected files; .github/workflows/ci.yml is absent from nwdes examine read (ReadRefused) and no admitted probe command exposes it.
+```
+
+### E2
+
+not_examined
+
+```text
+O1, O2: Public examination workspace has no projected files; .github/workflows/deploy-pds-check.yml is absent from nwdes examine read (ReadRefused) and no admitted probe command exposes it.
+```
+
+### E3
+
+not_examined
+
+```text
+O1, O2: Public examination workspace has no projected files; .github/workflows/deploy-pds-check.yml is absent from nwdes examine read (ReadRefused) and no admitted probe command exposes it.
+```

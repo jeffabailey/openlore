@@ -31,7 +31,7 @@
 },
 "counters": {
 "E": 3,
-"F": 22,
+"F": 24,
 "P": 2,
 "S": 1
 },
@@ -63,6 +63,20 @@
 "limactl shell local-dev -- sh -c 'cd ~/openlore && cargo test -p xtask --test scale_to_zero_ci'"
 ]
 }
+}
+},
+"examination": {
+"E1": {
+"reason": "F23",
+"verdict": "not_examined"
+},
+"E2": {
+"reason": "F24",
+"verdict": "not_examined"
+},
+"E3": {
+"reason": "F24",
+"verdict": "not_examined"
 }
 },
 "expectations": {
@@ -109,6 +123,8 @@
 "F20": "Clean digest-pinned files pass while any latest-tag reference in review-app compose or deploy script, indexer top-level or nested files, or prod-indexer infrastructure files causes a blocking failure",
 "F21": "Unpinned latest image tags in indexer deployment files and prod-indexer infrastructure files are blocked in continuous integration alongside review-app files",
 "F22": "A latest-tag reference is added only in a file type excluded by a custom filter other than shell, compose YAML, or Tofu files, or the workflow trigger path filters omit a newly added directory",
+"F23": "O1, O2: Public examination workspace has no projected files; .github/workflows/ci.yml is absent from nwdes examine read (ReadRefused) and no admitted probe command exposes it.",
+"F24": "O1, O2: Public examination workspace has no projected files; .github/workflows/deploy-pds-check.yml is absent from nwdes examine read (ReadRefused) and no admitted probe command exposes it.",
 "F3": "ci.yml declares top-level permissions with contents: read",
 "F4": "deploy-pds-check.yml scans deploy/indexer and deploy/tofu/environments/prod-indexer for :latest references",
 "F5": "ci.yml declares top-level permissions: contents: read, and deploy-pds-check.yml scans deploy/indexer and deploy/tofu/environments/prod-indexer for :latest references",
