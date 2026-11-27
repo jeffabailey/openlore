@@ -139,7 +139,7 @@ None.
 not_examined
 
 ```text
-No admitted nwdes examine probe command or public workspace document exposes FakePlcResolver or openlore-indexer (O1, O2); delayed-write HTTP 200 vs 404 behavior could not be observed.
+Blocked from observing delayed client writes to FakePlcResolver (O1, O2, O3): no direct FakePlcResolver probe is admitted, and admitted script indexer-ingest-oracle fails under nwdes examine probe with limactl fatal error (instance 'local-dev' does not exist).
 ```
 
 ### E2
@@ -147,7 +147,7 @@ No admitted nwdes examine probe command or public workspace document exposes Fak
 not_examined
 
 ```text
-No admitted nwdes examine probe command or public workspace document exposes FakePlcResolver or openlore-indexer (O1, O2); split-write HTTP request head until CRLFCRLF behavior could not be observed.
+Blocked from observing split-write TCP request heads ending in CRLFCRLF against FakePlcResolver (O1, O2, O3): no direct FakePlcResolver probe is admitted, and admitted script indexer-ingest-oracle fails under nwdes examine probe with limactl fatal error (instance 'local-dev' does not exist).
 ```
 
 ### E3
@@ -155,5 +155,5 @@ No admitted nwdes examine probe command or public workspace document exposes Fak
 not_examined
 
 ```text
-No admitted nwdes examine probe command or public workspace document exposes FakePlcResolver or openlore-indexer (O1, O2); per-connection handling across multiple accepted connections and distinct DIDs could not be observed.
+Blocked from observing multi-connection delayed/split requests across distinct DIDs on FakePlcResolver (O1, O2, O3): no direct FakePlcResolver probe is admitted, and admitted script indexer-ingest-oracle fails under nwdes examine probe with limactl fatal error (instance 'local-dev' does not exist).
 ```

@@ -31,7 +31,7 @@
 },
 "counters": {
 "E": 3,
-"F": 24,
+"F": 27,
 "P": 1,
 "S": 1
 },
@@ -62,15 +62,15 @@
 },
 "examination": {
 "E1": {
-"reason": "F22",
+"reason": "F25",
 "verdict": "not_examined"
 },
 "E2": {
-"reason": "F23",
+"reason": "F26",
 "verdict": "not_examined"
 },
 "E3": {
-"reason": "F24",
+"reason": "F27",
 "verdict": "not_examined"
 }
 },
@@ -120,9 +120,9 @@
 "F2": "FakePlcResolver reliably reads complete HTTP request heads on blocking accepted streams so indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam does not flake under parallel load or fragmented requests",
 "F20": "Ingesting signed claims against the PLC resolver reliably verifies valid claims and rejects tampered signatures using the real decoded Ed25519 key.",
 "F21": "A resolver that only succeeds when the HTTP client writes the full request head in a single immediate TCP segment without delay or fragmentation.",
-"F22": "No admitted nwdes examine probe command or public workspace document exposes FakePlcResolver or openlore-indexer (O1, O2); delayed-write HTTP 200 vs 404 behavior could not be observed.",
-"F23": "No admitted nwdes examine probe command or public workspace document exposes FakePlcResolver or openlore-indexer (O1, O2); split-write HTTP request head until CRLFCRLF behavior could not be observed.",
-"F24": "No admitted nwdes examine probe command or public workspace document exposes FakePlcResolver or openlore-indexer (O1, O2); per-connection handling across multiple accepted connections and distinct DIDs could not be observed.",
+"F25": "Blocked from observing delayed client writes to FakePlcResolver (O1, O2, O3): no direct FakePlcResolver probe is admitted, and admitted script indexer-ingest-oracle fails under nwdes examine probe with limactl fatal error (instance 'local-dev' does not exist).",
+"F26": "Blocked from observing split-write TCP request heads ending in CRLFCRLF against FakePlcResolver (O1, O2, O3): no direct FakePlcResolver probe is admitted, and admitted script indexer-ingest-oracle fails under nwdes examine probe with limactl fatal error (instance 'local-dev' does not exist).",
+"F27": "Blocked from observing multi-connection delayed/split requests across distinct DIDs on FakePlcResolver (O1, O2, O3): no direct FakePlcResolver probe is admitted, and admitted script indexer-ingest-oracle fails under nwdes examine probe with limactl fatal error (instance 'local-dev' does not exist).",
 "F3": "FakePlcResolver sets every accepted stream to blocking mode and reads the complete HTTP request head until CRLFCRLF so delayed or split client writes receive HTTP 200 with the matching DID document instead of spurious 404",
 "F4": "FakePlcResolver serves HTTP 200 with the matching DID document when a client pauses before writing or sends the HTTP request line across multiple TCP chunks, and indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam passes reliably",
 "F5": "A client connects to FakePlcResolver and sends GET /did:plc:priya-test HTTP/1.1 after a delay and across split TCP writes, and openlore-indexer ingest resolves Priya's real z6Mk key against FakePlcResolver",
