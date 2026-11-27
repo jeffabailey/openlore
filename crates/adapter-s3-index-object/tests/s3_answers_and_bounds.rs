@@ -469,7 +469,8 @@ fn assert_publish_outcome(
 }
 
 #[tokio::test]
-async fn conditional_publish_reports_conflict_for_precondition_and_concurrent_conflict_and_fails_other_errors() {
+async fn conditional_publish_reports_conflict_for_precondition_and_concurrent_conflict_and_fails_other_errors(
+) {
     let cases: [(&str, Option<&str>, PublishExpectation); 6] = [
         (
             "412 Precondition Failed",
