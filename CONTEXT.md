@@ -11,4 +11,4 @@ scale-to-zero-hosting (indexer on Lambda, ADR-090): DELIVER finalized 2026-10-31
 ## Next Steps
 - User decisions: 05-01 probe not_live, 08-08 cold through the edge, the x-amzn refused-header path, how to produce a 140 MB index.
 - After a push, the first CI run is the final proof. Then the operator stages in `deploy/indexer/README.md`; evidence goes in `docs/evolution/scale-to-zero-hosting-evidence.md`.
-- Fix-later list is in the evolution doc. RUSTSEC-2026-0387 recheck 2026-11-24. Flake `indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam` still open.
+- Fix-later list is in the evolution doc. `RUSTSEC-2026-0387` and `RUSTSEC-2026-0543` recheck 2026-12-24 (in `deny.toml`). Flake `indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam` fixed (`05e229c`).
