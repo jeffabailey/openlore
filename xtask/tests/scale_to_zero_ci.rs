@@ -2479,3 +2479,266 @@ fn each_evidence_item_names_its_stage_and_how_to_record_it() {
     let gone = runbook.replace("P-18, 20 concurrent calls:", "Some calls:");
     assert_eq!(missing_evidence(&gone).len(), 1, "a step that is not below");
 }
+
+// ---------------------------------------------------------------------------------------------
+// CI workflow security checks: top-level permissions and :latest image-pin scan
+// ---------------------------------------------------------------------------------------------
+
+/// Strip a YAML `# ...` comment and trim surrounding whitespace.
+fn strip_yaml_comment(line: &str) -> &str {
+    line.split('#').next().unwrap_or("").trim()
+}
+
+/// Top-level `permissions:` mapping in a GitHub Actions workflow, if declared as a mapping.
+/// Returns `None` when no column-0 `permissions:` key exists, when duplicated, or when not a map.
+fn top_level_permissions(workflow: &str) -> Option<BTreeMap<String, String>> {
+    let lines: Vec<&str> = workflow.lines().collect();
+    let starts: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            !line.starts_with(' ')
+                && !line.starts_with('\t')
+                && strip_yaml_comment(line).starts_with("permissions:")
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+    if starts.len() != 1 {
+        return None;
+    }
+
+    let header = strip_yaml_comment(lines[starts[0]]);
+    let inline = header.strip_prefix("permissions:")?.trim();
+    let mut entries = BTreeMap::new();
+
+    if !inline.is_empty() {
+        let inner = inline.strip_prefix('{')?.strip_suffix('}')?;
+        for pair in inner.split(',') {
+            let (key, value) = pair.split_once(':')?;
+            entries.insert(key.trim().to_owned(), value.trim().to_owned());
+        }
+        return Some(entries);
+    }
+
+    for &line in &lines[starts[0] + 1..] {
+        let trimmed = strip_yaml_comment(line);
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !line.starts_with(' ') && !line.starts_with('\t') {
+            break;
+        }
+        let (key, value) = trimmed.split_once(':')?;
+        entries.insert(key.trim().to_owned(), value.trim().to_owned());
+    }
+    (!entries.is_empty()).then_some(entries)
+}
+
+/// All top-level job names under `jobs:` in a workflow, in declaration order.
+fn job_names(workflow: &str) -> Vec<&str> {
+    let Some((_, after_jobs)) = workflow.split_once("\njobs:\n") else {
+        return Vec::new();
+    };
+    after_jobs
+        .lines()
+        .take_while(|line| {
+            line.trim().is_empty()
+                || line.starts_with('#')
+                || line.starts_with(' ')
+                || line.starts_with('\t')
+        })
+        .filter_map(|line| {
+            let rest = line.strip_prefix("  ")?;
+            if rest.starts_with(' ') || rest.starts_with('#') {
+                return None;
+            }
+            rest.trim().strip_suffix(':')
+        })
+        .collect()
+}
+
+/// The `COMPOSE_FILE_PATH` set in a job's `env:` block, if any.
+fn job_compose_file_path(job_body: &str) -> Option<&str> {
+    job_body.lines().find_map(|line| {
+        let rest = line.strip_prefix("      COMPOSE_FILE_PATH:")?;
+        Some(
+            strip_yaml_comment(rest)
+                .trim_matches('"')
+                .trim_matches('\''),
+        )
+    })
+}
+
+/// Extract shell snippets from a step's `run:` script that check for `:latest`.
+fn latest_scan_snippets(step: &str) -> Vec<String> {
+    let body = if step.contains("run: |\n") {
+        script(step)
+    } else if let Some(line) = step.lines().find(|l| l.trim_start().starts_with("run:")) {
+        line.trim_start()
+            .strip_prefix("run:")
+            .unwrap_or("")
+            .trim()
+            .to_owned()
+    } else {
+        return Vec::new();
+    };
+
+    let mut snippets = Vec::new();
+    let lines: Vec<&str> = body.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim_start();
+        if trimmed.starts_with('#') || trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+        if trimmed.starts_with("if ") {
+            let start = i;
+            let mut depth = 0usize;
+            while i < lines.len() {
+                let t = lines[i].trim_start();
+                if t.starts_with("if ") {
+                    depth += 1;
+                }
+                if t == "fi" || t.ends_with("; fi") || t.starts_with("fi ") {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        i += 1;
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            let block = lines[start..i].join("\n");
+            if block.contains(":latest") {
+                snippets.push(block);
+            }
+        } else {
+            if trimmed.contains(":latest") {
+                snippets.push(lines[i].to_owned());
+            }
+            i += 1;
+        }
+    }
+    snippets
+}
+
+#[test]
+fn ci_workflow_declares_top_level_read_only_contents_permissions() {
+    let ci = read(".github/workflows/ci.yml");
+    let expected = BTreeMap::from([("contents".to_owned(), "read".to_owned())]);
+    assert_eq!(
+        top_level_permissions(&ci),
+        Some(expected),
+        "ci.yml must declare top-level `permissions: contents: read` with no extra grants"
+    );
+}
+
+#[test]
+fn deploy_check_workflow_scans_indexer_and_prod_indexer_for_latest_image_references() {
+    let workflow = read(".github/workflows/deploy-pds-check.yml");
+    let mut scans: Vec<(Option<String>, String)> = Vec::new();
+    for name in job_names(&workflow) {
+        let body = job(&workflow, name);
+        let compose_path = job_compose_file_path(body).map(str::to_owned);
+        for step in steps(body) {
+            let snippets = latest_scan_snippets(step);
+            if !snippets.is_empty() {
+                assert!(
+                    !body.lines().any(|line| line.starts_with("    if:")),
+                    "job `{name}` running the :latest scan must not be conditionally skipped"
+                );
+                assert!(
+                    !step.contains("continue-on-error: true"),
+                    "the :latest scan step in `{name}` must block on failure"
+                );
+                for snippet in snippets {
+                    scans.push((compose_path.clone(), snippet));
+                }
+            }
+        }
+    }
+    assert!(
+        !scans.is_empty(),
+        "deploy-pds-check.yml must contain a :latest image-pin scan"
+    );
+
+    let run_latest_scans = |dirty_relative: Option<&str>| -> bool {
+        let dir = tempfile::tempdir().expect("a temp workspace");
+        let files = [
+            (
+                "deploy/review-app/host/compose.yaml",
+                "services:\n  app:\n    image: ghcr.io/jeffabailey/openlore-review-app@${REVIEW_APP_DIGEST}\n",
+            ),
+            (
+                "deploy/review-app/deploy.sh",
+                "#!/usr/bin/env bash\nIMAGE=ghcr.io/jeffabailey/openlore-review-app@sha256:0000\n",
+            ),
+            (
+                "deploy/indexer/deploy.sh",
+                "#!/usr/bin/env bash\nIMAGE=ghcr.io/jeffabailey/openlore-indexer@sha256:0000\n",
+            ),
+            (
+                "deploy/indexer/host/compose.yaml",
+                "services:\n  indexer:\n    image: ghcr.io/jeffabailey/openlore-indexer@${INDEXER_DIGEST}\n",
+            ),
+            (
+                "deploy/tofu/environments/prod-indexer/lambda.tf",
+                "variable \"bootstrap_image_uri\" {\n  default = \"ghcr.io/jeffabailey/openlore-indexer@sha256:0000\"\n}\n",
+            ),
+        ];
+        for (rel, clean_body) in files {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            let content = if dirty_relative == Some(rel) {
+                format!("{clean_body}image: ghcr.io/jeffabailey/openlore-indexer:latest\n")
+            } else {
+                clean_body.to_owned()
+            };
+            std::fs::write(&path, content).expect("write planted file");
+        }
+        if scans
+            .iter()
+            .any(|(_, snippet)| snippet.contains("git grep"))
+        {
+            let init = Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(dir.path())
+                .status()
+                .expect("git init");
+            assert!(init.success(), "git init in temp workspace");
+            let add = Command::new("git")
+                .args(["add", "-A"])
+                .current_dir(dir.path())
+                .status()
+                .expect("git add");
+            assert!(add.success(), "git add in temp workspace");
+        }
+        scans.iter().all(|(compose_path, snippet)| {
+            let mut cmd = Command::new("bash");
+            cmd.args(["-euo", "pipefail", "-c", snippet])
+                .current_dir(dir.path());
+            if let Some(path) = compose_path {
+                cmd.env("COMPOSE_FILE_PATH", path);
+            }
+            cmd.output().expect("bash").status.success()
+        })
+    };
+
+    assert!(
+        run_latest_scans(None),
+        "a clean tree with digest-pinned images must pass the :latest scan"
+    );
+    for target in [
+        "deploy/review-app/host/compose.yaml",
+        "deploy/review-app/deploy.sh",
+        "deploy/indexer/deploy.sh",
+        "deploy/indexer/host/compose.yaml",
+        "deploy/tofu/environments/prod-indexer/lambda.tf",
+    ] {
+        assert!(
+            !run_latest_scans(Some(target)),
+            "the :latest scan in deploy-pds-check.yml must reject a :latest reference in {target}"
+        );
+    }
+}

@@ -19,6 +19,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 # Cancel in-flight runs of the same workflow on the same branch/PR.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

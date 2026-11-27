@@ -1,0 +1,155 @@
+{
+"acceptance": {
+"S1": [
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F18",
+"test": "xtask/tests/scale_to_zero_ci.rs::ci_workflow_declares_top_level_read_only_contents_permissions"
+},
+"expected": "F16",
+"stimulus": "F15",
+"user_result": "F17"
+},
+{
+"covers": [
+"P2"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F22",
+"test": "xtask/tests/scale_to_zero_ci.rs::deploy_check_workflow_scans_indexer_and_prod_indexer_for_latest_image_references"
+},
+"expected": "F20",
+"stimulus": "F19",
+"user_result": "F21"
+}
+]
+},
+"counters": {
+"E": 3,
+"F": 22,
+"P": 2,
+"S": 1
+},
+"design": {
+"paradigm": "functional",
+"slices": {
+"S1": {
+"oracle": "xtask/tests/scale_to_zero_ci.rs",
+"public_oracle": {
+"expected": "F7",
+"falsifier": "F8",
+"promises": [
+"P1",
+"P2"
+],
+"stimulus": "F6"
+},
+"targets": [
+{
+"change": "Extend",
+"path": ".github/workflows/ci.yml"
+},
+{
+"change": "Extend",
+"path": ".github/workflows/deploy-pds-check.yml"
+}
+],
+"verification": [
+"limactl shell local-dev -- sh -c 'cd ~/openlore && cargo test -p xtask --test scale_to_zero_ci'"
+]
+}
+}
+},
+"expectations": {
+"rows": [
+{
+"id": "E1",
+"lacuna": "F10",
+"promises": [
+"P1"
+],
+"text": "F9"
+},
+{
+"id": "E2",
+"lacuna": "F12",
+"promises": [
+"P2"
+],
+"text": "F11"
+},
+{
+"id": "E3",
+"lacuna": "F14",
+"promises": [
+"P2"
+],
+"text": "F13"
+}
+]
+},
+"facts": {
+"F1": "Harden CI workflow security checks (scale-to-zero-hosting LOW): add top-level permissions: contents: read to .github/workflows/ci.yml, and extend the :latest image-pin scan in .github/workflows/deploy-pds-check.yml to cover deploy/indexer and deploy/tofu/environments/prod-indexer in addition to compose and deploy/review-app/deploy.sh.",
+"F10": "Checking for top-level permissions with contents: read in ci.yml does not see whether additional top-level or job-level permissions widen token scope, whether other workflows omit top-level permissions, or whether CI jobs succeed at runtime under read-only token permissions.",
+"F11": "The deploy-pds-check.yml workflow scans deploy/indexer for :latest references.",
+"F12": "Checking that deploy/indexer is included in the :latest scan in deploy-pds-check.yml does not see whether a real :latest reference in nested or templated files under deploy/indexer actually fails the workflow at runtime, or whether pinned tags avoid false positives.",
+"F13": "The deploy-pds-check.yml workflow scans deploy/tofu/environments/prod-indexer for :latest references.",
+"F14": "Checking that deploy/tofu/environments/prod-indexer is included in the :latest scan in deploy-pds-check.yml does not see whether a real :latest reference in HCL or nested files under deploy/tofu/environments/prod-indexer triggers a check failure at runtime, nor whether other deploy environments remain unscanned.",
+"F15": "Check the continuous integration workflow for top-level token permissions",
+"F16": "The workflow declares top-level permissions granting only read access to repository contents",
+"F17": "Workflow runs default to least-privilege read-only repository contents permissions unless a job explicitly requests more",
+"F18": "An individual job overrides permissions with broader scope than needed, or top-level permissions are declared via YAML anchors rather than a direct mapping",
+"F19": "Run the deployment check workflow's latest-tag scan against clean digest-pinned files and against planted latest-tag references in review-app, indexer, and prod-indexer deployment files",
+"F2": "Enforce least-privilege default GITHUB_TOKEN permissions in ci.yml and prevent unpinned :latest image references in indexer deploy scripts and prod-indexer tofu",
+"F20": "Clean digest-pinned files pass while any latest-tag reference in review-app compose or deploy script, indexer top-level or nested files, or prod-indexer infrastructure files causes a blocking failure",
+"F21": "Unpinned latest image tags in indexer deployment files and prod-indexer infrastructure files are blocked in continuous integration alongside review-app files",
+"F22": "A latest-tag reference is added only in a file type excluded by a custom filter other than shell, compose YAML, or Tofu files, or the workflow trigger path filters omit a newly added directory",
+"F3": "ci.yml declares top-level permissions with contents: read",
+"F4": "deploy-pds-check.yml scans deploy/indexer and deploy/tofu/environments/prod-indexer for :latest references",
+"F5": "ci.yml declares top-level permissions: contents: read, and deploy-pds-check.yml scans deploy/indexer and deploy/tofu/environments/prod-indexer for :latest references",
+"F6": "Run xtask scale_to_zero_ci tests against .github/workflows/ci.yml and .github/workflows/deploy-pds-check.yml",
+"F7": "ci.yml defines top-level permissions with contents: read, and deploy-pds-check.yml's :latest scan includes deploy/indexer and deploy/tofu/environments/prod-indexer",
+"F8": "ci.yml lacks top-level permissions: contents: read, or deploy-pds-check.yml's :latest scan omits deploy/indexer or deploy/tofu/environments/prod-indexer",
+"F9": "The ci.yml workflow declares a top-level permissions block with contents: read."
+},
+"product": {
+"promises": [
+{
+"id": "P1",
+"kind": "Outcome",
+"text": "F3"
+},
+{
+"id": "P2",
+"kind": "Outcome",
+"text": "F4"
+}
+],
+"slices": [
+{
+"id": "S1",
+"observation": "F5",
+"promises": [
+"P1",
+"P2"
+]
+}
+]
+},
+"request": "F1",
+"schema": "nwdes.handoff",
+"scope": {
+"id": "fix-ci-permissions-and-latest-scan",
+"kind": "Feature"
+},
+"version": 4,
+"work": {
+"size": "M",
+"value": "F2"
+}
+}

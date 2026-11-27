@@ -186,7 +186,7 @@ jobs:
       - name: images are pinned by digest only
         run: |
           set -euo pipefail
-          if grep -nE ':latest\b' "$COMPOSE_FILE_PATH" deploy/review-app/deploy.sh; then
+          if grep -rnE ':latest\b' "$COMPOSE_FILE_PATH" deploy/review-app/deploy.sh deploy/indexer deploy/tofu/environments/prod-indexer; then
             echo "::error::a :latest reference"; exit 1
           fi
           # shellcheck disable=SC2016 # the literal ${REVIEW_APP_DIGEST} is what must appear
