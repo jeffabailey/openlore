@@ -31,7 +31,7 @@
 },
 "counters": {
 "E": 3,
-"F": 27,
+"F": 30,
 "P": 1,
 "S": 1
 },
@@ -62,15 +62,15 @@
 },
 "examination": {
 "E1": {
-"reason": "F25",
+"reason": "F28",
 "verdict": "not_examined"
 },
 "E2": {
-"reason": "F26",
+"reason": "F29",
 "verdict": "not_examined"
 },
 "E3": {
-"reason": "F27",
+"reason": "F30",
 "verdict": "not_examined"
 }
 },
@@ -120,10 +120,10 @@
 "F2": "FakePlcResolver reliably reads complete HTTP request heads on blocking accepted streams so indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam does not flake under parallel load or fragmented requests",
 "F20": "Ingesting signed claims against the PLC resolver reliably verifies valid claims and rejects tampered signatures using the real decoded Ed25519 key.",
 "F21": "A resolver that only succeeds when the HTTP client writes the full request head in a single immediate TCP segment without delay or fragmentation.",
-"F25": "Blocked from observing delayed client writes to FakePlcResolver (O1, O2, O3): no direct FakePlcResolver probe is admitted, and admitted script indexer-ingest-oracle fails under nwdes examine probe with limactl fatal error (instance 'local-dev' does not exist).",
-"F26": "Blocked from observing split-write TCP request heads ending in CRLFCRLF against FakePlcResolver (O1, O2, O3): no direct FakePlcResolver probe is admitted, and admitted script indexer-ingest-oracle fails under nwdes examine probe with limactl fatal error (instance 'local-dev' does not exist).",
-"F27": "Blocked from observing multi-connection delayed/split requests across distinct DIDs on FakePlcResolver (O1, O2, O3): no direct FakePlcResolver probe is admitted, and admitted script indexer-ingest-oracle fails under nwdes examine probe with limactl fatal error (instance 'local-dev' does not exist).",
+"F28": "Observation gap (O1-O3): no admitted public probe exposes FakePlcResolver for a delayed TCP client write, and indexer-ingest-oracle --no-capture emits only test names and pass counts with zero HTTP status or DID document output.",
+"F29": "Observation gap (O1-O3): no admitted public probe exposes FakePlcResolver for split TCP writes ending in CRLFCRLF, and indexer-ingest-oracle --no-capture emits only test names and pass counts with zero HTTP status or DID document output.",
 "F3": "FakePlcResolver sets every accepted stream to blocking mode and reads the complete HTTP request head until CRLFCRLF so delayed or split client writes receive HTTP 200 with the matching DID document instead of spurious 404",
+"F30": "Observation gap (O1-O3): no admitted public probe exposes FakePlcResolver across multiple accepted connections or distinct requested DIDs, and indexer-ingest-oracle --no-capture emits only test names and pass counts.",
 "F4": "FakePlcResolver serves HTTP 200 with the matching DID document when a client pauses before writing or sends the HTTP request line across multiple TCP chunks, and indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam passes reliably",
 "F5": "A client connects to FakePlcResolver and sends GET /did:plc:priya-test HTTP/1.1 after a delay and across split TCP writes, and openlore-indexer ingest resolves Priya's real z6Mk key against FakePlcResolver",
 "F6": "FakePlcResolver returns HTTP 200 with Priya's z6Mk DID document for delayed and split-write requests, and indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam passes with 1 verified claim and 1 bad_signature rejection",

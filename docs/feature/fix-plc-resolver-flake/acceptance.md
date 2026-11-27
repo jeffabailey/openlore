@@ -139,7 +139,7 @@ None.
 not_examined
 
 ```text
-Blocked from observing delayed client writes to FakePlcResolver (O1, O2, O3): no direct FakePlcResolver probe is admitted, and admitted script indexer-ingest-oracle fails under nwdes examine probe with limactl fatal error (instance 'local-dev' does not exist).
+Observation gap (O1-O3): no admitted public probe exposes FakePlcResolver for a delayed TCP client write, and indexer-ingest-oracle --no-capture emits only test names and pass counts with zero HTTP status or DID document output.
 ```
 
 ### E2
@@ -147,7 +147,7 @@ Blocked from observing delayed client writes to FakePlcResolver (O1, O2, O3): no
 not_examined
 
 ```text
-Blocked from observing split-write TCP request heads ending in CRLFCRLF against FakePlcResolver (O1, O2, O3): no direct FakePlcResolver probe is admitted, and admitted script indexer-ingest-oracle fails under nwdes examine probe with limactl fatal error (instance 'local-dev' does not exist).
+Observation gap (O1-O3): no admitted public probe exposes FakePlcResolver for split TCP writes ending in CRLFCRLF, and indexer-ingest-oracle --no-capture emits only test names and pass counts with zero HTTP status or DID document output.
 ```
 
 ### E3
@@ -155,5 +155,5 @@ Blocked from observing split-write TCP request heads ending in CRLFCRLF against 
 not_examined
 
 ```text
-Blocked from observing multi-connection delayed/split requests across distinct DIDs on FakePlcResolver (O1, O2, O3): no direct FakePlcResolver probe is admitted, and admitted script indexer-ingest-oracle fails under nwdes examine probe with limactl fatal error (instance 'local-dev' does not exist).
+Observation gap (O1-O3): no admitted public probe exposes FakePlcResolver across multiple accepted connections or distinct requested DIDs, and indexer-ingest-oracle --no-capture emits only test names and pass counts.
 ```
