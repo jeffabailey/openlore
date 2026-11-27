@@ -57,7 +57,7 @@
 },
 "counters": {
 "E": 2,
-"F": 27,
+"F": 29,
 "P": 1,
 "S": 1
 },
@@ -84,6 +84,16 @@
 "cargo test -p adapter-s3-index-object"
 ]
 }
+}
+},
+"examination": {
+"E1": {
+"reason": "F28",
+"verdict": "not_examined"
+},
+"E2": {
+"reason": "F29",
+"verdict": "not_examined"
 }
 },
 "expectations": {
@@ -127,6 +137,8 @@
 "F25": "The probe records the conditional write as honoured rather than unknown when the object store answers with HTTP 409 ConditionalRequestConflict.",
 "F26": "Internally, HTTP 409 ConditionalRequestConflict is recorded as proof that the store honours conditional writes rather than an inconclusive error.",
 "F27": "The public startup write probe returns the same passing outcome for both honoured and unknown marker answers, and the intermediate probe classification helper is crate-private with no declared contract locator.",
+"F28": "No admitted public probe command exposes S3 conditional PutObject (publish_if_match) or write_probe_seen against HTTP 409 ConditionalRequestConflict (O1, O2, O3). Cannot observe wire precondition header, Conflict classification, Honoured probe result, or unchanged stored data from the user's point of view.",
+"F29": "No admitted public probe command exposes S3 conditional PutObject (publish_if_match) against HTTP 409 with alternate, missing, or malformed error codes or non-conditional 409 (O1, O2, O3). Cannot observe store-failure classification from the user's point of view.",
 "F3": "A conditional PutObject answered with HTTP 409 ConditionalRequestConflict is classified as PublishOutcome::Conflict (and proves the write condition was honoured), while HTTP 409 with any other error code remains a store failure",
 "F4": "publish_if_match returns Ok(PublishOutcome::Conflict) on HTTP 412 and HTTP 409 ConditionalRequestConflict, returns Err on HTTP 409 with any other error code or 403/500, and write_probe_seen treats 409 ConditionalRequestConflict as Honoured",
 "F5": "S3 returns HTTP 412 PreconditionFailed, HTTP 409 ConditionalRequestConflict, HTTP 409 with a different error code (e.g. OperationAborted), HTTP 403 AccessDenied, or HTTP 500 InternalError to a conditional PutObject",

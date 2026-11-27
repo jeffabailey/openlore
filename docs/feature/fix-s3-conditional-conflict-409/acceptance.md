@@ -170,4 +170,18 @@ None.
 
 ## Examination
 
-None.
+### E1
+
+not_examined
+
+```text
+No admitted public probe command exposes S3 conditional PutObject (publish_if_match) or write_probe_seen against HTTP 409 ConditionalRequestConflict (O1, O2, O3). Cannot observe wire precondition header, Conflict classification, Honoured probe result, or unchanged stored data from the user's point of view.
+```
+
+### E2
+
+not_examined
+
+```text
+No admitted public probe command exposes S3 conditional PutObject (publish_if_match) against HTTP 409 with alternate, missing, or malformed error codes or non-conditional 409 (O1, O2, O3). Cannot observe store-failure classification from the user's point of view.
+```
