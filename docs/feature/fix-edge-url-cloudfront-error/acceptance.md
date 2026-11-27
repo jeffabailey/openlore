@@ -134,4 +134,26 @@ None.
 
 ## Examination
 
-None.
+### E1
+
+not_examined
+
+```text
+Cannot invoke deploy.sh / edge_url with a failing aws cloudfront list-distributions stub: nwdes examine probe refuses deploy.sh (only console scripts openlore-review-app, review-app-oracle, indexer-ingest-oracle are admitted; see O2), workspace public projection is empty (O1), and this examiner session is restricted to nwdes CLI verbs only.
+```
+
+### E2
+
+not_examined
+
+```text
+Cannot invoke deploy.sh / edge_url with a failing aws cloudfront list-distributions stub to verify stdout/stderr omit 'no distribution serves': nwdes examine probe refuses deploy.sh (O2), workspace public projection is empty (O1), and this examiner session is restricted to nwdes CLI verbs only.
+```
+
+### E3
+
+not_examined
+
+```text
+Cannot invoke deploy.sh / edge_url with a succeeding aws cloudfront list-distributions stub returning empty or non-matching aliases: nwdes examine probe refuses deploy.sh (O2), workspace public projection is empty (O1), and this examiner session is restricted to nwdes CLI verbs only.
+```

@@ -31,7 +31,7 @@
 },
 "counters": {
 "E": 3,
-"F": 22,
+"F": 25,
 "P": 2,
 "S": 1
 },
@@ -59,6 +59,20 @@
 "limactl shell local-dev -- sh -c 'cd ~/openlore && cargo test -p xtask --test scale_to_zero_platform'"
 ]
 }
+}
+},
+"examination": {
+"E1": {
+"reason": "F23",
+"verdict": "not_examined"
+},
+"E2": {
+"reason": "F24",
+"verdict": "not_examined"
+},
+"E3": {
+"reason": "F25",
+"verdict": "not_examined"
 }
 },
 "expectations": {
@@ -105,6 +119,9 @@
 "F20": "The command exits non-zero with a refusal stating that no distribution serves the host",
 "F21": "An operator still receives the refusal stating that no distribution serves the host when no matching distribution alias exists",
 "F22": "A CloudFront response that omits the Items array entirely rather than returning an empty array, or a refusal that says no distribution serves without repeating the hostname",
+"F23": "Cannot invoke deploy.sh / edge_url with a failing aws cloudfront list-distributions stub: nwdes examine probe refuses deploy.sh (only console scripts openlore-review-app, review-app-oracle, indexer-ingest-oracle are admitted; see O2), workspace public projection is empty (O1), and this examiner session is restricted to nwdes CLI verbs only.",
+"F24": "Cannot invoke deploy.sh / edge_url with a failing aws cloudfront list-distributions stub to verify stdout/stderr omit 'no distribution serves': nwdes examine probe refuses deploy.sh (O2), workspace public projection is empty (O1), and this examiner session is restricted to nwdes CLI verbs only.",
+"F25": "Cannot invoke deploy.sh / edge_url with a succeeding aws cloudfront list-distributions stub returning empty or non-matching aliases: nwdes examine probe refuses deploy.sh (O2), workspace public projection is empty (O1), and this examiner session is restricted to nwdes CLI verbs only.",
 "F3": "When aws cloudfront list-distributions fails, edge_url refuses with a message identifying the failed CloudFront read rather than claiming no distribution serves the host",
 "F4": "When aws cloudfront list-distributions succeeds with no matching alias, edge_url continues to refuse with 'no distribution serves'",
 "F5": "edge_url fails with a refusal naming the CloudFront read failure when aws cloudfront list-distributions fails, and still reports no distribution serves INDEX_HOST when the list succeeds without a matching alias",
