@@ -1,0 +1,145 @@
+{
+"acceptance": {
+"S1": [
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F16",
+"test": "xtask/tests/scale_to_zero_ci.rs::each_role_can_do_what_its_table_says_and_nothing_else"
+},
+"expected": "F14",
+"stimulus": "F13",
+"user_result": "F15"
+},
+{
+"covers": [
+"P2"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F20",
+"test": "xtask/tests/scale_to_zero_ci.rs::the_registry_is_immutable_and_only_lambda_pulls"
+},
+"expected": "F18",
+"stimulus": "F17",
+"user_result": "F19"
+}
+]
+},
+"counters": {
+"E": 2,
+"F": 20,
+"P": 2,
+"S": 1
+},
+"design": {
+"paradigm": "functional",
+"slices": {
+"S1": {
+"oracle": "xtask/tests/scale_to_zero_ci.rs",
+"public_oracle": {
+"expected": "F7",
+"falsifier": "F8",
+"promises": [
+"P1",
+"P2"
+],
+"stimulus": "F6"
+},
+"targets": [
+{
+"change": "Extend",
+"path": "deploy/tofu/environments/prod-indexer/iam.tf"
+},
+{
+"change": "Extend",
+"path": "deploy/tofu/environments/prod-indexer/ecr.tf"
+}
+],
+"verification": [
+"limactl shell local-dev -- sh -c 'cd ~/openlore && cargo test -p xtask --test scale_to_zero_ci'"
+]
+}
+}
+},
+"expectations": {
+"rows": [
+{
+"id": "E1",
+"lacuna": "F10",
+"promises": [
+"P1"
+],
+"text": "F9"
+},
+{
+"id": "E2",
+"lacuna": "F12",
+"promises": [
+"P2"
+],
+"text": "F11"
+}
+]
+},
+"facts": {
+"F1": "Tighten prod-indexer IAM trust and ECR repository policy conditions (scale-to-zero-hosting M5): add an ArnLike aws:SourceArn condition scoped to the openlore-indexer schedule group on scheduler_trust in deploy/tofu/environments/prod-indexer/iam.tf, and change lambda_pulls_images aws:SourceArn condition test from StringLike to ArnLike in deploy/tofu/environments/prod-indexer/ecr.tf.",
+"F10": "A static policy check cannot observe live AWS STS/EventBridge Scheduler evaluation—whether real openlore-indexer schedule invocations match the ArnLike pattern without blocking legitimate runs or whether another same-account schedule group is actually denied at runtime; P1 also leaves the exact schedule-group ARN pattern (partition, region, wildcard suffix) unspecified.",
+"F11": "In the lambda_pulls_images policy, the aws:SourceArn condition uses the ArnLike operator and does not use StringLike.",
+"F12": "Checking the policy operator alone cannot observe live AWS ECR/Lambda image-pull authorization—whether ArnLike matches the actual aws:SourceArn presented by Lambda at runtime across colon-delimited ARN segments where ArnLike differs from StringLike, or whether the target ARN pattern itself is scoped as intended.",
+"F13": "Verify the prod-indexer IAM trust policy for the EventBridge Scheduler role",
+"F14": "The scheduler trust policy enforces both an exact account condition and an ArnLike source ARN condition scoped to the openlore-indexer schedule group",
+"F15": "Only EventBridge Scheduler schedules in the openlore-indexer schedule group within the production account can assume the scheduler role",
+"F16": "A trust statement with an unexpected Deny effect or an AWS runtime ARN evaluation difference not visible in static policy inspection would still pass",
+"F17": "Verify the prod-indexer ECR repository pull policy for Lambda",
+"F18": "The Lambda image pull policy evaluates the source ARN condition using ArnLike rather than StringLike for openlore-indexer functions",
+"F19": "Lambda image pulls from the indexer repository require an ARN-segment-aware ArnLike match on the openlore-indexer function ARN",
+"F2": "Prevent cross-schedule and cross-ARN-segment confused-deputy access to the prod-indexer scheduler role and ECR repository",
+"F20": "A pull policy statement with an unexpected Deny effect or an AWS runtime ARN evaluation difference not visible in static policy inspection would still pass",
+"F3": "scheduler_trust requires aws:SourceArn matching the openlore-indexer schedule group via ArnLike in addition to aws:SourceAccount",
+"F4": "lambda_pulls_images evaluates aws:SourceArn with ArnLike instead of StringLike",
+"F5": "scheduler_trust pins aws:SourceArn with ArnLike to the openlore-indexer schedule group alongside aws:SourceAccount, and lambda_pulls_images uses ArnLike instead of StringLike on aws:SourceArn",
+"F6": "Run xtask scale_to_zero_ci tests against deploy/tofu/environments/prod-indexer/iam.tf and ecr.tf",
+"F7": "scheduler_trust enforces both aws:SourceAccount and ArnLike aws:SourceArn for the openlore-indexer schedule group, and lambda_pulls_images enforces ArnLike on aws:SourceArn",
+"F8": "scheduler_trust omits aws:SourceArn or uses StringLike, or lambda_pulls_images still uses StringLike on aws:SourceArn",
+"F9": "In the scheduler_trust policy, assume-role access requires both aws:SourceAccount and an ArnLike condition on aws:SourceArn matching the openlore-indexer schedule group."
+},
+"product": {
+"promises": [
+{
+"id": "P1",
+"kind": "Outcome",
+"text": "F3"
+},
+{
+"id": "P2",
+"kind": "Outcome",
+"text": "F4"
+}
+],
+"slices": [
+{
+"id": "S1",
+"observation": "F5",
+"promises": [
+"P1",
+"P2"
+]
+}
+]
+},
+"request": "F1",
+"schema": "nwdes.handoff",
+"scope": {
+"id": "fix-prod-indexer-iam-conditions",
+"kind": "Feature"
+},
+"version": 4,
+"work": {
+"size": "M",
+"value": "F2"
+}
+}

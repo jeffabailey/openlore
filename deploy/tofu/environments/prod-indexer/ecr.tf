@@ -57,7 +57,7 @@ data "aws_iam_policy_document" "lambda_pulls_images" {
     }
 
     condition {
-      test     = "StringLike"
+      test     = "ArnLike"
       variable = "aws:SourceArn"
       values   = ["arn:aws:lambda:${local.region}:${local.account_id}:function:openlore-indexer-*"]
     }

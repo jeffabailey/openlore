@@ -546,7 +546,7 @@ fn the_registry_is_immutable_and_only_lambda_pulls() {
         "the pull",
         only(pulling, "condition"),
         &[
-            ("test", r#""StringLike""#),
+            ("test", r#""ArnLike""#),
             ("variable", r#""aws:SourceArn""#),
             (
                 "values",
@@ -661,25 +661,67 @@ fn each_role_can_do_what_its_table_says_and_nothing_else() {
         !tofu.contains("aws_iam_role_policy_attachment") && !tofu.contains("managed_policy_arns"),
         "no managed policy: the basic execution role grants CreateLogGroup on *"
     );
-    for (name, service) in [
-        ("lambda_trust", "lambda.amazonaws.com"),
-        ("scheduler_trust", "scheduler.amazonaws.com"),
-    ] {
-        let statement = only(policy(&tofu, name), "statement");
-        assert_rows(
-            name,
-            only(statement, "principals"),
-            &[("identifiers", &format!(r#"["{service}"]"#))],
-        );
-        assert_rows(
-            name,
-            only(statement, "condition"),
-            &[
-                ("variable", r#""aws:SourceAccount""#),
-                ("values", "[local.account_id]"),
-            ],
-        );
-    }
+    let lambda_trust = only(policy(&tofu, "lambda_trust"), "statement");
+    assert_rows(
+        "lambda_trust",
+        only(lambda_trust, "principals"),
+        &[("identifiers", r#"["lambda.amazonaws.com"]"#)],
+    );
+    assert_rows(
+        "lambda_trust",
+        only(lambda_trust, "condition"),
+        &[
+            ("test", r#""StringEquals""#),
+            ("variable", r#""aws:SourceAccount""#),
+            ("values", "[local.account_id]"),
+        ],
+    );
+
+    assert_rows(
+        "schedule group",
+        resource(&tofu, "aws_scheduler_schedule_group", "indexer"),
+        &[("name", r#""openlore-indexer""#)],
+    );
+    let scheduler_trust = only(policy(&tofu, "scheduler_trust"), "statement");
+    assert_rows(
+        "scheduler_trust",
+        only(scheduler_trust, "principals"),
+        &[("identifiers", r#"["scheduler.amazonaws.com"]"#)],
+    );
+    let raw_scheduler_conditions = nested(scheduler_trust, "condition");
+    assert_eq!(
+        raw_scheduler_conditions.len(),
+        2,
+        "scheduler_trust must have exactly two conditions (aws:SourceAccount and aws:SourceArn)"
+    );
+    let scheduler_conditions: BTreeMap<(&str, &str), &str> = raw_scheduler_conditions
+        .into_iter()
+        .map(|condition| {
+            (
+                (
+                    setting(condition, "test").expect("a condition test"),
+                    setting(condition, "variable").expect("a condition variable"),
+                ),
+                setting(condition, "values").expect("condition values"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        scheduler_conditions.get(&(r#""StringEquals""#, r#""aws:SourceAccount""#)),
+        Some(&"[local.account_id]"),
+        "scheduler_trust: aws:SourceAccount"
+    );
+    let source_arn = scheduler_conditions
+        .get(&(r#""ArnLike""#, r#""aws:SourceArn""#))
+        .copied();
+    let expected_schedule_group_arns = [
+        r#"["arn:aws:scheduler:${local.region}:${local.account_id}:schedule/${aws_scheduler_schedule_group.indexer.name}/*"]"#,
+        r#"["arn:aws:scheduler:${local.region}:${local.account_id}:schedule/openlore-indexer/*"]"#,
+    ];
+    assert!(
+        source_arn.is_some_and(|value| expected_schedule_group_arns.contains(&value)),
+        "scheduler_trust: ArnLike aws:SourceArn must scope to the openlore-indexer schedule group, got {source_arn:?}"
+    );
 }
 
 /// During the trial no function can write into the group A1-A3 read.

@@ -45,6 +45,12 @@ data "aws_iam_policy_document" "scheduler_trust" {
       variable = "aws:SourceAccount"
       values   = [local.account_id]
     }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:aws:scheduler:${local.region}:${local.account_id}:schedule/${aws_scheduler_schedule_group.indexer.name}/*"]
+    }
   }
 }
 
