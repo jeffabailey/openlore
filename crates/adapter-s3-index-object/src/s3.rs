@@ -1,8 +1,9 @@
 //! The S3 calls behind the index object (D-STZ-5, D-STZ-6, D-STZ-12, D-STZ-38).
 //!
 //! What an answer means is pure, and lives at the top of this file: a 404 is
-//! absent, a 412 is a conflict, and anything else is a store failure. The rest
-//! makes the calls and reads their answers through those functions.
+//! absent, a 412 or a 409 `ConditionalRequestConflict` is a conflict, and
+//! anything else is a store failure. The rest makes the calls and reads their
+//! answers through those functions.
 //!
 //! Every call takes its limits from `client_settings(call)`. A `GetObject` also
 //! runs inside [`within`], because the SDK's operation timeout ends when the
@@ -44,6 +45,8 @@ const PASS_ID_KEY: &str = "pass-id";
 
 /// S3's error code for a bucket that does not exist.
 const NO_SUCH_BUCKET: &str = "NoSuchBucket";
+/// S3's error code when a conditional PUT loses a race with a concurrent write.
+const CONDITIONAL_REQUEST_CONFLICT: &str = "ConditionalRequestConflict";
 
 /// How a store failed: it answered no, or it did not answer usefully.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,22 +96,22 @@ enum WriteAnswer {
     Failed(StoreFailure),
 }
 
-/// Only a 412 is a lost update (D-STZ-6, D-STZ-41).
-fn write_answer(status: Option<u16>) -> WriteAnswer {
-    match status {
-        Some(412) => WriteAnswer::Conflict,
+/// A 412 or a 409 `ConditionalRequestConflict` is a lost update (D-STZ-6, D-STZ-41).
+fn write_answer(status: Option<u16>, code: Option<&str>) -> WriteAnswer {
+    match (status, code) {
+        (Some(412), _) | (Some(409), Some(CONDITIONAL_REQUEST_CONFLICT)) => WriteAnswer::Conflict,
         _ => WriteAnswer::Failed(StoreFailure::of(status)),
     }
 }
 
 /// What one PUT of the write probe's marker got, in the words of the repeat's
-/// answer: `Err` holds the status of a failed PUT, if it had one. Only a 412 says the
-/// condition was honoured, and anything else that is not a 2xx says nothing about
-/// conditions (D-STZ-39).
-fn marker_answer(sent: Result<(), Option<u16>>) -> RepeatAnswer {
+/// answer: `Err` holds the status and error code of a failed PUT, if it had them.
+/// Only a 412 or a 409 `ConditionalRequestConflict` says the condition was honoured,
+/// and anything else that is not a 2xx says nothing about conditions (D-STZ-39).
+fn marker_answer(sent: Result<(), (Option<u16>, Option<&str>)>) -> RepeatAnswer {
     match sent {
         Ok(()) => RepeatAnswer::Accepted,
-        Err(status) => match write_answer(status) {
+        Err((status, code)) => match write_answer(status, code) {
             WriteAnswer::Conflict => RepeatAnswer::Honoured,
             WriteAnswer::Failed(_) => RepeatAnswer::Unknown,
         },
@@ -486,10 +489,13 @@ impl IndexObjectStore {
             Ok(put) => {
                 published_version(put.e_tag(), metadata, size_bytes).map(PublishOutcome::Published)
             }
-            Err(failed) => match write_answer(store_reply(&failed).0) {
-                WriteAnswer::Conflict => Ok(PublishOutcome::Conflict),
-                WriteAnswer::Failed(failure) => Err(failure.error(detail_of(&failed))),
-            },
+            Err(failed) => {
+                let (status, code) = store_reply(&failed);
+                match write_answer(status, code) {
+                    WriteAnswer::Conflict => Ok(PublishOutcome::Conflict),
+                    WriteAnswer::Failed(failure) => Err(failure.error(detail_of(&failed))),
+                }
+            }
         }
     }
 
@@ -516,11 +522,7 @@ impl IndexObjectStore {
             .config_override(client_settings(StoreCall::WriteProbePut).s3_config())
             .send()
             .await;
-        marker_answer(
-            sent.as_ref()
-                .map(drop)
-                .map_err(|failed| store_reply(failed).0),
-        )
+        marker_answer(sent.as_ref().map(drop).map_err(store_reply))
     }
 
     pub(crate) async fn put_last_pass(&self, last: &LastPass) -> Result<(), IndexObjectError> {
@@ -558,6 +560,8 @@ mod tests {
             Just(NO_SUCH_BUCKET.to_string()),
             Just("AccessDenied".to_string()),
             Just("PreconditionFailed".to_string()),
+            Just(CONDITIONAL_REQUEST_CONFLICT.to_string()),
+            Just("OperationAborted".to_string()),
             "[A-Za-z]{1,12}",
         ])
     }
@@ -566,6 +570,7 @@ mod tests {
         prop::option::of(prop_oneof![
             Just(403u16),
             Just(404),
+            Just(409),
             Just(412),
             Just(500),
             100..600u16,
@@ -602,16 +607,22 @@ mod tests {
             prop_assert_eq!(answer, expected);
         }
 
-        // D-STZ-6, D-STZ-41, RIO-7: only a 412 is a lost update.
+        // D-STZ-6, D-STZ-41, RIO-7: only a 412 or a 409 ConditionalRequestConflict is a lost update.
         #[test]
-        fn a_write_is_a_conflict_only_on_a_412(status in any_status()) {
-            let expected = if status == Some(412) {
+        fn a_write_is_a_conflict_only_on_a_412_or_a_409_conditional_request_conflict(
+            status in any_status(),
+            code in any_code(),
+        ) {
+            let is_conflict = status == Some(412)
+                || (status == Some(409)
+                    && code.as_deref() == Some(CONDITIONAL_REQUEST_CONFLICT));
+            let expected = if is_conflict {
                 WriteAnswer::Conflict
             } else {
                 WriteAnswer::Failed(failure_for(status))
             };
 
-            prop_assert_eq!(write_answer(status), expected);
+            prop_assert_eq!(write_answer(status, code.as_deref()), expected);
         }
 
         // Where a refusal stops being one. `any_status` reaches these only by chance,
@@ -624,22 +635,26 @@ mod tests {
             let expected = if refused { StoreFailure::Refused } else { StoreFailure::Unavailable };
 
             prop_assert_eq!(read_answer(Some(status), None), ReadAnswer::Failed(expected));
-            prop_assert_eq!(write_answer(Some(status)), WriteAnswer::Failed(expected));
+            prop_assert_eq!(write_answer(Some(status), None), WriteAnswer::Failed(expected));
         }
 
-        // D-STZ-39: a 412 is the only proof of a condition, and no failure reads
-        // as a write the store took.
+        // D-STZ-39: a 412 or a 409 ConditionalRequestConflict is the only proof of a
+        // condition, and no failure reads as a write the store took.
         #[test]
-        fn a_marker_put_is_honoured_only_on_a_412_and_never_taken_when_it_failed(
+        fn a_marker_put_is_honoured_only_on_a_412_or_409_conditional_conflict_and_never_taken_when_it_failed(
             status in any_status(),
+            code in any_code(),
         ) {
-            let expected = if status == Some(412) {
+            let is_honoured = status == Some(412)
+                || (status == Some(409)
+                    && code.as_deref() == Some(CONDITIONAL_REQUEST_CONFLICT));
+            let expected = if is_honoured {
                 RepeatAnswer::Honoured
             } else {
                 RepeatAnswer::Unknown
             };
 
-            prop_assert_eq!(marker_answer(Err(status)), expected);
+            prop_assert_eq!(marker_answer(Err((status, code.as_deref()))), expected);
         }
 
         // D-STZ-12: each stamp comes back from its own key.

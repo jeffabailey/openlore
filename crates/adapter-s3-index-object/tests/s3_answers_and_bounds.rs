@@ -425,34 +425,107 @@ async fn a_publish_reports_the_size_it_sent_under_the_condition_it_was_given() {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PublishExpectation {
+    Conflict,
+    Refused,
+    Unavailable,
+}
+
+fn assert_publish_outcome(
+    status: &str,
+    code: &str,
+    expected: PublishExpectation,
+    published: &Result<PublishOutcome, IndexObjectError>,
+    attempts: usize,
+) {
+    match expected {
+        PublishExpectation::Conflict => assert_eq!(
+            *published,
+            Ok(PublishOutcome::Conflict),
+            "WHAT: {status} ({code}) returned {published:?} instead of Ok(PublishOutcome::Conflict); \
+             WHY: conditional write conflicts must be classified as lost-update conflicts, not store failures; \
+             HOW: map HTTP 412 and HTTP 409 ConditionalRequestConflict to Conflict"
+        ),
+        PublishExpectation::Refused => assert!(
+            matches!(published, Err(IndexObjectError::Refused { .. })),
+            "WHAT: {status} ({code}) returned {published:?} instead of Err(Refused); \
+             WHY: non-conflict 4xx store rejections must surface as store failures, never as lost-update conflicts; \
+             HOW: keep non-ConditionalRequestConflict 409 and 403 mapped to Refused"
+        ),
+        PublishExpectation::Unavailable => assert!(
+            matches!(published, Err(IndexObjectError::Unavailable { .. })),
+            "WHAT: {status} ({code}) returned {published:?} instead of Err(Unavailable); \
+             WHY: 5xx store outages must surface as store failures, never as lost-update conflicts; \
+             HOW: keep 500 mapped to Unavailable"
+        ),
+    }
+    assert_eq!(
+        attempts, 1,
+        "WHAT: {status} ({code}) sent {attempts} requests instead of 1; \
+         WHY: conditional publishes must not retry; \
+         HOW: keep max_attempts at 1 for publish calls"
+    );
+}
+
 #[tokio::test]
-async fn a_412_is_a_conflict_and_every_other_refusal_a_failure() {
-    let cases = [
-        ("412 Precondition Failed", "PreconditionFailed", true),
-        ("409 Conflict", "ConditionalRequestConflict", false),
-        ("403 Forbidden", "AccessDenied", false),
-        ("500 Internal Server Error", "InternalError", false),
+async fn conditional_publish_reports_conflict_for_precondition_and_concurrent_conflict_and_fails_other_errors() {
+    let cases: [(&str, Option<&str>, PublishExpectation); 6] = [
+        (
+            "412 Precondition Failed",
+            Some("PreconditionFailed"),
+            PublishExpectation::Conflict,
+        ),
+        (
+            "409 Conflict",
+            Some("ConditionalRequestConflict"),
+            PublishExpectation::Conflict,
+        ),
+        (
+            "409 Conflict",
+            Some("OperationAborted"),
+            PublishExpectation::Refused,
+        ),
+        ("409 Conflict", None, PublishExpectation::Refused),
+        (
+            "403 Forbidden",
+            Some("AccessDenied"),
+            PublishExpectation::Refused,
+        ),
+        (
+            "500 Internal Server Error",
+            Some("InternalError"),
+            PublishExpectation::Unavailable,
+        ),
     ];
-    for (status, code, conflict) in cases {
-        let body = format!("<Error><Code>{code}</Code></Error>");
-        let store = LoopbackStore::answering(move |_, stream| {
-            answer_with(stream, status, &[], &body);
-        });
-        let adapter = store.adapter().await;
-        let scratch = tempfile::tempdir().expect("scratch");
-        let src = file_holding(scratch.path(), b"index bytes");
+    let conditions = [
+        WriteCondition::IfNoneMatch,
+        WriteCondition::IfMatch("\"old\"".to_string()),
+    ];
+    for condition in conditions {
+        for (status, code, expected) in cases {
+            let body = code
+                .map(|c| format!("<Error><Code>{c}</Code></Error>"))
+                .unwrap_or_default();
+            let store = LoopbackStore::answering(move |_, stream| {
+                answer_with(stream, status, &[], &body);
+            });
+            let adapter = store.adapter().await;
+            let scratch = tempfile::tempdir().expect("scratch");
+            let src = file_holding(scratch.path(), b"index bytes");
 
-        let published = adapter
-            .publish_if_match(&src, WriteCondition::IfNoneMatch, metadata(), LIMIT)
-            .await;
+            let published = adapter
+                .publish_if_match(&src, condition.clone(), metadata(), LIMIT)
+                .await;
 
-        assert_eq!(
-            published == Ok(PublishOutcome::Conflict),
-            conflict,
-            "{status}: {published:?}"
-        );
-        assert_eq!(published.is_err(), !conflict, "{status}: {published:?}");
-        assert_eq!(store.requests().len(), 1, "{status}: one attempt");
+            assert_publish_outcome(
+                status,
+                code.unwrap_or("<none>"),
+                expected,
+                &published,
+                store.requests().len(),
+            );
+        }
     }
 }
 
@@ -748,6 +821,19 @@ async fn a_fetch_outlasts_search_inits_budget_unless_it_was_composed_for_search(
     assert!(matches!(fetched, Ok(Some(_))), "{fetched:?}");
 }
 
+type StoreAnswer = (&'static str, &'static str);
+
+/// A store that gives each request the next `(status, body)` of `answers`, and the
+/// last for good.
+fn answering_in_turn_with_bodies(answers: &'static [StoreAnswer]) -> LoopbackStore {
+    let turn = AtomicUsize::new(0);
+    LoopbackStore::answering(move |_, stream| {
+        let this_turn = turn.fetch_add(1, Ordering::SeqCst);
+        let (status, body) = answers[this_turn.min(answers.len() - 1)];
+        answer_with(stream, status, &[], body);
+    })
+}
+
 /// A store that gives each request the next of `answers`, and the last for good.
 fn answering_in_turn(answers: &'static [&'static str]) -> LoopbackStore {
     let turn = AtomicUsize::new(0);
@@ -771,21 +857,27 @@ async fn write_probe_as_init_runs_it(adapter: &Arc<S3IndexObjectAdapter>) -> Pro
 /// took, so a retry or a repeat skipped or added shows here.
 #[tokio::test]
 async fn the_write_probe_refuses_only_two_accepted_puts_after_at_most_two_puts() {
-    const TAKEN: &str = "200 OK";
-    const HONOURED: &str = "412 Precondition Failed";
-    const DENIED: &str = "403 Forbidden";
-    const DOWN: &str = "500 Internal Server Error";
-    let rows: [(&[&str], usize, bool); 7] = [
+    const TAKEN: StoreAnswer = ("200 OK", "");
+    const HONOURED: StoreAnswer = ("412 Precondition Failed", "");
+    const CONCURRENT_CONFLICT: StoreAnswer = (
+        "409 Conflict",
+        "<Error><Code>ConditionalRequestConflict</Code></Error>",
+    );
+    const DENIED: StoreAnswer = ("403 Forbidden", "");
+    const DOWN: StoreAnswer = ("500 Internal Server Error", "");
+    let rows: [(&[StoreAnswer], usize, bool); 9] = [
         (&[HONOURED], 1, false),
+        (&[CONCURRENT_CONFLICT], 1, false),
         (&[DENIED], 1, false),
         (&[DOWN], 1, false),
         (&[TAKEN, HONOURED], 2, false),
+        (&[TAKEN, CONCURRENT_CONFLICT], 2, false),
         (&[TAKEN, DENIED], 2, false),
         (&[TAKEN, DOWN], 2, false),
         (&[TAKEN, TAKEN], 2, true),
     ];
     for (answers, puts, refused) in rows {
-        let store = answering_in_turn(answers);
+        let store = answering_in_turn_with_bodies(answers);
         let adapter = Arc::new(store.adapter().await);
 
         let outcome = write_probe_as_init_runs_it(&adapter).await;

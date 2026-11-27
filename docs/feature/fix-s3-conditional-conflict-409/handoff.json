@@ -1,0 +1,167 @@
+{
+"acceptance": {
+"S1": [
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F15",
+"test": "crates/adapter-s3-index-object/tests/s3_answers_and_bounds.rs::conditional_publish_reports_conflict_for_precondition_and_concurrent_conflict_and_fails_other_errors"
+},
+"expected": "F13",
+"stimulus": "F12",
+"user_result": "F14"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F19",
+"test": "crates/adapter-s3-index-object/tests/s3_answers_and_bounds.rs::conditional_publish_reports_conflict_for_precondition_and_concurrent_conflict_and_fails_other_errors"
+},
+"expected": "F17",
+"stimulus": "F16",
+"user_result": "F18"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "Tested",
+"still_passes_if": "F23",
+"test": "crates/adapter-s3-index-object/tests/s3_answers_and_bounds.rs::the_write_probe_refuses_only_two_accepted_puts_after_at_most_two_puts"
+},
+"expected": "F21",
+"stimulus": "F20",
+"user_result": "F22"
+},
+{
+"covers": [
+"P1"
+],
+"disposition": {
+"kind": "NotTested",
+"owner": "crafter unit and property tests in crates/adapter-s3-index-object/src/s3.rs",
+"reason": "F27"
+},
+"expected": "F25",
+"stimulus": "F24",
+"user_result": "F26"
+}
+]
+},
+"counters": {
+"E": 2,
+"F": 27,
+"P": 1,
+"S": 1
+},
+"design": {
+"paradigm": "functional",
+"slices": {
+"S1": {
+"oracle": "crates/adapter-s3-index-object/tests/s3_answers_and_bounds.rs",
+"public_oracle": {
+"expected": "F6",
+"falsifier": "F7",
+"promises": [
+"P1"
+],
+"stimulus": "F5"
+},
+"targets": [
+{
+"change": "Extend",
+"path": "crates/adapter-s3-index-object/src/s3.rs"
+}
+],
+"verification": [
+"cargo test -p adapter-s3-index-object"
+]
+}
+}
+},
+"expectations": {
+"rows": [
+{
+"id": "E1",
+"lacuna": "F9",
+"promises": [
+"P1"
+],
+"text": "F8"
+},
+{
+"id": "E2",
+"lacuna": "F11",
+"promises": [
+"P1"
+],
+"text": "F10"
+}
+]
+},
+"facts": {
+"F1": "Fix S3 409 ConditionalRequestConflict mapping (scale-to-zero-hosting fix-later): adapter-s3-index-object treats only HTTP 412 as PublishOutcome::Conflict (and RepeatAnswer::Honoured), mapping S3 409 ConditionalRequestConflict from concurrent conditional PUTs as a store failure instead of a lost-update conflict.",
+"F10": "A conditional PutObject answered with HTTP 409 and any error code other than ConditionalRequestConflict (including an absent or unparseable error code) remains a store failure and is not classified as PublishOutcome::Conflict.",
+"F11": "An oracle that tests only a single alternate 409 error code does not observe behavior on HTTP 409 responses with missing or malformed error payloads, other distinct S3 409 codes, or a non-conditional PutObject returning HTTP 409 ConditionalRequestConflict.",
+"F12": "A conditional object upload receives HTTP 412 PreconditionFailed or HTTP 409 ConditionalRequestConflict from the object store, under either a create-only or matching-version condition.",
+"F13": "The upload reports a lost-update conflict rather than a store failure and sends exactly one request per upload.",
+"F14": "A concurrent conditional upload conflict is treated as a normal lost-update conflict without retrying or failing as a store outage.",
+"F15": "The adapter only parses bare error XML and fails to recognize ConditionalRequestConflict when extra XML elements accompany the error code.",
+"F16": "A conditional object upload receives HTTP 409 with a non-conflict error code such as OperationAborted, HTTP 409 with no error code, HTTP 403 AccessDenied, or HTTP 500 InternalError from the object store.",
+"F17": "The upload reports a store failure (refused for 4xx responses, unavailable for 5xx responses), never a lost-update conflict, and sends exactly one request per upload.",
+"F18": "Non-conflict store rejections and outages surface as store failures rather than being silently masked as lost-update conflicts.",
+"F19": "An untested non-conflict HTTP 409 error code such as BucketAlreadyExists is erroneously included in an over-broad conflict allowlist.",
+"F2": "S3 409 ConditionalRequestConflict on conditional PUTs maps to PublishOutcome::Conflict (and proves conditional writes are honoured in the write probe) while non-ConditionalRequestConflict 409s remain store failures",
+"F20": "A startup write-condition probe receives HTTP 409 ConditionalRequestConflict on its first conditional marker upload or on its repeat conditional marker upload after an initial HTTP 200.",
+"F21": "The startup write-condition probe succeeds without refusing startup as an ignored write condition, sending one upload when the first conflicts and two uploads when the second conflicts.",
+"F22": "Startup does not falsely refuse a bucket that answers a conditional marker upload with HTTP 409 ConditionalRequestConflict.",
+"F23": "The adapter classifies HTTP 409 ConditionalRequestConflict as unknown rather than honoured inside the write probe, because the public startup probe succeeds on both honoured and unknown answers.",
+"F24": "The internal write-condition probe classifies an HTTP 409 ConditionalRequestConflict response as proving the write condition was honoured rather than unknown.",
+"F25": "The probe records the conditional write as honoured rather than unknown when the object store answers with HTTP 409 ConditionalRequestConflict.",
+"F26": "Internally, HTTP 409 ConditionalRequestConflict is recorded as proof that the store honours conditional writes rather than an inconclusive error.",
+"F27": "The public startup write probe returns the same passing outcome for both honoured and unknown marker answers, and the intermediate probe classification helper is crate-private with no declared contract locator.",
+"F3": "A conditional PutObject answered with HTTP 409 ConditionalRequestConflict is classified as PublishOutcome::Conflict (and proves the write condition was honoured), while HTTP 409 with any other error code remains a store failure",
+"F4": "publish_if_match returns Ok(PublishOutcome::Conflict) on HTTP 412 and HTTP 409 ConditionalRequestConflict, returns Err on HTTP 409 with any other error code or 403/500, and write_probe_seen treats 409 ConditionalRequestConflict as Honoured",
+"F5": "S3 returns HTTP 412 PreconditionFailed, HTTP 409 ConditionalRequestConflict, HTTP 409 with a different error code (e.g. OperationAborted), HTTP 403 AccessDenied, or HTTP 500 InternalError to a conditional PutObject",
+"F6": "publish_if_match returns Ok(PublishOutcome::Conflict) for 412 and for 409 ConditionalRequestConflict, and returns Err for 409 with another error code, 403, and 500; each makes exactly one attempt",
+"F7": "publish_if_match returns Err on 409 ConditionalRequestConflict, or returns Ok(PublishOutcome::Conflict) on a non-ConditionalRequestConflict 409, 403, or 500",
+"F8": "A conditional PutObject answered with HTTP 409 and error code ConditionalRequestConflict is classified as PublishOutcome::Conflict and treated as proof that the store honoured the write condition.",
+"F9": "An oracle that only asserts PublishOutcome::Conflict on a synthetic HTTP 409 ConditionalRequestConflict response does not observe whether the conditional precondition was sent on the wire, whether existing stored data remained unmodified, or whether callers treat the conflict identically as proof of an honoured write condition."
+},
+"product": {
+"promises": [
+{
+"id": "P1",
+"kind": "Outcome",
+"text": "F3"
+}
+],
+"slices": [
+{
+"id": "S1",
+"observation": "F4",
+"promises": [
+"P1"
+]
+}
+]
+},
+"request": "F1",
+"schema": "nwdes.handoff",
+"scope": {
+"id": "fix-s3-conditional-conflict-409",
+"kind": "Feature"
+},
+"version": 4,
+"work": {
+"size": "M",
+"value": "F2"
+}
+}
