@@ -154,4 +154,34 @@ None.
 
 ## Examination
 
-None.
+### E1
+
+not_examined
+
+```text
+Blocked by empty public projection (O1) and unexposed edge/policy probe surface (O2: admitted commands are openlore-review-app, review-app-oracle, indexer-ingest-oracle). Cannot observe CloudFront response headers policy strip or live edge stripping of x-amzn-errortype from user view.
+```
+
+### E2
+
+not_examined
+
+```text
+Blocked by empty public projection (O1) and unexposed edge/policy probe surface (O2). Cannot observe whether the CloudFront response headers policy strip retains all six previously configured x-amzn-* headers without reading private repo source.
+```
+
+### E3
+
+not_examined
+
+```text
+Blocked by empty public projection (O1) and unexposed edge_checks probe surface (O2: edge_checks is not an admitted probe command). Cannot invoke edge_checks against a POST search response carrying x-amzn-errortype or other x-amzn-* headers.
+```
+
+### E4
+
+not_examined
+
+```text
+Blocked by empty public projection (O1) and unexposed edge_checks probe surface (O2: edge_checks is not an admitted probe command). Cannot invoke edge_checks against a GET /healthz response carrying x-amzn-* headers.
+```

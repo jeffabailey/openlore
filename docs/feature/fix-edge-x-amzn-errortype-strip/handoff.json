@@ -31,7 +31,7 @@
 },
 "counters": {
 "E": 4,
-"F": 24,
+"F": 28,
 "P": 2,
 "S": 1
 },
@@ -63,6 +63,24 @@
 "limactl shell local-dev -- sh -c 'cd ~/openlore && cargo test -p xtask --test scale_to_zero_ci'"
 ]
 }
+}
+},
+"examination": {
+"E1": {
+"reason": "F25",
+"verdict": "not_examined"
+},
+"E2": {
+"reason": "F26",
+"verdict": "not_examined"
+},
+"E3": {
+"reason": "F27",
+"verdict": "not_examined"
+},
+"E4": {
+"reason": "F28",
+"verdict": "not_examined"
 }
 },
 "expectations": {
@@ -119,6 +137,10 @@
 "F22": "The check passes when both health check and POST search are clean, fails when POST search returns x-amzn-errortype or any mixed-case x-amzn-* header even with a clean health check, and still fails when the health check returns an x-amzn-* header",
 "F23": "Deployment edge verification blocks release whenever an origin x-amzn-* header leaks on either POST search or the health check",
 "F24": "POST search returns an x-amzn-* header only on a non-200 error response while 200 POST search responses remain clean",
+"F25": "Blocked by empty public projection (O1) and unexposed edge/policy probe surface (O2: admitted commands are openlore-review-app, review-app-oracle, indexer-ingest-oracle). Cannot observe CloudFront response headers policy strip or live edge stripping of x-amzn-errortype from user view.",
+"F26": "Blocked by empty public projection (O1) and unexposed edge/policy probe surface (O2). Cannot observe whether the CloudFront response headers policy strip retains all six previously configured x-amzn-* headers without reading private repo source.",
+"F27": "Blocked by empty public projection (O1) and unexposed edge_checks probe surface (O2: edge_checks is not an admitted probe command). Cannot invoke edge_checks against a POST search response carrying x-amzn-errortype or other x-amzn-* headers.",
+"F28": "Blocked by empty public projection (O1) and unexposed edge_checks probe surface (O2: edge_checks is not an admitted probe command). Cannot invoke edge_checks against a GET /healthz response carrying x-amzn-* headers.",
 "F3": "aws_cloudfront_response_headers_policy.strip removes x-amzn-errortype in addition to the existing six x-amzn-* headers",
 "F4": "edge_checks rejects an x-amzn-* response header on POST search as well as on GET /healthz",
 "F5": "openlore-index-strip removes x-amzn-errortype alongside the existing six x-amzn-* headers, and edge_checks rejects an x-amzn-* header on the POST search response as well as GET /healthz",
